@@ -1,0 +1,57 @@
+[package]
+name = "picasa-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A fast native GTK photo gallery"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+blake3 = "1"
+chrono = { version = "0.4", features = ["clock"] }
+fast_image_resize = "5"
+gio = "0.21"
+libc = "0.2"
+glib = "0.21"
+gtk4 = { version = "0.10", features = ["v4_12"] }
+heif-oxide = "0.1"
+image = "0.25"
+kamadak-exif = "0.6"
+libadwaita = { version = "0.8", features = ["v1_5"] }
+rayon = "1"
+rawler = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake"] }
+walkdir = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Image codecs and resamplers are CPU kernels whose debug implementations are
+# otherwise tens of times slower (notably lossless WebP and convolution). Keep
+# application code debuggable while making `cargo run` representative of the
+# interactive viewer's real performance.
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package.fast_image_resize]
+opt-level = 3
+
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.image-webp]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3

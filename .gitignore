@@ -1,0 +1,41 @@
+# Rust build
+/target/
+
+# AppImage build
+/AppDir/
+
+# Logs
+*.log
+
+# Backups / archives
+*.zip
+
+# Old source copies / experiments
+/src-after-*/
+/src-themed/
+/src-sidebar-aligned/
+
+# Project/Codex working files
+AGENTS.md
+PROJECT_INDEX-*.md
+todo-*.md
+b4-agent.zip
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*~
+
+
+2 Sep 26/
+.codex-backups/
+data/
+files.txt
+picasa-rs-3sep-6am
+picasa-rs-search
+picasa-rs-themed
+screenshot/
+themes/
+todo-albums
+tools/
