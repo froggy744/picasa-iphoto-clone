@@ -1,6 +1,6 @@
-# Picasa iPhoto Clone
+# PIC - Picasa iPhoto Clone - a fast photo manager inspired by Picasa and iPhoto
 
-A lightweight desktop photo manager inspired by the simplicity of **Google Picasa** and classic **iPhoto**.
+So hwat is PIC. Picasa iPhone Clone is a lightweight desktop photo manager inspired by the simplicity of **Picasa** and **iPhoto**.
 
 Built in **Rust** using **GTK4 / libadwaita**, with a focus on fast browsing, local photo libraries and a clean desktop interface.  Meant to be Linux only but decided to with Windows a go.
 
