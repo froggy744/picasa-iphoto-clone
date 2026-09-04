@@ -68,4 +68,4 @@ Contributions, testing and suggestions are welcome.
 
 ## Disclaimer
 
-This is an independent open-source project inspired by classic desktop photo-management applications. It is not affiliated with or endorsed by Google or Apple.
+This is an independent open-source project inspired by classic desktop photo-management applications. It is not affiliated with or endorsed by Google or Apple. have not lost any photos while building or testing this app, but it is still under active development. To be safe, please test it first with copies of your photos or a temporary test folder. I do not want to be responsible for anyone losing their photos, so please make sure your important originals are backed up before testing.
