@@ -2,7 +2,7 @@
 
 A lightweight desktop photo manager inspired by the simplicity of **Google Picasa** and classic **iPhoto**.
 
-Built in **Rust** using **GTK4 / libadwaita**, with a focus on fast browsing, local photo libraries and a clean desktop interface.
+Built in **Rust** using **GTK4 / libadwaita**, with a focus on fast browsing, local photo libraries and a clean desktop interface.  Meant to be Linux only but decided to with Windows a go.
 
 ## Screenshot
 
