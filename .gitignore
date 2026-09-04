@@ -1,41 +1,34 @@
-# Rust build
-/target/
+# Ignore everything by default
+/*
 
-# AppImage build
-/AppDir/
+# Keep important root files
+!/.gitignore
+!/Cargo.toml
+!/Cargo.lock
+!/README.md
+!/ABOUT ME.md
 
-# Logs
-*.log
+# Keep source
+!/src/
+!/src/**
 
-# Backups / archives
-*.zip
+# Keep application data / metadata
+!/data/
+!/data/**
 
-# Old source copies / experiments
-/src-after-*/
-/src-themed/
-/src-sidebar-aligned/
+# Keep icons
+!/icon/
+!/icon/**
 
-# Project/Codex working files
-AGENTS.md
-PROJECT_INDEX-*.md
-todo-*.md
-b4-agent.zip
+# Keep selected tools
+!/tools/
+!/tools/setup-windows-cross.sh
+!/tools/ucrt64-pkg-config
+!/tools/x86_64-pc-windows-gnu-ucrt-linker
 
-# Editor / OS
-.vscode/
-.idea/
-.DS_Store
-*~
+# Optional Flatpak manifest
+!/io.github.you.PicasaRs.yml
 
-
-2 Sep 26/
-.codex-backups/
-data/
-files.txt
-picasa-rs-3sep-6am
-picasa-rs-search
-picasa-rs-themed
-screenshot/
-themes/
-todo-albums
-tools/
+# Keep samples
+!/samples/
+!/samples/**
