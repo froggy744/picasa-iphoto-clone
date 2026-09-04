@@ -1,34 +1,21 @@
 # Ignore everything by default
 /*
 
-# Keep important root files
+# Keep selected root files
 !/.gitignore
-!/Cargo.toml
-!/Cargo.lock
-!/README.md
 !/ABOUT ME.md
+!/Cargo.lock
+!/Cargo.toml
+!/README.md
 
-# Keep source
-!/src/
-!/src/**
-
-# Keep application data / metadata
-!/data/
-!/data/**
-
-# Keep icons
+# Keep icon folder
 !/icon/
 !/icon/**
-
-# Keep selected tools
-!/tools/
-!/tools/setup-windows-cross.sh
-!/tools/ucrt64-pkg-config
-!/tools/x86_64-pc-windows-gnu-ucrt-linker
-
-# Optional Flatpak manifest
-!/io.github.you.PicasaRs.yml
 
 # Keep samples
 !/samples/
 !/samples/**
+
+# Keep source
+!/src/
+!/src/**
