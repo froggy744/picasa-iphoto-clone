@@ -4,6 +4,10 @@ A lightweight desktop photo manager inspired by the simplicity of **Google Picas
 
 Built in **Rust** using **GTK4 / libadwaita**, with a focus on fast browsing, local photo libraries and a clean desktop interface.
 
+## Screenshot
+
+<img src="samples/Picasa Iphoto Clone-PIC.jpg" alt="Picasa iPhoto Clone" width="700">
+
 ## Features
 
 * Import and browse photo folders
@@ -32,7 +36,9 @@ When viewing a photo:
 | `1`       | View at 100%          |
 | `Esc`     | Close photo viewer    |
 
-In the photo grid, use the **arrow keys** to move through photos and **Ctrl + mouse wheel** to quickly resize the thumbnail grid. **up and arrow keys at the end of photo access next or previous folder**  
+In the photo grid, use the **arrow keys** to move through photos and **Ctrl + mouse wheel** to quickly resize the thumbnail grid.
+
+Use the **Up / Down arrow keys** at the end of a photo collection to move to the previous or next folder.
 
 ## Image Support
 
