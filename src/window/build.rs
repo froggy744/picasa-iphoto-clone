@@ -1,6 +1,6 @@
 pub fn build(app: &adw::Application, connection: Connection) -> adw::ApplicationWindow {
     let window = adw::ApplicationWindow::new(app);
-    window.set_title(Some("Picasa iPhoto Clone"));
+    window.set_title(Some("PIC - Picasa iPhoto Clone"));
     window.set_default_size(1440, 900);
 
     let connection = Rc::new(RefCell::new(connection));
@@ -52,10 +52,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     });
 
     // Space opens the fullscreen viewer from the gallery. While the viewer
-    // is open, it cycles fit -> 1:1 -> fit -> close.
+    // is open, it toggles between fit and 1:1 viewing.
     // The actual open action is installed after Gallery exists.
     let space_open_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
-    let space_close_after_fit = Rc::new(Cell::new(false));
     let space_toggle_in_progress = Rc::new(Cell::new(false));
 
     // Handle viewer keyboard shortcuts at the window boundary as well as
@@ -66,14 +65,23 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let lightbox_for_window_escape = lightbox.clone();
     let space_open_slot_for_key = space_open_slot.clone();
     let one_to_one_for_key = info.one_to_one.clone();
-    let space_close_after_fit_for_key = space_close_after_fit.clone();
     let space_toggle_in_progress_for_key = space_toggle_in_progress.clone();
+    let window_for_fullscreen_key = window.clone();
     window_escape.connect_key_pressed(move |_, key, _, _| {
-        if key == gtk::gdk::Key::Escape && lightbox_for_window_escape.root.is_visible() {
+        if (key == gtk::gdk::Key::Escape || key == gtk::gdk::Key::BackSpace)
+            && lightbox_for_window_escape.root.is_visible()
+        {
             if std::env::var_os("PICASA_TRACE").is_some() {
                 eprintln!("UI TRACE lightbox_escape_window_close");
             }
             lightbox_for_window_escape.close();
+            glib::Propagation::Stop
+        } else if key == gtk::gdk::Key::F11 {
+            if window_for_fullscreen_key.is_fullscreen() {
+                window_for_fullscreen_key.unfullscreen();
+            } else {
+                window_for_fullscreen_key.fullscreen();
+            }
             glib::Propagation::Stop
         } else if lightbox_for_window_escape.root.is_visible()
             && (key == gtk::gdk::Key::Left || key == gtk::gdk::Key::Right)
@@ -92,12 +100,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     one_to_one_for_key.set_active(false);
                     if std::env::var_os("PICASA_TRACE").is_some() {
                         eprintln!("UI TRACE lightbox_space_fit");
-                    }
-                } else if space_close_after_fit_for_key.get() {
-                    lightbox_for_window_escape.close();
-                    space_close_after_fit_for_key.set(false);
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("UI TRACE lightbox_space_close");
                     }
                 } else {
                     space_toggle_in_progress_for_key.set(true);
@@ -665,15 +667,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     });
 
     let lightbox_for_one_to_one = lightbox.clone();
-    let space_close_after_fit_for_toggle = space_close_after_fit.clone();
     let space_toggle_in_progress_for_toggle = space_toggle_in_progress.clone();
     info.one_to_one.connect_toggled(move |button| {
         lightbox_for_one_to_one.set_one_to_one(button.is_active());
         if space_toggle_in_progress_for_toggle.get() {
             space_toggle_in_progress_for_toggle.set(false);
-            space_close_after_fit_for_toggle.set(!button.is_active());
-        } else {
-            space_close_after_fit_for_toggle.set(false);
         }
     });
 
@@ -682,13 +680,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // the GridView container is not enough after the lightbox owned focus:
     // GTK can lose the active list cursor, so arrow keys appear dead.
     let one_to_one_for_visibility = info.one_to_one.clone();
-    let space_close_after_fit_for_visibility = space_close_after_fit.clone();
     let gallery_for_lightbox_close = gallery.root.clone();
     let selected_photo_for_lightbox_close = selected_photo.clone();
     lightbox.root.connect_visible_notify(move |root| {
         if !root.is_visible() {
             one_to_one_for_visibility.set_active(false);
-            space_close_after_fit_for_visibility.set(false);
 
             let gallery = gallery_for_lightbox_close.clone();
             let selected_photo = selected_photo_for_lightbox_close.borrow().clone();
@@ -1469,10 +1465,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let clear_thumbnails = gtk::Button::with_label("Clear thumbnails");
     clear_thumbnails.set_halign(gtk::Align::Fill);
+    clear_thumbnails.add_css_class("clear-action-button");
     let clear_database = gtk::Button::with_label("Clear database");
     clear_database.set_halign(gtk::Align::Fill);
+    clear_database.add_css_class("clear-action-button");
     let clear_all = gtk::Button::with_label("Clear all");
     clear_all.set_halign(gtk::Align::Fill);
+    clear_all.add_css_class("clear-action-button");
     settings_box.append(&appearance);
     settings_box.append(&iphone_theme);
     settings_box.append(&standard_theme);
@@ -1770,6 +1769,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .metric-val { font-size: 13px; font-weight: 500; color: #eeeeee; }\
         .photo-action-button { min-width: 34px; min-height: 34px; padding: 0; border-radius: 7px; color: #ededed; background: #3a3a3a; border: 1px solid #1b1b1b; box-shadow: inset 0 1px rgba(255,255,255,0.12); transition: background 150ms ease; }\
         .photo-action-button:hover { background: #505050; }\
+        button.clear-action-button { color: #2e3436; background: #e6e6e6; border: 1px solid #9a9a9a; }\
+        button.clear-action-button:hover { color: #1f2325; background: #f0f0f0; border-color: #777777; }\
+        button.clear-action-button:active { background: #d2d2d2; }\
         .favorite-btn.active, .favorite-btn.active image { color: #ff453a; }\
         .one-to-one-btn:checked { color: #ffffff; background: #4d9fdb; }\
         .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; color: #a9a9a9; }\

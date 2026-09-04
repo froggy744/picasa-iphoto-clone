@@ -442,7 +442,9 @@ impl Lightbox {
         let collection_navigation_for_key = collection_navigation.clone();
 
         key.connect_key_pressed(move |_, key, _, _| {
-            if key == gtk::gdk::Key::Escape && root_for_escape.is_visible() {
+            if (key == gtk::gdk::Key::Escape || key == gtk::gdk::Key::BackSpace)
+                && root_for_escape.is_visible()
+            {
                 root_for_escape.set_visible(false);
                 glib::Propagation::Stop
             } else if [gtk::gdk::Key::plus, gtk::gdk::Key::equal].contains(&key) {

@@ -73,6 +73,9 @@ const STANDARD_GTK4_CSS: &str = r#"
     .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: alpha(@theme_fg_color, 0.55); }
     .photo-action-button { border-radius: 8px; color: @theme_fg_color; background: alpha(@theme_fg_color, 0.05); border: 1px solid alpha(@theme_fg_color, 0.10); box-shadow: none; }
     .photo-action-button:hover { background: alpha(@theme_fg_color, 0.12); }
+    button.clear-action-button { color: #2e3436; background: #e6e6e6; border: 1px solid #9a9a9a; }
+    button.clear-action-button:hover { color: #1f2325; background: #f0f0f0; border-color: #777777; }
+    button.clear-action-button:active { background: #d2d2d2; }
     .favorite-btn.active, .favorite-btn.active image { color: #e01b24; }
     .one-to-one-btn:checked { color: @accent_fg_color; background: @accent_bg_color; }
     .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; }
