@@ -1,9 +1,11 @@
 pub fn cache_dir() -> Result<PathBuf> {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        .context("could not determine the user's cache directory")?;
-    Ok(base.join("picasa-rs").join("thumbs"))
+    let directory = dirs::cache_dir()
+        .context("could not determine the user's cache directory")?
+        .join("picasa-rs")
+        .join("thumbs");
+    fs::create_dir_all(&directory)
+        .with_context(|| format!("could not create cache directory {}", directory.display()))?;
+    Ok(directory)
 }
 
 pub fn cache_size() -> Result<u64> {
@@ -215,4 +217,3 @@ fn create_uncached(path: &str, destination: &PathBuf) -> Result<PathBuf> {
     );
     Ok(destination.clone())
 }
-

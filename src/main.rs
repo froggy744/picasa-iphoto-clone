@@ -57,6 +57,7 @@ fn main() {
 
 /// When tracing is enabled, persist the complete stderr stream beside the
 /// checkout. A new timestamped file is created for every application run.
+#[cfg(unix)]
 fn init_trace_log() {
     if std::env::var_os("PICASA_TRACE").is_none() {
         return;
@@ -77,3 +78,6 @@ fn init_trace_log() {
         eprintln!("PICASA TRACE LOG: {}", path.display());
     }
 }
+
+#[cfg(not(unix))]
+fn init_trace_log() {}

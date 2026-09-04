@@ -1,3 +1,56 @@
+fn show_folder_statistics(
+    parent: &gtk::Widget,
+    connection: Rc<RefCell<Connection>>,
+    folder: db::Folder,
+) {
+    let photos = db::photos(&connection.borrow(), Some(folder.id), false, None).unwrap_or_default();
+    let direct_photos = photos
+        .iter()
+        .filter(|photo| photo.folder_id == Some(folder.id))
+        .count();
+    let available = photos
+        .iter()
+        .filter(|photo| crate::source::cached_file_available(&photo.path))
+        .count();
+    let total_bytes: u64 = photos
+        .iter()
+        .filter_map(|photo| photo.size_bytes)
+        .filter_map(|size| u64::try_from(size).ok())
+        .sum();
+    let body = format!(
+        "{}\n\nTotal photos: {}\nPhotos directly in this folder: {}\nSubfolders: {}\nOriginals available: {}\nOriginals unavailable: {}\nTotal file size: {}",
+        folder.path,
+        photos.len(),
+        direct_photos,
+        folder.subfolder_count,
+        available,
+        photos.len().saturating_sub(available),
+        format_folder_bytes(total_bytes),
+    );
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!("{} statistics", folder.name))
+        .body(body)
+        .close_response("close")
+        .build();
+    dialog.add_response("close", "Close");
+    dialog.present(Some(parent));
+}
+
+fn format_folder_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
 pub fn build(app: &adw::Application, connection: Connection) -> adw::ApplicationWindow {
     let window = adw::ApplicationWindow::new(app);
     window.set_title(Some("PIC - Picasa iPhoto Clone"));
@@ -144,6 +197,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         })
     };
     let import_folder_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let refresh_folder_slot: Rc<RefCell<Option<Rc<dyn Fn(String)>>>> =
+        Rc::new(RefCell::new(None));
     let import_folder: Rc<dyn Fn()> = {
         let slot = import_folder_slot.clone();
         Rc::new(move || {
@@ -920,6 +975,21 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         import_folder.clone(),
         delete_album.clone(),
         availability_refresh.clone(),
+        {
+            let slot = refresh_folder_slot.clone();
+            Rc::new(move |path| {
+                if let Some(callback) = slot.borrow().as_ref() {
+                    callback(path);
+                }
+            })
+        },
+        {
+            let connection = connection.clone();
+            let parent: gtk::Widget = window.clone().upcast();
+            Rc::new(move |folder| {
+                show_folder_statistics(&parent, connection.clone(), folder);
+            })
+        },
     );
     sidebar_for_unavailable.replace(Some(sidebar.clone()));
     sidebar_selection_slot.replace(Some(sidebar.clone()));
@@ -974,18 +1044,21 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }
         schedule_mount_refresh_for_change();
     });
-    let unix_mount_monitor = gio::UnixMountMonitor::get();
-    let schedule_unix_mount_refresh = schedule_mount_refresh.clone();
-    unix_mount_monitor.connect_mountpoints_changed(move |_| {
-        schedule_unix_mount_refresh();
-    });
-    let schedule_unix_mount_refresh = schedule_mount_refresh.clone();
-    unix_mount_monitor.connect_mounts_changed(move |_| {
-        schedule_unix_mount_refresh();
-    });
     unsafe {
         window.set_data("picasa-volume-monitor", volume_monitor);
-        window.set_data("picasa-unix-mount-monitor", unix_mount_monitor);
+        #[cfg(unix)]
+        {
+            let unix_mount_monitor = gio::UnixMountMonitor::get();
+            let schedule_unix_mount_refresh = schedule_mount_refresh.clone();
+            unix_mount_monitor.connect_mountpoints_changed(move |_| {
+                schedule_unix_mount_refresh();
+            });
+            let schedule_unix_mount_refresh = schedule_mount_refresh.clone();
+            unix_mount_monitor.connect_mounts_changed(move |_| {
+                schedule_unix_mount_refresh();
+            });
+            window.set_data("picasa-unix-mount-monitor", unix_mount_monitor);
+        }
     }
     let sidebar_for_events = sidebar.clone();
 
@@ -1756,6 +1829,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         gridview.section-grid > child:selected .selection-badge, gridview.section-grid > item:selected .selection-badge { opacity: 1; }\
         .offline-badge { min-width: 20px; min-height: 20px; padding: 0; border-radius: 9999px; color: #2a1a00; background: #f2c14e; font-weight: 700; }\
         .sidebar-offline-badge { min-width: 16px; min-height: 16px; padding: 0; border-radius: 9999px; color: #2a1a00; background: #f2c14e; font-weight: 700; font-size: 10px; }\
+        .folder-disclosure { opacity: 0.68; }\
+        .navigation-sidebar .folder-count { color: #969696; }\
         .thumbnail { border-radius: 5px; }\
         .missing-thumbnail { background: #383838; }\
         .section-heading-box { margin-top: 18px; margin-bottom: 7px; }\
@@ -1829,6 +1904,25 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             scan_job.borrow_mut().active = Some(control);
         })
     };
+
+    refresh_folder_slot.replace(Some({
+        let scan_job = scan_job.clone();
+        let start_next_scan = start_next_scan.clone();
+        Rc::new(move |path: String| {
+            let mut job = scan_job.borrow_mut();
+            if let Some(previous) = job.active.take() {
+                previous.cancel();
+            }
+            job.generation = job.generation.wrapping_add(1);
+            job.kind = Some(ScanJobKind::Refresh);
+            job.pending.clear();
+            job.pending.push_back(path);
+            job.imported_total = 0;
+            job.failed_total = 0;
+            drop(job);
+            start_next_scan();
+        })
+    }));
 
     let scan_job_for_stop = scan_job.clone();
     stop_scan.connect_clicked(move |_| {
@@ -1970,7 +2064,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
             job.generation = job.generation.wrapping_add(1);
             job.kind = Some(ScanJobKind::Refresh);
-            job.pending = folders.into_iter().map(|folder| folder.path).collect();
+            job.pending = folders
+                .into_iter()
+                .filter(|folder| folder.imported_root)
+                .map(|folder| folder.path)
+                .collect();
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("FOLDER TRACE refresh_roots pending={:?}", job.pending);
+            }
             job.imported_total = 0;
             job.failed_total = 0;
         }

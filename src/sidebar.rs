@@ -1,6 +1,5 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -49,6 +48,8 @@ const FOLDER_REVEALER_KEY: &str = "picasa-sidebar-folder-revealer";
 const FOLDER_INDICATOR_KEY: &str = "picasa-sidebar-folder-indicator";
 const CURRENT_FILTER_KEY: &str = "picasa-sidebar-current-filter";
 const FILTER_SYNCING_KEY: &str = "picasa-sidebar-filter-syncing";
+const FOLDER_REFRESH_KEY: &str = "picasa-sidebar-folder-refresh";
+const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
 
 pub fn build(
     folders: &[Folder],
@@ -59,6 +60,8 @@ pub fn build(
     on_import_folder: Rc<dyn Fn()>,
     on_delete_album: Rc<dyn Fn(i64)>,
     on_unavailable: Rc<dyn Fn()>,
+    on_refresh_folder: Rc<dyn Fn(String)>,
+    on_folder_statistics: Rc<dyn Fn(Folder)>,
 ) -> gtk::ScrolledWindow {
     let on_filter: Rc<dyn Fn(SidebarFilter)> = Rc::new(on_filter);
     let state = Rc::new(RefCell::new(SidebarState::default()));
@@ -179,6 +182,8 @@ pub fn build(
     // refresh() and append_folder() can update only the relevant sections
     // without changing any caller-facing API.
     unsafe {
+        folder_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder);
+        folder_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics);
         outer.set_data(STATE_KEY, state);
         outer.set_data(LIBRARY_LIST_KEY, library_list);
         outer.set_data(ALBUM_LIST_KEY, album_list);
@@ -530,15 +535,21 @@ fn populate_folders(
         return;
     }
 
-    let by_id: HashMap<i64, &Folder> = folders.iter().map(|folder| (folder.id, folder)).collect();
-    let by_path: HashMap<&str, i64> = folders
+    let visible_folders = folders
         .iter()
-        .map(|folder| (normalize_path(&folder.path), folder.id))
+        .filter(|folder| folder.photo_count > 0)
+        .collect::<Vec<_>>();
+    let by_id: HashMap<i64, &Folder> = visible_folders
+        .iter()
+        .map(|folder| (folder.id, *folder))
         .collect();
-
     let mut children: HashMap<Option<i64>, Vec<i64>> = HashMap::new();
-    for folder in folders {
-        let parent = direct_parent_id(folder, &by_path);
+    for folder in visible_folders {
+        let parent = if folder.imported_root {
+            None
+        } else {
+            folder.parent_id
+        };
         children.entry(parent).or_default().push(folder.id);
     }
 
@@ -554,22 +565,24 @@ fn populate_folders(
     }
 
     let roots = children.get(&None).cloned().unwrap_or_default();
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "FOLDER TRACE sidebar folders={} roots={:?} relationships={:?}",
+            folders.len(),
+            roots,
+            folders
+                .iter()
+                .map(|folder| (
+                    folder.id,
+                    folder.path.clone(),
+                    folder.parent_id,
+                    folder.imported_root
+                ))
+                .collect::<Vec<_>>()
+        );
+    }
     for id in roots {
         append_folder_branch(list, id, 0, &by_id, &children, state, on_unavailable);
-    }
-}
-
-fn direct_parent_id(folder: &Folder, by_path: &HashMap<&str, i64>) -> Option<i64> {
-    let path = normalize_path(&folder.path);
-    let parent = Path::new(path).parent()?.to_str()?;
-    by_path.get(normalize_path(parent)).copied()
-}
-
-fn normalize_path(path: &str) -> &str {
-    if path.len() > 1 {
-        path.trim_end_matches('/')
-    } else {
-        path
     }
 }
 
@@ -620,25 +633,29 @@ fn append_folder_row(
     row.set_margin_top(2);
     row.set_margin_bottom(2);
 
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    content.set_margin_top(6);
-    content.set_margin_bottom(6);
-    let disclosure_gutter = if depth == 0 && has_children { 16 } else { 0 };
-    content.set_margin_start(8 + (depth as i32 * 14) - disclosure_gutter);
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    content.set_margin_top(4);
+    content.set_margin_bottom(4);
+    content.set_margin_start(4);
     content.set_margin_end(8);
 
-    // Keep disclosure controls for expandable folders and indent nested rows.
+    // Every row gets the same fixed chevron slot. This keeps folder icons and
+    // names aligned even when the hierarchy is deeply nested.
+    let disclosure_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    disclosure_slot.set_size_request(12, 18);
+    disclosure_slot.set_width_request(12);
     if has_children {
         let expanded = state.borrow().expanded_folders.contains(&folder.id);
-        let disclosure = gtk::Button::from_icon_name(if expanded {
+        let disclosure = gtk::Image::from_icon_name(if expanded {
             "pan-down-symbolic"
         } else {
             "pan-end-symbolic"
         });
-        disclosure.add_css_class("flat");
-        disclosure.set_focusable(false);
-        disclosure.set_size_request(14, 14);
-        disclosure.set_tooltip_text(Some(if expanded {
+        disclosure.add_css_class("folder-disclosure");
+        disclosure.set_pixel_size(10);
+        disclosure.set_halign(gtk::Align::Center);
+        disclosure.set_valign(gtk::Align::Center);
+        disclosure_slot.set_tooltip_text(Some(if expanded {
             "Collapse folder"
         } else {
             "Show subfolders"
@@ -647,7 +664,8 @@ fn append_folder_row(
         let folder_id = folder.id;
         let list_for_toggle = list.clone();
         let state_for_toggle = state.clone();
-        disclosure.connect_clicked(move |_| {
+        let toggle = gtk::GestureClick::new();
+        toggle.connect_pressed(move |gesture, _, _, _| {
             {
                 let mut state = state_for_toggle.borrow_mut();
                 if !state.expanded_folders.remove(&folder_id) {
@@ -660,13 +678,12 @@ fn append_folder_row(
             // To make expansion immediate, store a synthetic toggle marker and
             // let rebuild_folder_list_from_rows() reconstruct from row data.
             rebuild_folder_list_from_rows(&list_for_toggle, &state_for_toggle);
+            gesture.set_state(gtk::EventSequenceState::Claimed);
         });
-        content.append(&disclosure);
-    } else if depth > 0 {
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_size_request(14, 14);
-        content.append(&spacer);
+        disclosure_slot.add_controller(toggle);
+        disclosure_slot.append(&disclosure);
     }
+    content.append(&disclosure_slot);
 
     let icon = gtk::Image::from_icon_name("folder-symbolic");
     icon.set_pixel_size(18);
@@ -678,20 +695,17 @@ fn append_folder_row(
     title_label.set_xalign(0.0);
     title_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     labels.append(&title_label);
-
-    let subtitle_label = gtk::Label::new(Some(&folder.path));
-    subtitle_label.set_xalign(0.0);
-    subtitle_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-    subtitle_label.add_css_class("dim-label");
-    labels.append(&subtitle_label);
     content.append(&labels);
 
+    let trailing = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let count_label = gtk::Label::new(Some(&format_count(folder.photo_count)));
+    count_label.set_width_request(36);
     count_label.set_xalign(1.0);
     count_label.set_valign(gtk::Align::Center);
     count_label.add_css_class("dim-label");
     count_label.add_css_class("sidebar-count");
-    content.append(&count_label);
+    count_label.add_css_class("folder-count");
+    trailing.append(&count_label);
 
     if !folder.available {
         let warning = gtk::Button::with_label("!");
@@ -703,10 +717,14 @@ fn append_folder_row(
         warning.set_tooltip_text(Some("Source folder unavailable"));
         let on_unavailable = on_unavailable.clone();
         warning.connect_clicked(move |_| (on_unavailable)());
-        content.append(&warning);
+        trailing.append(&warning);
     }
+    content.append(&trailing);
 
     row.set_child(Some(&content));
+    if folder.imported_root {
+        row.set_tooltip_text(Some(&folder.path));
+    }
     unsafe {
         row.set_data("picasa-filter", SidebarFilter::Folder(folder.id));
         row.set_data("picasa-folder-record", folder.clone());
@@ -715,7 +733,67 @@ fn append_folder_row(
         row.set_data("picasa-folder-unavailable-callback", on_unavailable.clone());
     }
     list.append(&row);
+    add_folder_context_menu(&list, &row, folder);
     row
+}
+
+fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &Folder) {
+    let refresh = unsafe {
+        list.data::<Rc<dyn Fn(String)>>(FOLDER_REFRESH_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
+    let statistics = unsafe {
+        list.data::<Rc<dyn Fn(Folder)>>(FOLDER_STATISTICS_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
+    let Some(refresh) = refresh else {
+        return;
+    };
+    let Some(statistics) = statistics else {
+        return;
+    };
+
+    let folder_for_menu = folder.clone();
+    let row_for_menu = row.clone();
+    let right_click = gtk::GestureClick::new();
+    right_click.set_button(3);
+    right_click.connect_pressed(move |gesture, _, _, _| {
+        let popover = gtk::Popover::new();
+        popover.set_has_arrow(true);
+        popover.set_parent(&row_for_menu);
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        menu.set_margin_top(6);
+        menu.set_margin_bottom(6);
+        menu.set_margin_start(6);
+        menu.set_margin_end(6);
+
+        let refresh_item = gtk::Button::with_label("Refresh folder");
+        refresh_item.add_css_class("flat");
+        let path = folder_for_menu.path.clone();
+        let popover_for_refresh = popover.clone();
+        let refresh = refresh.clone();
+        refresh_item.connect_clicked(move |_| {
+            popover_for_refresh.popdown();
+            refresh(path.clone());
+        });
+        menu.append(&refresh_item);
+
+        let statistics_item = gtk::Button::with_label("Folder statistics");
+        statistics_item.add_css_class("flat");
+        let folder = folder_for_menu.clone();
+        let statistics = statistics.clone();
+        let popover_for_statistics = popover.clone();
+        statistics_item.connect_clicked(move |_| {
+            popover_for_statistics.popdown();
+            statistics(folder.clone());
+        });
+        menu.append(&statistics_item);
+
+        popover.set_child(Some(&menu));
+        popover.popup();
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+    });
+    row.add_controller(right_click);
 }
 
 // Folder expansion must be immediate, but the public toggle callback does not

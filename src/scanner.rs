@@ -101,7 +101,7 @@ fn scan_with_control(
     }
     let indexed = db::photo_fingerprints(&connection)?;
     let root_file = crate::source::file(root);
-    let files = collect_files(&root_file, control)?;
+    let (files, discovered_folders) = collect_files(&root_file, control)?;
     if control.is_cancelled() {
         send(events, ScanEvent::Cancelled { imported: 0 });
         return Ok(0);
@@ -118,6 +118,25 @@ fn scan_with_control(
     let mut indexed_events = Vec::new();
     let mut folder_ids = HashMap::from([(root.to_string(), folder_id)]);
     let mut transaction = Some(connection.unchecked_transaction()?);
+    for (path, parent_path) in discovered_folders {
+        if path == root {
+            continue;
+        }
+        let parent_id = parent_path
+            .as_ref()
+            .and_then(|parent| folder_ids.get(parent))
+            .copied()
+            .unwrap_or(folder_id);
+        let id = db::insert_discovered_folder(transaction.as_ref().unwrap(), &path, parent_id)?;
+        trace!(
+            "FOLDER TRACE scanner_register path={} parent_path={:?} parent_id={} id={}",
+            path,
+            parent_path,
+            parent_id,
+            id
+        );
+        folder_ids.insert(path, id);
+    }
     for (file, info, folder_path) in files {
         if control.is_cancelled() {
             break;
@@ -126,7 +145,19 @@ fn scan_with_control(
         let folder_id = if let Some(folder_id) = folder_ids.get(&folder_path) {
             *folder_id
         } else {
-            let folder_id = db::insert_folder(transaction.as_ref().unwrap(), &folder_path)?;
+            let parent_path = crate::source::file(&folder_path)
+                .parent()
+                .map(|parent| crate::source::reference(&parent));
+            let parent_id = parent_path
+                .as_ref()
+                .and_then(|parent| folder_ids.get(parent))
+                .copied()
+                .unwrap_or(folder_id);
+            let folder_id = db::insert_discovered_folder(
+                transaction.as_ref().unwrap(),
+                &folder_path,
+                parent_id,
+            )?;
             folder_ids.insert(folder_path.clone(), folder_id);
             folder_id
         };
@@ -306,13 +337,19 @@ fn send(events: Option<&Sender<ScanEvent>>, event: ScanEvent) {
 fn collect_files(
     root: &gio::File,
     control: &ScanControl,
-) -> Result<Vec<(gio::File, gio::FileInfo, String)>> {
-    let mut pending = vec![(root.clone(), crate::source::reference(root))];
+) -> Result<(
+    Vec<(gio::File, gio::FileInfo, String)>,
+    Vec<(String, Option<String>)>,
+)> {
+    let root_path = crate::source::reference(root);
+    let mut pending = vec![(root.clone(), root_path.clone(), None)];
     let mut files = Vec::new();
-    while let Some((directory, folder_path)) = pending.pop() {
+    let mut folders = Vec::new();
+    while let Some((directory, folder_path, parent_path)) = pending.pop() {
         if control.is_cancelled() {
             break;
         }
+        folders.push((folder_path.clone(), parent_path));
         let enumerator = directory
             .enumerate_children(
                 "standard::name,standard::type,time::modified,standard::size",
@@ -333,7 +370,11 @@ fn collect_files(
                     // raw decode (several seconds per item).
                     let name = info.name().to_string_lossy().to_ascii_lowercase();
                     if !name.ends_with(".lrdata") && name != "previews" && name != "cache" {
-                        pending.push((child.clone(), crate::source::reference(&child)));
+                        pending.push((
+                            child.clone(),
+                            crate::source::reference(&child),
+                            Some(folder_path.clone()),
+                        ));
                     }
                 }
                 gio::FileType::Regular if supported(Path::new(&info.name())) => {
@@ -343,7 +384,7 @@ fn collect_files(
             }
         }
     }
-    Ok(files)
+    Ok((files, folders))
 }
 
 fn read_metadata(path: &str, attributes: &gio::FileInfo) -> Result<PhotoMetadata> {

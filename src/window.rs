@@ -61,6 +61,8 @@ const STANDARD_GTK4_CSS: &str = r#"
     .selection-badge { background: @accent_bg_color; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
     .offline-badge { min-width: 20px; min-height: 20px; padding: 0; border-radius: 9999px; color: #2a1a00; background: #f2c14e; font-weight: 700; }
     .sidebar-offline-badge { min-width: 16px; min-height: 16px; padding: 0; border-radius: 9999px; color: #2a1a00; background: #f2c14e; font-weight: 700; font-size: 10px; }
+    .folder-disclosure { opacity: 0.68; }
+    .navigation-sidebar .folder-count { color: alpha(@theme_fg_color, 0.68); }
     .thumbnail { border-radius: 8px; }
     .missing-thumbnail { background: alpha(@theme_fg_color, 0.06); }
     .section-heading-box { margin-top: 16px; margin-bottom: 8px; }
