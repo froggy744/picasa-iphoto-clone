@@ -1005,6 +1005,32 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 show_remove_folder_confirmation(parent.clone(), folder, context.clone());
             })
         },
+        {
+            let context = action_context.clone();
+            Rc::new(move |folder, favorite| {
+                match db::set_favorite_for_folder(
+                    &context.connection.borrow(),
+                    folder.id,
+                    favorite,
+                ) {
+                    Ok(changed) => {
+                        eprintln!(
+                            "FAVORITE TRACE folder={} favorite={} changed={}",
+                            folder.id, favorite, changed
+                        );
+                        refresh_photo_actions_grid(&context);
+                        (context.on_unavailable)();
+                    }
+                    Err(error) => {
+                        show_error(
+                            context.info.root.upcast_ref(),
+                            "Could not update folder favourites",
+                            &error.to_string(),
+                        );
+                    }
+                }
+            })
+        },
     );
     sidebar_for_unavailable.replace(Some(sidebar.clone()));
     sidebar_selection_slot.replace(Some(sidebar.clone()));

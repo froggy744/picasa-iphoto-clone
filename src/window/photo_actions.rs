@@ -49,6 +49,53 @@ fn show_photo_context_menu(
     )));
     menu.append(&add_to_album);
 
+    let favorite_label = if photo.favorite() {
+        "Remove from Favourites"
+    } else {
+        "Add to Favourites"
+    };
+    let favorite = add_action(favorite_label);
+    let favorite_context = context.clone();
+    let favorite_selection = selection_provider.clone();
+    let favorite_photo = photo.clone();
+    let popover_for_favorite = popover.clone();
+    favorite.connect_clicked(move |button| {
+        let target = !favorite_photo.favorite();
+        let ids = favorite_selection();
+        let count = ids.len();
+        for id in ids {
+            if let Err(error) = db::set_favorite(
+                &favorite_context.connection.borrow(),
+                id,
+                target,
+            ) {
+                show_error(
+                    button.upcast_ref(),
+                    "Could not update favourite",
+                    &error.to_string(),
+                );
+                return;
+            }
+        }
+
+        let selected_id = favorite_context
+            .selected_photo
+            .borrow()
+            .as_ref()
+            .map(|selected| selected.id());
+        if selected_id == Some(favorite_photo.id()) {
+            favorite_photo.set_favorite(target);
+            favorite_context
+                .selected_photo
+                .replace(Some(favorite_photo.clone()));
+            favorite_context.info.set_photo(Some(&favorite_photo));
+        }
+        eprintln!("FAVORITE TRACE photos={} favorite={}", count, target);
+        popover_for_favorite.popdown();
+        refresh_photo_actions_grid(&favorite_context);
+        (favorite_context.on_unavailable)();
+    });
+
     if let sidebar::SidebarFilter::Album(album_id) = context.filter.get() {
         let remove = add_action("Remove from Album");
         let remove_context = context.clone();

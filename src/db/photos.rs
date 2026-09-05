@@ -303,6 +303,28 @@ pub fn set_favorite(connection: &Connection, id: i64, favorite: bool) -> Result<
     Ok(())
 }
 
+pub fn set_favorite_for_folder(
+    connection: &Connection,
+    folder_id: i64,
+    favorite: bool,
+) -> Result<usize> {
+    let changed = connection.execute(
+        "UPDATE photos
+         SET favorite = ?1
+         WHERE trashed = 0 AND folder_id IN (
+             WITH RECURSIVE descendants(id) AS (
+                 SELECT id FROM folders WHERE id = ?2
+                 UNION ALL
+                 SELECT child.id FROM folders child
+                 JOIN descendants ON child.parent_id = descendants.id
+             )
+             SELECT id FROM descendants
+         )",
+        params![favorite, folder_id],
+    )?;
+    Ok(changed)
+}
+
 pub fn set_rotation(connection: &Connection, id: i64, rotation: i32) -> Result<()> {
     let normalized = rotation.rem_euclid(360);
     if ![0, 90, 180, 270].contains(&normalized) {

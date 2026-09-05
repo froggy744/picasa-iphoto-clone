@@ -51,6 +51,7 @@ const FILTER_SYNCING_KEY: &str = "picasa-sidebar-filter-syncing";
 const FOLDER_REFRESH_KEY: &str = "picasa-sidebar-folder-refresh";
 const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
 const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
+const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
 
 pub fn build(
     folders: &[Folder],
@@ -64,6 +65,7 @@ pub fn build(
     on_refresh_folder: Rc<dyn Fn(String)>,
     on_folder_statistics: Rc<dyn Fn(Folder)>,
     on_remove_folder: Rc<dyn Fn(Folder)>,
+    on_folder_favorite: Rc<dyn Fn(Folder, bool)>,
 ) -> gtk::ScrolledWindow {
     let on_filter: Rc<dyn Fn(SidebarFilter)> = Rc::new(on_filter);
     let state = Rc::new(RefCell::new(SidebarState::default()));
@@ -187,6 +189,7 @@ pub fn build(
         folder_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder);
         folder_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics);
         folder_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder);
+        folder_list.set_data(FOLDER_FAVORITE_KEY, on_folder_favorite);
         outer.set_data(STATE_KEY, state);
         outer.set_data(LIBRARY_LIST_KEY, library_list);
         outer.set_data(ALBUM_LIST_KEY, album_list);
@@ -753,6 +756,10 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
         list.data::<Rc<dyn Fn(Folder)>>(FOLDER_REMOVE_KEY)
             .map(|callback| callback.as_ref().clone())
     };
+    let favorite = unsafe {
+        list.data::<Rc<dyn Fn(Folder, bool)>>(FOLDER_FAVORITE_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
     let Some(refresh) = refresh else {
         return;
     };
@@ -760,6 +767,9 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
         return;
     };
     let Some(remove) = remove else {
+        return;
+    };
+    let Some(favorite) = favorite else {
         return;
     };
 
@@ -810,6 +820,28 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
             remove(folder.clone());
         });
         menu.append(&remove_item);
+
+        let add_favorites = gtk::Button::with_label("Add all photos to Favourites");
+        add_favorites.add_css_class("flat");
+        let folder = folder_for_menu.clone();
+        let favorite_for_add = favorite.clone();
+        let popover_for_add = popover.clone();
+        add_favorites.connect_clicked(move |_| {
+            popover_for_add.popdown();
+            favorite_for_add(folder.clone(), true);
+        });
+        menu.append(&add_favorites);
+
+        let remove_favorites = gtk::Button::with_label("Remove all photos from Favourites");
+        remove_favorites.add_css_class("flat");
+        let folder = folder_for_menu.clone();
+        let favorite = favorite.clone();
+        let popover_for_remove = popover.clone();
+        remove_favorites.connect_clicked(move |_| {
+            popover_for_remove.popdown();
+            favorite(folder.clone(), false);
+        });
+        menu.append(&remove_favorites);
 
         popover.set_child(Some(&menu));
         popover.popup();
