@@ -88,6 +88,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let mut photos = db::photos(&connection.borrow(), None, false, None).unwrap_or_default();
     retain_enabled_formats(&connection.borrow(), &mut photos);
     sort_photos(&mut photos, sort.get());
+    let startup_photos = Rc::new(photos);
 
     let info = Rc::new(InfoBar::new());
     info.set_photo(None);
@@ -268,7 +269,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let grid_thumbnail_size = grid_thumbnail_size_from_setting(&connection.borrow());
 
     let gallery = Rc::new(grid::Gallery::new(
-        &photos,
+        &[],
         grid_thumbnail_size,
         move |photo| {
             info_for_grid.set_photo(photo.as_ref());
@@ -1831,6 +1832,45 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     window.set_content(Some(&toast_overlay));
 
+    let startup_toast = adw::Toast::new(&format!(
+        "Loading photos 0 / {}",
+        startup_photos.len()
+    ));
+    startup_toast.set_timeout(0);
+    toast_overlay.add_toast(startup_toast.clone());
+    let startup_gallery = gallery.clone();
+    let startup_toast_for_idle = startup_toast.clone();
+    let startup_photos_for_idle = startup_photos.clone();
+    let startup_total = startup_photos_for_idle.len();
+    let mut startup_offset = 0usize;
+    const STARTUP_BATCH_SIZE: usize = 500;
+    glib::idle_add_local(move || {
+        if startup_offset >= startup_total {
+            startup_toast_for_idle.dismiss();
+            return glib::ControlFlow::Break;
+        }
+
+        let end = (startup_offset + STARTUP_BATCH_SIZE).min(startup_total);
+        let batch = &startup_photos_for_idle[startup_offset..end];
+        if startup_offset == 0 {
+            startup_gallery.replace(batch);
+        } else {
+            startup_gallery.append_photos(batch);
+        }
+        startup_offset = end;
+
+        startup_toast_for_idle.set_title(&format!(
+            "Loading photos {} / {}",
+            startup_offset, startup_total
+        ));
+        if startup_offset >= startup_total {
+            startup_toast_for_idle.dismiss();
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
+
     // Below this width the sidebar becomes an overlay instead of permanently
     // consuming grid space. The breakpoint restores the expanded split view
     // automatically when the window grows again.
@@ -1981,7 +2021,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     // A previously interrupted import can leave valid DB records without
     // previews. Rebuild those previews off the GTK thread at startup.
-    let missing_thumbnails: Vec<_> = photos
+    let missing_thumbnails: Vec<_> = startup_photos
         .iter()
         .filter_map(|photo| {
             let cache =

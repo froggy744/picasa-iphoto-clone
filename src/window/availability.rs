@@ -1,6 +1,14 @@
 fn run_ui_guarded(label: &str, action: impl FnOnce()) {
+    let started = std::time::Instant::now();
     if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)) {
         eprintln!("UI CALLBACK PANIC RECOVERED: {label}: {panic:?}");
+    }
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "UI PERF callback={} elapsed_ms={}",
+            label,
+            started.elapsed().as_millis()
+        );
     }
 }
 
@@ -82,4 +90,3 @@ fn refresh_availability_ui(
         }
     }
 }
-
