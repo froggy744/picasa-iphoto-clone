@@ -168,8 +168,16 @@ fn create_uncached(path: &str, destination: &PathBuf) -> Result<PathBuf> {
             )
         }
     };
-    let source =
-        apply_orientation(DynamicImage::ImageRgb8(source), exif_orientation(path)).to_rgb8();
+    // heif-oxide applies HEIF container transforms (`irot`/`imir`/`clap`) as
+    // part of decoding, so its pixels already have display orientation. Do
+    // not apply an EXIF orientation a second time; some HEIC files contain
+    // both forms of orientation metadata.
+    let orientation = if is_heif(path) {
+        1
+    } else {
+        exif_orientation(path)
+    };
+    let source = apply_orientation(DynamicImage::ImageRgb8(source), orientation).to_rgb8();
     let decode_ms = decode_started.elapsed().as_millis();
     thumb_trace!(
         "THUMB TRACE decoded path={} decoder={} scale={} source={}x{}",
