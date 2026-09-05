@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -22,6 +23,13 @@ const DEFAULT_TILE_HEIGHT: i32 = 120;
 const MIN_TILE_WIDTH: i32 = 100;
 const MAX_TILE_WIDTH: i32 = 300;
 const ZOOM_STEP_WIDTH: i32 = 24;
+
+const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 128;
+
+thread_local! {
+    static RAW_THUMBNAIL_CACHE: RefCell<VecDeque<(String, i32, gtk::gdk::Paintable)>> =
+        const { RefCell::new(VecDeque::new()) };
+}
 
 mod square_tile {
     use std::cell::{Cell, RefCell};
@@ -122,8 +130,17 @@ impl SquareTile {
     }
 
     fn bind_photo(&self, photo: &PhotoObject) {
+        let started = Instant::now();
         self.imp().photo.replace(Some(photo.clone()));
         self.refresh_thumbnail_with_probe(false);
+        let elapsed_ms = started.elapsed().as_millis();
+        if elapsed_ms >= 16 && std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "GRID PERF tile_bind_ms={} path={}",
+                elapsed_ms,
+                photo.path()
+            );
+        }
     }
 
     fn refresh_thumbnail(&self) {
@@ -226,6 +243,11 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
         return None;
     }
 
+    let rotation = photo.rotation().rem_euclid(360);
+    if let Some(paintable) = raw_thumbnail_cache_get(&source_path, rotation) {
+        return Some(paintable);
+    }
+
     let mut image = image::open(path).ok()?.to_rgba8();
     let image_width = image.width();
     let image_height = image.height();
@@ -256,7 +278,7 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
         image = image::imageops::crop_imm(&image, 0, top, image_width, crop_height).to_image();
     }
 
-    image = match photo.rotation().rem_euclid(360) {
+    image = match rotation {
         90 => image::imageops::rotate90(&image),
         180 => image::imageops::rotate180(&image),
         270 => image::imageops::rotate270(&image),
@@ -266,12 +288,7 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
     if std::env::var_os("PICASA_TRACE").is_some() {
         eprintln!(
             "GRID TILE TRACE raw_crop path={} cached={}x{} target={}x{} rotation={}",
-            source_path,
-            image_width,
-            image_height,
-            display_width,
-            display_height,
-            photo.rotation()
+            source_path, image_width, image_height, display_width, display_height, rotation
         );
     }
 
@@ -285,7 +302,35 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
         &bytes,
         width as usize * 4,
     );
-    Some(texture.upcast())
+    let paintable: gtk::gdk::Paintable = texture.upcast();
+    raw_thumbnail_cache_insert(source_path, rotation, paintable.clone());
+    Some(paintable)
+}
+
+fn raw_thumbnail_cache_get(path: &str, rotation: i32) -> Option<gtk::gdk::Paintable> {
+    RAW_THUMBNAIL_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let index = cache.iter().position(|(cached_path, cached_rotation, _)| {
+            cached_path == path && *cached_rotation == rotation
+        })?;
+        let entry = cache.remove(index)?;
+        let paintable = entry.2.clone();
+        cache.push_back(entry);
+        Some(paintable)
+    })
+}
+
+fn raw_thumbnail_cache_insert(path: String, rotation: i32, paintable: gtk::gdk::Paintable) {
+    RAW_THUMBNAIL_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|(cached_path, cached_rotation, _)| {
+            cached_path != &path || *cached_rotation != rotation
+        });
+        cache.push_back((path, rotation, paintable));
+        while cache.len() > RAW_THUMBNAIL_CACHE_CAPACITY {
+            cache.pop_front();
+        }
+    });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,6 +370,7 @@ pub struct Gallery {
     tile_width: Rc<Cell<i32>>,
     tile_height: Rc<Cell<i32>>,
     current_photos: Rc<RefCell<Vec<PhotoObject>>>,
+    replace_generation: Rc<Cell<u64>>,
     group_mode: Rc<Cell<GroupMode>>,
     group_date: Rc<Cell<GroupDate>>,
     group_ranges: Rc<RefCell<Vec<GroupRange>>>,
@@ -540,6 +586,7 @@ impl Gallery {
             tile_width,
             tile_height,
             current_photos,
+            replace_generation: Rc::new(Cell::new(0)),
             group_mode: Rc::new(Cell::new(GroupMode::None)),
             group_date: Rc::new(Cell::new(GroupDate::Taken)),
             group_ranges: Rc::new(RefCell::new(Vec::new())),
@@ -714,6 +761,8 @@ impl Gallery {
     pub fn replace(&self, photos: &[Photo]) {
         let started = Instant::now();
         eprintln!("GRID PERF replace_start rows={}", photos.len());
+        let generation = self.replace_generation.get().wrapping_add(1);
+        self.replace_generation.set(generation);
         let unchanged = {
             let current = self.current_photos.borrow();
             current.len() == photos.len()
@@ -728,6 +777,16 @@ impl Gallery {
                 photos.len(),
                 started.elapsed().as_millis()
             );
+            return;
+        }
+
+        // Constructing tens of thousands of GObjects synchronously blocks
+        // GTK for several seconds. Keep the existing model semantics for
+        // normal refreshes, but let the main loop make progress between small
+        // batches for library-sized replacements.
+        const PROGRESSIVE_REPLACE_THRESHOLD: usize = 1_000;
+        if photos.len() > PROGRESSIVE_REPLACE_THRESHOLD {
+            self.replace_progressive(photos.to_vec(), generation);
             return;
         }
 
@@ -757,6 +816,74 @@ impl Gallery {
             self.rebuild_group_ranges();
             self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
+    }
+
+    fn replace_progressive(&self, photos: Vec<Photo>, generation: u64) {
+        const BATCH_SIZE: usize = 250;
+
+        let photos = Rc::new(photos);
+        let offset = Rc::new(Cell::new(0usize));
+        let store = self.store.clone();
+        let selected = self.selected.clone();
+        let current_photos = self.current_photos.clone();
+        let selection = self.selection.clone();
+        let group_mode = self.group_mode.clone();
+        let group_date = self.group_date.clone();
+        let group_ranges = self.group_ranges.clone();
+        let group_header = self.group_header.clone();
+        let group_title = self.group_title.clone();
+        let group_count = self.group_count.clone();
+        let last_scroll_y = self.last_scroll_y.clone();
+        let current_columns = self.current_columns.clone();
+        let tile_height = self.tile_height.clone();
+        let replace_generation = self.replace_generation.clone();
+
+        glib::idle_add_local(move || {
+            if replace_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+
+            let start = offset.get();
+            let end = (start + BATCH_SIZE).min(photos.len());
+            let objects: Vec<PhotoObject> = photos[start..end]
+                .iter()
+                .map(PhotoObject::from_photo)
+                .collect();
+
+            if start == 0 {
+                selected(None);
+                current_photos.replace(objects.clone());
+                store.remove_all();
+            } else {
+                current_photos.borrow_mut().extend(objects.iter().cloned());
+            }
+            store.splice(start as u32, 0, &objects);
+            offset.set(end);
+
+            if end < photos.len() {
+                return glib::ControlFlow::Continue;
+            }
+
+            rebuild_group_ranges_for(&current_photos, &group_mode, &group_date, &group_ranges);
+            update_group_header_for_index_for(
+                &group_mode,
+                &group_ranges,
+                &group_header,
+                &group_title,
+                &group_count,
+                (((last_scroll_y.get() - 20.0).max(0.0) / (tile_height.get().max(1) as f64 + 12.0))
+                    .floor() as usize)
+                    * current_columns.get().max(1) as usize,
+            );
+            if objects.is_empty() {
+                selection.unselect_all();
+            } else {
+                // Restore the same initial-selection behavior as replace(),
+                // but only after the complete model exists.
+                selection.select_item(0, true);
+            }
+            glib::ControlFlow::Break
+        });
     }
 
     pub fn append_photos(&self, photos: &[Photo]) {
@@ -804,6 +931,67 @@ impl Gallery {
             _ => ids,
         }
     }
+}
+
+fn rebuild_group_ranges_for(
+    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
+    group_mode: &Rc<Cell<GroupMode>>,
+    group_date: &Rc<Cell<GroupDate>>,
+    group_ranges: &Rc<RefCell<Vec<GroupRange>>>,
+) {
+    let mode = group_mode.get();
+    let date = group_date.get();
+    let photos = current_photos.borrow();
+    let mut ranges: Vec<GroupRange> = Vec::new();
+    if mode != GroupMode::None {
+        for (index, photo) in photos.iter().enumerate() {
+            let label = group_label(photo, mode, date);
+            match ranges.last_mut() {
+                Some(last) if last.label == label => last.end = index + 1,
+                _ => ranges.push(GroupRange {
+                    start: index,
+                    end: index + 1,
+                    label,
+                }),
+            }
+        }
+    }
+    group_ranges.replace(ranges);
+}
+
+fn update_group_header_for_index_for(
+    group_mode: &Rc<Cell<GroupMode>>,
+    group_ranges: &Rc<RefCell<Vec<GroupRange>>>,
+    group_header: &gtk::Box,
+    group_title: &gtk::Label,
+    group_count: &gtk::Label,
+    index: usize,
+) {
+    if group_mode.get() == GroupMode::None {
+        group_header.set_visible(false);
+        group_title.set_text("");
+        group_count.set_text("");
+        return;
+    }
+
+    let ranges = group_ranges.borrow();
+    let Some(range) = ranges
+        .iter()
+        .find(|range| index >= range.start && index < range.end)
+        .or_else(|| ranges.last())
+    else {
+        group_header.set_visible(false);
+        return;
+    };
+
+    group_header.set_visible(true);
+    group_title.set_text(&range.label);
+    let count = range.end.saturating_sub(range.start);
+    group_count.set_text(&format!(
+        "•  {} {}",
+        format_count(count),
+        if count == 1 { "photo" } else { "photos" }
+    ));
 }
 
 fn group_label(photo: &PhotoObject, mode: GroupMode, date: GroupDate) -> String {

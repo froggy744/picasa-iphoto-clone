@@ -620,7 +620,20 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let sidebar_resize_active = Rc::new(Cell::new(false));
     let gallery_for_resize = gallery.clone();
     let sidebar_resize_active_for_tick = sidebar_resize_active.clone();
+    let last_grid_tick = Rc::new(Cell::new(None::<Instant>));
+    let last_grid_tick_for_tick = last_grid_tick.clone();
     grid_scroll.add_tick_callback(move |scrolled, _clock| {
+        let now = Instant::now();
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            if let Some(previous) = last_grid_tick_for_tick.replace(Some(now)) {
+                let frame_gap_ms = now.duration_since(previous).as_millis();
+                if frame_gap_ms >= 33 {
+                    eprintln!("UI PERF grid_frame_gap_ms={frame_gap_ms}");
+                }
+            } else {
+                last_grid_tick_for_tick.set(Some(now));
+            }
+        }
         if !sidebar_resize_active_for_tick.get() {
             let width = scrolled.width();
             if width > 100 {
