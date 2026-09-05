@@ -238,7 +238,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         })
     };
     availability_refresh_slot.replace(Some(availability_refresh.clone()));
-    let albums_home_refresh_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
+    let albums_home_refresh_slot: Rc<RefCell<Option<Rc<dyn Fn(&[db::Album])>>>> =
         Rc::new(RefCell::new(None));
     let album_home_click_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> =
         Rc::new(RefCell::new(None));
@@ -258,9 +258,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         on_unavailable: availability_refresh.clone(),
         refresh_albums_home: {
             let slot = albums_home_refresh_slot.clone();
-            Rc::new(move || {
+            Rc::new(move |albums| {
                 if let Some(refresh) = slot.borrow().as_ref() {
-                    refresh();
+                    refresh(albums);
                 }
             })
         },
@@ -653,6 +653,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let albums_home = albums_view::build(
         &albums,
         &connection.borrow(),
+        grid_thumbnail_size,
         {
             let slot = album_home_click_slot.clone();
             Rc::new(move |album_id| {
@@ -904,6 +905,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         &albums_home,
                         &albums,
                         &connection_for_albums.borrow(),
+                        grid_thumbnail_size,
                         on_album,
                     );
                 }
@@ -923,16 +925,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let albums_home = albums_home.clone();
         let connection = connection.clone();
         let click_slot = album_home_click_slot.clone();
-        Rc::new(move || {
-            let Ok(albums) = db::albums(&connection.borrow()) else {
-                return;
-            };
+        Rc::new(move |albums| {
             let on_album = click_slot
                 .borrow()
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(|| Rc::new(|_| {}));
-            albums_view::refresh(&albums_home, &albums, &connection.borrow(), on_album);
+            eprintln!("ALBUM UI TRACE index_refresh albums={}", albums.len());
+            // Album cards keep using existing cached thumbnails; this only
+            // replaces the index data after an album mutation.
+            albums_view::refresh(
+                &albums_home,
+                albums,
+                &connection.borrow(),
+                grid_thumbnail_size,
+                on_album,
+            );
         })
     }));
 
@@ -988,6 +996,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let parent: gtk::Widget = window.clone().upcast();
             Rc::new(move |folder| {
                 show_folder_statistics(&parent, connection.clone(), folder);
+            })
+        },
+        {
+            let parent: gtk::Widget = window.clone().upcast();
+            let context = action_context.clone();
+            Rc::new(move |folder| {
+                show_remove_folder_confirmation(parent.clone(), folder, context.clone());
             })
         },
     );
@@ -1824,6 +1839,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .photo-frame { box-shadow: 0 2px 5px rgba(0,0,0,0.62), 0 0 0 1px rgba(255,255,255,0.12); }\
         .photo-tile { border-radius: 7px; border: 2px solid transparent; background: #3a3a3a; transition: border-color 150ms ease, box-shadow 150ms ease; }\
         .photo-tile:hover { border-color: rgba(140,196,237,0.70); box-shadow: 0 3px 10px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.18); }\
+        .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }\
+        button.album-card { min-width: 0; padding: 0; margin: 0; background: transparent; background-image: none; border: none; box-shadow: none; }\
+        button.album-card:hover, button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }\
         gridview.section-grid > child:selected .photo-tile, gridview.section-grid > item:selected .photo-tile { border-color: #78b9e8; box-shadow: 0 0 0 1px #c6e6ff, 0 3px 10px rgba(0,0,0,0.75); }\
         .selection-badge { opacity: 0; transition: opacity 150ms ease; background: #4d9fdb; color: white; border-radius: 9999px; padding: 3px; box-shadow: 0 1px 3px rgba(0,0,0,0.55); }\
         gridview.section-grid > child:selected .selection-badge, gridview.section-grid > item:selected .selection-badge { opacity: 1; }\

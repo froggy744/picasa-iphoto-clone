@@ -10,6 +10,11 @@ fn selected_photo_ids(context: &PhotoActionContext, fallback_id: Option<i64>) ->
 fn refresh_album_ui(context: &PhotoActionContext) {
     let folders = db::folders(&context.connection.borrow()).unwrap_or_default();
     let albums = db::albums(&context.connection.borrow()).unwrap_or_default();
+    eprintln!(
+        "ALBUM UI TRACE refresh albums={} current_filter={:?}",
+        albums.len(),
+        context.filter.get()
+    );
     let counts = db::sidebar_counts(&context.connection.borrow()).unwrap_or_default();
     if let Some(sidebar) = context.sidebar.borrow().as_ref() {
         sidebar::refresh(
@@ -24,7 +29,7 @@ fn refresh_album_ui(context: &PhotoActionContext) {
         );
     }
     configure_infobar_album_menu(&context.info.add_to_album, context.clone());
-    (context.refresh_albums_home)();
+    (context.refresh_albums_home)(&albums);
 }
 
 fn configure_infobar_album_menu(button: &gtk::MenuButton, context: PhotoActionContext) {
@@ -193,7 +198,56 @@ fn show_delete_album_confirmation(parent: gtk::Widget, album_id: i64, context: P
             context.filter.set(sidebar::SidebarFilter::All);
             refresh_photo_actions_grid(&context);
         }
+        eprintln!("ALBUM UI TRACE deleted id={album_id}");
         refresh_album_ui(&context);
+    });
+    dialog.present(Some(&parent));
+}
+
+fn show_remove_folder_confirmation(
+    parent: gtk::Widget,
+    folder: db::Folder,
+    context: PhotoActionContext,
+) {
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!("Remove “{}” from the library?", folder.name))
+        .body("The folder and its indexed photos will be removed from the app. Files on disk will not be deleted.")
+        .close_response("cancel")
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("remove", "Remove from Library");
+    dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+
+    let parent_for_response = parent.clone();
+    dialog.connect_response(Some("remove"), move |_, _| {
+        if let Err(error) = db::remove_folder(&context.connection.borrow(), folder.id) {
+            show_error(
+                &parent_for_response,
+                "Could not remove folder",
+                &error.to_string(),
+            );
+            return;
+        }
+
+        let current_filter = context.filter.get();
+        let current_folder_removed = match current_filter {
+            sidebar::SidebarFilter::Folder(current_id) => {
+                !db::folder_exists(&context.connection.borrow(), current_id).unwrap_or(true)
+            }
+            _ => false,
+        };
+        if current_folder_removed {
+            context.filter.set(sidebar::SidebarFilter::All);
+            if let Some(sidebar) = context.sidebar.borrow().as_ref() {
+                sidebar::set_active_filter(sidebar, sidebar::SidebarFilter::All);
+            }
+        }
+
+        eprintln!("FOLDER UI TRACE removed id={} path={}", folder.id, folder.path);
+        refresh_album_ui(&context);
+        if context.filter.get() != sidebar::SidebarFilter::Albums {
+            refresh_photo_actions_grid(&context);
+        }
     });
     dialog.present(Some(&parent));
 }

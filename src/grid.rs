@@ -79,6 +79,16 @@ mod square_tile {
                     gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x, y));
 
                 child.allocate(child_width, child_height, baseline, Some(transform));
+
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "GRID TILE TRACE allocation tile={}x{} child={}x{}",
+                        child_width,
+                        child_height,
+                        child.allocated_width(),
+                        child.allocated_height()
+                    );
+                }
             }
         }
 
@@ -97,7 +107,7 @@ glib::wrapper! {
 }
 
 impl SquareTile {
-    fn new(width: i32, height: i32, child: &impl IsA<gtk::Widget>) -> Self {
+    pub(crate) fn new(width: i32, height: i32, child: &impl IsA<gtk::Widget>) -> Self {
         let tile: Self = glib::Object::new();
         tile.imp().width.set(width.max(1));
         tile.imp().height.set(height.max(1));
@@ -167,7 +177,11 @@ impl SquareTile {
         let existing = cached.as_deref().filter(|_| thumbnail_available);
 
         if let Some(path) = existing {
-            if let Some(rotated) = crate::photo_texture::rotated_thumbnail(path, photo.rotation()) {
+            if let Some(cropped) = raw_cached_thumbnail(&photo, path) {
+                picture.set_paintable(Some(&cropped));
+            } else if let Some(rotated) =
+                crate::photo_texture::rotated_thumbnail(path, photo.rotation())
+            {
                 picture.set_paintable(Some(&rotated));
             } else {
                 picture.set_filename(Some(path));
@@ -194,6 +208,84 @@ impl SquareTile {
             picture.add_css_class("missing-thumbnail");
         }
     }
+}
+
+/// Nikon RAW thumbnails can contain a letterboxed embedded preview whose
+/// pixel aspect ratio does not match the camera image dimensions. GTK cannot
+/// crop bars that are already part of the cached pixels, so crop the small
+/// cached image before handing it to the normal Cover-rendered Picture.
+pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gtk::gdk::Paintable> {
+    let source_path = photo.path();
+    if !crate::image_format::uses(&source_path, crate::image_format::DecoderKind::Raw) {
+        return None;
+    }
+
+    let source_width = photo.width();
+    let source_height = photo.height();
+    if source_width <= 0 || source_height <= 0 {
+        return None;
+    }
+
+    let mut image = image::open(path).ok()?.to_rgba8();
+    let image_width = image.width();
+    let image_height = image.height();
+    if image_width == 0 || image_height == 0 {
+        return None;
+    }
+
+    // Cached thumbnails have already had EXIF orientation applied during
+    // generation. Raw dimensions are reported in sensor orientation, so
+    // orientations 5-8 require the target axes to be swapped as well.
+    let orientation = crate::thumbnail::exif_orientation(&source_path);
+    let (display_width, display_height) = if matches!(orientation, 5..=8) {
+        (source_height, source_width)
+    } else {
+        (source_width, source_height)
+    };
+    let target_ratio = display_width as f64 / display_height as f64;
+    let image_ratio = image_width as f64 / image_height as f64;
+    if image_ratio > target_ratio {
+        let crop_width =
+            ((image_height as f64 * target_ratio).round() as u32).clamp(1, image_width);
+        let left = (image_width - crop_width) / 2;
+        image = image::imageops::crop_imm(&image, left, 0, crop_width, image_height).to_image();
+    } else if image_ratio < target_ratio {
+        let crop_height =
+            ((image_width as f64 / target_ratio).round() as u32).clamp(1, image_height);
+        let top = (image_height - crop_height) / 2;
+        image = image::imageops::crop_imm(&image, 0, top, image_width, crop_height).to_image();
+    }
+
+    image = match photo.rotation().rem_euclid(360) {
+        90 => image::imageops::rotate90(&image),
+        180 => image::imageops::rotate180(&image),
+        270 => image::imageops::rotate270(&image),
+        _ => image,
+    };
+
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "GRID TILE TRACE raw_crop path={} cached={}x{} target={}x{} rotation={}",
+            source_path,
+            image_width,
+            image_height,
+            display_width,
+            display_height,
+            photo.rotation()
+        );
+    }
+
+    let width = image.width() as i32;
+    let height = image.height() as i32;
+    let bytes = glib::Bytes::from_owned(image.into_raw());
+    let texture = gtk::gdk::MemoryTexture::new(
+        width,
+        height,
+        gtk::gdk::MemoryFormat::R8g8b8a8,
+        &bytes,
+        width as usize * 4,
+    );
+    Some(texture.upcast())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

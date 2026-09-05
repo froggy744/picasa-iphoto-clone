@@ -53,6 +53,9 @@ const STANDARD_GTK4_CSS: &str = r#"
     .photo-frame { box-shadow: none; }
     .photo-tile { border-radius: 10px; border: 2px solid transparent; background: alpha(@theme_fg_color, 0.05); box-shadow: none; }
     .photo-tile:hover { border-color: alpha(@accent_bg_color, 0.40); box-shadow: none; }
+    .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }
+    button.album-card { min-width: 0; padding: 0; margin: 0; background: transparent; background-image: none; border: none; box-shadow: none; }
+    button.album-card:hover, button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }
     gridview.section-grid > child:selected .photo-tile,
     gridview.section-grid > item:selected .photo-tile {
         border-color: @accent_bg_color;
@@ -294,7 +297,7 @@ struct PhotoActionContext {
     import_folder: Rc<dyn Fn()>,
     delete_album: Rc<dyn Fn(i64)>,
     on_unavailable: Rc<dyn Fn()>,
-    refresh_albums_home: Rc<dyn Fn()>,
+    refresh_albums_home: Rc<dyn Fn(&[db::Album])>,
 }
 
 include!("window/build.rs");

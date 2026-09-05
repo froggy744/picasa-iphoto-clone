@@ -10,6 +10,11 @@ fn refresh_grid(
         "SEARCH PERF refresh_start filter={:?} query={:?}",
         filter, search
     );
+    if filter == sidebar::SidebarFilter::Albums {
+        eprintln!("ALBUM UI TRACE refresh_grid_skip filter=Albums");
+        return;
+    }
+
     // An active search is a library-wide view, regardless of the destination
     // that was selected before typing began.
     if !search.is_empty() {
@@ -65,7 +70,7 @@ fn refresh_grid(
         sidebar::SidebarFilter::All | sidebar::SidebarFilter::RecentlyAdded => (None, false),
         sidebar::SidebarFilter::Favorites => (None, true),
         sidebar::SidebarFilter::Folder(id) => (Some(id), false),
-        sidebar::SidebarFilter::Albums => unreachable!(),
+        sidebar::SidebarFilter::Albums => return,
         sidebar::SidebarFilter::Album(_) => unreachable!(),
     };
 

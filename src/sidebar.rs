@@ -50,6 +50,7 @@ const CURRENT_FILTER_KEY: &str = "picasa-sidebar-current-filter";
 const FILTER_SYNCING_KEY: &str = "picasa-sidebar-filter-syncing";
 const FOLDER_REFRESH_KEY: &str = "picasa-sidebar-folder-refresh";
 const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
+const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 
 pub fn build(
     folders: &[Folder],
@@ -62,6 +63,7 @@ pub fn build(
     on_unavailable: Rc<dyn Fn()>,
     on_refresh_folder: Rc<dyn Fn(String)>,
     on_folder_statistics: Rc<dyn Fn(Folder)>,
+    on_remove_folder: Rc<dyn Fn(Folder)>,
 ) -> gtk::ScrolledWindow {
     let on_filter: Rc<dyn Fn(SidebarFilter)> = Rc::new(on_filter);
     let state = Rc::new(RefCell::new(SidebarState::default()));
@@ -184,6 +186,7 @@ pub fn build(
     unsafe {
         folder_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder);
         folder_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics);
+        folder_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder);
         outer.set_data(STATE_KEY, state);
         outer.set_data(LIBRARY_LIST_KEY, library_list);
         outer.set_data(ALBUM_LIST_KEY, album_list);
@@ -746,10 +749,17 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
         list.data::<Rc<dyn Fn(Folder)>>(FOLDER_STATISTICS_KEY)
             .map(|callback| callback.as_ref().clone())
     };
+    let remove = unsafe {
+        list.data::<Rc<dyn Fn(Folder)>>(FOLDER_REMOVE_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
     let Some(refresh) = refresh else {
         return;
     };
     let Some(statistics) = statistics else {
+        return;
+    };
+    let Some(remove) = remove else {
         return;
     };
 
@@ -788,6 +798,18 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
             statistics(folder.clone());
         });
         menu.append(&statistics_item);
+
+        let remove_item = gtk::Button::with_label("Remove from Library");
+        remove_item.add_css_class("flat");
+        remove_item.add_css_class("destructive-action");
+        let folder = folder_for_menu.clone();
+        let remove = remove.clone();
+        let popover_for_remove = popover.clone();
+        remove_item.connect_clicked(move |_| {
+            popover_for_remove.popdown();
+            remove(folder.clone());
+        });
+        menu.append(&remove_item);
 
         popover.set_child(Some(&menu));
         popover.popup();

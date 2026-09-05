@@ -143,6 +143,48 @@ pub fn folders(connection: &Connection) -> Result<Vec<Folder>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Remove a folder and its indexed descendants from the application database.
+/// This only deletes database rows; it never touches the filesystem.
+pub fn remove_folder(connection: &Connection, folder_id: i64) -> Result<()> {
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute(
+        "DELETE FROM photos
+         WHERE folder_id IN (
+           WITH RECURSIVE descendants(id) AS (
+             SELECT id FROM folders WHERE id = ?1
+             UNION ALL
+             SELECT child.id FROM folders child
+             JOIN descendants ON child.parent_id = descendants.id
+           )
+           SELECT id FROM descendants
+         )",
+        [folder_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM folders
+         WHERE id IN (
+           WITH RECURSIVE descendants(id) AS (
+             SELECT id FROM folders WHERE id = ?1
+             UNION ALL
+             SELECT child.id FROM folders child
+             JOIN descendants ON child.parent_id = descendants.id
+           )
+           SELECT id FROM descendants
+         )",
+        [folder_id],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn folder_exists(connection: &Connection, folder_id: i64) -> Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1)",
+        [folder_id],
+        |row| row.get(0),
+    )?)
+}
+
 pub fn upsert_photo(
     connection: &Connection,
     path: &Path,
