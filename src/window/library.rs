@@ -33,6 +33,7 @@ fn refresh_grid(
                 photos.len(),
                 filter_started.elapsed().as_millis()
             );
+            limit_recently_added(&connection.borrow(), filter, &mut photos);
             let sort_started = Instant::now();
             sort_photos(&mut photos, sort);
             eprintln!(
@@ -81,6 +82,7 @@ fn refresh_grid(
         (!search.is_empty()).then_some(search),
     ) {
         retain_enabled_formats(&connection.borrow(), &mut photos);
+        limit_recently_added(&connection.borrow(), filter, &mut photos);
         sort_photos(&mut photos, sort);
         eprintln!(
             "VIEW TRACE refresh filter={:?} search={:?} photos={}",
@@ -95,6 +97,27 @@ fn refresh_grid(
             filter, search
         );
     }
+}
+
+fn limit_recently_added(
+    connection: &Connection,
+    filter: sidebar::SidebarFilter,
+    photos: &mut Vec<db::Photo>,
+) {
+    if filter != sidebar::SidebarFilter::RecentlyAdded {
+        return;
+    }
+
+    // Select the newest files first, then restore the user's chosen display
+    // ordering in refresh_grid().
+    sort_photos(
+        photos,
+        PhotoSort {
+            field: SortField::DateAdded,
+            direction: SortDirection::Descending,
+        },
+    );
+    photos.truncate(db::recently_added_limit(connection));
 }
 
 fn retain_enabled_formats(connection: &Connection, photos: &mut Vec<db::Photo>) {
@@ -129,7 +152,14 @@ fn sort_photos(photos: &mut [db::Photo], sort: PhotoSort) {
                 pixel_count(right.width, right.height),
                 sort.direction,
             ),
-            SortField::DateAdded => compare_optional(left.mtime, right.mtime, sort.direction),
+            SortField::DateAdded => {
+                directed_ordering(
+                    left.added_at
+                        .cmp(&right.added_at)
+                        .then(left.id.cmp(&right.id)),
+                    sort.direction,
+                )
+            }
         };
 
         ordering.then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
@@ -221,6 +251,7 @@ mod photo_action_tests {
             height: dimensions.map(|value| value.1),
             size_bytes,
             mtime,
+            added_at: mtime.unwrap_or_default(),
             rotation: 0,
             favorite: false,
             trashed: false,

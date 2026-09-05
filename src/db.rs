@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS photos (
   height INTEGER,
   size_bytes INTEGER,
   mtime INTEGER,
+  added_at INTEGER NOT NULL DEFAULT 0,
   rotation INTEGER DEFAULT 0,
   favorite BOOLEAN DEFAULT 0,
   trashed BOOLEAN DEFAULT 0
@@ -76,6 +77,7 @@ pub struct Photo {
     pub height: Option<i64>,
     pub size_bytes: Option<i64>,
     pub mtime: Option<i64>,
+    pub added_at: i64,
     pub rotation: i32,
     pub favorite: bool,
     pub trashed: bool,

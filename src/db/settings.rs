@@ -1,9 +1,25 @@
+pub const RECENTLY_ADDED_LIMIT_SETTING_KEY: &str = "recently-added-limit";
+pub const DEFAULT_RECENTLY_ADDED_LIMIT: usize = 100;
+const MAX_RECENTLY_ADDED_LIMIT: usize = 1_000_000;
+pub const LIBRARY_AVAILABLE_SETTING_KEY: &str = "library-stats-available";
+pub const LIBRARY_UNAVAILABLE_SETTING_KEY: &str = "library-stats-unavailable";
+pub const LIBRARY_STATS_UPDATED_SETTING_KEY: &str = "library-stats-updated";
+
 pub fn setting(connection: &Connection, key: &str) -> Result<Option<String>> {
     Ok(connection
         .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
             row.get(0)
         })
         .optional()?)
+}
+
+pub fn recently_added_limit(connection: &Connection) -> usize {
+    setting(connection, RECENTLY_ADDED_LIMIT_SETTING_KEY)
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, MAX_RECENTLY_ADDED_LIMIT))
+        .unwrap_or(DEFAULT_RECENTLY_ADDED_LIMIT)
 }
 
 pub fn set_setting(connection: &Connection, key: &str, value: &str) -> Result<()> {
@@ -44,7 +60,7 @@ pub fn sidebar_counts(connection: &Connection) -> Result<SidebarCounts> {
     Ok(SidebarCounts {
         photos,
         favorites,
-        recently_added: photos,
+        recently_added: photos.min(recently_added_limit(connection) as i64),
     })
 }
 
@@ -87,4 +103,3 @@ pub fn clear_all(connection: &Connection) -> Result<()> {
     )?;
     Ok(())
 }
-

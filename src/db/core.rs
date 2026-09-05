@@ -22,9 +22,30 @@ pub fn open(path: &Path) -> Result<Connection> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.execute_batch(SCHEMA)?;
+    migrate_photo_schema(&connection)?;
     migrate_folder_schema(&connection)?;
     migrate_album_schema(&connection)?;
     Ok(connection)
+}
+
+fn migrate_photo_schema(connection: &Connection) -> Result<()> {
+    let columns = connection
+        .prepare("PRAGMA table_info(photos)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !columns.iter().any(|column| column == "added_at") {
+        connection.execute(
+            "ALTER TABLE photos ADD COLUMN added_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    // Existing records have no import timestamp. Their stable row IDs retain
+    // the database's historical insertion order until they are refreshed.
+    connection.execute("UPDATE photos SET added_at = id WHERE added_at = 0", [])?;
+    connection.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_photos_added_at ON photos(added_at DESC);",
+    )?;
+    Ok(())
 }
 
 fn migrate_folder_schema(connection: &Connection) -> Result<()> {
@@ -95,7 +116,7 @@ fn repair_folder_parent_links(connection: &Connection) -> Result<()> {
 
         if direct_parent_id.is_some() && direct_parent_id != current_parent_id {
             connection.execute(
-                "UPDATE folders SET parent_id = ?1, imported_root = 0 WHERE id = ?2",
+                "UPDATE folders SET parent_id = ?1 WHERE id = ?2",
                 rusqlite::params![direct_parent_id, id],
             )?;
         }

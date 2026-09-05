@@ -569,12 +569,13 @@ fn populate_folders(
         .collect();
     let mut children: HashMap<Option<i64>, Vec<i64>> = HashMap::new();
     for folder in visible_folders {
-        let parent = if folder.imported_root {
-            None
-        } else {
-            folder.parent_id
-        };
-        children.entry(parent).or_default().push(folder.id);
+        // imported_root controls scan scope only. It must not flatten an
+        // explicitly imported folder out of its visual hierarchy; otherwise
+        // synthetic parents such as /mnt/steam cannot collapse their children.
+        children
+            .entry(folder.parent_id)
+            .or_default()
+            .push(folder.id);
     }
 
     for ids in children.values_mut() {
@@ -746,6 +747,23 @@ fn append_folder_row(
     content.append(&trailing);
 
     row.set_child(Some(&content));
+    let folder_id = folder.id;
+    let list_for_double_click = list.clone();
+    let state_for_double_click = state.clone();
+    let double_click = gtk::GestureClick::new();
+    double_click.set_button(1);
+    double_click.connect_pressed(move |gesture, n_press, _, _| {
+        if n_press == 2 {
+            let mut state = state_for_double_click.borrow_mut();
+            if !state.expanded_folders.remove(&folder_id) {
+                state.expanded_folders.insert(folder_id);
+            }
+            drop(state);
+            rebuild_folder_list_from_rows(&list_for_double_click, &state_for_double_click);
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+        }
+    });
+    row.add_controller(double_click);
     if folder.imported_root {
         row.set_tooltip_text(Some(&folder.path));
     }
@@ -807,6 +825,11 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
 
         let refresh_item = gtk::Button::with_label("Refresh folder");
         refresh_item.add_css_class("flat");
+        refresh_item.set_sensitive(folder_for_menu.imported_root);
+        if !folder_for_menu.imported_root {
+            refresh_item
+                .set_tooltip_text(Some("Only explicitly imported folders can be refreshed"));
+        }
         let path = folder_for_menu.path.clone();
         let popover_for_refresh = popover.clone();
         let refresh = refresh.clone();

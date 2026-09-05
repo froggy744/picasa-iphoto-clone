@@ -194,7 +194,15 @@ impl SquareTile {
         let existing = cached.as_deref().filter(|_| thumbnail_available);
 
         if let Some(path) = existing {
-            if let Some(cropped) = raw_cached_thumbnail(&photo, path) {
+            // RAW correction requires decoding and cropping pixels. Do not do
+            // that synchronously while GtkGridView binds a tile; the cached
+            // file is already a usable thumbnail and keeps startup/scrolling
+            // responsive.
+            if crate::image_format::uses(&photo.path(), crate::image_format::DecoderKind::Raw)
+                && photo.rotation().rem_euclid(360) == 0
+            {
+                picture.set_filename(Some(path));
+            } else if let Some(cropped) = raw_cached_thumbnail(&photo, path) {
                 picture.set_paintable(Some(&cropped));
             } else if let Some(rotated) =
                 crate::photo_texture::rotated_thumbnail(path, photo.rotation())

@@ -56,6 +56,44 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     window.set_title(Some("PIC - Picasa iPhoto Clone"));
     window.set_default_size(1440, 900);
 
+    let close_confirmation_open = Rc::new(Cell::new(false));
+    let close_confirmation_allowed = Rc::new(Cell::new(false));
+    let close_confirmation_open_for_request = close_confirmation_open.clone();
+    let close_confirmation_allowed_for_request = close_confirmation_allowed.clone();
+    window.connect_close_request(move |window| {
+        if close_confirmation_allowed_for_request.get() {
+            return glib::Propagation::Proceed;
+        }
+        if close_confirmation_open_for_request.replace(true) {
+            return glib::Propagation::Stop;
+        }
+
+        let dialog = adw::AlertDialog::builder()
+            .heading("Close Picasa?")
+            .body("Are you sure you want to close the application?")
+            .default_response("cancel")
+            .close_response("cancel")
+            .build();
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("close", "Close Picasa");
+        dialog.set_response_appearance("close", adw::ResponseAppearance::Destructive);
+
+        let window_for_response = window.clone();
+        let close_confirmation_open_for_response = close_confirmation_open_for_request.clone();
+        let close_confirmation_allowed_for_response = close_confirmation_allowed_for_request.clone();
+        dialog.connect_response(None, move |dialog, response| {
+            close_confirmation_open_for_response.set(false);
+            if response == "close" {
+                close_confirmation_allowed_for_response.set(true);
+                window_for_response.close();
+            } else {
+                dialog.close();
+            }
+        });
+        dialog.present(Some(window));
+        glib::Propagation::Stop
+    });
+
     let connection = Rc::new(RefCell::new(connection));
     let folders = db::folders(&connection.borrow()).unwrap_or_default();
     let albums = db::albums(&connection.borrow()).unwrap_or_default();
@@ -87,8 +125,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     }));
     let mut photos = db::photos(&connection.borrow(), None, false, None).unwrap_or_default();
     retain_enabled_formats(&connection.borrow(), &mut photos);
+    limit_recently_added(
+        &connection.borrow(),
+        sidebar::SidebarFilter::RecentlyAdded,
+        &mut photos,
+    );
     sort_photos(&mut photos, sort.get());
     let startup_photos = Rc::new(photos);
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "STARTUP library_loaded photos={} displayed={} folders={} albums={} scan=disabled",
+            sidebar_counts.photos,
+            startup_photos.len(),
+            folders.len(),
+            albums.len()
+        );
+    }
 
     let info = Rc::new(InfoBar::new());
     info.set_photo(None);
@@ -178,7 +230,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let info_for_grid = info.clone();
     let selected_photo_for_grid = selected_photo.clone();
     let lightbox_for_grid = lightbox.clone();
-    let filter = Rc::new(Cell::new(sidebar::SidebarFilter::All));
+    let filter = Rc::new(Cell::new(sidebar::SidebarFilter::RecentlyAdded));
     let search_text = Rc::new(RefCell::new(String::new()));
     let search_entry_slot: Rc<RefCell<Option<gtk::SearchEntry>>> = Rc::new(RefCell::new(None));
     let search_suppressed = Rc::new(Cell::new(false));
@@ -377,6 +429,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             };
 
             retain_enabled_formats(&connection.borrow(), &mut photos);
+            limit_recently_added(&connection.borrow(), current_filter, &mut photos);
             sort_photos(&mut photos, sort.get());
 
             let Some(index) = photos.iter().position(|photo| photo.id == selected.id()) else {
@@ -1868,7 +1921,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     const STARTUP_BATCH_SIZE: usize = 500;
     glib::idle_add_local(move || {
         if startup_offset >= startup_total {
-            startup_toast_for_idle.dismiss();
+            startup_toast_for_idle.set_title("No photos");
+            startup_toast_for_idle.set_timeout(3);
             return glib::ControlFlow::Break;
         }
 
@@ -1886,7 +1940,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             startup_offset, startup_total
         ));
         if startup_offset >= startup_total {
-            startup_toast_for_idle.dismiss();
+            startup_toast_for_idle.set_title(&format!("Loaded {startup_total} photos"));
+            startup_toast_for_idle.set_timeout(3);
             glib::ControlFlow::Break
         } else {
             glib::ControlFlow::Continue
@@ -2014,7 +2069,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     refresh_folder_slot.replace(Some({
         let scan_job = scan_job.clone();
         let start_next_scan = start_next_scan.clone();
+        let connection = connection.clone();
         Rc::new(move |path: String| {
+            let imported_root = db::folders(&connection.borrow())
+                .ok()
+                .into_iter()
+                .flatten()
+                .any(|folder| folder.path == path && folder.imported_root);
+            if !imported_root {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!("SCAN ignored non-imported folder root={path}");
+                }
+                return;
+            }
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("SCAN requested folder root={path}");
+            }
             let mut job = scan_job.borrow_mut();
             if let Some(previous) = job.active.take() {
                 previous.cancel();
@@ -2094,12 +2164,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     }
 
     let parent = window.clone();
+    let connection_for_import = connection.clone();
+    let sidebar_refresh_for_import = availability_refresh.clone();
     let scan_job_for_import = scan_job.clone();
     let start_next_scan_for_import = start_next_scan.clone();
 
     import_folder_slot.replace(Some(Rc::new(move || {
         let scan_job = scan_job_for_import.clone();
         let start_next_scan = start_next_scan_for_import.clone();
+        let connection = connection_for_import.clone();
+        let sidebar_refresh = sidebar_refresh_for_import.clone();
 
         let dialog = gtk::FileChooserNative::new(
             Some("Import Folder"),
@@ -2113,6 +2187,18 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if response == gtk::ResponseType::Accept {
                 if let Some(file) = dialog.file() {
                     let root = crate::source::reference(&file);
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!("IMPORT selected root={root}");
+                    }
+                    if let Err(error) = db::mark_import_root(&connection.borrow(), &root) {
+                        eprintln!("Could not register imported folder {root}: {error}");
+                        return;
+                    }
+                    // Re-read the folder hierarchy immediately after the
+                    // selected root is registered. The scan worker may emit
+                    // its first event later, but the sidebar must already show
+                    // the correct parent/child relationship before scanning.
+                    sidebar_refresh();
                     {
                         let mut job = scan_job.borrow_mut();
                         if let Some(previous) = job.active.take() {
@@ -2311,9 +2397,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let mut failure_toast_shown = false;
     let mut progress_toast: Option<adw::Toast> = None;
     let mut thumbnail_total: usize = 0;
-    let event_started = std::time::Instant::now();
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
+        let callback_started = Instant::now();
         // Never monopolize the GTK loop when a fast scanner has queued many
         // results. Leaving some events queued lets GTK process input, redraws,
         // scrolling, and folder changes between import batches.
@@ -2530,6 +2616,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         continue;
                     }
 
+                    crate::settings::refresh_library_availability_stats(
+                        connection_for_events.clone(),
+                    );
+
                     stop_scan_for_events.set_visible(false);
                     if let Some(toast) = progress_toast.take() {
                         toast.dismiss();
@@ -2594,7 +2684,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             eprintln!(
                 "UI PERF event_tick events={} elapsed_ms={}",
                 handled_events,
-                event_started.elapsed().as_millis()
+                callback_started.elapsed().as_millis()
             );
         }
 
@@ -2603,7 +2693,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 eprintln!(
                     "UI PERF photo_batch={} elapsed_ms={}",
                     pending_photos.len(),
-                    event_started.elapsed().as_millis()
+                    callback_started.elapsed().as_millis()
                 );
             }
             run_ui_guarded("photo batch append", || {
