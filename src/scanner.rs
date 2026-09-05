@@ -178,7 +178,17 @@ fn scan_with_control(
                 .ok()
                 .flatten()
                 .is_none();
-        if fingerprint_matches && !missing_raw_dimensions && !missing_heif_thumbnail {
+        let missing_raw_thumbnail = is_raw(&path)
+            && existing.is_some()
+            && thumbnail::existing_cache_path(&path, fingerprint.0, fingerprint.1)
+                .ok()
+                .flatten()
+                .is_none();
+        if fingerprint_matches
+            && !missing_raw_dimensions
+            && !missing_heif_thumbnail
+            && !missing_raw_thumbnail
+        {
             db::set_photo_folder(transaction.as_ref().unwrap(), &path, folder_id)?;
             continue;
         }

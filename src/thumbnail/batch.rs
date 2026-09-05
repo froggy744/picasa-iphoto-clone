@@ -8,7 +8,7 @@ pub fn create_many(
     // The default Rayon pool was starting too many full-resolution decodes,
     // making each thumbnail slower instead of faster.
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(thumbnail_worker_threads())
+        .num_threads(thumbnail_worker_threads(items))
         .build()
         .expect("thumbnail worker pool should be constructible");
     pool.install(|| {
@@ -34,7 +34,7 @@ pub fn create_many_cancellable(
     use rayon::prelude::*;
 
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(thumbnail_worker_threads())
+        .num_threads(thumbnail_worker_threads(items))
         .build()
         .expect("thumbnail worker pool should be constructible");
     pool.install(|| {
@@ -61,11 +61,22 @@ pub fn create_many_cancellable(
 /// `THUMB PERF` lines on your machine (e.g. a slow spinning disk or network
 /// share), lower this cap — more threads won't help an I/O-bound workload
 /// and can even hurt by causing seek contention.
-fn thumbnail_worker_threads() -> usize {
-    std::thread::available_parallelism()
+fn thumbnail_worker_threads(items: &[(String, Option<i64>, Option<i64>)]) -> usize {
+    let available = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
-        .unwrap_or(4)
-        .clamp(2, 8)
+        .unwrap_or(4);
+
+    // RAW preview decoding is substantially more CPU- and memory-intensive
+    // than JPEG thumbnailing. Keep mixed refreshes responsive while still
+    // allowing ordinary image batches to use the available cores.
+    let has_raw = items.iter().any(|(path, _, _)| {
+        crate::image_format::uses(path, crate::image_format::DecoderKind::Raw)
+    });
+    if has_raw {
+        available.clamp(1, 2)
+    } else {
+        available.clamp(2, 8)
+    }
 }
 
 pub fn clear_cache() -> Result<()> {

@@ -33,6 +33,37 @@ fn decode_heif(bytes: &[u8]) -> Result<DecodedThumbnailSource> {
 
 fn decode_nef(reference: &str) -> Result<DecodedThumbnailSource> {
     let local_path = crate::source::materialize(reference)?;
+
+    // The embedded Nikon thumbnail is often only 240x320 and produces visibly
+    // soft gallery tiles. Prefer rawler's larger decoded preview for the
+    // cached thumbnail; the embedded paths remain fallbacks for RAW files
+    // that rawler cannot decode.
+    let raw_preview_started = Instant::now();
+    match rawler::analyze::extract_preview_pixels(
+        local_path.clone(),
+        &rawler::decoders::RawDecodeParams::default(),
+    ) {
+        Ok(image) => {
+            let source_width = image.width();
+            let source_height = image.height();
+            thumb_trace!(
+                "THUMB TRACE RAW preview decoder=rawler source={}x{} elapsed_ms={}",
+                source_width,
+                source_height,
+                raw_preview_started.elapsed().as_millis()
+            );
+            return Ok(DecodedThumbnailSource {
+                image: image.to_rgb8(),
+                source_width,
+                source_height,
+                scale: "raw preview",
+            });
+        }
+        Err(error) => {
+            thumb_trace!("THUMB TRACE RAW preview_failed reason={error}");
+        }
+    }
+
     if let Some(thumbnail) = nef_uncompressed_thumbnail(&local_path)? {
         return Ok(thumbnail);
     }
