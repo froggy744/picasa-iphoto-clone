@@ -93,7 +93,7 @@ fn show_photo_context_menu(
         eprintln!("FAVORITE TRACE photos={} favorite={}", count, target);
         popover_for_favorite.popdown();
         refresh_photo_actions_grid(&favorite_context);
-        (favorite_context.on_unavailable)();
+        refresh_favorite_sidebar(&favorite_context);
     });
 
     if let sidebar::SidebarFilter::Album(album_id) = context.filter.get() {
@@ -392,6 +392,16 @@ fn refresh_photo_actions_grid(context: &PhotoActionContext) {
         context.sort.get(),
         &gallery,
     );
+}
+
+fn refresh_favorite_sidebar(context: &PhotoActionContext) {
+    let Some(sidebar) = context.sidebar.borrow().as_ref().cloned() else {
+        return;
+    };
+    let Ok(counts) = db::sidebar_counts(&context.connection.borrow()) else {
+        return;
+    };
+    sidebar::refresh_library_counts(&sidebar, counts, &context.on_unavailable);
 }
 
 fn show_properties_dialog(

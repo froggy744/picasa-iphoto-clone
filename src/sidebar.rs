@@ -268,6 +268,24 @@ pub fn refresh(
     }
 }
 
+pub fn refresh_library_counts(
+    scrolled: &gtk::ScrolledWindow,
+    counts: SidebarCounts,
+    on_unavailable: &Rc<dyn Fn()>,
+) {
+    let Some(library_list) = stored_widget::<gtk::ListBox>(scrolled, LIBRARY_LIST_KEY) else {
+        return;
+    };
+
+    clear_list(&library_list);
+    append_heading_static(&library_list, "Library");
+    populate_library(&library_list, counts, on_unavailable);
+
+    if let Some(filter) = current_filter(scrolled) {
+        set_active_filter(scrolled, filter);
+    }
+}
+
 /// Add the folder row immediately when an import starts. The normal refresh
 /// remains responsible for counts and ordering once the import completes.
 pub fn append_folder(

@@ -682,6 +682,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let sort_for_favorite = sort.clone();
     let lightbox_for_favorite = lightbox.clone();
     let sidebar_refresh_for_favorite = availability_refresh.clone();
+    let sidebar_for_favorite = sidebar_for_unavailable.clone();
 
     info.favorite.connect_clicked(move |_| {
         let Some(photo) = selected_for_favorite.borrow().clone() else {
@@ -710,7 +711,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         } else {
             info_favorite.set_photo(Some(&photo));
         }
-        sidebar_refresh_for_favorite();
+        if let Some(sidebar) = sidebar_for_favorite.borrow().as_ref().cloned() {
+            if let Ok(counts) = db::sidebar_counts(&db_for_favorite.borrow()) {
+                sidebar::refresh_library_counts(
+                    &sidebar,
+                    counts,
+                    &sidebar_refresh_for_favorite,
+                );
+            }
+        }
 
         if std::env::var_os("PICASA_TRACE").is_some() {
             eprintln!(
