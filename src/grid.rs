@@ -733,9 +733,38 @@ impl Gallery {
     }
 
     pub fn refresh_availability(&self) {
-        for photo in self.current_photos.borrow().iter() {
-            let available = crate::source::cached_file_available(&photo.path());
-            photo.set_original_available(available);
+        let updates = self
+            .current_photos
+            .borrow()
+            .iter()
+            .map(|photo| {
+                (
+                    photo.id(),
+                    crate::source::cached_file_available(&photo.path()),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.apply_availability(&updates);
+    }
+
+    pub fn availability_snapshot(&self) -> Vec<(i64, String)> {
+        self.current_photos
+            .borrow()
+            .iter()
+            .map(|photo| (photo.id(), photo.path()))
+            .collect()
+    }
+
+    pub fn apply_availability(&self, updates: &[(i64, bool)]) {
+        for (id, available) in updates {
+            if let Some(photo) = self
+                .current_photos
+                .borrow()
+                .iter()
+                .find(|photo| photo.id() == *id)
+            {
+                photo.set_original_available(*available);
+            }
         }
 
         let mut tiles = Vec::new();

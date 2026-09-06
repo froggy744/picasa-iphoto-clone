@@ -1,3 +1,7 @@
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+static AVAILABILITY_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 fn run_ui_guarded(label: &str, action: impl FnOnce()) {
     let started = std::time::Instant::now();
     if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)) {
@@ -64,9 +68,31 @@ fn refresh_availability_ui(
 ) {
     crate::source::refresh_availability();
 
-    // Recompute the loaded PhotoObjects before touching either view.
+    let generation = AVAILABILITY_GENERATION.fetch_add(1, AtomicOrdering::Relaxed) + 1;
     if let Some(gallery) = gallery.borrow().upgrade() {
-        gallery.refresh_availability();
+        let snapshot = gallery.availability_snapshot();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let updates = snapshot
+                .into_iter()
+                .map(|(id, path)| (id, crate::source::cached_file_available(&path)))
+                .collect::<Vec<_>>();
+            let _ = sender.send((generation, updates));
+        });
+
+        let gallery_for_result = gallery.clone();
+        glib::timeout_add_local(Duration::from_millis(50), move || {
+            match receiver.try_recv() {
+                Ok((result_generation, updates)) => {
+                    if result_generation == AVAILABILITY_GENERATION.load(AtomicOrdering::Relaxed) {
+                        gallery_for_result.apply_availability(&updates);
+                    }
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            }
+        });
     }
 
     if let (Ok(folders), Ok(albums), Ok(counts)) = (
