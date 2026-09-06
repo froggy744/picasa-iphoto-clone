@@ -58,9 +58,9 @@ impl Lightbox {
         let pan_drag = gtk::GestureDrag::new();
         pan_drag.set_button(1);
         pan_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+        pan_drag.set_exclusive(true);
 
         let one_to_one_for_drag_begin = one_to_one_active.clone();
-        let root_for_drag_begin = root.clone();
         let viewport_for_drag_begin = picture_viewport.clone();
         let drag_start_h_begin = drag_start_h.clone();
         let drag_start_v_begin = drag_start_v.clone();
@@ -70,17 +70,12 @@ impl Lightbox {
                 return;
             }
 
-            // The drag controller is attached to the stationary root overlay.
-            // Only start panning if the drag began inside the image viewport.
-            let inside_viewport = viewport_for_drag_begin
-                .compute_bounds(&root_for_drag_begin)
-                .map(|bounds| {
-                    x >= bounds.x() as f64
-                        && y >= bounds.y() as f64
-                        && x < (bounds.x() + bounds.width()) as f64
-                        && y < (bounds.y() + bounds.height()) as f64
-                })
-                .unwrap_or(false);
+            // The controller is attached to the stationary image viewport,
+            // so the gesture coordinates are already local to that viewport.
+            let inside_viewport = x >= 0.0
+                && y >= 0.0
+                && x < viewport_for_drag_begin.width() as f64
+                && y < viewport_for_drag_begin.height() as f64;
 
             if !inside_viewport {
                 gesture.set_state(gtk::EventSequenceState::Denied);
@@ -172,10 +167,10 @@ impl Lightbox {
             }
         });
         // Double-click stays on the picture. The pan gesture is attached to
-        // the stationary root overlay so its coordinates do not move while
-        // the ScrolledWindow adjustments pan the image.
+        // the stationary viewport so its coordinates do not move while the
+        // ScrolledWindow adjustments pan the image.
         picture.add_controller(double_click);
-        root.add_controller(pan_drag);
+        picture_viewport.add_controller(pan_drag);
 
         // Some close paths intentionally hide the overlay directly (outside
         // click and double-click). Reset the internal presentation state for

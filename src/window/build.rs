@@ -1220,7 +1220,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     sidebar_shell.set_child(Some(&left_column));
 
     let sidebar_resize_handle = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    sidebar_resize_handle.set_width_request(8);
+    // Keep a forgiving hit area around the visible divider. The handle is
+    // intentionally transparent, so this does not change the sidebar's
+    // appearance.
+    sidebar_resize_handle.set_width_request(12);
     sidebar_resize_handle.set_hexpand(false);
     sidebar_resize_handle.set_vexpand(true);
     sidebar_resize_handle.set_halign(gtk::Align::End);
@@ -1301,6 +1304,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let sidebar_drag_split_width = Rc::new(Cell::new(1.0f64));
     let sidebar_drag = gtk::GestureDrag::new();
     sidebar_drag.set_button(1);
+    sidebar_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    sidebar_drag.set_exclusive(true);
 
     let sidebar_shell_for_drag_begin = sidebar_shell.clone();
     let main_split_for_drag_begin = main_split.clone();
@@ -2004,7 +2009,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .search-field entry { background: transparent; border: none; box-shadow: none; color: #f5f5f5; }\
         .photo-grid { background: #292929; }\
         scrolledwindow undershoot { background: transparent; }\
-        gridview.section-grid { background: transparent; padding: 0; }\
+        gridview.section-grid { background: transparent; padding: 20px 20px 24px 20px; }\
         gridview.section-grid > child, gridview.section-grid > item { padding: 6px; margin: 0; background: transparent; background-image: none; box-shadow: none; border-radius: 10px; }\
         gridview.section-grid > child:hover, gridview.section-grid > child:selected, gridview.section-grid > child:focus, gridview.section-grid > child:active, gridview.section-grid > item:hover, gridview.section-grid > item:selected, gridview.section-grid > item:focus, gridview.section-grid > item:active { background: transparent; background-image: none; outline: none; box-shadow: none; }\
         .photo-frame { box-shadow: 0 2px 5px rgba(0,0,0,0.62), 0 0 0 1px rgba(255,255,255,0.12); }\

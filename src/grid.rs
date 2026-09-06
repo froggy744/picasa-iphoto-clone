@@ -479,10 +479,10 @@ impl Gallery {
             frame.add_overlay(&checkmark);
 
             let unavailable_badge = gtk::Button::with_label("!");
-            unavailable_badge.set_halign(gtk::Align::End);
+            unavailable_badge.set_halign(gtk::Align::Start);
             unavailable_badge.set_valign(gtk::Align::Start);
             unavailable_badge.set_margin_top(8);
-            unavailable_badge.set_margin_end(8);
+            unavailable_badge.set_margin_start(8);
             unavailable_badge.add_css_class("offline-badge");
             unavailable_badge.set_tooltip_text(Some("Original photo unavailable"));
             unavailable_badge.set_visible(false);
@@ -547,10 +547,6 @@ impl Gallery {
         root.set_vexpand(true);
         root.set_halign(gtk::Align::Fill);
         root.set_valign(gtk::Align::Fill);
-        root.set_margin_start(20);
-        root.set_margin_end(20);
-        root.set_margin_top(20);
-        root.set_margin_bottom(24);
         root.add_css_class("section-grid");
 
         let selected_for_signal = selected.clone();
