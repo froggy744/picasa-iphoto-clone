@@ -50,7 +50,6 @@ pub fn existing_cache_path(
 }
 
 pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result<PathBuf> {
-    const FAILURE_MARKER_VERSION: &[u8] = b"picasa-thumbnail-failure-v2\n";
     let destination = cache_path(path, mtime, size_bytes)?;
     let failure_marker = destination.with_extension("failed");
     if destination.is_file() {
@@ -62,15 +61,10 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
         return Ok(destination);
     }
     if failure_marker.is_file() {
-        let retry_raw = is_raw(path)
-            && fs::read(&failure_marker)
-                .map(|contents| contents != FAILURE_MARKER_VERSION)
-                .unwrap_or(true);
-        if is_heif(path) || retry_raw {
+        if is_heif(path) {
             // HEIF was previously admitted by the scanner without having a
             // decoder, so old libraries can contain a stale failure marker.
-            // Retry those files now that an improved decoder/fallback is
-            // available. The versioned marker prevents repeated retries.
+            // Retry those files now that an HEIF decoder is available.
             let _ = fs::remove_file(&failure_marker);
         } else {
             thumb_trace!(
@@ -103,7 +97,7 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
         // Avoid retrying a known corrupt/unsupported source on every launch.
         // The marker is keyed by the source fingerprint, so a changed file
         // naturally gets a new cache key and can be attempted again.
-        let _ = fs::write(&failure_marker, FAILURE_MARKER_VERSION);
+        let _ = fs::write(&failure_marker, b"thumbnail generation failed\n");
     }
     result
 }
