@@ -371,14 +371,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     gallery_for_actions.replace(Rc::downgrade(&gallery));
     apply_gallery_grouping(&gallery, filter.get(), sort.get(), group_mode.get());
 
-    // Complete the Space shortcut now that the gallery/current filter state
-    // exists. Rebuild the same current photo collection used by the grid, then
-    // open the currently selected photo at its matching index.
+    // Reuse the gallery model for the Space shortcut. Re-querying the database
+    // and rebuilding the complete library model here blocked the GTK thread.
     {
-        let connection = connection.clone();
-        let filter = filter.clone();
-        let search = search_text.clone();
-        let sort = sort.clone();
+        let gallery = gallery.clone();
         let selected_photo = selected_photo.clone();
         let lightbox = lightbox.clone();
         let availability_refresh = availability_refresh.clone();
@@ -392,53 +388,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 availability_refresh();
             }
 
-            let search_text = search.borrow().clone();
-            let current_filter = filter.get();
-
-            let mut photos = match current_filter {
-                sidebar::SidebarFilter::Albums => Vec::new(),
-                sidebar::SidebarFilter::Album(album_id) => db::photos_in_album(
-                    &connection.borrow(),
-                    album_id,
-                    (!search_text.is_empty()).then_some(search_text.as_str()),
-                )
-                .unwrap_or_default(),
-                sidebar::SidebarFilter::Folder(folder_id) => db::photos(
-                    &connection.borrow(),
-                    Some(folder_id),
-                    false,
-                    (!search_text.is_empty()).then_some(search_text.as_str()),
-                )
-                .unwrap_or_default(),
-                sidebar::SidebarFilter::Favorites => db::photos(
-                    &connection.borrow(),
-                    None,
-                    true,
-                    (!search_text.is_empty()).then_some(search_text.as_str()),
-                )
-                .unwrap_or_default(),
-                sidebar::SidebarFilter::All | sidebar::SidebarFilter::RecentlyAdded => db::photos(
-                    &connection.borrow(),
-                    None,
-                    false,
-                    (!search_text.is_empty()).then_some(search_text.as_str()),
-                )
-                .unwrap_or_default(),
-            };
-
-            retain_enabled_formats(&connection.borrow(), &mut photos);
-            limit_recently_added(&connection.borrow(), current_filter, &mut photos);
-            sort_photos(&mut photos, sort.get());
-
-            let Some(index) = photos.iter().position(|photo| photo.id == selected.id()) else {
+            let photos = gallery.photo_objects();
+            let Some(index) = photos.iter().position(|photo| photo.id() == selected.id()) else {
                 return;
             };
-
-            let objects = photos
-                .iter()
-                .map(crate::photo_object::PhotoObject::from_photo)
-                .collect::<Vec<_>>();
-            lightbox.open(objects, index);
+            lightbox.open(photos, index);
         })));
     }
 

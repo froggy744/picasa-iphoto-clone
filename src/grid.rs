@@ -897,6 +897,10 @@ impl Gallery {
             _ => ids,
         }
     }
+
+    pub fn photo_objects(&self) -> Vec<PhotoObject> {
+        self.current_photos.borrow().clone()
+    }
 }
 
 fn rebuild_group_ranges_for(
