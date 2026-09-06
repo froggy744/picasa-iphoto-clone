@@ -44,6 +44,7 @@ const ALBUM_LIST_KEY: &str = "picasa-sidebar-album-list";
 const ALBUM_REVEALER_KEY: &str = "picasa-sidebar-album-revealer";
 const ALBUM_INDICATOR_KEY: &str = "picasa-sidebar-album-indicator";
 const FOLDER_LIST_KEY: &str = "picasa-sidebar-folder-list";
+const FOLDER_SCROLL_KEY: &str = "picasa-sidebar-folder-scroll";
 const FOLDER_REVEALER_KEY: &str = "picasa-sidebar-folder-revealer";
 const FOLDER_INDICATOR_KEY: &str = "picasa-sidebar-folder-indicator";
 const CURRENT_FILTER_KEY: &str = "picasa-sidebar-current-filter";
@@ -52,6 +53,7 @@ const FOLDER_REFRESH_KEY: &str = "picasa-sidebar-folder-refresh";
 const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
 const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
+const KEYBOARD_GRID_TARGET_KEY: &str = "picasa-sidebar-keyboard-grid-target";
 
 pub fn build(
     folders: &[Folder],
@@ -196,12 +198,233 @@ pub fn build(
         outer.set_data(ALBUM_REVEALER_KEY, album_revealer);
         outer.set_data(ALBUM_INDICATOR_KEY, album_indicator);
         outer.set_data(FOLDER_LIST_KEY, folder_list);
+        outer.set_data(FOLDER_SCROLL_KEY, folder_scroll);
         outer.set_data(FOLDER_REVEALER_KEY, folder_revealer);
         outer.set_data(FOLDER_INDICATOR_KEY, folder_indicator);
         outer.set_data(FILTER_SYNCING_KEY, filter_syncing);
     }
 
+    let keyboard = gtk::EventControllerKey::new();
+    keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let sidebar_for_keyboard = outer.clone();
+    keyboard.connect_key_pressed(move |_, key, _, modifiers| {
+        handle_keyboard_navigation(&sidebar_for_keyboard, key, modifiers)
+    });
+    outer.add_controller(keyboard);
+
     outer
+}
+
+/// Set the widget that receives focus when Tab leaves the sidebar.
+pub fn set_keyboard_grid_target(scrolled: &gtk::ScrolledWindow, target: &gtk::Widget) {
+    unsafe {
+        scrolled.set_data(KEYBOARD_GRID_TARGET_KEY, target.clone());
+    }
+
+    let sidebar_for_grid = scrolled.clone();
+    let grid_keyboard = gtk::EventControllerKey::new();
+    grid_keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
+    grid_keyboard.connect_key_pressed(move |_, key, _, _| {
+        if key != gtk::gdk::Key::Tab && key != gtk::gdk::Key::ISO_Left_Tab {
+            return glib::Propagation::Proceed;
+        }
+        let sections = navigation_sections(&sidebar_for_grid);
+        if let Some(row) = selected_navigation_row(&sections)
+            .or_else(|| sections.last().and_then(|(_, rows)| rows.first().cloned()))
+        {
+            select_navigation_row(&sections, &row);
+        }
+        glib::Propagation::Stop
+    });
+    target.add_controller(grid_keyboard);
+}
+
+fn handle_keyboard_navigation(
+    scrolled: &gtk::ScrolledWindow,
+    key: gtk::gdk::Key,
+    modifiers: gtk::gdk::ModifierType,
+) -> glib::Propagation {
+    let shift_tab = key == gtk::gdk::Key::ISO_Left_Tab
+        || (key == gtk::gdk::Key::Tab && modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK));
+    if shift_tab {
+        return focus_previous_sidebar_section(scrolled);
+    }
+    if key == gtk::gdk::Key::Tab {
+        let target = unsafe {
+            scrolled
+                .data::<gtk::Widget>(KEYBOARD_GRID_TARGET_KEY)
+                .map(|target| target.as_ref().clone())
+        };
+        if let Some(target) = target {
+            target.grab_focus();
+            return glib::Propagation::Stop;
+        }
+    }
+
+    let sections = navigation_sections(scrolled);
+    let all_rows = sections
+        .iter()
+        .flat_map(|(_, rows)| rows.iter().cloned())
+        .collect::<Vec<_>>();
+    if all_rows.is_empty() {
+        return glib::Propagation::Proceed;
+    }
+
+    match key {
+        gtk::gdk::Key::Up | gtk::gdk::Key::Down => {
+            let selected = selected_navigation_row(&sections);
+            let current = selected
+                .as_ref()
+                .and_then(|row| all_rows.iter().position(|candidate| candidate == row));
+            let next = match (current, key == gtk::gdk::Key::Down) {
+                (Some(index), true) => (index + 1).min(all_rows.len() - 1),
+                (Some(index), false) => index.saturating_sub(1),
+                (None, true) => 0,
+                (None, false) => all_rows.len() - 1,
+            };
+            select_navigation_row(&sections, &all_rows[next]);
+            glib::Propagation::Stop
+        }
+        gtk::gdk::Key::Left | gtk::gdk::Key::Right => {
+            let Some((list, row)) = selected_folder_navigation_row(scrolled) else {
+                return glib::Propagation::Proceed;
+            };
+            let rows = folder_rows(&list);
+            let folder = unsafe {
+                row.data::<Folder>("picasa-folder-record")
+                    .map(|folder| folder.as_ref().clone())
+            };
+            let Some(folder) = folder else {
+                return glib::Propagation::Proceed;
+            };
+            let has_children = unsafe {
+                row.data::<bool>("picasa-folder-has-children")
+                    .is_some_and(|value| *value.as_ref())
+            };
+            let state = sidebar_state(scrolled);
+            let Some(state) = state else {
+                return glib::Propagation::Proceed;
+            };
+            let expanded = state.borrow().expanded_folders.contains(&folder.id);
+
+            if key == gtk::gdk::Key::Right {
+                if has_children && !expanded {
+                    state.borrow_mut().expanded_folders.insert(folder.id);
+                    rebuild_folder_list_from_rows(&list, &state);
+                    set_active_filter(scrolled, SidebarFilter::Folder(folder.id));
+                } else if has_children {
+                    let visible_rows = folder_rows(&list);
+                    if let Some(child) = visible_rows
+                        .iter()
+                        .skip_while(|candidate| *candidate != &row)
+                        .nth(1)
+                    {
+                        list.select_row(Some(child));
+                    }
+                }
+            } else if has_children && expanded {
+                state.borrow_mut().expanded_folders.remove(&folder.id);
+                rebuild_folder_list_from_rows(&list, &state);
+                set_active_filter(scrolled, SidebarFilter::Folder(folder.id));
+            } else if let Some(parent_id) = folder.parent_id {
+                if rows.iter().any(|candidate| unsafe {
+                    candidate
+                        .data::<Folder>("picasa-folder-record")
+                        .is_some_and(|parent| parent.as_ref().id == parent_id)
+                }) {
+                    set_active_filter(scrolled, SidebarFilter::Folder(parent_id));
+                }
+            }
+            glib::Propagation::Stop
+        }
+        _ => glib::Propagation::Proceed,
+    }
+}
+
+fn folder_rows(list: &gtk::ListBox) -> Vec<gtk::ListBoxRow> {
+    let mut rows = Vec::new();
+    let mut child = list.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+            if unsafe { row.data::<Folder>("picasa-folder-record") }.is_some() {
+                rows.push(row);
+            }
+        }
+        child = next;
+    }
+    rows
+}
+
+fn navigation_sections(
+    scrolled: &gtk::ScrolledWindow,
+) -> Vec<(gtk::ListBox, Vec<gtk::ListBoxRow>)> {
+    [LIBRARY_LIST_KEY, ALBUM_LIST_KEY, FOLDER_LIST_KEY]
+        .into_iter()
+        .filter_map(|key| {
+            let list = stored_widget::<gtk::ListBox>(scrolled, key)?;
+            let mut rows = Vec::new();
+            let mut child = list.first_child();
+            while let Some(widget) = child {
+                let next = widget.next_sibling();
+                if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+                    let selectable =
+                        unsafe { row.data::<SidebarFilter>("picasa-filter") }.is_some();
+                    if selectable {
+                        rows.push(row);
+                    }
+                }
+                child = next;
+            }
+            (!rows.is_empty()).then_some((list, rows))
+        })
+        .collect()
+}
+
+fn selected_navigation_row(
+    sections: &[(gtk::ListBox, Vec<gtk::ListBoxRow>)],
+) -> Option<gtk::ListBoxRow> {
+    sections.iter().find_map(|(list, _)| list.selected_row())
+}
+
+fn selected_folder_navigation_row(
+    scrolled: &gtk::ScrolledWindow,
+) -> Option<(gtk::ListBox, gtk::ListBoxRow)> {
+    let list = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY)?;
+    Some((list.clone(), list.selected_row()?))
+}
+
+fn select_navigation_row(sections: &[(gtk::ListBox, Vec<gtk::ListBoxRow>)], row: &gtk::ListBoxRow) {
+    for (list, rows) in sections {
+        if rows.iter().any(|candidate| candidate == row) {
+            list.select_row(Some(row));
+            row.grab_focus();
+            break;
+        }
+    }
+}
+
+fn focus_previous_sidebar_section(scrolled: &gtk::ScrolledWindow) -> glib::Propagation {
+    let sections = navigation_sections(scrolled);
+    let Some(selected) = selected_navigation_row(&sections) else {
+        return glib::Propagation::Proceed;
+    };
+    let Some(section_index) = sections
+        .iter()
+        .position(|(_, rows)| rows.iter().any(|row| row == &selected))
+    else {
+        return glib::Propagation::Proceed;
+    };
+    if section_index == 0 {
+        return glib::Propagation::Proceed;
+    }
+    if let Some((list, rows)) = sections.get(section_index - 1) {
+        if let Some(row) = rows.last() {
+            list.select_row(Some(row));
+            row.grab_focus();
+        }
+    }
+    glib::Propagation::Stop
 }
 
 pub fn refresh(
@@ -231,6 +454,7 @@ pub fn refresh(
     let Some(folder_list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) else {
         return;
     };
+    let folder_scroll_value = folder_scroll_value(scrolled);
 
     clear_list(&library_list);
     append_heading_static(&library_list, "Library");
@@ -266,6 +490,7 @@ pub fn refresh(
     if let Some(filter) = current_filter(scrolled) {
         set_active_filter(scrolled, filter);
     }
+    restore_folder_scroll(scrolled, folder_scroll_value);
 }
 
 pub fn refresh_library_counts(
@@ -333,6 +558,10 @@ pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) 
         return;
     };
 
+    let folder_scroll_value = matches!(filter, SidebarFilter::Folder(_))
+        .then(|| folder_scroll_value(scrolled))
+        .flatten();
+
     syncing.set(true);
     if let Some(library_list) = stored_widget::<gtk::ListBox>(scrolled, LIBRARY_LIST_KEY) {
         library_list.unselect_all();
@@ -357,6 +586,99 @@ pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) 
         }
     }
     syncing.set(false);
+    restore_folder_scroll(scrolled, folder_scroll_value);
+}
+
+fn folder_scroll_value(scrolled: &gtk::ScrolledWindow) -> Option<f64> {
+    stored_widget::<gtk::ScrolledWindow>(scrolled, FOLDER_SCROLL_KEY)
+        .map(|folder_scroll| folder_scroll.vadjustment().value())
+}
+
+fn restore_folder_scroll(scrolled: &gtk::ScrolledWindow, value: Option<f64>) {
+    let Some(value) = value else {
+        return;
+    };
+    let scrolled = scrolled.clone();
+    glib::idle_add_local_once(move || {
+        let Some(folder_scroll) =
+            stored_widget::<gtk::ScrolledWindow>(&scrolled, FOLDER_SCROLL_KEY)
+        else {
+            return;
+        };
+        let adjustment = folder_scroll.vadjustment();
+        let max_value = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+        adjustment.set_value(value.clamp(adjustment.lower(), max_value));
+    });
+}
+
+/// Reveal and scroll to an imported folder selected from search suggestions.
+pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
+    let Some(state) = sidebar_state(scrolled) else {
+        return;
+    };
+    let Some(list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) else {
+        return;
+    };
+
+    // Search results can target a row below a collapsed ancestor. Expand the
+    // path using the same cached folder data used for the normal tree.
+    let folders = unsafe {
+        list.data::<Vec<Folder>>("picasa-folder-cache")
+            .map(|folders| folders.as_ref().clone())
+            .unwrap_or_default()
+    };
+    let by_id: HashMap<i64, &Folder> = folders.iter().map(|folder| (folder.id, folder)).collect();
+    let mut parent = by_id.get(&folder_id).and_then(|folder| folder.parent_id);
+    let mut expanded = false;
+    while let Some(parent_id) = parent {
+        expanded |= state.borrow_mut().expanded_folders.insert(parent_id);
+        parent = by_id.get(&parent_id).and_then(|folder| folder.parent_id);
+    }
+    let folder_scroll_value = folder_scroll_value(scrolled);
+    if expanded {
+        rebuild_folder_list_from_rows(&list, &state);
+    }
+
+    let mut child = list.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+            let matches = unsafe {
+                row.data::<SidebarFilter>("picasa-filter")
+                    .is_some_and(|filter| *filter.as_ref() == SidebarFilter::Folder(folder_id))
+            };
+            if matches {
+                // Keep the normal row-selected callback from re-entering
+                // destination navigation while the search result is being
+                // revealed.
+                set_active_filter(scrolled, SidebarFilter::Folder(folder_id));
+                if let Some(folder_scroll) =
+                    stored_widget::<gtk::ScrolledWindow>(scrolled, FOLDER_SCROLL_KEY)
+                {
+                    let adjustment = folder_scroll.vadjustment();
+                    let allocation = row.allocation();
+                    let top = f64::from(allocation.y());
+                    let bottom = top + f64::from(allocation.height());
+                    let visible_top = adjustment.value();
+                    let visible_bottom = visible_top + adjustment.page_size();
+                    let value = if top < visible_top {
+                        top
+                    } else if bottom > visible_bottom {
+                        bottom - adjustment.page_size()
+                    } else {
+                        visible_top
+                    };
+                    adjustment.set_value(value.clamp(
+                        adjustment.lower(),
+                        adjustment.upper() - adjustment.page_size(),
+                    ));
+                }
+                return;
+            }
+        }
+        child = next;
+    }
+    restore_folder_scroll(scrolled, folder_scroll_value);
 }
 
 fn current_filter(scrolled: &gtk::ScrolledWindow) -> Option<SidebarFilter> {
@@ -747,23 +1069,25 @@ fn append_folder_row(
     content.append(&trailing);
 
     row.set_child(Some(&content));
-    let folder_id = folder.id;
-    let list_for_double_click = list.clone();
-    let state_for_double_click = state.clone();
-    let double_click = gtk::GestureClick::new();
-    double_click.set_button(1);
-    double_click.connect_pressed(move |gesture, n_press, _, _| {
-        if n_press == 2 {
-            let mut state = state_for_double_click.borrow_mut();
-            if !state.expanded_folders.remove(&folder_id) {
-                state.expanded_folders.insert(folder_id);
+    if has_children {
+        let folder_id = folder.id;
+        let list_for_double_click = list.clone();
+        let state_for_double_click = state.clone();
+        let double_click = gtk::GestureClick::new();
+        double_click.set_button(1);
+        double_click.connect_pressed(move |gesture, n_press, _, _| {
+            if n_press == 2 {
+                let mut state = state_for_double_click.borrow_mut();
+                if !state.expanded_folders.remove(&folder_id) {
+                    state.expanded_folders.insert(folder_id);
+                }
+                drop(state);
+                rebuild_folder_list_from_rows(&list_for_double_click, &state_for_double_click);
+                gesture.set_state(gtk::EventSequenceState::Claimed);
             }
-            drop(state);
-            rebuild_folder_list_from_rows(&list_for_double_click, &state_for_double_click);
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-        }
-    });
-    row.add_controller(double_click);
+        });
+        row.add_controller(double_click);
+    }
     if folder.imported_root {
         row.set_tooltip_text(Some(&folder.path));
     }
@@ -896,6 +1220,15 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
 // record. We collect the full currently-known set from visible rows plus hidden
 // descendants cached on the ListBox itself when populate_folders() runs.
 fn rebuild_folder_list_from_rows(list: &gtk::ListBox, state: &Rc<RefCell<SidebarState>>) {
+    let folder_scroll = list
+        .ancestor(gtk::ScrolledWindow::static_type())
+        .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok());
+    let outer = folder_scroll.as_ref().and_then(|folder_scroll| {
+        folder_scroll
+            .ancestor(gtk::ScrolledWindow::static_type())
+            .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
+    });
+    let folder_scroll_value = outer.as_ref().and_then(|outer| folder_scroll_value(outer));
     let folders = unsafe {
         list.data::<Vec<Folder>>("picasa-folder-cache")
             .map(|data| data.as_ref().clone())
@@ -911,6 +1244,9 @@ fn rebuild_folder_list_from_rows(list: &gtk::ListBox, state: &Rc<RefCell<Sidebar
     }
     clear_list(list);
     populate_folders(list, &folders, state, &callback);
+    if let Some(outer) = outer {
+        restore_folder_scroll(&outer, folder_scroll_value);
+    }
 }
 
 fn append_filter(

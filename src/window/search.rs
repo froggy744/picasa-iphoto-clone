@@ -18,6 +18,7 @@ fn update_folder_suggestions(
     let query = query.to_lowercase();
     let matches = folders
         .iter()
+        .filter(|folder| folder.imported_root)
         .filter(|folder| folder.name.to_lowercase().contains(&query))
         .take(8)
         .collect::<Vec<_>>();

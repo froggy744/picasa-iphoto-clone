@@ -1108,6 +1108,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             })
         },
     );
+    sidebar::set_keyboard_grid_target(&sidebar, gallery.root.upcast_ref());
     sidebar_for_unavailable.replace(Some(sidebar.clone()));
     sidebar_selection_slot.replace(Some(sidebar.clone()));
     sidebar::set_active_filter(&sidebar, filter.get());
@@ -1422,6 +1423,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let search_suppressed_for_search = search_suppressed.clone();
     let search_debounce_for_search = search_debounce.clone();
     let destination_click_for_search = destination_click.clone();
+    let sidebar_selection_for_search = sidebar_selection_slot.clone();
     let suggestion_revealer_for_search = suggestion_revealer.clone();
     let suggestion_list_for_search = suggestion_list.clone();
     let folders_for_search = folders.clone();
@@ -1458,7 +1460,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 &query,
                 Rc::new({
                     let destination_click = destination_click_for_search.clone();
-                    move |folder_id| destination_click(sidebar::SidebarFilter::Folder(folder_id))
+                    let sidebar_selection = sidebar_selection_for_search.clone();
+                    move |folder_id| {
+                        destination_click(sidebar::SidebarFilter::Folder(folder_id));
+                        if let Some(sidebar) = sidebar_selection.borrow().as_ref() {
+                            sidebar::scroll_to_folder(sidebar, folder_id);
+                        }
+                    }
                 }),
             );
             // Updating the inline suggestion list must never move typing focus
@@ -1548,6 +1556,26 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         );
         entry.grab_focus();
     });
+
+    // The suggestions are an inline popup, so close them for any click whose
+    // target is outside the search area while retaining the current text.
+    let search_area_for_click = search_area.clone();
+    let suggestion_revealer_for_click = suggestion_revealer.clone();
+    let search_click = gtk::GestureClick::new();
+    search_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let window_for_search_click = window.clone();
+    search_click.connect_pressed(move |_, _, x, y| {
+        let inside_search = window_for_search_click
+            .pick(x, y, gtk::PickFlags::DEFAULT)
+            .is_some_and(|picked| {
+                picked.is_ancestor(&search_area_for_click)
+                    || search_area_for_click.is_ancestor(&picked)
+            });
+        if !inside_search {
+            suggestion_revealer_for_click.set_reveal_child(false);
+        }
+    });
+    window.add_controller(search_click);
 
     let import = gtk::Button::from_icon_name("folder-open-symbolic");
     import.set_tooltip_text(Some("Import Folder"));
