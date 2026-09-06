@@ -108,6 +108,14 @@ pub fn take_priority_completions() -> usize {
         .unwrap_or_default()
 }
 
+pub fn priority_pending_count() -> usize {
+    PRIORITY_PENDING
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .map(|pending| pending.len())
+        .unwrap_or_default()
+}
+
 // Structural split only: included files remain in this module scope.
 include!("thumbnail/cache.rs");
 include!("thumbnail/viewer.rs");

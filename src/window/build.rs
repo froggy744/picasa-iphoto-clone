@@ -2089,11 +2089,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // is intentionally limited to Recently Added, but recovery must not miss
     // older photos whose thumbnails are absent.
     let recovery_photos = all_startup_photos;
+    let startup_paths = startup_photos
+        .iter()
+        .map(|photo| photo.path.clone())
+        .collect::<std::collections::HashSet<_>>();
     scan_job.borrow_mut().kind = Some(ScanJobKind::Maintenance);
     let sender = scan_sender.clone();
     let generation = scan_job.borrow().generation;
     std::thread::spawn(move || {
-            let missing_thumbnails: Vec<_> = recovery_photos
+            let mut missing_thumbnails: Vec<_> = recovery_photos
                 .iter()
                 .filter_map(|photo| {
                     let cache = crate::thumbnail::cache_path(
@@ -2107,6 +2111,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     })
                 })
                 .collect();
+            // The first viewport must become usable before older library
+            // photos consume the thumbnail workers. The remaining work is
+            // then processed in small batches so newly visible requests can
+            // get ahead while the user scrolls.
+            missing_thumbnails.sort_by_key(|(path, _, _)| !startup_paths.contains(path));
             if missing_thumbnails.is_empty() {
                 let _ = sender.send(ScanUiEvent {
                     generation,
@@ -2123,25 +2132,27 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     total: missing_thumbnails.len(),
                 },
             });
-            let results = crate::thumbnail::create_many(&missing_thumbnails, |path| {
-                let _ = sender.send(ScanUiEvent {
-                    generation,
-                    event: scanner::ScanEvent::ThumbnailCreated {
-                        path: std::path::PathBuf::from(path),
-                    },
-                });
-            });
             let mut failed = 0;
-            for ((path, _, _), result) in missing_thumbnails.into_iter().zip(results) {
-                if let Err(error) = result {
-                    failed += 1;
+            for chunk in missing_thumbnails.chunks(64) {
+                let results = crate::thumbnail::create_many(chunk, |path| {
                     let _ = sender.send(ScanUiEvent {
                         generation,
-                        event: scanner::ScanEvent::Failed {
+                        event: scanner::ScanEvent::ThumbnailCreated {
                             path: std::path::PathBuf::from(path),
-                            error: format!("thumbnail: {error}"),
                         },
                     });
+                });
+                for ((path, _, _), result) in chunk.iter().zip(results) {
+                    if let Err(error) = result {
+                        failed += 1;
+                        let _ = sender.send(ScanUiEvent {
+                            generation,
+                            event: scanner::ScanEvent::Failed {
+                                path: std::path::PathBuf::from(path),
+                                error: format!("thumbnail: {error}"),
+                            },
+                        });
+                    }
                 }
             }
             let _ = sender.send(ScanUiEvent {
@@ -2387,10 +2398,28 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let mut thumbnail_total: usize = 0;
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
-        let callback_started = Instant::now();
-        if crate::thumbnail::take_priority_completions() > 0 {
+        let priority_completions = crate::thumbnail::take_priority_completions();
+        if priority_completions > 0 {
             thumbnails_dirty = true;
         }
+        let priority_pending = crate::thumbnail::priority_pending_count();
+        if priority_pending > 0 {
+            if let Some(toast) = progress_toast.as_ref() {
+                if thumbnail_total == 0 {
+                    toast.set_title(&format!("Creating visible thumbnails ({priority_pending} queued)"));
+                }
+            } else {
+                let toast = adw::Toast::new("Creating visible thumbnails…");
+                toast.set_timeout(0);
+                toast_overlay_for_events.add_toast(toast.clone());
+                progress_toast = Some(toast);
+            }
+        } else if priority_completions > 0 && thumbnail_total == 0 {
+            if let Some(toast) = progress_toast.take() {
+                toast.dismiss();
+            }
+        }
+        let callback_started = Instant::now();
         // Never monopolize the GTK loop when a fast scanner has queued many
         // results. Leaving some events queued lets GTK process input, redraws,
         // scrolling, and folder changes between import batches.
