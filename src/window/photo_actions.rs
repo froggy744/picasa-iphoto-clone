@@ -1,3 +1,5 @@
+use gio::prelude::AppInfoExt;
+
 fn show_photo_context_menu(
     photo: crate::photo_object::PhotoObject,
     anchor: gtk::Widget,
@@ -31,6 +33,8 @@ fn show_photo_context_menu(
 
     let open = add_action("Open");
     let open_with = add_action("Open With…");
+    let open_in_folder =
+        is_library_filter(context.filter.get()).then(|| add_action("Open in Folder"));
     menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
     let album_selection = selected_photo_ids(&context, Some(photo.id()));
@@ -145,12 +149,25 @@ fn show_photo_context_menu(
     });
 
     let file = crate::source::file(&photo.path());
-    let uri = file.uri();
-    let popover_for_uri = popover.clone();
+    let open_with_file = file.clone();
+    let open_with_anchor = open_with.clone();
+    let popover_for_open_with = popover.clone();
     open_with.connect_clicked(move |_| {
-        let _ = gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>);
-        popover_for_uri.popdown();
+        popover_for_open_with.popdown();
+        show_open_with_dialog(open_with_anchor.upcast_ref(), &open_with_file);
     });
+
+    if let Some(open_in_folder) = open_in_folder {
+        let folder_id = photo.folder_id();
+        let navigate_to_folder = context.navigate_to_folder.clone();
+        let popover_for_folder = popover.clone();
+        open_in_folder.connect_clicked(move |_| {
+            if folder_id != 0 {
+                navigate_to_folder(folder_id);
+            }
+            popover_for_folder.popdown();
+        });
+    }
 
     let path_for_copy = photo.path();
     let display = anchor.display();
@@ -163,10 +180,7 @@ fn show_photo_context_menu(
     let file_for_manager = file.clone();
     let popover_for_manager = popover.clone();
     file_manager.connect_clicked(move |_| {
-        if let Some(parent) = file_for_manager.parent() {
-            let _ =
-                gio::AppInfo::launch_default_for_uri(&parent.uri(), None::<&gio::AppLaunchContext>);
-        }
+        open_file_in_manager(&file_for_manager);
         popover_for_manager.popdown();
     });
 
@@ -229,6 +243,80 @@ fn show_photo_context_menu(
             );
         });
     }
+}
+
+fn open_file_in_manager(file: &gio::File) {
+    if let Some(path) = file.path() {
+        // Nautilus is the only file manager whose selection option is verified
+        // in the supported Linux environment. Spawn it so the GTK main thread
+        // remains responsive while it opens and selects the file.
+        if std::process::Command::new("nautilus")
+            .arg("--select")
+            .arg(path)
+            .spawn()
+            .is_ok()
+        {
+            return;
+        }
+    }
+
+    if let Some(parent) = file.parent() {
+        let _ = gio::AppInfo::launch_default_for_uri(
+            &parent.uri(),
+            None::<&gio::AppLaunchContext>,
+        );
+    }
+}
+
+fn show_open_with_dialog(parent: &gtk::Widget, file: &gio::File) {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    content.set_margin_top(6);
+    content.set_margin_bottom(6);
+    content.set_margin_start(6);
+    content.set_margin_end(6);
+
+    let path = file
+        .path()
+        .unwrap_or_else(|| std::path::PathBuf::from(file.uri().as_str()));
+    let (content_type, _) = gio::content_type_guess(Some(&path), None::<&[u8]>);
+    let apps = gio::AppInfo::all_for_type(content_type.as_str());
+    let mut app_buttons = Vec::new();
+    let dialog = if apps.is_empty() {
+        adw::AlertDialog::builder()
+            .heading("Open With")
+            .body("No applications are registered for this file type.")
+            .close_response("close")
+            .build()
+    } else {
+        for app in apps {
+            let button = gtk::Button::with_label(app.display_name().as_str());
+            button.set_halign(gtk::Align::Fill);
+            button.add_css_class("flat");
+            app_buttons.push((button.clone(), app));
+            content.append(&button);
+        }
+        let dialog = adw::AlertDialog::builder()
+            .heading("Open With")
+            .body("Choose an application for this file:")
+            .extra_child(&content)
+            .close_response("close")
+            .build();
+        for (button, app) in app_buttons {
+            let app_for_launch = app.clone();
+            let file_for_launch = file.clone();
+            let dialog_for_launch = dialog.clone();
+            button.connect_clicked(move |_| {
+                let _ = app_for_launch.launch(
+                    std::slice::from_ref(&file_for_launch),
+                    None::<&gio::AppLaunchContext>,
+                );
+                dialog_for_launch.close();
+            });
+        }
+        dialog
+    };
+    dialog.add_response("close", "Cancel");
+    dialog.present(Some(parent));
 }
 
 fn show_rename_dialog(

@@ -293,6 +293,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         Rc::new(RefCell::new(None));
     let album_home_click_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> =
         Rc::new(RefCell::new(None));
+    let folder_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> =
+        Rc::new(RefCell::new(None));
+    let navigate_to_folder: Rc<dyn Fn(i64)> = {
+        let slot = folder_navigation_slot.clone();
+        Rc::new(move |folder_id| {
+            if let Some(callback) = slot.borrow().as_ref() {
+                callback(folder_id);
+            }
+        })
+    };
     let action_context = PhotoActionContext {
         connection: connection.clone(),
         gallery: gallery_for_actions.clone(),
@@ -307,6 +317,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         import_folder: import_folder.clone(),
         delete_album: delete_album.clone(),
         on_unavailable: availability_refresh.clone(),
+        navigate_to_folder: navigate_to_folder.clone(),
         refresh_albums_home: {
             let slot = albums_home_refresh_slot.clone();
             Rc::new(move |albums| {
@@ -935,6 +946,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     album_home_click_slot.replace(Some({
         let destination_click = destination_click.clone();
         Rc::new(move |album_id| destination_click(sidebar::SidebarFilter::Album(album_id)))
+    }));
+    folder_navigation_slot.replace(Some({
+        let destination_click = destination_click.clone();
+        let sidebar_selection = sidebar_selection_slot.clone();
+        Rc::new(move |folder_id| {
+            destination_click(sidebar::SidebarFilter::Folder(folder_id));
+            if let Some(sidebar) = sidebar_selection.borrow().as_ref() {
+                sidebar::scroll_to_folder(sidebar, folder_id);
+            }
+        })
     }));
     albums_home_refresh_slot.replace(Some({
         let albums_home = albums_home.clone();
