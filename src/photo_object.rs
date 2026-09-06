@@ -94,12 +94,7 @@ impl PhotoObject {
             .property("folder-path", photo.folder_path.clone())
             .property(
                 "original-available",
-                photo
-                    .folder_path
-                    .as_deref()
-                    .map(crate::source::cached_source_available)
-                    .unwrap_or(true)
-                    && crate::source::cached_file_available(&photo.path),
+                crate::source::cached_file_available(&photo.path),
             )
             .property("cached-thumbnail-path", cached_thumbnail_path.clone())
             .property(

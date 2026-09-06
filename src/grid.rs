@@ -151,12 +151,7 @@ impl SquareTile {
         let Some(photo) = self.imp().photo.borrow().clone() else {
             return;
         };
-        let available = photo
-            .folder_path()
-            .as_deref()
-            .map(crate::source::cached_source_available)
-            .unwrap_or(true)
-            && crate::source::cached_file_available(&photo.path());
+        let available = crate::source::cached_file_available(&photo.path());
         photo.set_original_available(available);
 
         if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
@@ -746,12 +741,7 @@ impl Gallery {
 
     pub fn refresh_availability(&self) {
         for photo in self.current_photos.borrow().iter() {
-            let available = photo
-                .folder_path()
-                .as_deref()
-                .map(crate::source::cached_source_available)
-                .unwrap_or(true)
-                && crate::source::cached_file_available(&photo.path());
+            let available = crate::source::cached_file_available(&photo.path());
             photo.set_original_available(available);
         }
 

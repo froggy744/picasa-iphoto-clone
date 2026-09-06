@@ -1420,6 +1420,27 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     search_area.append(&suggestion_revealer);
     right_header.set_title_widget(Some(&search_area));
 
+    // The split layout has two in-content header bars instead of one native
+    // titlebar. Preserve the usual titlebar double-click behavior on both:
+    // maximize when normal, and restore the previous window size when maximized.
+    for header in [&left_header, &right_header] {
+        let window_for_titlebar = window.clone();
+        let titlebar_double_click = gtk::GestureClick::new();
+        titlebar_double_click.set_button(1);
+        titlebar_double_click.connect_pressed(move |gesture, n_press, _, _| {
+            if n_press != 2 {
+                return;
+            }
+            if window_for_titlebar.is_maximized() {
+                window_for_titlebar.unmaximize();
+            } else {
+                window_for_titlebar.maximize();
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+        });
+        header.add_controller(titlebar_double_click);
+    }
+
     let gallery_for_search = gallery.clone();
     let connection_for_search = connection.clone();
     let filter_for_search = filter.clone();

@@ -32,6 +32,11 @@ pub fn cached_source_available(reference: &str) -> bool {
 }
 
 pub fn cached_file_available(reference: &str) -> bool {
+    // Local paths are cheap to check and can change when a removable drive is
+    // mounted or unmounted, so do not retain a stale result for them.
+    if !reference.contains("://") {
+        return Path::new(reference).is_file();
+    }
     let key = format!("file:{reference}");
     let mut cache = availability_cache().lock().unwrap();
     *cache

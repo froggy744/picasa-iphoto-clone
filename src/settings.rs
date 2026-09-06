@@ -328,12 +328,8 @@ fn schedule_availability_stats(
             return glib::ControlFlow::Break;
         }
 
-        for (path, folder_path) in &page {
-            let is_available = folder_path
-                .as_deref()
-                .map(crate::source::cached_source_available)
-                .unwrap_or(true)
-                && crate::source::cached_file_available(path);
+        for (path, _folder_path) in &page {
+            let is_available = crate::source::cached_file_available(path);
             if is_available {
                 available += 1;
             } else {
@@ -390,12 +386,8 @@ pub fn refresh_library_availability_stats(connection: Rc<RefCell<Connection>>) {
             }
             return glib::ControlFlow::Break;
         }
-        for (path, folder_path) in &page {
-            let is_available = folder_path
-                .as_deref()
-                .map(crate::source::cached_source_available)
-                .unwrap_or(true)
-                && crate::source::cached_file_available(path);
+        for (path, _folder_path) in &page {
+            let is_available = crate::source::cached_file_available(path);
             if is_available {
                 available += 1;
             } else {
