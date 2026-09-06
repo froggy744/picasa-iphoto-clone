@@ -114,12 +114,26 @@ impl SquareTile {
     }
 
     fn set_tile_size(&self, width: i32, height: i32) {
-        self.imp().width.set(width.max(1));
-        self.imp().height.set(height.max(1));
+        let width = width.max(1);
+        let height = height.max(1);
+        if self.imp().width.get() == width && self.imp().height.get() == height {
+            return;
+        }
+        self.imp().width.set(width);
+        self.imp().height.set(height);
         self.queue_resize();
     }
 
     fn bind_photo(&self, photo: &PhotoObject) {
+        if self
+            .imp()
+            .photo
+            .borrow()
+            .as_ref()
+            .is_some_and(|current| current.id() == photo.id())
+        {
+            return;
+        }
         self.imp().photo.replace(Some(photo.clone()));
         photo.set_original_available(crate::source::cached_file_available(&photo.path()));
         if let Some(path) = photo.cached_thumbnail_path() {
