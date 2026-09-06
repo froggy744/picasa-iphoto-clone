@@ -1,53 +1,68 @@
+use std::sync::mpsc::TryRecvError;
+
+static REFRESH_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 fn refresh_grid(
     connection: &Rc<RefCell<Connection>>,
     filter: sidebar::SidebarFilter,
     search: &str,
     sort: PhotoSort,
-    gallery: &grid::Gallery,
+    gallery: &Rc<grid::Gallery>,
 ) {
+    let _ = connection;
     if filter == sidebar::SidebarFilter::Albums {
         return;
     }
 
-    // An active search is a library-wide view, regardless of the destination
-    // that was selected before typing began.
-    if !search.is_empty() {
-        if let Ok(mut photos) = db::photos(&connection.borrow(), None, false, Some(search)) {
-            retain_enabled_formats(&connection.borrow(), &mut photos);
-            limit_recently_added(&connection.borrow(), filter, &mut photos);
-            sort_photos(&mut photos, sort);
-            gallery.replace(&photos);
-        }
-        return;
-    }
+    let generation = REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let search = search.to_owned();
+    let (sender, receiver) = std::sync::mpsc::channel();
 
-    if let sidebar::SidebarFilter::Album(album_id) = filter {
-        if let Ok(mut photos) = db::photos_in_album(&connection.borrow(), album_id, None) {
-            retain_enabled_formats(&connection.borrow(), &mut photos);
-            sort_photos(&mut photos, sort);
-            gallery.replace(&photos);
-        }
-        return;
-    }
-    let (folder_id, favorites) = match filter {
-        sidebar::SidebarFilter::All | sidebar::SidebarFilter::RecentlyAdded => (None, false),
-        sidebar::SidebarFilter::Favorites => (None, true),
-        sidebar::SidebarFilter::Folder(id) => (Some(id), false),
-        sidebar::SidebarFilter::Albums => return,
-        sidebar::SidebarFilter::Album(_) => unreachable!(),
-    };
+    std::thread::spawn(move || {
+        let Ok(connection) = db::open_default() else {
+            let _ = sender.send(None);
+            return;
+        };
 
-    if let Ok(mut photos) = db::photos(
-        &connection.borrow(),
-        folder_id,
-        favorites,
-        (!search.is_empty()).then_some(search),
-    ) {
-        retain_enabled_formats(&connection.borrow(), &mut photos);
-        limit_recently_added(&connection.borrow(), filter, &mut photos);
+        let mut photos = if !search.is_empty() {
+            // An active search is a library-wide view, regardless of the
+            // destination that was selected before typing began.
+            db::photos(&connection, None, false, Some(&search)).unwrap_or_default()
+        } else if let sidebar::SidebarFilter::Album(album_id) = filter {
+            db::photos_in_album(&connection, album_id, None).unwrap_or_default()
+        } else {
+            let (folder_id, favorites) = match filter {
+                sidebar::SidebarFilter::All | sidebar::SidebarFilter::RecentlyAdded => {
+                    (None, false)
+                }
+                sidebar::SidebarFilter::Favorites => (None, true),
+                sidebar::SidebarFilter::Folder(id) => (Some(id), false),
+                sidebar::SidebarFilter::Albums => return,
+                sidebar::SidebarFilter::Album(_) => unreachable!(),
+            };
+            db::photos(&connection, folder_id, favorites, None).unwrap_or_default()
+        };
+
+        retain_enabled_formats(&connection, &mut photos);
+        limit_recently_added(&connection, filter, &mut photos);
         sort_photos(&mut photos, sort);
-        gallery.replace(&photos);
-    }
+        let _ = sender.send(Some(photos));
+    });
+
+    let gallery = gallery.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(25), move || {
+        match receiver.try_recv() {
+            Ok(Some(photos)) => {
+                if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
+                    gallery.replace(&photos);
+                }
+                glib::ControlFlow::Break
+            }
+            Ok(None) | Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
+        }
+    });
 }
 
 fn limit_recently_added(
