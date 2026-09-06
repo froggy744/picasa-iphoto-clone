@@ -35,7 +35,16 @@ fn is_nikon_raw(path: &str) -> bool {
     crate::image_format::for_path(path).is_some_and(|format| format.id == "nikon_raw")
 }
 
+fn is_dng(path: &str) -> bool {
+    crate::image_format::for_path(path).is_some_and(|format| format.id == "dng")
+}
+
 fn decode_raw_thumbnail(reference: &str) -> Result<DecodedThumbnailSource> {
+    std::panic::catch_unwind(|| decode_raw_thumbnail_inner(reference))
+        .map_err(|_| anyhow::anyhow!("RAW thumbnail decoder panicked"))?
+}
+
+fn decode_raw_thumbnail_inner(reference: &str) -> Result<DecodedThumbnailSource> {
     let local_path = crate::source::materialize(reference)?;
     let mut failures = Vec::new();
 
@@ -91,27 +100,73 @@ fn decode_raw_thumbnail(reference: &str) -> Result<DecodedThumbnailSource> {
     }
 
     match rawler::analyze::extract_thumbnail_pixels(
-        local_path,
+        &local_path,
         &rawler::decoders::RawDecodeParams::default(),
     ) {
         Ok(image) => {
             let source_width = image.width();
             let source_height = image.height();
-            Ok(DecodedThumbnailSource {
+            return Ok(DecodedThumbnailSource {
                 image: image.to_rgb8(),
                 source_width,
                 source_height,
                 scale: "raw thumbnail",
-            })
+            });
         }
         Err(error) => {
             failures.push(format!("thumbnail extraction: {error}"));
-            Err(anyhow::anyhow!(
-                "RAW thumbnail strategies failed: {}",
-                failures.join("; ")
-            ))
         }
     }
+
+    // Samsung DNGs can have an incomplete preview after intact sensor data.
+    // Only try the expensive recovery after both embedded strategies fail.
+    if is_dng(reference) {
+        match decode_dng_sensor_thumbnail(&local_path) {
+            Ok(decoded) => return Ok(decoded),
+            Err(error) => failures.push(format!("full RAW recovery: {error:#}")),
+        }
+    }
+    Err(anyhow::anyhow!(
+        "RAW thumbnail strategies failed: {}",
+        failures.join("; ")
+    ))
+}
+
+fn decode_dng_sensor_thumbnail(path: &Path) -> Result<DecodedThumbnailSource> {
+    // Serialize full-sensor recovery across bulk and visible workers, and
+    // keep rawler's internal Rayon work off the unbounded global pool.
+    static POOL: OnceLock<std::result::Result<Mutex<rayon::ThreadPool>, rayon::ThreadPoolBuildError>> =
+        OnceLock::new();
+    let pool = POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .map(Mutex::new)
+    });
+    let pool = pool.as_ref().map_err(|error| anyhow::anyhow!("DNG recovery pool: {error}"))?;
+    let pool = pool.lock().map_err(|_| anyhow::anyhow!("DNG recovery pool poisoned"))?;
+    let path = path.to_owned();
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    pool.spawn(move || {
+        let result = std::panic::catch_unwind(|| -> Result<DecodedThumbnailSource> {
+            let image = rawler::analyze::extract_full_pixels(
+                &path,
+                &rawler::decoders::RawDecodeParams::default(),
+            )?;
+            let (source_width, source_height) = (image.width(), image.height());
+            Ok(DecodedThumbnailSource {
+                image: resize(image.into_rgb8())?,
+                source_width,
+                source_height,
+                scale: "full RAW recovery",
+            })
+        })
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("DNG full RAW decoder panicked")));
+        let _ = send.send(result);
+    });
+    // Blocking receive deliberately avoids install(): a caller in a Rayon
+    // batch must not steal another recovery task while holding this mutex.
+    receive.recv().context("DNG recovery worker disconnected")?
 }
 
 /// Decode a display-quality image for the lightbox. `viewport_width` and
@@ -243,8 +298,8 @@ where
                 Err(preview_error) => {
                     // Some DNG files have a truncated embedded preview while
                     // their sensor data is still readable. Develop the RAW
-                    // image only as a viewer fallback; gallery thumbnails
-                    // never take this expensive path.
+                    // image as a viewer fallback. DNG thumbnails have a
+                    // separate bounded recovery path after preview failure.
                     thumb_trace!(
                         "VIEW TRACE raw_preview_failed; trying_full_raw reason={preview_error}"
                     );
@@ -648,5 +703,78 @@ pub fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage 
         )),
         8 => DynamicImage::ImageRgba8(image::imageops::rotate270(&image.to_rgba8())),
         _ => image,
+    }
+}
+
+#[cfg(test)]
+mod raw_thumbnail_tests {
+    use super::*;
+
+    #[test]
+    fn non_nikon_raw_never_uses_nikon_thumbnail_fallbacks() {
+        for path in ["photo.dng", "photo.DNG", "photo.CR2", "photo.ARW", "photo.RAF"] {
+            assert!(is_raw(path));
+            assert!(!is_nikon_raw(path));
+        }
+        assert!(is_nikon_raw("photo.NEF"));
+        assert!(is_nikon_raw("photo.nrw"));
+        assert!(is_dng("photo.DNG"));
+        assert!(!is_dng("photo.NEF"));
+    }
+
+    #[test]
+    fn broken_dng_returns_all_strategy_errors_and_releases_recovery_worker() {
+        use rayon::prelude::*;
+
+        let directory = std::env::temp_dir().join(format!(
+            "picasa-broken-dng-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("broken.DNG");
+        fs::write(&path, b"II\x2a\x00\x08\x00\x00\x00").unwrap();
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+        // Exercise callers from a parallel bulk pool as well as repeated
+        // failures, so an error cannot leave the recovery mutex held.
+        pool.install(|| {
+            (0..4).into_par_iter().for_each(|_| {
+                let error = decode_raw_thumbnail(path.to_str().unwrap()).err().unwrap().to_string();
+                assert!(error.contains("preview extraction:"), "{error}");
+                assert!(error.contains("thumbnail extraction:"), "{error}");
+                assert!(error.contains("full RAW recovery:"), "{error}");
+                assert!(!error.contains("Nikon"), "{error}");
+            });
+        });
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    #[ignore = "set PICASA_TEST_DNG to a DNG with a broken preview and readable sensor data"]
+    fn recovers_requested_dng_with_broken_preview() {
+        let path = std::env::var("PICASA_TEST_DNG").expect("PICASA_TEST_DNG must name a fixture");
+        let before = fs::metadata(&path).unwrap();
+        let params = rawler::decoders::RawDecodeParams::default();
+        assert!(rawler::analyze::extract_preview_pixels(&path, &params).is_err());
+        assert!(rawler::analyze::extract_thumbnail_pixels(&path, &params).is_err());
+        let started = Instant::now();
+        let decoded = decode_raw_thumbnail(&path).unwrap();
+        assert_eq!(decoded.scale, "full RAW recovery");
+        assert!(decoded.source_width > THUMBNAIL_SIZE);
+        assert!(decoded.source_height > THUMBNAIL_SIZE);
+        assert_eq!(decoded.image.width().max(decoded.image.height()), THUMBNAIL_SIZE);
+        eprintln!("DNG recovery: {}x{} -> {}x{} in {}ms",
+            decoded.source_width, decoded.source_height,
+            decoded.image.width(), decoded.image.height(), started.elapsed().as_millis());
+
+        let destination = std::env::temp_dir().join(format!("picasa-dng-test-{}.jpg", std::process::id()));
+        create_uncached(&path, &destination).unwrap();
+        let cached = image::open(&destination).unwrap();
+        assert_eq!(cached.width().max(cached.height()), THUMBNAIL_SIZE);
+        fs::remove_file(destination).unwrap();
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
     }
 }

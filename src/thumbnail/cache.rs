@@ -24,7 +24,9 @@ pub fn cache_size() -> Result<u64> {
 pub fn cache_path(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result<PathBuf> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(path.as_bytes());
-    let cache_version = if crate::image_format::uses(
+    let cache_version = if is_dng(path) {
+        DNG_THUMBNAIL_CACHE_VERSION
+    } else if crate::image_format::uses(
         path,
         crate::image_format::DecoderKind::Raw,
     ) {
