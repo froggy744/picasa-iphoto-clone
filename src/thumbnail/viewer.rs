@@ -31,13 +31,16 @@ fn decode_heif(bytes: &[u8]) -> Result<DecodedThumbnailSource> {
     })
 }
 
-fn decode_nef(reference: &str) -> Result<DecodedThumbnailSource> {
-    let local_path = crate::source::materialize(reference)?;
+fn is_nikon_raw(path: &str) -> bool {
+    crate::image_format::for_path(path).is_some_and(|format| format.id == "nikon_raw")
+}
 
-    // The embedded Nikon thumbnail is often only 240x320 and produces visibly
-    // soft gallery tiles. Prefer rawler's larger decoded preview for the
-    // cached thumbnail; the embedded paths remain fallbacks for RAW files
-    // that rawler cannot decode.
+fn decode_raw_thumbnail(reference: &str) -> Result<DecodedThumbnailSource> {
+    let local_path = crate::source::materialize(reference)?;
+    let mut failures = Vec::new();
+
+    // Prefer rawler's larger decoded preview for the cached thumbnail. This is
+    // the generic path used by DNG and every other supported RAW format.
     let raw_preview_started = Instant::now();
     match rawler::analyze::extract_preview_pixels(
         local_path.clone(),
@@ -60,35 +63,55 @@ fn decode_nef(reference: &str) -> Result<DecodedThumbnailSource> {
             });
         }
         Err(error) => {
+            failures.push(format!("preview extraction: {error}"));
             thumb_trace!("THUMB TRACE RAW preview_failed reason={error}");
         }
     }
 
-    if let Some(thumbnail) = nef_uncompressed_thumbnail(&local_path)? {
-        return Ok(thumbnail);
-    }
-    if let Some(bytes) = nef_embedded_thumbnail(&local_path)? {
-        // Nikon writes this tiny JPEG in IFD1. It is vastly faster than
-        // decoding the full-size camera preview just to make a 320px tile.
-        let decoded = decode_jpeg_turbo(&bytes).or_else(|_| decode_with_image(&bytes))?;
-        return Ok(decoded);
+    // These fallbacks understand Nikon's unusual embedded thumbnail layout;
+    // applying them to DNG/CR2/ARW/etc. can misinterpret unrelated TIFF data.
+    if is_nikon_raw(reference) {
+        match nef_uncompressed_thumbnail(&local_path) {
+            Ok(Some(thumbnail)) => return Ok(thumbnail),
+            Ok(None) => failures.push("Nikon uncompressed thumbnail: not found".into()),
+            Err(error) => failures.push(format!("Nikon uncompressed thumbnail: {error}")),
+        }
+        match nef_embedded_thumbnail(&local_path) {
+            Ok(Some(bytes)) => {
+                // Nikon writes this tiny JPEG in IFD1. It is vastly faster
+                // than decoding the full-size camera preview for a tile.
+                match decode_jpeg_turbo(&bytes).or_else(|_| decode_with_image(&bytes)) {
+                    Ok(decoded) => return Ok(decoded),
+                    Err(error) => failures.push(format!("Nikon JPEG thumbnail decode: {error}")),
+                }
+            }
+            Ok(None) => failures.push("Nikon JPEG thumbnail: not found".into()),
+            Err(error) => failures.push(format!("Nikon JPEG thumbnail: {error}")),
+        }
     }
 
-    thumb_trace!(
-        "THUMB TRACE NEF thumbnail missing; falling back to preview decode path={reference}"
-    );
-    let image = rawler::analyze::extract_thumbnail_pixels(
+    match rawler::analyze::extract_thumbnail_pixels(
         local_path,
         &rawler::decoders::RawDecodeParams::default(),
-    )?;
-    let source_width = image.width();
-    let source_height = image.height();
-    Ok(DecodedThumbnailSource {
-        image: image.to_rgb8(),
-        source_width,
-        source_height,
-        scale: "embedded preview",
-    })
+    ) {
+        Ok(image) => {
+            let source_width = image.width();
+            let source_height = image.height();
+            Ok(DecodedThumbnailSource {
+                image: image.to_rgb8(),
+                source_width,
+                source_height,
+                scale: "raw thumbnail",
+            })
+        }
+        Err(error) => {
+            failures.push(format!("thumbnail extraction: {error}"));
+            Err(anyhow::anyhow!(
+                "RAW thumbnail strategies failed: {}",
+                failures.join("; ")
+            ))
+        }
+    }
 }
 
 /// Decode a display-quality image for the lightbox. `viewport_width` and
@@ -214,10 +237,33 @@ where
             );
             let stage = Instant::now();
             check_viewer_cancelled(&cancelled, "before_raw_preview_decode")?;
-            let image = rawler::analyze::extract_preview_pixels(
-                local_path,
-                &rawler::decoders::RawDecodeParams::default(),
-            )?;
+            let raw_params = rawler::decoders::RawDecodeParams::default();
+            let image = match rawler::analyze::extract_preview_pixels(&local_path, &raw_params) {
+                Ok(image) => image,
+                Err(preview_error) => {
+                    // Some DNG files have a truncated embedded preview while
+                    // their sensor data is still readable. Develop the RAW
+                    // image only as a viewer fallback; gallery thumbnails
+                    // never take this expensive path.
+                    thumb_trace!(
+                        "VIEW TRACE raw_preview_failed; trying_full_raw reason={preview_error}"
+                    );
+                    check_viewer_cancelled(&cancelled, "before_full_raw_decode")?;
+                    let full = rawler::analyze::extract_full_pixels(&local_path, &raw_params)
+                        .map_err(|full_error| {
+                            anyhow::anyhow!(
+                                "RAW viewer strategies failed: preview: {preview_error}; full RAW: {full_error}"
+                            )
+                        })?;
+                    check_viewer_cancelled(&cancelled, "after_full_raw_decode")?;
+                    thumb_trace!(
+                        "VIEW TRACE full_raw_decode source={}x{}",
+                        full.width(),
+                        full.height()
+                    );
+                    full
+                }
+            };
             check_viewer_cancelled(&cancelled, "after_raw_preview_decode")?;
             let source_width = image.width();
             let source_height = image.height();

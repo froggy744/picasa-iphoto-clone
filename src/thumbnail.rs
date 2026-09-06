@@ -17,7 +17,7 @@ use turbojpeg::{Decompressor, Image as TurboImage, PixelFormat, ScalingFactor};
 
 const THUMBNAIL_SIZE: u32 = 320;
 const THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v4-heif-orientation";
-const RAW_THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v5-raw-preview";
+const RAW_THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v6-generic-raw";
 
 macro_rules! thumb_trace {
     ($($arg:tt)*) => {

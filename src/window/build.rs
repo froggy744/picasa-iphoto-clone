@@ -1385,6 +1385,29 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     search_area.append(&suggestion_revealer);
     right_header.set_title_widget(Some(&search_area));
 
+    // The lightbox takes keyboard focus while it is open and covers the
+    // header, so the search entry cannot be clicked or receive typed input.
+    // Keep the existing search entry and handlers, but provide the standard
+    // shortcut to close the overlay and return focus to search.
+    let search_keyboard = gtk::EventControllerKey::new();
+    search_keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let search_for_keyboard = search.clone();
+    let lightbox_for_search_keyboard = lightbox.clone();
+    search_keyboard.connect_key_pressed(move |_, key, _, modifiers| {
+        if key == gtk::gdk::Key::f
+            && modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+        {
+            if lightbox_for_search_keyboard.root.is_visible() {
+                lightbox_for_search_keyboard.close();
+            }
+            search_for_keyboard.grab_focus();
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    window.add_controller(search_keyboard);
+
     // The split layout has two in-content header bars instead of one native
     // titlebar. Preserve the usual titlebar double-click behavior on both:
     // maximize when normal, and restore the previous window size when maximized.

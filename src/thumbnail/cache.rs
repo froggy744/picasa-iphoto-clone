@@ -114,7 +114,7 @@ fn create_uncached(path: &str, destination: &PathBuf) -> Result<PathBuf> {
     }
     let decode_started = Instant::now();
     let (source, source_width, source_height, decoder, scale, read_ms) = if is_raw(path) {
-        let decoded = decode_nef(path)?;
+        let decoded = decode_raw_thumbnail(path)?;
         (
             decoded.image,
             decoded.source_width,
