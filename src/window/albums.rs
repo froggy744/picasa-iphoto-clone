@@ -10,11 +10,6 @@ fn selected_photo_ids(context: &PhotoActionContext, fallback_id: Option<i64>) ->
 fn refresh_album_ui(context: &PhotoActionContext) {
     let folders = db::folders(&context.connection.borrow()).unwrap_or_default();
     let albums = db::albums(&context.connection.borrow()).unwrap_or_default();
-    eprintln!(
-        "ALBUM UI TRACE refresh albums={} current_filter={:?}",
-        albums.len(),
-        context.filter.get()
-    );
     let counts = db::sidebar_counts(&context.connection.borrow()).unwrap_or_default();
     if let Some(sidebar) = context.sidebar.borrow().as_ref() {
         sidebar::refresh(
@@ -198,7 +193,6 @@ fn show_delete_album_confirmation(parent: gtk::Widget, album_id: i64, context: P
             context.filter.set(sidebar::SidebarFilter::All);
             refresh_photo_actions_grid(&context);
         }
-        eprintln!("ALBUM UI TRACE deleted id={album_id}");
         refresh_album_ui(&context);
     });
     dialog.present(Some(&parent));
@@ -243,7 +237,6 @@ fn show_remove_folder_confirmation(
             }
         }
 
-        eprintln!("FOLDER UI TRACE removed id={} path={}", folder.id, folder.path);
         refresh_album_ui(&context);
         if context.filter.get() != sidebar::SidebarFilter::Albums {
             refresh_photo_actions_grid(&context);

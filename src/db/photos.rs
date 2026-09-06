@@ -114,7 +114,6 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
             let parent_id = insert_folder(connection, &sibling_parent)?;
             imported_parent = Some(parent_id);
             if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("FOLDER TRACE inferred_shared_parent path={path} parent_path={sibling_parent} parent_id={parent_id}");
             }
         }
     }
@@ -133,7 +132,6 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
         }
     };
     if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!("FOLDER TRACE insert_import path={path} imported_parent={imported_parent:?} existing={existing:?} target_parent={parent_id:?} target_root={imported_root}");
     }
     connection.execute(
         "INSERT INTO folders(path, name, parent_id, imported_root) VALUES (?1, ?2, ?3, ?4)
@@ -155,7 +153,6 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
         0
     };
     if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!("FOLDER TRACE import_result id={id} path={path} parent_id={parent_id:?} imported_root={imported_root} reparented_descendant_roots={reparented}");
     }
     repair_existing_folder_parents(connection)?;
     Ok(id)
@@ -190,7 +187,6 @@ pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: 
     )?;
     let id = connection.query_row("SELECT id FROM folders WHERE path = ?1", [path], |row| row.get(0))?;
     if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!("FOLDER TRACE discover path={path} requested_parent={parent_id} existing={existing:?} result_id={id}");
     }
     Ok(id)
 }

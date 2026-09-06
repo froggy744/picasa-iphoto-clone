@@ -1,5 +1,6 @@
 mod albums_view;
 mod db;
+mod diagnostics;
 mod grid;
 mod image_format;
 mod infobar;
@@ -55,29 +56,8 @@ fn main() {
     application.run();
 }
 
-/// When tracing is enabled, persist the complete stderr stream beside the
-/// checkout. A new timestamped file is created for every application run.
 #[cfg(unix)]
-fn init_trace_log() {
-    if std::env::var_os("PICASA_TRACE").is_none() {
-        return;
-    }
-    use std::fs::OpenOptions;
-    use std::os::fd::AsRawFd;
-    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let path = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join(format!("picasa-trace-{stamp}.log"));
-    if let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) {
-        // Keep all existing eprintln!-based instrumentation, including GTK
-        // warnings and panic diagnostics, in the same per-run file.
-        unsafe {
-            libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO);
-        }
-        eprintln!("\n===== PICASA TRACE RUN {stamp} =====");
-        eprintln!("PICASA TRACE LOG: {}", path.display());
-    }
-}
+fn init_trace_log() {}
 
 #[cfg(not(unix))]
 fn init_trace_log() {}

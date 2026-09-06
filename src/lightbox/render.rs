@@ -37,7 +37,6 @@ fn show_photo(
     }
     if cache_hit {
         if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("UI PERF lightbox_display_cache_reuse path={path}");
         }
         return;
     }
@@ -145,7 +144,6 @@ fn show_photo(
 
         if generation.get() != expected_generation || cancelled.load(Ordering::Acquire) {
             if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("UI TRACE lightbox_stale_result ignored expected_generation={} current_generation={}", expected_generation, generation.get());
             }
             return;
         }
@@ -224,7 +222,6 @@ fn show_photo(
             }
             Err(error) => {
                 if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!("UI TRACE lightbox_full_decode_error={}", error);
                 }
             }
         }
@@ -297,7 +294,6 @@ fn prepare_navigation_photo(
     };
     let navigation_started = std::time::Instant::now();
     if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!("UI TRACE lightbox_navigation_request path={}", photo.path());
     }
     if zoom < 0.0 {
         return (false, false);
@@ -327,7 +323,6 @@ fn prepare_navigation_photo(
                 "UI PERF lightbox_display_cache_hit path={} target={}x{}",
                 path, target_width, target_height
             );
-            eprintln!("UI PERF lightbox_preview_visible_ms=0 source=display_cache");
         }
         return (true, true);
     }
@@ -347,7 +342,6 @@ fn prepare_navigation_photo(
     // image or trigger a transient black-bar allocation.
     if crate::image_format::uses(&path, crate::image_format::DecoderKind::Raw) {
         if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("UI PERF lightbox_preview_skipped source=raw_previous_full");
         }
         return (false, false);
     }

@@ -11,7 +11,6 @@ fn update_folder_suggestions(
 
     if query.is_empty() {
         revealer.set_reveal_child(false);
-        eprintln!("SEARCH TRACE query=\"\" folder_matches=0");
         return;
     }
 
@@ -23,19 +22,7 @@ fn update_folder_suggestions(
         .take(8)
         .collect::<Vec<_>>();
 
-    eprintln!(
-        "SEARCH TRACE query={:?} folder_matches={}",
-        query,
-        matches.len()
-    );
     for folder in &matches {
-        eprintln!(
-            "SEARCH TRACE folder_match id={} name={:?} path={:?}",
-            folder.id,
-            folder.name,
-            folder.path
-        );
-
         let button = gtk::Button::new();
         button.set_halign(gtk::Align::Fill);
         button.set_focusable(false);

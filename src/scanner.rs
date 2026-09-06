@@ -17,7 +17,9 @@ use crate::thumbnail;
 
 macro_rules! trace {
     ($($arg:tt)*) => {
-        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!($($arg)*); }
+        if false {
+            eprintln!($($arg)*);
+        }
     };
 }
 

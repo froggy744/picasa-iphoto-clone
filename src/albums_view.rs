@@ -78,13 +78,11 @@ pub fn refresh(
     let Some(count) = find_descendant_with_css_class(&root, "albums-home-count")
         .and_then(|widget| widget.downcast::<gtk::Label>().ok())
     else {
-        eprintln!("ALBUM VIEW TRACE refresh_failed reason=count_missing");
         return;
     };
     let Some(cards) = find_descendant_with_css_class(&root, "albums-home-grid")
         .and_then(|widget| widget.downcast::<gtk::FlowBox>().ok())
     else {
-        eprintln!("ALBUM VIEW TRACE refresh_failed reason=grid_missing");
         return;
     };
 

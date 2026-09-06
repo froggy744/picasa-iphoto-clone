@@ -244,7 +244,6 @@ impl Lightbox {
                     }
                     let Some(photo) = photos.borrow().get(index.get()).cloned() else {
                         if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!("UI TRACE lightbox_context_click no_current_photo");
                         }
                         return;
                     };
@@ -268,7 +267,6 @@ impl Lightbox {
                         );
                         gesture.set_state(gtk::EventSequenceState::Claimed);
                     } else if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("UI TRACE lightbox_context_click no_handler");
                     }
                 });
                 right_click
@@ -597,7 +595,6 @@ impl Lightbox {
     /// A negative zoom is reserved for this temporary 1:1 mode.
     pub fn set_one_to_one(&self, enabled: bool) {
         if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("UI TRACE lightbox_one_to_one enabled={enabled}");
         }
 
         if self.one_to_one_active.get() == enabled {

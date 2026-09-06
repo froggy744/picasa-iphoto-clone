@@ -20,7 +20,7 @@ const RAW_THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v5-raw-preview";
 
 macro_rules! thumb_trace {
     ($($arg:tt)*) => {
-        if std::env::var_os("PICASA_TRACE").is_some() {
+        if false {
             eprintln!($($arg)*);
         }
     };

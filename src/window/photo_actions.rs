@@ -90,7 +90,6 @@ fn show_photo_context_menu(
                 .replace(Some(favorite_photo.clone()));
             favorite_context.info.set_photo(Some(&favorite_photo));
         }
-        eprintln!("FAVORITE TRACE photos={} favorite={}", count, target);
         popover_for_favorite.popdown();
         refresh_photo_actions_grid(&favorite_context);
         refresh_favorite_sidebar(&favorite_context);

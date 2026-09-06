@@ -5,56 +5,18 @@ fn refresh_grid(
     sort: PhotoSort,
     gallery: &grid::Gallery,
 ) {
-    let started = Instant::now();
-    eprintln!(
-        "SEARCH PERF refresh_start filter={:?} query={:?}",
-        filter, search
-    );
     if filter == sidebar::SidebarFilter::Albums {
-        eprintln!("ALBUM UI TRACE refresh_grid_skip filter=Albums");
         return;
     }
 
     // An active search is a library-wide view, regardless of the destination
     // that was selected before typing began.
     if !search.is_empty() {
-        let db_started = Instant::now();
         if let Ok(mut photos) = db::photos(&connection.borrow(), None, false, Some(search)) {
-            eprintln!(
-                "SEARCH PERF global_db_done query={:?} rows={} elapsed_ms={}",
-                search,
-                photos.len(),
-                db_started.elapsed().as_millis()
-            );
-            let filter_started = Instant::now();
             retain_enabled_formats(&connection.borrow(), &mut photos);
-            eprintln!(
-                "SEARCH PERF global_format_filter_done rows={} elapsed_ms={}",
-                photos.len(),
-                filter_started.elapsed().as_millis()
-            );
             limit_recently_added(&connection.borrow(), filter, &mut photos);
-            let sort_started = Instant::now();
             sort_photos(&mut photos, sort);
-            eprintln!(
-                "SEARCH PERF global_sort_done rows={} elapsed_ms={}",
-                photos.len(),
-                sort_started.elapsed().as_millis()
-            );
-            eprintln!(
-                "VIEW TRACE refresh filter={:?} search={:?} photos={}",
-                filter,
-                search,
-                photos.len()
-            );
-            let gallery_started = Instant::now();
             gallery.replace(&photos);
-            eprintln!(
-                "SEARCH PERF global_gallery_done rows={} elapsed_ms={} total_ms={}",
-                photos.len(),
-                gallery_started.elapsed().as_millis(),
-                started.elapsed().as_millis()
-            );
         }
         return;
     }
@@ -84,18 +46,7 @@ fn refresh_grid(
         retain_enabled_formats(&connection.borrow(), &mut photos);
         limit_recently_added(&connection.borrow(), filter, &mut photos);
         sort_photos(&mut photos, sort);
-        eprintln!(
-            "VIEW TRACE refresh filter={:?} search={:?} photos={}",
-            filter,
-            search,
-            photos.len()
-        );
         gallery.replace(&photos);
-    } else {
-        eprintln!(
-            "VIEW TRACE refresh failed filter={:?} search={:?}",
-            filter, search
-        );
     }
 }
 

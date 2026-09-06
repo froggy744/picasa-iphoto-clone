@@ -87,16 +87,6 @@ mod square_tile {
                     gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x, y));
 
                 child.allocate(child_width, child_height, baseline, Some(transform));
-
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "GRID TILE TRACE allocation tile={}x{} child={}x{}",
-                        child_width,
-                        child_height,
-                        child.allocated_width(),
-                        child.allocated_height()
-                    );
-                }
             }
         }
 
@@ -130,17 +120,13 @@ impl SquareTile {
     }
 
     fn bind_photo(&self, photo: &PhotoObject) {
-        let started = Instant::now();
         self.imp().photo.replace(Some(photo.clone()));
-        self.refresh_thumbnail_with_probe(false);
-        let elapsed_ms = started.elapsed().as_millis();
-        if elapsed_ms >= 16 && std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "GRID PERF tile_bind_ms={} path={}",
-                elapsed_ms,
-                photo.path()
-            );
+        photo.set_original_available(crate::source::cached_file_available(&photo.path()));
+        if let Some(path) = photo.cached_thumbnail_path() {
+            photo.set_thumbnail_available(std::path::Path::new(&path).is_file());
         }
+        crate::diagnostics::visible_thumbnail(photo.thumbnail_available());
+        self.refresh_thumbnail_with_probe(false);
     }
 
     fn refresh_thumbnail(&self) {
@@ -287,13 +273,6 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
         270 => image::imageops::rotate270(&image),
         _ => image,
     };
-
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "GRID TILE TRACE raw_crop path={} cached={}x{} target={}x{} rotation={}",
-            source_path, image_width, image_height, display_width, display_height, rotation
-        );
-    }
 
     let width = image.width() as i32;
     let height = image.height() as i32;
@@ -753,8 +732,7 @@ impl Gallery {
     }
 
     pub fn replace(&self, photos: &[Photo]) {
-        let started = Instant::now();
-        eprintln!("GRID PERF replace_start rows={}", photos.len());
+        let profile_started = crate::diagnostics::refresh_started(photos.len());
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
         let unchanged = {
@@ -766,11 +744,6 @@ impl Gallery {
                     .all(|(object, photo)| object.id() == photo.id)
         };
         if unchanged {
-            eprintln!(
-                "GRID PERF replace_unchanged rows={} elapsed_ms={}",
-                photos.len(),
-                started.elapsed().as_millis()
-            );
             return;
         }
 
@@ -780,27 +753,15 @@ impl Gallery {
         // batches for library-sized replacements.
         const PROGRESSIVE_REPLACE_THRESHOLD: usize = 1_000;
         if photos.len() > PROGRESSIVE_REPLACE_THRESHOLD {
-            self.replace_progressive(photos.to_vec(), generation);
+            self.replace_progressive(photos.to_vec(), generation, profile_started);
             return;
         }
 
         (self.selected)(None);
-        let object_started = Instant::now();
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
-        eprintln!(
-            "GRID PERF photo_objects_done rows={} elapsed_ms={}",
-            objects.len(),
-            object_started.elapsed().as_millis()
-        );
+        crate::diagnostics::refresh_first_batch(profile_started, objects.len());
         self.current_photos.replace(objects.clone());
-        let splice_started = Instant::now();
         self.store.splice(0, self.store.n_items(), &objects);
-        eprintln!(
-            "GRID PERF model_splice_done rows={} elapsed_ms={} total_ms={}",
-            objects.len(),
-            splice_started.elapsed().as_millis(),
-            started.elapsed().as_millis()
-        );
         if objects.is_empty() {
             self.selection.unselect_all();
         } else {
@@ -810,13 +771,20 @@ impl Gallery {
             self.rebuild_group_ranges();
             self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
+        crate::diagnostics::refresh_finished(profile_started, objects.len());
     }
 
-    fn replace_progressive(&self, photos: Vec<Photo>, generation: u64) {
-        const BATCH_SIZE: usize = 250;
+    fn replace_progressive(
+        &self,
+        photos: Vec<Photo>,
+        generation: u64,
+        profile_started: Option<Instant>,
+    ) {
+        const BATCH_SIZE: usize = 500;
 
         let photos = Rc::new(photos);
         let offset = Rc::new(Cell::new(0usize));
+        let initialized = Rc::new(Cell::new(false));
         let store = self.store.clone();
         let selected = self.selected.clone();
         let current_photos = self.current_photos.clone();
@@ -843,40 +811,44 @@ impl Gallery {
                 .iter()
                 .map(PhotoObject::from_photo)
                 .collect();
-
-            if start == 0 {
-                selected(None);
-                current_photos.replace(objects.clone());
-                store.remove_all();
-            } else {
-                current_photos.borrow_mut().extend(objects.iter().cloned());
-            }
-            store.splice(start as u32, 0, &objects);
             offset.set(end);
 
-            if end < photos.len() {
-                return glib::ControlFlow::Continue;
+            if !initialized.replace(true) {
+                selected(None);
+                current_photos.replace(objects.clone());
+                store.splice(0, store.n_items(), &objects);
+                crate::diagnostics::refresh_first_batch(profile_started, objects.len());
+            } else {
+                current_photos.borrow_mut().extend(objects.iter().cloned());
+                store.splice(store.n_items(), 0, &objects);
             }
 
-            rebuild_group_ranges_for(&current_photos, &group_mode, &group_date, &group_ranges);
-            update_group_header_for_index_for(
-                &group_mode,
-                &group_ranges,
-                &group_header,
-                &group_title,
-                &group_count,
-                (((last_scroll_y.get() - 20.0).max(0.0) / (tile_height.get().max(1) as f64 + 12.0))
-                    .floor() as usize)
-                    * current_columns.get().max(1) as usize,
-            );
-            if objects.is_empty() {
-                selection.unselect_all();
-            } else {
-                // Restore the same initial-selection behavior as replace(),
-                // but only after the complete model exists.
+            if end >= photos.len() {
+                rebuild_group_ranges_for(&current_photos, &group_mode, &group_date, &group_ranges);
+                update_group_header_for_index_for(
+                    &group_mode,
+                    &group_ranges,
+                    &group_header,
+                    &group_title,
+                    &group_count,
+                    (((last_scroll_y.get() - 20.0).max(0.0)
+                        / (tile_height.get().max(1) as f64 + 12.0))
+                        .floor() as usize)
+                        * current_columns.get().max(1) as usize,
+                );
+            }
+            if end >= photos.len() && !objects.is_empty() {
                 selection.select_item(0, true);
             }
-            glib::ControlFlow::Break
+            if end < photos.len() {
+                glib::ControlFlow::Continue
+            } else {
+                crate::diagnostics::refresh_finished(
+                    profile_started,
+                    current_photos.borrow().len(),
+                );
+                glib::ControlFlow::Break
+            }
         });
     }
 

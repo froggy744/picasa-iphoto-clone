@@ -92,18 +92,12 @@ impl PhotoObject {
             .property("favorite", photo.favorite)
             .property("folder-id", photo.folder_id.unwrap_or_default())
             .property("folder-path", photo.folder_path.clone())
-            .property(
-                "original-available",
-                crate::source::cached_file_available(&photo.path),
-            )
+            // Availability is refreshed when a tile is bound. Probing every
+            // original while constructing a library-sized model blocks GTK.
+            .property("original-available", true)
             .property("cached-thumbnail-path", cached_thumbnail_path.clone())
-            .property(
-                "thumbnail-available",
-                cached_thumbnail_path
-                    .as_deref()
-                    .map(|path| std::path::Path::new(path).is_file())
-                    .unwrap_or(false),
-            )
+            // The visible tile performs this inexpensive cache check lazily.
+            .property("thumbnail-available", false)
             .build();
         object
     }

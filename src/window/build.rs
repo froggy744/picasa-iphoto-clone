@@ -123,8 +123,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     } else {
         grid::GroupMode::None
     }));
-    let mut photos = db::photos(&connection.borrow(), None, false, None).unwrap_or_default();
-    retain_enabled_formats(&connection.borrow(), &mut photos);
+    let mut all_startup_photos = db::photos(&connection.borrow(), None, false, None)
+        .unwrap_or_default();
+    retain_enabled_formats(&connection.borrow(), &mut all_startup_photos);
+    let mut photos = all_startup_photos.clone();
     limit_recently_added(
         &connection.borrow(),
         sidebar::SidebarFilter::RecentlyAdded,
@@ -178,7 +180,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             && lightbox_for_window_escape.root.is_visible()
         {
             if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("UI TRACE lightbox_escape_window_close");
             }
             lightbox_for_window_escape.close();
             glib::Propagation::Stop
@@ -205,19 +206,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     space_toggle_in_progress_for_key.set(true);
                     one_to_one_for_key.set_active(false);
                     if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("UI TRACE lightbox_space_fit");
                     }
                 } else {
                     space_toggle_in_progress_for_key.set(true);
                     one_to_one_for_key.set_active(true);
                     if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("UI TRACE lightbox_space_one_to_one");
                     }
                 }
             } else if let Some(open_selected) = space_open_slot_for_key.borrow().as_ref() {
                 open_selected();
                 if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!("UI TRACE lightbox_space_open_selected");
                 }
             }
             glib::Propagation::Stop
@@ -673,20 +671,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let sidebar_resize_active = Rc::new(Cell::new(false));
     let gallery_for_resize = gallery.clone();
     let sidebar_resize_active_for_tick = sidebar_resize_active.clone();
-    let last_grid_tick = Rc::new(Cell::new(None::<Instant>));
-    let last_grid_tick_for_tick = last_grid_tick.clone();
     grid_scroll.add_tick_callback(move |scrolled, _clock| {
-        let now = Instant::now();
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            if let Some(previous) = last_grid_tick_for_tick.replace(Some(now)) {
-                let frame_gap_ms = now.duration_since(previous).as_millis();
-                if frame_gap_ms >= 33 {
-                    eprintln!("UI PERF grid_frame_gap_ms={frame_gap_ms}");
-                }
-            } else {
-                last_grid_tick_for_tick.set(Some(now));
-            }
-        }
+        crate::diagnostics::scroll_tick();
         if !sidebar_resize_active_for_tick.get() {
             let width = scrolled.width();
             if width > 100 {
@@ -963,7 +949,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
             suppressed.set(false);
             search_text.replace(String::new());
-            eprintln!("SEARCH TRACE destination_click clear_search filter={:?}", new_filter);
             lightbox.close();
             filter.set(new_filter);
             if let Some(sidebar) = sidebar_selection.borrow().as_ref() {
@@ -1007,7 +992,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(|| Rc::new(|_| {}));
-            eprintln!("ALBUM UI TRACE index_refresh albums={}", albums.len());
             // Album cards keep using existing cached thumbnails; this only
             // replaces the index data after an album mutation.
             albums_view::refresh(
@@ -1457,24 +1441,18 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     search.connect_search_changed(move |entry| {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let callback_started = Instant::now();
-            eprintln!("SEARCH TRACE changed start text={:?}", entry.text());
             if search_suppressed_for_search.get() {
-                eprintln!("SEARCH TRACE changed suppressed");
                 return;
             }
-            eprintln!("SEARCH TRACE changed cancel_previous_debounce");
             if let Some(source) = search_debounce_for_search.borrow_mut().take() {
                 let removal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     source.remove();
                 }));
                 if removal.is_err() {
-                    eprintln!("SEARCH TRACE debounce_remove_failed source_already_removed");
                 }
             }
             let query = entry.text().to_string();
-            eprintln!("SEARCH TRACE changed query_captured query={:?}", query);
             search_text_for_search.replace(query.clone());
-            eprintln!("SEARCH TRACE changed shared_text_replaced");
             eprintln!(
                 "SEARCH TRACE changed folders_cached count={}",
                 folders_for_search.len()
@@ -1498,16 +1476,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             // Updating the inline suggestion list must never move typing focus
             // away from the SearchEntry.
             entry.grab_focus();
-            eprintln!("SEARCH TRACE changed suggestions_updated");
 
             if query.is_empty() {
-                eprintln!("SEARCH TRACE changed empty_refresh_start");
                 refresh_grid(&connection_for_search, filter_for_search.get(), "", sort_for_search.get(), &gallery_for_search);
-                eprintln!("SEARCH TRACE changed empty_refresh_done");
             } else if query.chars().count() < 2 {
-                eprintln!("SEARCH TRACE photo_refresh_deferred query={:?}", query);
             } else {
-                eprintln!("SEARCH TRACE photo_refresh_deferred query={:?}", query);
                 let connection = connection_for_search.clone();
                 let filter = filter_for_search.clone();
                 let search_text = search_text_for_search.clone();
@@ -1517,16 +1490,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 let query_for_refresh = query.clone();
                 let source = glib::timeout_add_local(Duration::from_millis(300), move || {
                     let refresh_started = Instant::now();
-                    eprintln!("SEARCH TRACE debounce_fired query={:?}", query_for_refresh);
                     // The source removes itself after returning Break. Clear
                     // the slot now so a later keystroke never tries to remove
                     // an already-finished SourceId.
                     debounce_slot.borrow_mut().take();
                     if search_text.borrow().as_str() != query_for_refresh {
-                        eprintln!("SEARCH TRACE debounce_stale query={:?}", query_for_refresh);
                         return glib::ControlFlow::Break;
                     }
-                    eprintln!("SEARCH TRACE global_refresh query={:?}", query_for_refresh);
                     refresh_grid(&connection, filter.get(), &query_for_refresh, sort.get(), &gallery);
                     eprintln!(
                         "SEARCH TRACE global_refresh_done query={:?} elapsed_ms={}",
@@ -1536,7 +1506,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     glib::ControlFlow::Break
                 });
                 search_debounce_for_search.replace(Some(source));
-                eprintln!("SEARCH TRACE changed debounce_scheduled");
             }
             eprintln!(
                 "SEARCH TRACE changed done query={:?} elapsed_ms={}",
@@ -1550,7 +1519,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 .copied()
                 .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
                 .unwrap_or("non-string panic payload");
-            eprintln!("SEARCH TRACE PANIC callback message={message}");
         }
     });
 
@@ -1563,7 +1531,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let gallery_for_activate = gallery.clone();
     let suggestion_revealer_for_activate = suggestion_revealer.clone();
     search.connect_activate(move |entry| {
-        eprintln!("SEARCH TRACE activate text={:?}", entry.text());
         if let Some(source) = search_debounce_for_activate.borrow_mut().take() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.remove()));
         }
@@ -1572,7 +1539,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         search_suppressed_for_activate.set(false);
         search_text_for_activate.replace(String::new());
         suggestion_revealer_for_activate.set_reveal_child(false);
-        eprintln!("SEARCH TRACE activate clear_search");
         refresh_grid(
             &connection_for_activate,
             filter_for_activate.get(),
@@ -2132,12 +2098,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 .any(|folder| folder.path == path && folder.imported_root);
             if !imported_root {
                 if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!("SCAN ignored non-imported folder root={path}");
                 }
                 return;
             }
             if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("SCAN requested folder root={path}");
             }
             let mut job = scan_job.borrow_mut();
             if let Some(previous) = job.active.take() {
@@ -2167,19 +2131,38 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     // A previously interrupted import can leave valid DB records without
     // previews. Rebuild those previews off the GTK thread at startup.
-    let missing_thumbnails: Vec<_> = startup_photos
-        .iter()
-        .filter_map(|photo| {
-            let cache =
-                crate::thumbnail::cache_path(&photo.path, photo.mtime, photo.size_bytes).ok()?;
-            (!cache.is_file()).then(|| (photo.path.clone(), photo.mtime, photo.size_bytes))
-        })
-        .collect();
-    if !missing_thumbnails.is_empty() {
-        scan_job.borrow_mut().kind = Some(ScanJobKind::Maintenance);
-        let sender = scan_sender.clone();
-        let generation = scan_job.borrow().generation;
-        std::thread::spawn(move || {
+    // Check the complete indexed library in the worker. The initial gallery
+    // is intentionally limited to Recently Added, but recovery must not miss
+    // older photos whose thumbnails are absent.
+    let recovery_photos = all_startup_photos;
+    scan_job.borrow_mut().kind = Some(ScanJobKind::Maintenance);
+    let sender = scan_sender.clone();
+    let generation = scan_job.borrow().generation;
+    std::thread::spawn(move || {
+            let missing_thumbnails: Vec<_> = recovery_photos
+                .iter()
+                .filter_map(|photo| {
+                    let cache = crate::thumbnail::cache_path(
+                        &photo.path,
+                        photo.mtime,
+                        photo.size_bytes,
+                    )
+                    .ok()?;
+                    (!cache.is_file()).then(|| {
+                        (photo.path.clone(), photo.mtime, photo.size_bytes)
+                    })
+                })
+                .collect();
+            if missing_thumbnails.is_empty() {
+                let _ = sender.send(ScanUiEvent {
+                    generation,
+                    event: scanner::ScanEvent::Finished {
+                        imported: 0,
+                        failed: 0,
+                    },
+                });
+                return;
+            }
             let _ = sender.send(ScanUiEvent {
                 generation,
                 event: scanner::ScanEvent::ThumbnailsStarted {
@@ -2214,8 +2197,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     failed,
                 },
             });
-        });
-    }
+    });
 
     let parent = window.clone();
     let connection_for_import = connection.clone();
@@ -2242,7 +2224,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 if let Some(file) = dialog.file() {
                     let root = crate::source::reference(&file);
                     if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("IMPORT selected root={root}");
                     }
                     if let Err(error) = db::mark_import_root(&connection.borrow(), &root) {
                         eprintln!("Could not register imported folder {root}: {error}");
@@ -2316,7 +2297,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 .map(|folder| folder.path)
                 .collect();
             if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("FOLDER TRACE refresh_roots pending={:?}", job.pending);
             }
             job.imported_total = 0;
             job.failed_total = 0;
@@ -2493,7 +2473,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             match &event {
                 scanner::ScanEvent::Started { root } => {
                     if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("SCAN Started root={}", root.display());
                     }
                     scan_count = 0;
                     thumbnail_total = 0;
@@ -2519,7 +2498,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                 scanner::ScanEvent::FolderStarted { folder } => {
                     if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("SCAN FolderStarted id={} path={}", folder.id, folder.path);
                     }
                     run_ui_guarded("sidebar folder append", || {
                         sidebar::append_folder(
@@ -2588,7 +2566,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                 scanner::ScanEvent::ThumbnailsStarted { total } => {
                     if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("SCAN ThumbnailsStarted total={total}");
                     }
                     scan_count = 0;
                     thumbnail_total = *total;
@@ -2641,7 +2618,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                 scanner::ScanEvent::Finished { imported, failed } => {
                     if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("SCAN Finished imported={imported} failed={failed}");
                     }
                     eprintln!(
                         "===== SCAN COMPLETE: imported={} failed={} | progressive gallery updates complete =====",
