@@ -36,6 +36,7 @@ type PriorityRequest = (String, Option<i64>, Option<i64>, PathBuf);
 
 static PRIORITY_SENDER: OnceLock<SyncSender<PriorityRequest>> = OnceLock::new();
 static PRIORITY_PENDING: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+static PRIORITY_ATTEMPTED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 static PRIORITY_COMPLETIONS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
 
 /// Ask the dedicated foreground thumbnail worker to create a thumbnail for a
@@ -56,13 +57,36 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
     if !pending.insert(destination.clone()) {
         return;
     }
+    if let Ok(mut attempted) = PRIORITY_ATTEMPTED
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+    {
+        if !attempted.insert(destination.clone()) {
+            pending.remove(&destination);
+            return;
+        }
+    }
     drop(pending);
 
     let sender = PRIORITY_SENDER.get_or_init(|| {
         let (sender, receiver) = sync_channel::<PriorityRequest>(256);
         std::thread::spawn(move || {
             while let Ok((path, mtime, size_bytes, destination)) = receiver.recv() {
-                let _ = create(&path, mtime, size_bytes);
+                // A previous run may have recorded a transient failure. A
+                // visible request gets one fresh attempt in this process.
+                let failure_marker = destination.with_extension("failed");
+                let _ = std::fs::remove_file(&failure_marker);
+                for _ in 0..20 {
+                    let _ = create(&path, mtime, size_bytes);
+                    if destination.is_file() || failure_marker.is_file() {
+                        break;
+                    }
+                    // If the bulk recovery worker already owns this cache
+                    // entry, create() returns without doing work. Give it a
+                    // short chance to finish instead of dropping the visible
+                    // request as a false success.
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
                 if let Ok(mut pending) = PRIORITY_PENDING
                     .get_or_init(|| Mutex::new(HashSet::new()))
                     .lock()
@@ -88,6 +112,12 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
             .lock()
         {
             pending.remove(&destination);
+        }
+        if let Ok(mut attempted) = PRIORITY_ATTEMPTED
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+        {
+            attempted.remove(&destination);
         }
         if !matches!(error, TrySendError::Full(_)) {
             return;
