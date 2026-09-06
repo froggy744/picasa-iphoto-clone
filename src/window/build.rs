@@ -952,8 +952,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let sidebar_selection = sidebar_selection_slot.clone();
         Rc::new(move |folder_id| {
             destination_click(sidebar::SidebarFilter::Folder(folder_id));
-            if let Some(sidebar) = sidebar_selection.borrow().as_ref() {
-                sidebar::scroll_to_folder(sidebar, folder_id);
+            let sidebar = sidebar_selection.borrow().as_ref().cloned();
+            if let Some(sidebar) = sidebar {
+                // set_active_filter() restores the previous folder scroll
+                // position on idle; reveal and scroll after that restoration
+                // so repeated navigation cannot overwrite the target.
+                glib::timeout_add_local_once(Duration::from_millis(100), move || {
+                    sidebar::scroll_to_folder(&sidebar, folder_id);
+                });
             }
         })
     }));
@@ -1442,8 +1448,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     let sidebar_selection = sidebar_selection_for_search.clone();
                     move |folder_id| {
                         destination_click(sidebar::SidebarFilter::Folder(folder_id));
-                        if let Some(sidebar) = sidebar_selection.borrow().as_ref() {
-                            sidebar::scroll_to_folder(sidebar, folder_id);
+                        if let Some(sidebar) = sidebar_selection.borrow().as_ref().cloned() {
+                            glib::timeout_add_local_once(
+                                Duration::from_millis(100),
+                                move || sidebar::scroll_to_folder(&sidebar, folder_id),
+                            );
                         }
                     }
                 }),

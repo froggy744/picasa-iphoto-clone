@@ -620,6 +620,16 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
         return;
     };
 
+    // A navigation request must make the target row visible even when the
+    // user previously collapsed the entire Folders section.
+    state.borrow_mut().folders_expanded = true;
+    if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, FOLDER_REVEALER_KEY) {
+        revealer.set_reveal_child(true);
+    }
+    if let Some(indicator) = stored_widget::<gtk::Button>(scrolled, FOLDER_INDICATOR_KEY) {
+        indicator.set_icon_name("pan-down-symbolic");
+    }
+
     // Search results can target a row below a collapsed ancestor. Expand the
     // path using the same cached folder data used for the normal tree.
     let folders = unsafe {
@@ -637,6 +647,16 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
     let folder_scroll_value = folder_scroll_value(scrolled);
     if expanded {
         rebuild_folder_list_from_rows(&list, &state);
+
+        // Rebuilding the tree schedules restoration of the previous scroll
+        // position and GTK has not allocated the new rows yet. Retry after
+        // both have had a main-loop turn so the target can be placed at the
+        // top reliably.
+        let scrolled = scrolled.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
+            scroll_to_folder(&scrolled, folder_id);
+        });
+        return;
     }
 
     let mut child = list.first_child();
@@ -648,29 +668,34 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
                     .is_some_and(|filter| *filter.as_ref() == SidebarFilter::Folder(folder_id))
             };
             if matches {
-                // Keep the normal row-selected callback from re-entering
-                // destination navigation while the search result is being
-                // revealed.
-                set_active_filter(scrolled, SidebarFilter::Folder(folder_id));
+                // Select directly so this reveal does not schedule another
+                // restoration of the old scroll position. The ListBox
+                // selection signal normally invokes the navigation callback,
+                // so suppress that callback for this programmatic selection.
+                let syncing = unsafe {
+                    scrolled
+                        .data::<Rc<Cell<bool>>>(FILTER_SYNCING_KEY)
+                        .map(|data| data.as_ref().clone())
+                };
+                if let Some(syncing) = &syncing {
+                    syncing.set(true);
+                }
+                select_matching_row(scrolled, FOLDER_LIST_KEY, SidebarFilter::Folder(folder_id));
+                if let Some(syncing) = syncing {
+                    syncing.set(false);
+                }
                 if let Some(folder_scroll) =
                     stored_widget::<gtk::ScrolledWindow>(scrolled, FOLDER_SCROLL_KEY)
                 {
                     let adjustment = folder_scroll.vadjustment();
                     let allocation = row.allocation();
                     let top = f64::from(allocation.y());
-                    let bottom = top + f64::from(allocation.height());
-                    let visible_top = adjustment.value();
-                    let visible_bottom = visible_top + adjustment.page_size();
-                    let value = if top < visible_top {
-                        top
-                    } else if bottom > visible_bottom {
-                        bottom - adjustment.page_size()
-                    } else {
-                        visible_top
-                    };
+                    // Keep the selected folder at the top of the folder pane
+                    // so repeated navigation has a consistent destination.
+                    let value = top;
                     adjustment.set_value(value.clamp(
                         adjustment.lower(),
-                        adjustment.upper() - adjustment.page_size(),
+                        (adjustment.upper() - adjustment.page_size()).max(adjustment.lower()),
                     ));
                 }
                 return;

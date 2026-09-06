@@ -33,8 +33,11 @@ fn show_photo_context_menu(
 
     let open = add_action("Open");
     let open_with = add_action("Open With…");
-    let open_in_folder =
-        is_library_filter(context.filter.get()).then(|| add_action("Open in Folder"));
+    let open_in_folder = (!matches!(
+        context.filter.get(),
+        sidebar::SidebarFilter::Albums | sidebar::SidebarFilter::Album(_)
+    ))
+    .then(|| add_action("Open in Folder"));
     menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
     let album_selection = selected_photo_ids(&context, Some(photo.id()));
