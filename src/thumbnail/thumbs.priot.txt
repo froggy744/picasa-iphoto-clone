@@ -1,0 +1,176 @@
+Three things in this file actively defeat the onscreen priority path. Fixing the priority section below; `batch.rs` needs no changes.
+
+**What's breaking it**
+
+1. **`PRIORITY_ATTEMPTED` is never cleared.** Once an entry is attempted once in the process, every future `request_priority` for it returns `skip_attempted` — including after a failure. So the second time a user views the same folder (or re-scrolls), none of the missing onscreen tiles get prioritized.
+2. **The 20×100ms give-up is shorter than one decode.** When bulk owns the cache entry (a 4K/RAW preview easily exceeds 2s), the priority worker times out, publishes no completion, and poisons `attempted`. The tile then waits for the bulk pass like everything else — exactly the demotion you're seeing.
+3. **`take_priority_completions` discards the paths and returns a count.** The worker already collects `PathBuf`s; the UI can't rebind the finished tiles, so even successful priority work may never visibly appear.
+
+**Fixed priority section (thumbnail.rs)**
+
+```rust
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+// PRIORITY_ATTEMPTED removed: the `.failed` marker written by create() now
+// carries "known bad, don't retry"; transient failures may retry on demand.
+
+/// How long a foreground request waits for a bulk worker that already owns
+/// the same cache entry before giving up as transiently failed.
+const PRIORITY_HANDOFF_TIMEOUT: Duration = Duration::from_secs(60);
+
+fn priority_trace(event: &str, path: &str, destination: &Path) {
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!("THUMB PRIORITY {event} path={path} cache={}", destination.display());
+    }
+}
+
+/// Must use the same key that cache.rs inserts into `IN_FLIGHT` (the cache
+/// destination, per the "owns this cache entry" contract).
+fn cache_entry_in_flight(destination: &Path) -> bool {
+    IN_FLIGHT
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .map(|in_flight| in_flight.contains(destination))
+        .unwrap_or(false)
+}
+
+/// Clears PENDING even if the worker panics; otherwise the bulk gate in
+/// create_many* would block the import forever.
+struct PendingGuard(PathBuf);
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = PRIORITY_PENDING
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+        {
+            pending.remove(&self.0);
+        }
+    }
+}
+
+pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64>) {
+    let Ok(destination) = cache_path(&path, mtime, size_bytes) else { return };
+    if destination.is_file() {
+        priority_trace("skip_existing", &path, &destination);
+        return;
+    }
+    // create() leaves this marker on genuine decode failures. Retrying a
+    // known-bad file on every tile rebind just burns CPU; transient failures
+    // (no marker) still retry on the next visible request.
+    let failure_marker = destination.with_extension("failed");
+    if failure_marker.is_file() {
+        priority_trace("skip_known_bad", &path, &destination);
+        return;
+    }
+
+    let pending = PRIORITY_PENDING.get_or_init(|| Mutex::new(HashSet::new()));
+    let Ok(mut pending) = pending.lock() else { return };
+    if !pending.insert(destination.clone()) {
+        priority_trace("skip_pending", &path, &destination);
+        return;
+    }
+    drop(pending);
+
+    let queue = PRIORITY_QUEUE.get_or_init(|| {
+        let queue = Arc::new((Mutex::new(VecDeque::<PriorityRequest>::new()), Condvar::new()));
+        for worker_id in 0..PRIORITY_WORKERS {
+            let queue = queue.clone();
+            std::thread::spawn(move || loop {
+                let (path, mtime, size_bytes, destination) = {
+                    let (queue, wake) = &*queue;
+                    let mut queue = queue.lock().expect("priority queue should not be poisoned");
+                    while queue.is_empty() {
+                        queue = wake.wait(queue).expect("priority queue should not be poisoned");
+                    }
+                    queue.pop_front().expect("priority queue was checked above")
+                };
+                let started = Instant::now();
+                priority_trace("worker_start", &path, &destination);
+
+                let failure_marker = destination.with_extension("failed");
+                if !destination.is_file() {
+                    // A visible request gets one fresh attempt; create()
+                    // re-marks it if decoding fails again.
+                    let _ = fs::remove_file(&failure_marker);
+                }
+                let guard = PendingGuard(destination.clone());
+
+                let deadline = started + PRIORITY_HANDOFF_TIMEOUT;
+                let mut attempts = 0u32;
+                while !destination.is_file() && !failure_marker.is_file() {
+                    if cache_entry_in_flight(&destination) {
+                        // Bulk owns this exact entry and will produce the same
+                        // file; create() would no-op. Wait for the handoff
+                        // instead of giving up while the tile is on screen.
+                        if Instant::now() >= deadline { break; }
+                        std::thread::sleep(Duration::from_millis(25));
+                        continue;
+                    }
+                    attempts += 1;
+                    let _ = create(&path, mtime, size_bytes);
+                    if destination.is_file() || failure_marker.is_file() { break; }
+                    if attempts >= 3 || Instant::now() >= deadline { break; }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+
+                drop(guard); // unblock the bulk gate before publishing
+
+                if destination.is_file() {
+                    if let Ok(mut completions) = PRIORITY_COMPLETIONS
+                        .get_or_init(|| Mutex::new(Vec::new()))
+                        .lock()
+                    {
+                        completions.push(PathBuf::from(&path));
+                    }
+                }
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "THUMB PRIORITY worker_done worker={worker_id} path={path} cache_exists={} failed_marker={} elapsed_ms={}",
+                        destination.is_file(),
+                        failure_marker.is_file(),
+                        started.elapsed().as_millis()
+                    );
+                }
+            });
+        }
+        queue
+    });
+
+    let (queue, wake) = &**queue;
+    let mut queue = queue.lock().expect("priority queue should not be poisoned");
+    if queue.len() >= PRIORITY_QUEUE_CAPACITY {
+        if let Some((_, _, _, evicted)) = queue.pop_back() {
+            if let Ok(mut pending) = PRIORITY_PENDING
+                .get_or_init(|| Mutex::new(HashSet::new()))
+                .lock()
+            {
+                pending.remove(&evicted);
+            }
+            priority_trace("evicted_oldest", "", &evicted);
+        }
+    }
+    queue.push_front((path, mtime, size_bytes, destination.clone()));
+    wake.notify_one();
+}
+
+/// Source paths whose foreground thumbnails finished since the last poll.
+/// Rebind exactly these tiles.
+pub fn take_priority_completions() -> Vec<PathBuf> {
+    PRIORITY_COMPLETIONS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .map(|mut completions| std::mem::take(&mut *completions))
+        .unwrap_or_default()
+}
+```
+
+`priority_pending_count` and `wait_for_priority_requests` stay as they are.
+
+**If it still "does nothing", the bug is in the glue** (which matches your "it's not thumbnails.rs"):
+
+- **`cache_path` with `None` mtime/size.** If the UI binds tiles without stat values and `cache_path` hashes the `Option`s instead of stat'ing the file, the priority worker writes to a *different cache key* than the gallery loader reads. That looks exactly like "priority is ignored". Resolve `None` via `fs::metadata` (same conversion bulk uses) before computing the destination.
+- **UI must poll and rebind.** A timer (~100–250ms) calling `take_priority_completions()` and rebinding only those paths. With the old count-only return there was no way to target them.
+- **`IN_FLIGHT` keying.** `cache_entry_in_flight` assumes destination keys; if `cache.rs` inserts source paths, pass `Path::new(&path)` instead.
+- `create()` must keep writing the `.failed` marker on hard failures — the `skip_known_bad` short-circuit depends on it.

@@ -2393,16 +2393,23 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let mut scan_count: usize = 0;
     let mut pending_photos: Vec<db::Photo> = Vec::new();
     let mut thumbnails_dirty = false;
+    let mut priority_thumbnail_paths = Vec::new();
     let mut failure_toast_shown = false;
     let mut progress_toast: Option<adw::Toast> = None;
     let mut thumbnail_total: usize = 0;
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
-        let priority_completions = crate::thumbnail::take_priority_completions();
-        if priority_completions > 0 {
-            thumbnails_dirty = true;
-        }
+        priority_thumbnail_paths.extend(crate::thumbnail::take_priority_completions());
+        let priority_completions = priority_thumbnail_paths.len();
         let priority_pending = crate::thumbnail::priority_pending_count();
+        if std::env::var_os("PICASA_TRACE").is_some()
+            && (priority_completions > 0 || priority_pending > 0)
+        {
+            eprintln!(
+                "THUMB PRIORITY ui_poll completions={} pending={}",
+                priority_completions, priority_pending
+            );
+        }
         if priority_pending > 0 {
             if let Some(toast) = progress_toast.as_ref() {
                 if thumbnail_total == 0 {
@@ -2722,6 +2729,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 gallery_for_events.refresh_thumbnails()
             });
             thumbnails_dirty = false;
+            priority_thumbnail_paths.clear();
+        } else if !priority_thumbnail_paths.is_empty() {
+            run_ui_guarded("visible thumbnail refresh", || {
+                gallery_for_events.refresh_thumbnails_for_paths(&priority_thumbnail_paths)
+            });
+            priority_thumbnail_paths.clear();
         }
 
         glib::ControlFlow::Continue

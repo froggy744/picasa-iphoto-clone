@@ -15,6 +15,7 @@ pub fn create_many(
         items
             .par_iter()
             .map(|(path, mtime, size)| {
+                wait_for_priority_requests();
                 let result = create(path, *mtime, *size);
                 completed(path);
                 result
@@ -43,6 +44,12 @@ pub fn create_many_cancellable(
             .map(|(path, mtime, size)| {
                 if cancelled() {
                     return None;
+                }
+                while priority_pending_count() > 0 {
+                    if cancelled() {
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
                 }
                 let result = create(path, *mtime, *size);
                 completed(path);

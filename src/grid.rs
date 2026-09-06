@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -140,6 +140,14 @@ impl SquareTile {
             let available = std::path::Path::new(&path).is_file();
             photo.set_thumbnail_available(available);
             if !available {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "THUMB PRIORITY visible_missing id={} path={} cache={}",
+                        photo.id(),
+                        photo.path(),
+                        path
+                    );
+                }
                 crate::thumbnail::request_priority(
                     photo.path(),
                     Some(photo.mtime()),
@@ -737,6 +745,29 @@ impl Gallery {
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.refresh_thumbnail();
+        }
+    }
+
+    pub fn refresh_thumbnails_for_paths(&self, paths: &[std::path::PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        let paths = paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<HashSet<_>>();
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            let matches = tile
+                .imp()
+                .photo
+                .borrow()
+                .as_ref()
+                .is_some_and(|photo| paths.contains(&photo.path()));
+            if matches {
+                tile.refresh_thumbnail();
+            }
         }
     }
 
