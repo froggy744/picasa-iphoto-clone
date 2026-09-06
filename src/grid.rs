@@ -137,7 +137,15 @@ impl SquareTile {
         self.imp().photo.replace(Some(photo.clone()));
         photo.set_original_available(crate::source::cached_file_available(&photo.path()));
         if let Some(path) = photo.cached_thumbnail_path() {
-            photo.set_thumbnail_available(std::path::Path::new(&path).is_file());
+            let available = std::path::Path::new(&path).is_file();
+            photo.set_thumbnail_available(available);
+            if !available {
+                crate::thumbnail::request_priority(
+                    photo.path(),
+                    Some(photo.mtime()),
+                    Some(photo.size_bytes()),
+                );
+            }
         }
         crate::diagnostics::visible_thumbnail(photo.thumbnail_available());
         self.refresh_thumbnail_with_probe(false);

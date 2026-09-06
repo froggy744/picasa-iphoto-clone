@@ -2388,6 +2388,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
         let callback_started = Instant::now();
+        if crate::thumbnail::take_priority_completions() > 0 {
+            thumbnails_dirty = true;
+        }
         // Never monopolize the GTK loop when a fast scanner has queued many
         // results. Leaving some events queued lets GTK process input, redraws,
         // scrolling, and folder changes between import batches.

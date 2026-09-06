@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::PathBuf;
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -30,6 +31,82 @@ macro_rules! thumb_trace {
 // thumbnail passes. Keep cache-key ownership separate from the filesystem
 // existence check so two workers cannot generate the same preview together.
 static IN_FLIGHT: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+
+type PriorityRequest = (String, Option<i64>, Option<i64>, PathBuf);
+
+static PRIORITY_SENDER: OnceLock<SyncSender<PriorityRequest>> = OnceLock::new();
+static PRIORITY_PENDING: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+static PRIORITY_COMPLETIONS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+
+/// Ask the dedicated foreground thumbnail worker to create a thumbnail for a
+/// tile that is currently being bound. The request is best-effort and
+/// deduplicated; the regular bulk recovery/import pass remains untouched.
+pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64>) {
+    let Ok(destination) = cache_path(&path, mtime, size_bytes) else {
+        return;
+    };
+    if destination.is_file() {
+        return;
+    }
+
+    let pending = PRIORITY_PENDING.get_or_init(|| Mutex::new(HashSet::new()));
+    let Ok(mut pending) = pending.lock() else {
+        return;
+    };
+    if !pending.insert(destination.clone()) {
+        return;
+    }
+    drop(pending);
+
+    let sender = PRIORITY_SENDER.get_or_init(|| {
+        let (sender, receiver) = sync_channel::<PriorityRequest>(256);
+        std::thread::spawn(move || {
+            while let Ok((path, mtime, size_bytes, destination)) = receiver.recv() {
+                let _ = create(&path, mtime, size_bytes);
+                if let Ok(mut pending) = PRIORITY_PENDING
+                    .get_or_init(|| Mutex::new(HashSet::new()))
+                    .lock()
+                {
+                    pending.remove(&destination);
+                }
+                if destination.is_file() {
+                    if let Ok(mut completions) = PRIORITY_COMPLETIONS
+                        .get_or_init(|| Mutex::new(Vec::new()))
+                        .lock()
+                    {
+                        completions.push(PathBuf::from(path));
+                    }
+                }
+            }
+        });
+        sender
+    });
+
+    if let Err(error) = sender.try_send((path, mtime, size_bytes, destination.clone())) {
+        if let Ok(mut pending) = PRIORITY_PENDING
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+        {
+            pending.remove(&destination);
+        }
+        if !matches!(error, TrySendError::Full(_)) {
+            return;
+        }
+    }
+}
+
+/// Return the number of foreground completions since the last UI poll.
+pub fn take_priority_completions() -> usize {
+    PRIORITY_COMPLETIONS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .map(|mut completions| {
+            let count = completions.len();
+            completions.clear();
+            count
+        })
+        .unwrap_or_default()
+}
 
 // Structural split only: included files remain in this module scope.
 include!("thumbnail/cache.rs");
