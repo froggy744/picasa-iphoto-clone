@@ -77,10 +77,23 @@ fn decode_nef(reference: &str) -> Result<DecodedThumbnailSource> {
     thumb_trace!(
         "THUMB TRACE NEF thumbnail missing; falling back to preview decode path={reference}"
     );
-    let image = rawler::analyze::extract_thumbnail_pixels(
-        local_path,
+    let image = match rawler::analyze::extract_thumbnail_pixels(
+        local_path.clone(),
         &rawler::decoders::RawDecodeParams::default(),
-    )?;
+    ) {
+        Ok(image) => image,
+        Err(raw_error) => {
+            // Some phone-generated DNG files are readable by ImageMagick's
+            // delegate but rejected by rawler because their preview/strip
+            // offsets are outside the truncated TIFF extent. Keep this as an
+            // optional compatibility fallback; normal RAW files never spawn
+            // an external process.
+            if let Some(decoded) = decode_external_thumbnail(&local_path)? {
+                return Ok(decoded);
+            }
+            return Err(raw_error.into());
+        }
+    };
     let source_width = image.width();
     let source_height = image.height();
     Ok(DecodedThumbnailSource {
@@ -89,6 +102,25 @@ fn decode_nef(reference: &str) -> Result<DecodedThumbnailSource> {
         source_height,
         scale: "embedded preview",
     })
+}
+
+fn decode_external_thumbnail(path: &std::path::Path) -> Result<Option<DecodedThumbnailSource>> {
+    let output = match std::process::Command::new("magick")
+        .arg(path)
+        .arg("-thumbnail")
+        .arg(format!("{THUMBNAIL_SIZE}x{THUMBNAIL_SIZE}"))
+        .arg("jpg:-")
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return Ok(None),
+    };
+    if !output.status.success() || output.stdout.is_empty() {
+        return Ok(None);
+    }
+
+    let decoded = decode_jpeg_turbo(&output.stdout).or_else(|_| decode_with_image(&output.stdout))?;
+    Ok(Some(decoded))
 }
 
 /// Decode a display-quality image for the lightbox. `viewport_width` and
