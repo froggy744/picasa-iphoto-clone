@@ -378,6 +378,7 @@ pub struct Gallery {
     store: gio::ListStore,
     selection: gtk::MultiSelection,
     collage_selection_mode: Rc<Cell<bool>>,
+    collage_selected_ids: Rc<RefCell<HashSet<i64>>>,
     current_columns: Rc<Cell<u32>>,
     last_layout_width: Rc<Cell<i32>>,
     tile_width: Rc<Cell<i32>>,
@@ -409,6 +410,7 @@ impl Gallery {
         let store = gio::ListStore::new::<PhotoObject>();
         let selection = gtk::MultiSelection::new(Some(store.clone()));
         let collage_selection_mode = Rc::new(Cell::new(false));
+        let collage_selected_ids = Rc::new(RefCell::new(HashSet::new()));
         // Independent thumbnail width/height. Change DEFAULT_TILE_WIDTH and
         // DEFAULT_TILE_HEIGHT above to choose your preferred starting size.
         let tile_width = Rc::new(Cell::new(
@@ -567,6 +569,7 @@ impl Gallery {
         collage_click.set_propagation_phase(gtk::PropagationPhase::Capture);
         let mode = collage_selection_mode.clone();
         let selection_for_click = selection.clone();
+        let collage_selected_ids_for_click = collage_selected_ids.clone();
         let root_for_click = root.clone();
         collage_click.connect_pressed(move |gesture, _, x, y| {
             if !mode.get() {
@@ -593,9 +596,11 @@ impl Gallery {
                 return;
             };
             gesture.set_state(gtk::EventSequenceState::Claimed);
-            if selection_for_click.is_selected(position) {
+            let mut selected_ids = collage_selected_ids_for_click.borrow_mut();
+            if selected_ids.remove(&photo_id) {
                 selection_for_click.unselect_item(position);
             } else {
+                selected_ids.insert(photo_id);
                 selection_for_click.select_item(position, false);
             }
         });
@@ -638,6 +643,7 @@ impl Gallery {
             store,
             selection,
             collage_selection_mode,
+            collage_selected_ids,
             current_columns: Rc::new(Cell::new(5)),
             last_layout_width: Rc::new(Cell::new(0)),
             tile_width,
@@ -888,12 +894,16 @@ impl Gallery {
             return;
         }
 
-        (self.selected)(None);
+        if !self.collage_selection_mode.get() {
+            (self.selected)(None);
+        }
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
         crate::diagnostics::refresh_first_batch(profile_started, objects.len());
         self.current_photos.replace(objects.clone());
         self.store.splice(0, self.store.n_items(), &objects);
-        if objects.is_empty() {
+        if self.collage_selection_mode.get() {
+            self.restore_collage_selection();
+        } else if objects.is_empty() {
             self.selection.unselect_all();
         } else {
             self.selection.select_item(0, true);
@@ -920,6 +930,8 @@ impl Gallery {
         let selected = self.selected.clone();
         let current_photos = self.current_photos.clone();
         let selection = self.selection.clone();
+        let collage_selection_mode = self.collage_selection_mode.clone();
+        let collage_selected_ids = self.collage_selected_ids.clone();
         let group_mode = self.group_mode.clone();
         let group_date = self.group_date.clone();
         let group_ranges = self.group_ranges.clone();
@@ -945,7 +957,9 @@ impl Gallery {
             offset.set(end);
 
             if !initialized.replace(true) {
-                selected(None);
+                if !collage_selection_mode.get() {
+                    selected(None);
+                }
                 current_photos.replace(objects.clone());
                 store.splice(0, store.n_items(), &objects);
                 crate::diagnostics::refresh_first_batch(profile_started, objects.len());
@@ -968,7 +982,19 @@ impl Gallery {
                         * current_columns.get().max(1) as usize,
                 );
             }
-            if end >= photos.len() && !objects.is_empty() {
+            if end >= photos.len() && collage_selection_mode.get() {
+                selection.unselect_all();
+                let wanted = collage_selected_ids.borrow().clone();
+                for position in 0..store.n_items() {
+                    if store
+                        .item(position)
+                        .and_downcast::<PhotoObject>()
+                        .is_some_and(|photo| wanted.contains(&photo.id()))
+                    {
+                        selection.select_item(position, false);
+                    }
+                }
+            } else if end >= photos.len() && !objects.is_empty() {
                 selection.select_item(0, true);
             }
             if end < photos.len() {
@@ -1011,6 +1037,9 @@ impl Gallery {
     }
 
     pub fn selected_photo_ids(&self, fallback_id: Option<i64>) -> Vec<i64> {
+        if self.collage_selection_mode.get() {
+            return self.collage_selected_ids.borrow().iter().copied().collect();
+        }
         let selected = self.selection.selection();
         let mut ids = Vec::new();
         if let Some((mut iter, first)) = gtk::BitsetIter::init_first(&selected) {
@@ -1031,9 +1060,18 @@ impl Gallery {
 
     pub fn set_collage_selection_mode(&self, active: bool) {
         self.collage_selection_mode.set(active);
+        if !active {
+            self.collage_selected_ids.borrow_mut().clear();
+        }
     }
 
     pub fn set_selected_photo_ids(&self, ids: &[i64]) {
+        self.collage_selected_ids
+            .borrow_mut()
+            .extend(ids.iter().copied());
+        self.collage_selected_ids
+            .borrow_mut()
+            .retain(|id| ids.contains(id));
         self.selection.unselect_all();
         let wanted = ids.iter().copied().collect::<HashSet<_>>();
         for position in 0..self.store.n_items() {
@@ -1041,6 +1079,21 @@ impl Gallery {
                 continue;
             };
             if wanted.contains(&photo.id()) {
+                self.selection.select_item(position, false);
+            }
+        }
+    }
+
+    fn restore_collage_selection(&self) {
+        self.selection.unselect_all();
+        let wanted = self.collage_selected_ids.borrow().clone();
+        for position in 0..self.store.n_items() {
+            if self
+                .store
+                .item(position)
+                .and_downcast::<PhotoObject>()
+                .is_some_and(|photo| wanted.contains(&photo.id()))
+            {
                 self.selection.select_item(position, false);
             }
         }
