@@ -21,6 +21,24 @@ pub fn cache_size() -> Result<u64> {
         .sum())
 }
 
+pub fn cache_count() -> Result<u64> {
+    let directory = cache_dir()?;
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Ok(0);
+    };
+    Ok(entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "jpg")
+        })
+        .filter_map(|entry| entry.file_type().ok())
+        .filter(|file_type| file_type.is_file())
+        .count() as u64)
+}
+
 pub fn cache_path(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result<PathBuf> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(path.as_bytes());

@@ -1577,7 +1577,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     window.add_controller(search_click);
 
     let import = gtk::Button::from_icon_name("folder-open-symbolic");
-    import.set_tooltip_text(Some("Import Folder"));
+    import.set_tooltip_text(Some("Add Folder to Library"));
     right_header.pack_end(&import);
 
     let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");

@@ -198,6 +198,7 @@ fn library_page(
         Some(recent_limit.upcast_ref()),
     );
     let counts = crate::db::library_counts(&connection.borrow()).unwrap_or_default();
+    let thumbnail_count = crate::thumbnail::cache_count().unwrap_or_default();
     let cache_size = crate::thumbnail::cache_size().unwrap_or_default();
     let database_size = crate::db::database_size(&connection.borrow()).unwrap_or_default();
     let available = crate::db::setting(
@@ -227,6 +228,7 @@ fn library_page(
 
     for (name, value) in [
         ("Total photos", counts.photos.to_string()),
+        ("Total thumbnails", thumbnail_count.to_string()),
         ("Total albums", counts.albums.to_string()),
         ("Total library folders", counts.folders.to_string()),
         ("Thumbnail cache size", format_bytes(cache_size)),
