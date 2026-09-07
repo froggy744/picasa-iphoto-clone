@@ -19,6 +19,7 @@ heif-oxide = "0.1"
 image = "0.25"
 kamadak-exif = "0.6"
 libadwaita = { version = "0.8", features = ["v1_5"] }
+notify = "6"
 rayon = "1"
 rawler = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }

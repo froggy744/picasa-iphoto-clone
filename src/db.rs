@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS folders (
   path TEXT UNIQUE NOT NULL,
   name TEXT,
   parent_id INTEGER REFERENCES folders(id),
-  imported_root BOOLEAN NOT NULL DEFAULT 0
+  imported_root BOOLEAN NOT NULL DEFAULT 0,
+  watched BOOLEAN NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS albums (
   id INTEGER PRIMARY KEY,
@@ -52,6 +53,7 @@ pub struct Folder {
     pub name: String,
     pub parent_id: Option<i64>,
     pub imported_root: bool,
+    pub watched: bool,
     pub photo_count: i64,
     pub subfolder_count: i64,
     pub available: bool,

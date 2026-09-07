@@ -262,6 +262,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let import_folder_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let refresh_folder_slot: Rc<RefCell<Option<Rc<dyn Fn(String)>>>> =
         Rc::new(RefCell::new(None));
+    let folder_watch_manager = Rc::new(RefCell::new(
+        crate::folder_watcher::FolderWatchManager::default(),
+    ));
+    let (folder_watch_sender, folder_watch_receiver) =
+        std::sync::mpsc::channel::<String>();
     let import_folder: Rc<dyn Fn()> = {
         let slot = import_folder_slot.clone();
         Rc::new(move || {
@@ -449,6 +454,25 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let settings_search = search_text.clone();
     let settings_sort = sort.clone();
     let settings_lightbox = lightbox.clone();
+    let settings_folder_watch_changed = {
+        let connection = connection.clone();
+        let manager = folder_watch_manager.clone();
+        let updates = folder_watch_sender.clone();
+        Rc::new(move |folder_id: i64, watched: bool| {
+            if watched {
+                if let Some(folder) = db::folders(&connection.borrow())
+                    .ok()
+                    .and_then(|folders| folders.into_iter().find(|folder| folder.id == folder_id))
+                {
+                    manager
+                        .borrow_mut()
+                        .watch(folder_id, folder.path, updates.clone());
+                }
+            } else {
+                manager.borrow_mut().unwatch(folder_id);
+            }
+        }) as Rc<dyn Fn(i64, bool)>
+    };
     info.more.connect_clicked(move |_| {
         let connection = settings_connection.clone();
         let gallery = settings_gallery.clone();
@@ -456,6 +480,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let search = settings_search.clone();
         let sort = settings_sort.clone();
         let lightbox = settings_lightbox.clone();
+        let folder_watch_changed = settings_folder_watch_changed.clone();
         settings_window.present(
             &settings_parent,
             settings_connection.clone(),
@@ -469,6 +494,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     &gallery,
                 );
             }),
+            folder_watch_changed,
         );
     });
 
@@ -2160,6 +2186,32 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             start_next_scan();
         })
     }));
+
+    {
+        let refresh_folder_slot = refresh_folder_slot.clone();
+        glib::timeout_add_local(Duration::from_millis(500), move || {
+            let mut paths = std::collections::HashSet::new();
+            while let Ok(path) = folder_watch_receiver.try_recv() {
+                paths.insert(path);
+            }
+            if let Some(refresh) = refresh_folder_slot.borrow().as_ref() {
+                for path in paths {
+                    refresh(path);
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    for folder in db::folders(&connection.borrow())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|folder| folder.watched)
+    {
+        folder_watch_manager
+            .borrow_mut()
+            .watch(folder.id, folder.path, folder_watch_sender.clone());
+    }
 
     let scan_job_for_stop = scan_job.clone();
     stop_scan.connect_clicked(move |_| {

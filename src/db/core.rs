@@ -61,6 +61,9 @@ fn migrate_folder_schema(connection: &Connection) -> Result<()> {
     if !columns.iter().any(|column| column == "imported_root") {
         connection.execute("ALTER TABLE folders ADD COLUMN imported_root BOOLEAN NOT NULL DEFAULT 0", [])?;
     }
+    if !columns.iter().any(|column| column == "watched") {
+        connection.execute("ALTER TABLE folders ADD COLUMN watched BOOLEAN NOT NULL DEFAULT 0", [])?;
+    }
     if !needs_inference {
         repair_folder_parent_links(connection)?;
         connection.execute_batch("CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);")?;
