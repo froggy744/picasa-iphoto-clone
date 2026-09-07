@@ -43,7 +43,8 @@ fn show_photo_context_menu(
     let album_selection = selected_photo_ids(&context, Some(photo.id()));
     let selection_provider: Rc<dyn Fn() -> Vec<i64>> = Rc::new(move || album_selection.clone());
     let add_to_album = gtk::MenuButton::new();
-    add_to_album.set_label("Add to Album  ›");
+    add_to_album.set_label("Add to Album");
+    add_to_album.set_direction(gtk::ArrowType::None);
     add_to_album.set_halign(gtk::Align::Fill);
     add_to_album.add_css_class("flat");
     add_to_album.set_popover(Some(&build_album_popover(
