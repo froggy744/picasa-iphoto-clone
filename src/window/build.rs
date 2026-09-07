@@ -338,6 +338,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
             })
         },
+        window: window.clone().upcast::<gtk::Window>().downgrade(),
     };
     let grid_thumbnail_size = grid_thumbnail_size_from_setting(&connection.borrow());
 

@@ -40,8 +40,17 @@ fn show_photo_context_menu(
     .then(|| add_action("Open in Folder"));
     menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
-    let album_selection = selected_photo_ids(&context, Some(photo.id()));
-    let selection_provider: Rc<dyn Fn() -> Vec<i64>> = Rc::new(move || album_selection.clone());
+    let selection_ids = selected_photo_ids(&context, Some(photo.id()));
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "COLLAGE TRACE context clicked_id={} selected_ids={:?}",
+            photo.id(),
+            selection_ids
+        );
+    }
+    let selection_for_provider = selection_ids.clone();
+    let selection_provider: Rc<dyn Fn() -> Vec<i64>> =
+        Rc::new(move || selection_for_provider.clone());
     let add_to_album = gtk::MenuButton::new();
     add_to_album.set_label("Add to Album");
     add_to_album.set_direction(gtk::ArrowType::None);
@@ -56,6 +65,25 @@ fn show_photo_context_menu(
         },
     )));
     menu.append(&add_to_album);
+
+    let collage_ids = selection_ids.clone();
+    let collage = add_action("Create Collage…");
+    collage.set_sensitive(collage_ids.len() >= 2);
+    let collage_context = context.clone();
+    let collage_popover = popover.clone();
+    collage.connect_clicked(move |_| {
+        collage_popover.popdown();
+        if let Some(parent) = collage_context.window.upgrade() {
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("COLLAGE TRACE open ids={:?}", collage_ids);
+            }
+            crate::collage::open(
+                &parent,
+                collage_context.connection.clone(),
+                collage_ids.clone(),
+            );
+        }
+    });
 
     let favorite_label = if photo.favorite() {
         "Remove from Favourites"
