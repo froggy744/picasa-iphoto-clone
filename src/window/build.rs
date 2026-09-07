@@ -260,6 +260,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         })
     };
     let import_folder_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let collage_open_slot: Rc<RefCell<Option<Rc<dyn Fn(Vec<i64>)>>>> =
+        Rc::new(RefCell::new(None));
+    let collage_add_mode_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
+        Rc::new(RefCell::new(None));
+    let collage_prepare_add_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
+        Rc::new(RefCell::new(None));
+    let collage_close_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
+        Rc::new(RefCell::new(None));
+    let open_collage: Rc<dyn Fn(Vec<i64>)> = {
+        let slot = collage_open_slot.clone();
+        Rc::new(move |ids| {
+            if let Some(callback) = slot.borrow().as_ref() {
+                callback(ids);
+            }
+        })
+    };
     let refresh_folder_slot: Rc<RefCell<Option<Rc<dyn Fn(String)>>>> =
         Rc::new(RefCell::new(None));
     let folder_watch_manager = Rc::new(RefCell::new(
@@ -335,6 +351,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         delete_album: delete_album.clone(),
         on_unavailable: availability_refresh.clone(),
         navigate_to_folder: navigate_to_folder.clone(),
+        open_collage: open_collage.clone(),
         refresh_albums_home: {
             let slot = albums_home_refresh_slot.clone();
             Rc::new(move |albums| {
@@ -736,9 +753,70 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     main_stack.set_vexpand(true);
     main_stack.add_named(&photo_page, Some("photos"));
     main_stack.add_named(&albums_home, Some("albums"));
+    let collage_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    collage_page.set_hexpand(true);
+    collage_page.set_vexpand(true);
+    main_stack.add_named(&collage_page, Some("collage"));
     main_stack.set_visible_child_name("photos");
     content.append(&main_stack);
     content.append(&info.root);
+
+    let collage_editor: Rc<RefCell<Option<crate::collage::CollageEditor>>> =
+        Rc::new(RefCell::new(None));
+    {
+        let parent = window.clone().upcast::<gtk::Window>();
+        let connection = connection.clone();
+        let main_stack = main_stack.clone();
+        let collage_page = collage_page.clone();
+        let collage_editor = collage_editor.clone();
+        let collage_add_mode_slot = collage_add_mode_slot.clone();
+        let collage_close_slot = collage_close_slot.clone();
+        collage_open_slot.replace(Some(Rc::new(move |ids| {
+            let add_mode_slot = collage_add_mode_slot.clone();
+            let close_slot = collage_close_slot.clone();
+            crate::collage::open(
+                &parent,
+                connection.clone(),
+                ids,
+                Rc::new({
+                    let parent = parent.clone();
+                    let main_stack = main_stack.clone();
+                    let collage_page = collage_page.clone();
+                    let collage_editor = collage_editor.clone();
+                    move |photos| {
+                        while let Some(child) = collage_page.first_child() {
+                            collage_page.remove(&child);
+                        }
+                        let add_photos = {
+                            let slot = add_mode_slot.clone();
+                            Rc::new(move || {
+                                if let Some(add_mode) = slot.borrow().as_ref() {
+                                    add_mode();
+                                }
+                            }) as Rc<dyn Fn()>
+                        };
+                        let close = {
+                            let slot = close_slot.clone();
+                            Rc::new(move || {
+                                if let Some(close) = slot.borrow().as_ref() {
+                                    close();
+                                }
+                            }) as Rc<dyn Fn()>
+                        };
+                        let editor = crate::collage::build_editor(
+                            &parent,
+                            photos,
+                            add_photos,
+                            close,
+                        );
+                        collage_page.append(&editor.root);
+                        collage_editor.replace(Some(editor));
+                        main_stack.set_visible_child_name("collage");
+                    }
+                }),
+            );
+        })));
+    }
 
     let selected_for_favorite = selected_photo.clone();
     let db_for_favorite = connection.clone();
@@ -1445,6 +1523,71 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     suggestion_list.set_size_request(320, -1);
     suggestion_revealer.set_child(Some(&suggestion_list));
     search_area.append(&suggestion_revealer);
+
+    let add_selected_to_collage = gtk::Button::with_label("Add Selected to Collage");
+    add_selected_to_collage.set_visible(false);
+    add_selected_to_collage.add_css_class("suggested-action");
+    add_selected_to_collage
+        .set_tooltip_text(Some("Add the selected library photos to the collage"));
+    right_header.pack_end(&add_selected_to_collage);
+    collage_add_mode_slot.replace(Some({
+        let prepare = collage_prepare_add_slot.clone();
+        Rc::new(move || {
+            if let Some(prepare) = prepare.borrow().as_ref() {
+                prepare();
+            }
+        })
+    }));
+    collage_close_slot.replace(Some({
+        let main_stack = main_stack.clone();
+        let button = add_selected_to_collage.clone();
+        let gallery = gallery.clone();
+        Rc::new(move || {
+            gallery.set_collage_selection_mode(false);
+            main_stack.set_visible_child_name("photos");
+            button.set_visible(false);
+        })
+    }));
+    collage_prepare_add_slot.replace(Some({
+        let main_stack = main_stack.clone();
+        let button = add_selected_to_collage.clone();
+        let gallery = gallery.clone();
+        let collage_editor = collage_editor.clone();
+        Rc::new(move || {
+            let editor_handle = collage_editor.borrow();
+            let Some(editor) = editor_handle.as_ref() else {
+                return;
+            };
+            gallery.set_collage_selection_mode(true);
+            gallery.set_selected_photo_ids(&editor.photo_ids());
+            main_stack.set_visible_child_name("photos");
+            button.set_visible(true);
+        })
+    }));
+    {
+        let main_stack = main_stack.clone();
+        let button = add_selected_to_collage.clone();
+        let gallery = gallery.clone();
+        let connection = connection.clone();
+        let collage_editor = collage_editor.clone();
+        add_selected_to_collage.connect_clicked(move |_| {
+            let photos = gallery
+                .selected_photo_ids(None)
+                .into_iter()
+                .filter_map(|id| db::photo(&connection.borrow(), id).ok().flatten())
+                .map(|photo| crate::photo_object::PhotoObject::from_photo(&photo))
+                .collect::<Vec<_>>();
+            if photos.len() < 2 {
+                return;
+            }
+            if let Some(editor) = collage_editor.borrow().as_ref() {
+                editor.set_photos(photos);
+                gallery.set_collage_selection_mode(false);
+                main_stack.set_visible_child_name("collage");
+                button.set_visible(false);
+            }
+        });
+    }
     right_header.set_title_widget(Some(&search_area));
 
     // The lightbox takes keyboard focus while it is open and covers the

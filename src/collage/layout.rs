@@ -4,7 +4,6 @@ pub fn apply(project: &mut CollageProject) {
     match project.layout {
         LayoutKind::Grid => grid(project),
         LayoutKind::Mosaic => mosaic(project),
-        LayoutKind::PicturePile => pile(project),
     }
 }
 
@@ -113,23 +112,6 @@ fn mixed_seed(seed: u64, index: u64) -> u64 {
     value ^= value >> 27;
     value = value.wrapping_mul(0x94d049bb133111eb);
     value ^ (value >> 31)
-}
-
-fn pile(project: &mut CollageProject) {
-    let mut random = project.seed ^ 0x9e3779b97f4a7c15;
-    let item_count = project.items.len();
-    for (index, item) in project.items.iter_mut().enumerate() {
-        let rx = next_unit(&mut random);
-        let ry = next_unit(&mut random);
-        let rr = next_unit(&mut random) * 18.0 - 9.0;
-        let size = (0.26 - item_count as f32 * 0.004).clamp(0.13, 0.25);
-        item.width = size;
-        item.height = size * 0.78;
-        item.x = (rx * (1.0 - size)).clamp(0.01, 0.99 - size);
-        item.y = (ry * (1.0 - item.height)).clamp(0.01, 0.99 - item.height);
-        item.rotation = rr;
-        item.z = index;
-    }
 }
 
 #[cfg(test)]
@@ -257,34 +239,11 @@ mod tests {
     }
 
     #[test]
-    fn picture_pile_random_values_are_normalized() {
+    fn layout_random_values_are_normalized() {
         let mut state = 42;
         for _ in 0..1000 {
             let value = next_unit(&mut state);
             assert!((0.0..=1.0).contains(&value));
         }
-    }
-
-    #[test]
-    fn picture_pile_is_deterministic_and_shuffle_changes_it() {
-        let mut first = project(8, LayoutKind::PicturePile, 12);
-        let mut second = project(8, LayoutKind::PicturePile, 12);
-        first.relayout();
-        second.relayout();
-        assert_eq!(
-            first
-                .items
-                .iter()
-                .map(|item| (item.x, item.y, item.rotation))
-                .collect::<Vec<_>>(),
-            second
-                .items
-                .iter()
-                .map(|item| (item.x, item.y, item.rotation))
-                .collect::<Vec<_>>()
-        );
-        second.seed = 13;
-        second.relayout();
-        assert_ne!(first.items[0].x, second.items[0].x);
     }
 }

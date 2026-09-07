@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::photo_object::PhotoObject;
 
 #[derive(Clone, Debug)]
@@ -11,7 +13,6 @@ pub struct CollagePhoto {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutKind {
-    PicturePile,
     Mosaic,
     Grid,
 }
@@ -104,6 +105,76 @@ impl CollageProject {
 
     pub fn relayout(&mut self) {
         crate::collage::layout::apply(self);
+    }
+
+    pub fn add_photos(&mut self, photos: Vec<PhotoObject>) {
+        let first_z = self.items.len();
+        let mut ids = self
+            .items
+            .iter()
+            .map(|item| item.photo.id)
+            .collect::<HashSet<_>>();
+        self.items.extend(
+            photos
+                .into_iter()
+                .filter(|photo| ids.insert(photo.id()))
+                .enumerate()
+                .map(|(index, photo)| CollageItem {
+                    photo: CollagePhoto {
+                        id: photo.id(),
+                        path: photo.path(),
+                        filename: photo.filename(),
+                        thumbnail_path: photo.cached_thumbnail_path(),
+                        library_rotation: photo.rotation(),
+                    },
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                    rotation: 0.0,
+                    z: first_z + index,
+                }),
+        );
+        self.relayout();
+    }
+
+    pub fn set_photos(&mut self, photos: Vec<PhotoObject>) {
+        let existing = self
+            .items
+            .iter()
+            .cloned()
+            .map(|item| (item.photo.id, item))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut seen = HashSet::new();
+        self.items = photos
+            .into_iter()
+            .filter(|photo| seen.insert(photo.id()))
+            .enumerate()
+            .map(|(z, photo)| {
+                existing
+                    .get(&photo.id())
+                    .cloned()
+                    .unwrap_or_else(|| CollageItem {
+                        photo: CollagePhoto {
+                            id: photo.id(),
+                            path: photo.path(),
+                            filename: photo.filename(),
+                            thumbnail_path: photo.cached_thumbnail_path(),
+                            library_rotation: photo.rotation(),
+                        },
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                        rotation: 0.0,
+                        z,
+                    })
+            })
+            .collect();
+        for (z, item) in self.items.iter_mut().enumerate() {
+            item.z = z;
+        }
+        self.relayout();
     }
 
     pub fn shuffle(&mut self) {

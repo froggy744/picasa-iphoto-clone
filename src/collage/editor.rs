@@ -32,7 +32,45 @@ struct PreviewFrame {
     inner: gtk::Fixed,
 }
 
-pub fn present(parent: &gtk::Window, photos: Vec<crate::photo_object::PhotoObject>) {
+pub struct CollageEditor {
+    pub root: gtk::Box,
+    project: Rc<RefCell<CollageProject>>,
+    canvas: gtk::Fixed,
+    frames: Rc<RefCell<Vec<PreviewFrame>>>,
+    status: gtk::Label,
+}
+
+impl CollageEditor {
+    pub fn photo_ids(&self) -> Vec<i64> {
+        self.project
+            .borrow()
+            .items
+            .iter()
+            .map(|item| item.photo.id)
+            .collect()
+    }
+
+    pub fn add_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
+        self.project.borrow_mut().add_photos(photos);
+        self.status
+            .set_text(&format!("{} photos", self.project.borrow().items.len()));
+        refresh_preview(&self.canvas, &self.frames, &self.project.borrow());
+    }
+
+    pub fn set_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
+        self.project.borrow_mut().set_photos(photos);
+        self.status
+            .set_text(&format!("{} photos", self.project.borrow().items.len()));
+        refresh_preview(&self.canvas, &self.frames, &self.project.borrow());
+    }
+}
+
+pub fn build(
+    parent: &gtk::Window,
+    photos: Vec<crate::photo_object::PhotoObject>,
+    on_add_photos: Rc<dyn Fn()>,
+    on_close: Rc<dyn Fn()>,
+) -> CollageEditor {
     let css = gtk::CssProvider::new();
     let css_data = collage_css();
     css.load_from_data(&css_data);
@@ -41,13 +79,6 @@ pub fn present(parent: &gtk::Window, photos: Vec<crate::photo_object::PhotoObjec
         &css,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
-    let window = adw::Window::builder()
-        .title("Create Collage")
-        .default_width(1120)
-        .default_height(760)
-        .transient_for(parent)
-        .modal(false)
-        .build();
     let project = Rc::new(RefCell::new(CollageProject::new(photos)));
 
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -108,16 +139,15 @@ pub fn present(parent: &gtk::Window, photos: Vec<crate::photo_object::PhotoObjec
     }
 
     add_section_label(&controls, "Layout");
-    let layout = gtk::DropDown::from_strings(&["Picture Pile", "Mosaic", "Grid"]);
-    layout.set_selected(2);
+    let layout = gtk::DropDown::from_strings(&["Mosaic", "Grid"]);
+    layout.set_selected(1);
     controls.append(&layout);
     {
         let project = project.clone();
         let refresh = refresh.clone();
         layout.connect_selected_notify(move |dropdown| {
             project.borrow_mut().layout = match dropdown.selected() {
-                0 => LayoutKind::PicturePile,
-                1 => LayoutKind::Mosaic,
+                0 => LayoutKind::Mosaic,
                 _ => LayoutKind::Grid,
             };
             project.borrow_mut().relayout();
@@ -224,44 +254,28 @@ pub fn present(parent: &gtk::Window, photos: Vec<crate::photo_object::PhotoObjec
     let export = gtk::Button::with_label("Create / Export Collage…");
     export.add_css_class("suggested-action");
     controls.append(&export);
+    let add_photos = gtk::Button::with_label("Add Photos…");
+    controls.append(&add_photos);
+    let close = gtk::Button::with_label("Exit Collage");
+    controls.append(&close);
     controls.append(&gtk::Box::new(gtk::Orientation::Vertical, 0));
     {
         let project = project.clone();
-        let window = window.clone();
-        export.connect_clicked(move |_| choose_export_path(&window, project.clone()));
+        let parent = parent.clone();
+        export.connect_clicked(move |_| choose_export_path(&parent, project.clone()));
     }
+    add_photos.connect_clicked(move |_| on_add_photos());
+    close.connect_clicked(move |_| on_close());
 
     root.append(&controls);
     root.append(&aspect_frame);
-
-    let header = adw::HeaderBar::new();
-    let title = gtk::Label::new(Some("Create Collage"));
-    title.add_css_class("title");
-    header.set_title_widget(Some(&title));
-    let close = gtk::Button::from_icon_name("window-close-symbolic");
-    close.set_tooltip_text(Some("Close collage editor"));
-    close.add_css_class("flat");
-    header.pack_end(&close);
-    let toolbar = adw::ToolbarView::new();
-    toolbar.add_top_bar(&header);
-    toolbar.set_content(Some(&root));
-    window.set_content(Some(&toolbar));
-
-    let window_for_close = window.clone();
-    close.connect_clicked(move |_| window_for_close.close());
-    let escape = gtk::EventControllerKey::new();
-    escape.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let window_for_escape = window.clone();
-    escape.connect_key_pressed(move |_, key, _, _| {
-        if key == gtk::gdk::Key::Escape {
-            window_for_escape.close();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    window.add_controller(escape);
-    window.present();
+    CollageEditor {
+        root,
+        project,
+        canvas,
+        frames,
+        status,
+    }
 }
 
 fn add_section_label(parent: &gtk::Box, text: &str) {
@@ -296,7 +310,7 @@ fn refresh_preview(
             frame.add_css_class("collage-photo-rounded");
         }
         // Keep the widget positioned by GtkFixed separate from the widget
-        // that may receive a Picture Pile rotation transform.
+        // that may receive a layout rotation transform.
         let inner = gtk::Fixed::new();
         inner.set_hexpand(true);
         inner.set_vexpand(true);
@@ -406,7 +420,7 @@ fn update_geometry(
     }
 }
 
-fn choose_export_path(window: &adw::Window, project: Rc<RefCell<CollageProject>>) {
+fn choose_export_path(window: &gtk::Window, project: Rc<RefCell<CollageProject>>) {
     let dialog = gtk::FileChooserNative::new(
         Some("Export Collage"),
         Some(window),

@@ -18,6 +18,11 @@ fn show_photo_context_menu(
     )));
 
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    // This popover is anchored to a virtualized GridView tile. In that
+    // context GTK can otherwise map the popover before it has calculated a
+    // natural size, resulting in a visible but unusable 0x0 menu.
+    menu.set_width_request(240);
+    menu.set_height_request(1);
     menu.set_margin_top(6);
     menu.set_margin_bottom(6);
     menu.set_margin_start(6);
@@ -73,16 +78,10 @@ fn show_photo_context_menu(
     let collage_popover = popover.clone();
     collage.connect_clicked(move |_| {
         collage_popover.popdown();
-        if let Some(parent) = collage_context.window.upgrade() {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("COLLAGE TRACE open ids={:?}", collage_ids);
-            }
-            crate::collage::open(
-                &parent,
-                collage_context.connection.clone(),
-                collage_ids.clone(),
-            );
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!("COLLAGE TRACE open ids={:?}", collage_ids);
         }
+        (collage_context.open_collage)(collage_ids.clone());
     });
 
     let favorite_label = if photo.favorite() {
@@ -263,7 +262,13 @@ fn show_photo_context_menu(
     });
 
     popover.set_child(Some(&menu));
-    popover.popup();
+    // GridView tiles are virtualized. Defer opening until the selection and
+    // allocation pass triggered by the secondary-button event has completed;
+    // otherwise the popover can remain unmapped at 0x0.
+    let popover_for_popup = popover.clone();
+    glib::idle_add_local_once(move || {
+        popover_for_popup.popup();
+    });
     if std::env::var_os("PICASA_TRACE").is_some() {
         let popover = popover.clone();
         glib::idle_add_local_once(move || {

@@ -3,6 +3,8 @@ mod layout;
 mod model;
 mod render;
 
+pub use editor::{build as build_editor, CollageEditor};
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -13,7 +15,12 @@ use rusqlite::Connection;
 
 use crate::photo_object::PhotoObject;
 
-pub fn open(parent: &gtk::Window, connection: Rc<RefCell<Connection>>, ids: Vec<i64>) {
+pub fn open(
+    parent: &gtk::Window,
+    connection: Rc<RefCell<Connection>>,
+    ids: Vec<i64>,
+    on_open: Rc<dyn Fn(Vec<PhotoObject>)>,
+) {
     if ids.len() < 2 {
         let dialog = adw::AlertDialog::builder()
             .heading("Create Collage")
@@ -41,5 +48,5 @@ pub fn open(parent: &gtk::Window, connection: Rc<RefCell<Connection>>, ids: Vec<
         return;
     }
 
-    editor::present(parent, photos);
+    on_open(photos);
 }

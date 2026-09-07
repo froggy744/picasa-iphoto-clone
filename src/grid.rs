@@ -377,6 +377,7 @@ pub struct Gallery {
     selected: Rc<dyn Fn(Option<PhotoObject>)>,
     store: gio::ListStore,
     selection: gtk::MultiSelection,
+    collage_selection_mode: Rc<Cell<bool>>,
     current_columns: Rc<Cell<u32>>,
     last_layout_width: Rc<Cell<i32>>,
     tile_width: Rc<Cell<i32>>,
@@ -407,6 +408,7 @@ impl Gallery {
         let on_zoom_changed: Rc<dyn Fn(i32)> = Rc::new(on_zoom_changed);
         let store = gio::ListStore::new::<PhotoObject>();
         let selection = gtk::MultiSelection::new(Some(store.clone()));
+        let collage_selection_mode = Rc::new(Cell::new(false));
         // Independent thumbnail width/height. Change DEFAULT_TILE_WIDTH and
         // DEFAULT_TILE_HEIGHT above to choose your preferred starting size.
         let tile_width = Rc::new(Cell::new(
@@ -556,6 +558,49 @@ impl Gallery {
         root.set_valign(gtk::Align::Fill);
         root.add_css_class("section-grid");
 
+        // Handle Add Photos clicks on the GridView itself, before the
+        // built-in GridView selection controller sees them. This makes the
+        // mode behave like a checklist: each click toggles one item and does
+        // not collapse the other selected photos.
+        let collage_click = gtk::GestureClick::new();
+        collage_click.set_button(1);
+        collage_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let mode = collage_selection_mode.clone();
+        let selection_for_click = selection.clone();
+        let root_for_click = root.clone();
+        collage_click.connect_pressed(move |gesture, _, x, y| {
+            if !mode.get() {
+                return;
+            }
+            let Some(picked) = root_for_click.pick(x, y, gtk::PickFlags::DEFAULT) else {
+                return;
+            };
+            let Some(tile) = picked
+                .ancestor(SquareTile::static_type())
+                .and_downcast::<SquareTile>()
+            else {
+                return;
+            };
+            let Some(photo_id) = tile.imp().photo.borrow().as_ref().map(|photo| photo.id()) else {
+                return;
+            };
+            let Some(position) = (0..selection_for_click.n_items()).find(|position| {
+                selection_for_click
+                    .item(*position)
+                    .and_downcast::<PhotoObject>()
+                    .is_some_and(|photo| photo.id() == photo_id)
+            }) else {
+                return;
+            };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            if selection_for_click.is_selected(position) {
+                selection_for_click.unselect_item(position);
+            } else {
+                selection_for_click.select_item(position, false);
+            }
+        });
+        root.add_controller(collage_click);
+
         let selected_for_signal = selected.clone();
         selection.connect_selection_changed(move |selection, _, _| {
             let selected = selection.selection();
@@ -592,6 +637,7 @@ impl Gallery {
             selected,
             store,
             selection,
+            collage_selection_mode,
             current_columns: Rc::new(Cell::new(5)),
             last_layout_width: Rc::new(Cell::new(0)),
             tile_width,
@@ -980,6 +1026,23 @@ impl Gallery {
         match fallback_id {
             Some(fallback) if !ids.contains(&fallback) => vec![fallback],
             _ => ids,
+        }
+    }
+
+    pub fn set_collage_selection_mode(&self, active: bool) {
+        self.collage_selection_mode.set(active);
+    }
+
+    pub fn set_selected_photo_ids(&self, ids: &[i64]) {
+        self.selection.unselect_all();
+        let wanted = ids.iter().copied().collect::<HashSet<_>>();
+        for position in 0..self.store.n_items() {
+            let Some(photo) = self.store.item(position).and_downcast::<PhotoObject>() else {
+                continue;
+            };
+            if wanted.contains(&photo.id()) {
+                self.selection.select_item(position, false);
+            }
         }
     }
 
