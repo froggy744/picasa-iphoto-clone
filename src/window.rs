@@ -298,7 +298,7 @@ struct PhotoActionContext {
     delete_album: Rc<dyn Fn(i64)>,
     on_unavailable: Rc<dyn Fn()>,
     refresh_albums_home: Rc<dyn Fn(&[db::Album])>,
-    navigate_to_folder: Rc<dyn Fn(i64)>,
+    navigate_to_folder: Rc<dyn Fn(i64, i64)>,
 }
 
 include!("window/build.rs");

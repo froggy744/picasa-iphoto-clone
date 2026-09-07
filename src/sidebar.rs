@@ -19,6 +19,7 @@ pub enum SidebarFilter {
 
 #[derive(Debug)]
 struct SidebarState {
+    library_expanded: bool,
     albums_expanded: bool,
     folders_expanded: bool,
     expanded_folders: HashSet<i64>,
@@ -29,6 +30,7 @@ struct SidebarState {
 impl Default for SidebarState {
     fn default() -> Self {
         Self {
+            library_expanded: true,
             albums_expanded: true,
             folders_expanded: true,
             expanded_folders: HashSet::new(),
@@ -40,6 +42,8 @@ impl Default for SidebarState {
 
 const STATE_KEY: &str = "picasa-sidebar-state";
 const LIBRARY_LIST_KEY: &str = "picasa-sidebar-library-list";
+const LIBRARY_REVEALER_KEY: &str = "picasa-sidebar-library-revealer";
+const LIBRARY_INDICATOR_KEY: &str = "picasa-sidebar-library-indicator";
 const ALBUM_LIST_KEY: &str = "picasa-sidebar-album-list";
 const ALBUM_REVEALER_KEY: &str = "picasa-sidebar-album-revealer";
 const ALBUM_INDICATOR_KEY: &str = "picasa-sidebar-album-indicator";
@@ -91,12 +95,34 @@ pub fn build(
     root.set_margin_top(4);
     root.set_margin_bottom(12);
 
-    // LIBRARY: fixed/static.
+    // LIBRARY: collapsible.
+    let (library_heading, library_indicator) = collapsible_heading("Library", None, "", true, None);
+    root.append(&library_heading);
+
     let library_list = section_list();
-    append_heading_static(&library_list, "Library");
     populate_library(&library_list, counts, &on_unavailable);
     connect_filter_list(&library_list, on_filter.clone(), filter_syncing.clone());
-    root.append(&library_list);
+    let library_revealer = gtk::Revealer::new();
+    library_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+    library_revealer.set_reveal_child(true);
+    library_revealer.set_child(Some(&library_list));
+    root.append(&library_revealer);
+
+    {
+        let state = state.clone();
+        let revealer = library_revealer.clone();
+        let indicator = library_indicator.clone();
+        library_indicator.connect_clicked(move |_| {
+            let expanded = !state.borrow().library_expanded;
+            state.borrow_mut().library_expanded = expanded;
+            revealer.set_reveal_child(expanded);
+            indicator.set_icon_name(if expanded {
+                "pan-down-symbolic"
+            } else {
+                "pan-end-symbolic"
+            });
+        });
+    }
 
     // ALBUMS: fixed/static in the sidebar, but its rows can be collapsed.
     let (album_heading, album_indicator) = collapsible_heading(
@@ -194,6 +220,8 @@ pub fn build(
         folder_list.set_data(FOLDER_FAVORITE_KEY, on_folder_favorite);
         outer.set_data(STATE_KEY, state);
         outer.set_data(LIBRARY_LIST_KEY, library_list);
+        outer.set_data(LIBRARY_REVEALER_KEY, library_revealer);
+        outer.set_data(LIBRARY_INDICATOR_KEY, library_indicator);
         outer.set_data(ALBUM_LIST_KEY, album_list);
         outer.set_data(ALBUM_REVEALER_KEY, album_revealer);
         outer.set_data(ALBUM_INDICATOR_KEY, album_indicator);
@@ -457,7 +485,6 @@ pub fn refresh(
     let folder_scroll_value = folder_scroll_value(scrolled);
 
     clear_list(&library_list);
-    append_heading_static(&library_list, "Library");
     populate_library(&library_list, counts, &on_unavailable);
 
     clear_list(&album_list);
@@ -466,6 +493,16 @@ pub fn refresh(
     clear_list(&folder_list);
     populate_folders(&folder_list, folders, &state, &on_unavailable);
 
+    if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, LIBRARY_REVEALER_KEY) {
+        revealer.set_reveal_child(state.borrow().library_expanded);
+    }
+    if let Some(indicator) = stored_widget::<gtk::Button>(scrolled, LIBRARY_INDICATOR_KEY) {
+        indicator.set_icon_name(if state.borrow().library_expanded {
+            "pan-down-symbolic"
+        } else {
+            "pan-end-symbolic"
+        });
+    }
     if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, ALBUM_REVEALER_KEY) {
         revealer.set_reveal_child(state.borrow().albums_expanded);
     }
@@ -503,7 +540,6 @@ pub fn refresh_library_counts(
     };
 
     clear_list(&library_list);
-    append_heading_static(&library_list, "Library");
     populate_library(&library_list, counts, on_unavailable);
 
     if let Some(filter) = current_filter(scrolled) {
@@ -1374,27 +1410,6 @@ fn append_album_filter(list: &gtk::ListBox, album: &Album, on_delete: &Rc<dyn Fn
         gesture.set_state(gtk::EventSequenceState::Claimed);
     });
     row.add_controller(right_click);
-}
-
-fn append_heading_static(list: &gtk::ListBox, text: &str) {
-    let label = gtk::Label::new(Some(text));
-    label.set_xalign(0.0);
-    label.add_css_class("sidebar-section-heading-title");
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    content.add_css_class("sidebar-section-heading");
-    content.set_hexpand(true);
-    // ListBoxRow contributes its own horizontal padding; compensate here so
-    // this static heading aligns with the direct heading boxes below it.
-    content.set_margin_start(2);
-    content.set_margin_end(8);
-    content.set_margin_top(8);
-    content.set_margin_bottom(4);
-    content.append(&label);
-    let row = gtk::ListBoxRow::new();
-    row.set_selectable(false);
-    row.set_activatable(false);
-    row.set_child(Some(&content));
-    list.append(&row);
 }
 
 fn collapsible_heading(

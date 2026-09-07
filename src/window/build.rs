@@ -293,13 +293,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         Rc::new(RefCell::new(None));
     let album_home_click_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> =
         Rc::new(RefCell::new(None));
-    let folder_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> =
+    let folder_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i64, i64)>>>> =
         Rc::new(RefCell::new(None));
-    let navigate_to_folder: Rc<dyn Fn(i64)> = {
+    let navigate_to_folder: Rc<dyn Fn(i64, i64)> = {
         let slot = folder_navigation_slot.clone();
-        Rc::new(move |folder_id| {
+        Rc::new(move |folder_id, photo_id| {
             if let Some(callback) = slot.borrow().as_ref() {
-                callback(folder_id);
+                callback(folder_id, photo_id);
             }
         })
     };
@@ -950,8 +950,20 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     folder_navigation_slot.replace(Some({
         let destination_click = destination_click.clone();
         let sidebar_selection = sidebar_selection_slot.clone();
-        Rc::new(move |folder_id| {
+        let gallery = gallery.clone();
+        Rc::new(move |folder_id, photo_id| {
             destination_click(sidebar::SidebarFilter::Folder(folder_id));
+            let gallery = gallery.clone();
+            let attempts = Rc::new(Cell::new(0));
+            let attempts_for_timer = attempts.clone();
+            glib::timeout_add_local(Duration::from_millis(25), move || {
+                attempts_for_timer.set(attempts_for_timer.get() + 1);
+                if gallery.select_photo(photo_id) || attempts_for_timer.get() >= 200 {
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            });
             let sidebar = sidebar_selection.borrow().as_ref().cloned();
             if let Some(sidebar) = sidebar {
                 // set_active_filter() restores the previous folder scroll

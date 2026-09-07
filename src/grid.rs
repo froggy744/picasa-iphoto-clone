@@ -980,6 +980,28 @@ impl Gallery {
         }
     }
 
+    pub fn select_photo(&self, photo_id: i64) -> bool {
+        let Some(model) = self.selection.model() else {
+            return false;
+        };
+        for position in 0..model.n_items() {
+            let matches = model
+                .item(position)
+                .and_downcast::<PhotoObject>()
+                .is_some_and(|photo| photo.id() == photo_id);
+            if matches {
+                self.selection.select_item(position, true);
+                self.root.scroll_to(
+                    position,
+                    gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                    None,
+                );
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn photo_objects(&self) -> Vec<PhotoObject> {
         self.current_photos.borrow().clone()
     }

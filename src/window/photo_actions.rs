@@ -165,9 +165,10 @@ fn show_photo_context_menu(
         let folder_id = photo.folder_id();
         let navigate_to_folder = context.navigate_to_folder.clone();
         let popover_for_folder = popover.clone();
+        let photo_id = photo.id();
         open_in_folder.connect_clicked(move |_| {
             if folder_id != 0 {
-                navigate_to_folder(folder_id);
+                navigate_to_folder(folder_id, photo_id);
             }
             popover_for_folder.popdown();
         });
