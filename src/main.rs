@@ -1,4 +1,5 @@
 mod albums_view;
+mod collage;
 mod db;
 mod diagnostics;
 mod grid;

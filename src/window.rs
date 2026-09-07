@@ -299,6 +299,7 @@ struct PhotoActionContext {
     on_unavailable: Rc<dyn Fn()>,
     refresh_albums_home: Rc<dyn Fn(&[db::Album])>,
     navigate_to_folder: Rc<dyn Fn(i64, i64)>,
+    window: glib::WeakRef<gtk::Window>,
 }
 
 include!("window/build.rs");

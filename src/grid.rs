@@ -521,9 +521,12 @@ impl Gallery {
             let context_menu = context_menu_for_setup.clone();
             let frame_for_context = frame.clone();
             right_click.connect_pressed(move |gesture, _, _, _| {
+                // Claim the secondary-button event before invoking the menu.
+                // Otherwise GtkGridView's selection controller can collapse
+                // an existing multi-selection to the clicked item first.
+                gesture.set_state(gtk::EventSequenceState::Claimed);
                 if let Some(photo) = list_item_for_context.item().and_downcast::<PhotoObject>() {
                     (context_menu)(photo, frame_for_context.clone().upcast());
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
                 }
             });
             frame.add_controller(right_click);
