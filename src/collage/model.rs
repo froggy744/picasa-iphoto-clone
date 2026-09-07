@@ -189,4 +189,23 @@ impl CollageProject {
         }
         self.relayout();
     }
+
+    pub fn swap_item_positions(&mut self, first: usize, second: usize) {
+        if first == second || first >= self.items.len() || second >= self.items.len() {
+            return;
+        }
+        let (first_item, second_item) = if first < second {
+            let (left, right) = self.items.split_at_mut(second);
+            (&mut left[first], &mut right[0])
+        } else {
+            let (left, right) = self.items.split_at_mut(first);
+            (&mut right[0], &mut left[second])
+        };
+        std::mem::swap(&mut first_item.x, &mut second_item.x);
+        std::mem::swap(&mut first_item.y, &mut second_item.y);
+        std::mem::swap(&mut first_item.width, &mut second_item.width);
+        std::mem::swap(&mut first_item.height, &mut second_item.height);
+        std::mem::swap(&mut first_item.rotation, &mut second_item.rotation);
+        std::mem::swap(&mut first_item.z, &mut second_item.z);
+    }
 }

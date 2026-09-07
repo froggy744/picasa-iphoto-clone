@@ -17,6 +17,8 @@ fn collage_css() -> String {
          .collage-black { background: #000000; }\
          .collage-light-gray { background: #eeeeee; }\
          .collage-photo { border: 1px solid alpha(@theme_fg_color, 0.18); border-radius: 0; box-shadow: 0 3px 12px alpha(#000000, 0.28); }\
+         .collage-dragging { opacity: 0.62; }\
+         .collage-drop-target { border: 3px solid #4d9fdb; box-shadow: 0 0 0 3px alpha(#4d9fdb, 0.45), 0 3px 12px alpha(#000000, 0.35); }\
          .collage-photo-rounded { overflow: hidden; }",
     );
     for radius in 0..=MAX_PREVIEW_CORNER_RADIUS {
@@ -54,14 +56,14 @@ impl CollageEditor {
         self.project.borrow_mut().add_photos(photos);
         self.status
             .set_text(&format!("{} photos", self.project.borrow().items.len()));
-        refresh_preview(&self.canvas, &self.frames, &self.project.borrow());
+        refresh_preview(&self.canvas, &self.frames, &self.project);
     }
 
     pub fn set_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
         self.project.borrow_mut().set_photos(photos);
         self.status
             .set_text(&format!("{} photos", self.project.borrow().items.len()));
-        refresh_preview(&self.canvas, &self.frames, &self.project.borrow());
+        refresh_preview(&self.canvas, &self.frames, &self.project);
     }
 }
 
@@ -120,7 +122,7 @@ pub fn build(
         let project = project.clone();
         let canvas = canvas.clone();
         let frames = frames.clone();
-        Rc::new(move || refresh_preview(&canvas, &frames, &project.borrow()))
+        Rc::new(move || refresh_preview(&canvas, &frames, &project))
     };
     refresh();
     {
@@ -288,7 +290,7 @@ fn add_section_label(parent: &gtk::Box, text: &str) {
 fn refresh_preview(
     canvas: &gtk::Fixed,
     frames: &Rc<RefCell<Vec<PreviewFrame>>>,
-    project: &CollageProject,
+    project: &Rc<RefCell<CollageProject>>,
 ) {
     while let Some(child) = canvas.first_child() {
         canvas.remove(&child);
@@ -297,16 +299,17 @@ fn refresh_preview(
     canvas.remove_css_class("collage-white");
     canvas.remove_css_class("collage-black");
     canvas.remove_css_class("collage-light-gray");
-    canvas.add_css_class(match project.background {
+    let project_data = project.borrow();
+    canvas.add_css_class(match project_data.background {
         Background::White => "collage-white",
         Background::Black => "collage-black",
         Background::LightGray => "collage-light-gray",
     });
 
-    for item in &project.items {
+    for (index, item) in project_data.items.iter().enumerate() {
         let frame = gtk::Frame::new(None);
         frame.add_css_class("collage-photo");
-        if project.round_corners {
+        if project_data.round_corners {
             frame.add_css_class("collage-photo-rounded");
         }
         // Keep the widget positioned by GtkFixed separate from the widget
@@ -339,6 +342,106 @@ fn refresh_preview(
         inner.put(&picture, 0.0, 0.0);
         frame.set_child(Some(&inner));
         canvas.put(&frame, 0.0, 0.0);
+        frame.set_cursor_from_name(Some("grab"));
+        let drag = gtk::GestureDrag::new();
+        let drag_start = Rc::new(Cell::new((0.0, 0.0)));
+        let drop_target = Rc::new(Cell::new(None::<usize>));
+        let frame_for_begin = frame.clone();
+        let drop_target_for_begin = drop_target.clone();
+        let drag_start_for_begin = drag_start.clone();
+        drag.connect_drag_begin(move |_, start_x, start_y| {
+            drag_start_for_begin.set((start_x, start_y));
+            drop_target_for_begin.set(None);
+            frame_for_begin.set_cursor_from_name(Some("grabbing"));
+            frame_for_begin.add_css_class("collage-dragging");
+        });
+        let project_for_update = project.clone();
+        let canvas_for_update = canvas.clone();
+        let frames_for_update = frames.clone();
+        let drop_target_for_update = drop_target.clone();
+        let drag_start_for_update = drag_start.clone();
+        drag.connect_drag_update(move |_, offset_x, offset_y| {
+            let width = canvas_for_update.width().max(1) as f64;
+            let height = canvas_for_update.height().max(1) as f64;
+            let (start_x, start_y) = drag_start_for_update.get();
+            let project = project_for_update.borrow();
+            let Some(source) = project.items.get(index) else {
+                return;
+            };
+            let pointer_x = source.x as f64 * width + start_x + offset_x;
+            let pointer_y = source.y as f64 * height + start_y + offset_y;
+            let normalized_x = pointer_x / width;
+            let normalized_y = pointer_y / height;
+            let target = project
+                .items
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(candidate, item)| {
+                    *candidate != index
+                        && normalized_x >= item.x as f64
+                        && normalized_x <= (item.x + item.width) as f64
+                        && normalized_y >= item.y as f64
+                        && normalized_y <= (item.y + item.height) as f64
+                })
+                .map(|(candidate, _)| candidate);
+            let previous = drop_target_for_update.replace(target);
+            if previous != target {
+                if let Some(previous) = previous {
+                    if let Some(frame) = frames_for_update.borrow().get(previous) {
+                        frame.outer.remove_css_class("collage-drop-target");
+                    }
+                }
+                if let Some(target) = target {
+                    if let Some(frame) = frames_for_update.borrow().get(target) {
+                        frame.outer.add_css_class("collage-drop-target");
+                    }
+                }
+            }
+        });
+        let project_for_end = project.clone();
+        let canvas_for_end = canvas.clone();
+        let frames_for_end = frames.clone();
+        let frame_for_end = frame.clone();
+        let drop_target_for_end = drop_target.clone();
+        drag.connect_drag_end(move |_, offset_x, offset_y| {
+            frame_for_end.set_cursor_from_name(Some("grab"));
+            frame_for_end.remove_css_class("collage-dragging");
+            if let Some(target) = drop_target_for_end.take() {
+                if let Some(frame) = frames_for_end.borrow().get(target) {
+                    frame.outer.remove_css_class("collage-drop-target");
+                }
+            }
+            let width = canvas_for_end.width().max(1) as f64;
+            let height = canvas_for_end.height().max(1) as f64;
+            let (start_x, start_y) = drag_start.get();
+            let mut project = project_for_end.borrow_mut();
+            let Some(source) = project.items.get(index) else {
+                return;
+            };
+            let pointer_x = source.x as f64 * width + start_x + offset_x;
+            let pointer_y = source.y as f64 * height + start_y + offset_y;
+            let normalized_x = pointer_x / width;
+            let normalized_y = pointer_y / height;
+            let target = project
+                .items
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(candidate, item)| {
+                    *candidate != index
+                        && normalized_x >= item.x as f64
+                        && normalized_x <= (item.x + item.width) as f64
+                        && normalized_y >= item.y as f64
+                        && normalized_y <= (item.y + item.height) as f64
+                })
+                .map(|(candidate, _)| candidate);
+            if let Some(target) = target {
+                project.swap_item_positions(index, target);
+            }
+            update_geometry(&canvas_for_end, &frames_for_end, &project);
+        });
+        frame.add_controller(drag);
         frames.borrow_mut().push(PreviewFrame {
             outer: frame.upcast(),
             inner,
@@ -353,19 +456,19 @@ fn refresh_preview(
         }
         eprintln!(
             "COLLAGE TRACE preview items={} widgets={} canvas={}x{}",
-            project.items.len(),
+            project_data.items.len(),
             child_count,
             canvas.width(),
             canvas.height()
         );
-        for item in &project.items {
+        for item in &project_data.items {
             eprintln!(
                 "COLLAGE TRACE item id={} x={:.4} y={:.4} w={:.4} h={:.4} rotation={:.2}",
                 item.photo.id, item.x, item.y, item.width, item.height, item.rotation
             );
         }
     }
-    update_geometry(canvas, frames, project);
+    update_geometry(canvas, frames, &project_data);
 }
 
 fn update_geometry(
