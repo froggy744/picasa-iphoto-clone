@@ -163,6 +163,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // is open, it toggles between fit and 1:1 viewing.
     // The actual open action is installed after Gallery exists.
     let space_open_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let collection_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i32)>>>> =
+        Rc::new(RefCell::new(None));
     let space_toggle_in_progress = Rc::new(Cell::new(false));
 
     // Handle viewer keyboard shortcuts at the window boundary as well as
@@ -174,6 +176,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let space_open_slot_for_key = space_open_slot.clone();
     let one_to_one_for_key = info.one_to_one.clone();
     let space_toggle_in_progress_for_key = space_toggle_in_progress.clone();
+    let collection_navigation_for_key = collection_navigation_slot.clone();
     let window_for_fullscreen_key = window.clone();
     window_escape.connect_key_pressed(move |_, key, _, _| {
         if (key == gtk::gdk::Key::Escape || key == gtk::gdk::Key::BackSpace)
@@ -200,6 +203,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         {
             lightbox_for_window_escape.navigate_collection(if key == gtk::gdk::Key::Up { -1 } else { 1 });
             glib::Propagation::Stop
+        } else if !lightbox_for_window_escape.root.is_visible()
+            && (key == gtk::gdk::Key::Up || key == gtk::gdk::Key::Down)
+        {
+            if let Some(navigate) = collection_navigation_for_key.borrow().as_ref() {
+                navigate(if key == gtk::gdk::Key::Up { -1 } else { 1 });
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
         } else if key == gtk::gdk::Key::space {
             if lightbox_for_window_escape.root.is_visible() {
                 if one_to_one_for_key.is_active() {
@@ -477,7 +489,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let gallery_for_collection_nav = gallery.clone();
     let lightbox_for_collection_nav = lightbox.clone();
     let sidebar_selection_for_collection_nav = sidebar_selection_slot.clone();
-    lightbox.set_collection_navigation_handler(move |direction| {
+    let collection_navigation: Rc<dyn Fn(i32)> = Rc::new(move |direction| {
         if direction == 0 {
             return;
         }
@@ -518,6 +530,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         filter_for_collection_nav.set(new_filter);
                         if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
                             sidebar::set_active_filter(sidebar, new_filter);
+                            let sidebar = sidebar.clone();
+                            let folder_id = folder.id;
+                            glib::timeout_add_local_once(Duration::from_millis(100), move || {
+                                sidebar::scroll_to_folder(&sidebar, folder_id);
+                            });
                         }
                         apply_gallery_grouping(
                             &gallery_for_collection_nav,
@@ -530,7 +547,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             .iter()
                             .map(crate::photo_object::PhotoObject::from_photo)
                             .collect::<Vec<_>>();
-                        lightbox_for_collection_nav.open(objects, 0);
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, 0);
+                        }
                         return;
                     }
 
@@ -576,7 +595,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             .iter()
                             .map(crate::photo_object::PhotoObject::from_photo)
                             .collect::<Vec<_>>();
-                        lightbox_for_collection_nav.open(objects, 0);
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, 0);
+                        }
                         return;
                     }
 
@@ -589,6 +610,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         }
     });
+    collection_navigation_slot.replace(Some(collection_navigation.clone()));
+    lightbox.set_collection_navigation_handler(move |direction| collection_navigation(direction));
 
     gallery.root.add_css_class("photo-grid");
 
