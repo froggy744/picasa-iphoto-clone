@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
@@ -93,6 +93,9 @@ fn scan_with_control(
 ) -> Result<usize> {
     let scan_started = Instant::now();
     trace!("IMPORT start root={root}");
+    if !root_is_available(root) {
+        anyhow::bail!("scan root is unavailable: {root}");
+    }
     let connection = db::open_default()?;
     let folder_id = db::insert_folder(&connection, root)?;
     let folder = db::folders(&connection)?
@@ -113,6 +116,21 @@ fn scan_with_control(
         files.len(),
         scan_started.elapsed().as_millis()
     );
+
+    // Only reconcile deletions after the complete tree was enumerated and the
+    // root is still available. If a removable drive went offline, discovery
+    // fails or this second check fails, so existing library records survive.
+    if !root_is_available(root) {
+        anyhow::bail!("scan root became unavailable: {root}");
+    }
+    let present_paths = files
+        .iter()
+        .map(|(file, _, _)| crate::source::reference(file))
+        .collect::<HashSet<_>>();
+    let removed = db::remove_missing_photos(&connection, folder_id, &present_paths)?;
+    if removed > 0 {
+        trace!("IMPORT removed_missing root={root} count={removed}");
+    }
 
     let mut imported = 0;
     let mut failed = 0;
@@ -313,6 +331,14 @@ fn scan_with_control(
         scan_started.elapsed().as_millis()
     );
     Ok(imported)
+}
+
+fn root_is_available(root: &str) -> bool {
+    if root.contains("://") {
+        crate::source::file(root).query_exists(gio::Cancellable::NONE)
+    } else {
+        Path::new(root).is_dir()
+    }
 }
 
 pub fn spawn_scan(root: String, events: Sender<ScanEvent>) -> ScanControl {

@@ -21,7 +21,7 @@ fn show_photo_context_menu(
     // This popover is anchored to a virtualized GridView tile. In that
     // context GTK can otherwise map the popover before it has calculated a
     // natural size, resulting in a visible but unusable 0x0 menu.
-    menu.set_width_request(240);
+    menu.set_width_request(340);
     menu.set_height_request(1);
     menu.set_margin_top(6);
     menu.set_margin_bottom(6);

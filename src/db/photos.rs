@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 fn ensure_parent_folder(connection: &Connection, path: &str) -> Result<Option<i64>> {
     let Some(parent) = Path::new(path).parent().and_then(|parent| parent.to_str()) else {
         return Ok(None);
@@ -260,6 +262,50 @@ pub fn remove_folder(connection: &Connection, folder_id: i64) -> Result<()> {
     )?;
     transaction.commit()?;
     Ok(())
+}
+
+/// Remove indexed photos below a folder when a completed scan confirms they
+/// are no longer present. The caller must verify that the storage location is
+/// available before calling this function; an empty offline mount must never
+/// be treated as an intentional deletion.
+pub fn remove_missing_photos(
+    connection: &Connection,
+    folder_id: i64,
+    present_paths: &HashSet<String>,
+) -> Result<usize> {
+    let stale_ids = {
+        let mut statement = connection.prepare(
+            "SELECT id, path FROM photos
+             WHERE folder_id IN (
+               WITH RECURSIVE descendants(id) AS (
+                 SELECT id FROM folders WHERE id = ?1
+                 UNION ALL
+                 SELECT child.id FROM folders child
+                 JOIN descendants ON child.parent_id = descendants.id
+               )
+               SELECT id FROM descendants
+             )",
+        )?;
+        let rows = statement
+            .query_map([folder_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+            .into_iter()
+            .filter(|(_, path)| !present_paths.contains(path))
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
+    };
+    if stale_ids.is_empty() {
+        return Ok(0);
+    }
+    let transaction = connection.unchecked_transaction()?;
+    for id in &stale_ids {
+        transaction.execute("DELETE FROM photos WHERE id = ?1", [id])?;
+    }
+    transaction.commit()?;
+    Ok(stale_ids.len())
 }
 
 pub fn folder_exists(connection: &Connection, folder_id: i64) -> Result<bool> {

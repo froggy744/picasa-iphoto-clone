@@ -19,7 +19,7 @@ fn collage_css() -> String {
          .collage-photo { border: 1px solid alpha(@theme_fg_color, 0.18); border-radius: 0; box-shadow: 0 3px 12px alpha(#000000, 0.28); }\
          .collage-dragging { opacity: 0.62; }\
          .collage-drop-target { border: 3px solid #4d9fdb; box-shadow: 0 0 0 3px alpha(#4d9fdb, 0.45), 0 3px 12px alpha(#000000, 0.35); }\
-         .collage-photo-rounded { overflow: hidden; }",
+         .collage-photo-rounded { }",
     );
     for radius in 0..=MAX_PREVIEW_CORNER_RADIUS {
         css.push_str(&format!(
