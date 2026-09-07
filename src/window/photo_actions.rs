@@ -35,7 +35,7 @@ fn show_photo_context_menu(
     let open_with = add_action("Open With…");
     let open_in_folder = (!matches!(
         context.filter.get(),
-        sidebar::SidebarFilter::Albums | sidebar::SidebarFilter::Album(_)
+        sidebar::SidebarFilter::Albums
     ))
     .then(|| add_action("Open in Folder"));
     menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
