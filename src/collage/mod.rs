@@ -21,23 +21,13 @@ pub fn open(
     ids: Vec<i64>,
     on_open: Rc<dyn Fn(Vec<PhotoObject>)>,
 ) {
-    if ids.len() < 2 {
-        let dialog = adw::AlertDialog::builder()
-            .heading("Create Collage")
-            .body("Select at least two photos to create a collage.")
-            .close_response("close")
-            .build();
-        dialog.add_response("close", "Close");
-        dialog.present(Some(parent));
-        return;
-    }
-
+    let had_selection = !ids.is_empty();
     let photos: Vec<PhotoObject> = ids
         .into_iter()
         .filter_map(|id| crate::db::photo(&connection.borrow(), id).ok().flatten())
         .map(|photo| PhotoObject::from_photo(&photo))
         .collect();
-    if photos.len() < 2 {
+    if had_selection && photos.is_empty() {
         let dialog = adw::AlertDialog::builder()
             .heading("Create Collage")
             .body("The selected photos are no longer available in the library.")

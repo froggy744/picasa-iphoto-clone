@@ -1588,6 +1588,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         });
     }
+    {
+        let open_collage = open_collage.clone();
+        let gallery = gallery.clone();
+        info.collage.connect_clicked(move |_| {
+            open_collage(gallery.selected_photo_ids(None));
+        });
+    }
     right_header.set_title_widget(Some(&search_area));
 
     // The lightbox takes keyboard focus while it is open and covers the

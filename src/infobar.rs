@@ -14,6 +14,7 @@ pub struct InfoBar {
     subtitle: gtk::Label,
     details: gtk::Box,
     pub favorite: gtk::Button,
+    pub collage: gtk::Button,
     pub add_to_album: gtk::MenuButton,
     pub one_to_one: gtk::ToggleButton,
     pub rotate: gtk::Button,
@@ -108,13 +109,17 @@ impl InfoBar {
         favorite.add_css_class("favorite-btn");
         favorite.set_tooltip_text(Some("Add to Favourites"));
 
+        let collage = gtk::Button::from_icon_name("view-grid-symbolic");
+        configure_action_button(&collage);
+        collage.set_tooltip_text(Some("Start a new blank collage"));
+
         let add_to_album = gtk::MenuButton::new();
         add_to_album.set_icon_name("folder-new-symbolic");
         configure_action_button(&add_to_album);
         add_to_album.set_tooltip_text(Some("Add to Album"));
 
         let grid_zoom_menu = gtk::MenuButton::new();
-        grid_zoom_menu.set_icon_name("view-grid-symbolic");
+        grid_zoom_menu.set_icon_name("view-app-grid-symbolic");
         configure_action_button(&grid_zoom_menu);
         grid_zoom_menu.set_tooltip_text(Some("Grid size"));
         grid_zoom_menu.set_direction(gtk::ArrowType::Up);
@@ -168,6 +173,7 @@ impl InfoBar {
         more.set_tooltip_text(Some("Settings"));
 
         actions.append(&favorite);
+        actions.append(&collage);
         actions.append(&add_to_album);
         actions.append(&grid_zoom_menu);
         actions.append(&one_to_one);
@@ -202,6 +208,7 @@ impl InfoBar {
             subtitle,
             details,
             favorite,
+            collage,
             add_to_album,
             one_to_one,
             rotate,
