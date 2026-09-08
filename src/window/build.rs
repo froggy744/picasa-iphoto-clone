@@ -165,6 +165,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let space_open_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let collection_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i32)>>>> =
         Rc::new(RefCell::new(None));
+    let search_popup_slot: Rc<RefCell<Option<gtk::Popover>>> = Rc::new(RefCell::new(None));
     let space_toggle_in_progress = Rc::new(Cell::new(false));
 
     // Handle viewer keyboard shortcuts at the window boundary as well as
@@ -177,8 +178,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let one_to_one_for_key = info.one_to_one.clone();
     let space_toggle_in_progress_for_key = space_toggle_in_progress.clone();
     let collection_navigation_for_key = collection_navigation_slot.clone();
+    let search_popup_for_key = search_popup_slot.clone();
     let window_for_fullscreen_key = window.clone();
     window_escape.connect_key_pressed(move |_, key, _, _| {
+        // Editing text must not invoke gallery Space/arrow-key shortcuts.
+        if !lightbox_for_window_escape.root.is_visible()
+            && gtk::prelude::RootExt::focus(&window_for_fullscreen_key)
+                .is_some_and(|focus| focus.is::<gtk::Editable>())
+            && key != gtk::gdk::Key::F11
+        {
+            return glib::Propagation::Proceed;
+        }
         if (key == gtk::gdk::Key::Escape || key == gtk::gdk::Key::BackSpace)
             && lightbox_for_window_escape.root.is_visible()
         {
@@ -193,6 +203,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 window_for_fullscreen_key.fullscreen();
             }
             glib::Propagation::Stop
+        } else if lightbox_for_window_escape.root.is_visible()
+            && (key == gtk::gdk::Key::Up || key == gtk::gdk::Key::Down)
+            && search_popup_for_key
+                .borrow()
+                .as_ref()
+                .is_some_and(|popup| popup.is_visible())
+        {
+            // Search suggestions own Up/Down while visible, even with the
+            // photo viewer open underneath.
+            glib::Propagation::Proceed
         } else if lightbox_for_window_escape.root.is_visible()
             && (key == gtk::gdk::Key::Left || key == gtk::gdk::Key::Right)
         {
@@ -1504,25 +1524,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Search photos"));
-    search.set_width_chars(22);
+    search.set_width_chars(18);
     // Do not force a 320px minimum. The fixed minimum was wider than the
     // available header centre area in smaller windows and pushed toolbar
     // buttons outside the visible allocation.
-    search.set_size_request(160, -1);
+    search.set_size_request(220, -1);
     search.set_hexpand(true);
     search.add_css_class("search-field");
     search_entry_slot.replace(Some(search.clone()));
-    let search_area = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let search_area = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     search_area.set_valign(gtk::Align::Center);
+    search_area.set_size_request(220, -1);
     search_area.set_hexpand(true);
     search_area.append(&search);
-    let suggestion_revealer = gtk::Revealer::new();
-    suggestion_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
-    suggestion_revealer.set_reveal_child(false);
-    let suggestion_list = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    suggestion_list.set_size_request(320, -1);
-    suggestion_revealer.set_child(Some(&suggestion_list));
-    search_area.append(&suggestion_revealer);
+    let (suggestion_popover, suggestion_list) = folder_suggestion_popup(&search);
+    search_popup_slot.replace(Some(suggestion_popover.clone()));
+    connect_search_popup_dismissal(window.upcast_ref(), &search, &suggestion_popover);
 
     let add_selected_to_collage = gtk::Button::with_label("Add Selected to Collage");
     add_selected_to_collage.set_visible(false);
@@ -1595,7 +1612,36 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             open_collage(gallery.selected_photo_ids(None));
         });
     }
+    // Keep the search field centered in the header. Its allocation is traced
+    // below because HeaderBar title sizing changes when the split sidebar is
+    // shown or hidden.
     right_header.set_title_widget(Some(&search_area));
+
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        let search_for_trace = search.clone();
+        let search_area_for_trace = search_area.clone();
+        let header_for_trace = right_header.clone();
+        main_split.connect_show_sidebar_notify(move |split| {
+            let search = search_for_trace.clone();
+            let search_area = search_area_for_trace.clone();
+            let header = header_for_trace.clone();
+            let split = split.clone();
+            let shown = split.shows_sidebar();
+            let collapsed = split.is_collapsed();
+            glib::idle_add_local_once(move || {
+                eprintln!(
+                    "SEARCH TRACE sidebar shown={} collapsed={} split_width={} header_width={} area_width={} entry_width={} text_chars={}",
+                    shown,
+                    collapsed,
+                    split.width(),
+                    header.width(),
+                    search_area.width(),
+                    search.width(),
+                    search.text().chars().count(),
+                );
+            });
+        });
+    }
 
     // The lightbox takes keyboard focus while it is open and covers the
     // header, so the search entry cannot be clicked or receive typed input.
@@ -1619,6 +1665,69 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }
     });
     window.add_controller(search_keyboard);
+
+    let begin_typed_search: Rc<dyn Fn() -> bool> = {
+        let stack = main_stack.downgrade();
+        let split = main_split.downgrade();
+        Rc::new(move || {
+            let (Some(stack), Some(split)) = (stack.upgrade(), split.upgrade()) else {
+                return false;
+            };
+            // The current photo viewer remains open while the gallery behind
+            // it updates to the new search results.
+            if stack.visible_child_name().as_deref() != Some("photos") {
+                return false;
+            }
+            if split.is_collapsed() && split.shows_sidebar() {
+                split.set_show_sidebar(false);
+            }
+            true
+        })
+    };
+    // Attach this at the window boundary so typing still starts a search when
+    // the fullscreen photo viewer is the widget currently receiving input.
+    connect_type_to_search(window.upcast_ref::<gtk::Widget>(), &search, begin_typed_search);
+
+    // Once a search has been entered, the entry retains focus. Forward the
+    // horizontal navigation keys to the gallery so they do not only move the
+    // text cursor after a folder suggestion has been selected.
+    let gallery_for_search_navigation = gallery.clone();
+    let search_for_navigation = search.clone();
+    let popup_for_navigation = suggestion_popover.clone();
+    let search_navigation = gtk::EventControllerKey::new();
+    search_navigation.set_propagation_phase(gtk::PropagationPhase::Capture);
+    search_navigation.connect_key_pressed(move |controller, key, _, modifiers| {
+        if modifiers.intersects(
+            gtk::gdk::ModifierType::CONTROL_MASK
+                | gtk::gdk::ModifierType::ALT_MASK
+                | gtk::gdk::ModifierType::SUPER_MASK
+                | gtk::gdk::ModifierType::META_MASK,
+        ) || !matches!(key, gtk::gdk::Key::Left | gtk::gdk::Key::Right)
+        {
+            return glib::Propagation::Proceed;
+        }
+        let Some(root) = search_for_navigation.root() else {
+            return glib::Propagation::Proceed;
+        };
+        let focused_in_search = root.focus().is_some_and(|focus| {
+            focus == search_for_navigation.upcast_ref::<gtk::Widget>().clone()
+                || focus.is_ancestor(&search_for_navigation)
+        });
+        if !focused_in_search || popup_for_navigation.is_visible() {
+            return glib::Propagation::Proceed;
+        }
+        gallery_for_search_navigation.root.grab_focus();
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!("SEARCH TRACE gallery_navigation key={key:?}");
+        }
+        let _ = controller.forward(
+            gallery_for_search_navigation
+                .root
+                .upcast_ref::<gtk::Widget>(),
+        );
+        glib::Propagation::Stop
+    });
+    window.add_controller(search_navigation);
 
     // The split layout has two in-content header bars instead of one native
     // titlebar. Preserve the usual titlebar double-click behavior on both:
@@ -1650,9 +1759,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let search_debounce_for_search = search_debounce.clone();
     let destination_click_for_search = destination_click.clone();
     let sidebar_selection_for_search = sidebar_selection_slot.clone();
-    let suggestion_revealer_for_search = suggestion_revealer.clone();
+    let suggestion_popover_for_search = suggestion_popover.clone();
     let suggestion_list_for_search = suggestion_list.clone();
-    let folders_for_search = folders.clone();
+    let search_area_for_search = search_area.clone();
+    let right_header_for_search = right_header.clone();
+    let main_split_for_search = main_split.clone();
 
     search.connect_search_changed(move |entry| {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1668,13 +1779,24 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
             }
             let query = entry.text().to_string();
+            // Imports and refreshes can change the folder hierarchy after the
+            // window was created. Read the current records so suggestions do
+            // not lag behind the sidebar and scan results.
+            let folders_for_search = db::folders(&connection_for_search.borrow())
+                .unwrap_or_default();
             search_text_for_search.replace(query.clone());
             eprintln!(
-                "SEARCH TRACE changed folders_cached count={}",
-                folders_for_search.len()
+                "SEARCH TRACE changed folders_cached count={} query_chars={} entry_width={} area_width={} header_width={} sidebar_shown={} split_collapsed={}",
+                folders_for_search.len(),
+                query.chars().count(),
+                entry.width(),
+                search_area_for_search.width(),
+                right_header_for_search.width(),
+                main_split_for_search.shows_sidebar(),
+                main_split_for_search.is_collapsed(),
             );
             update_folder_suggestions(
-                &suggestion_revealer_for_search,
+                &suggestion_popover_for_search,
                 &suggestion_list_for_search,
                 &folders_for_search,
                 &query,
@@ -1692,13 +1814,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     }
                 }),
             );
-            // Updating the inline suggestion list must never move typing focus
-            // away from the SearchEntry.
-            entry.grab_focus();
+            trace_search_focus("suggestions-updated", entry, &suggestion_popover_for_search);
 
             if query.is_empty() {
-                refresh_grid(&connection_for_search, filter_for_search.get(), "", sort_for_search.get(), &gallery_for_search);
-            } else if query.chars().count() < 2 {
+                refresh_grid(
+                    &connection_for_search,
+                    filter_for_search.get(),
+                    "",
+                    sort_for_search.get(),
+                    &gallery_for_search,
+                );
             } else {
                 let connection = connection_for_search.clone();
                 let filter = filter_for_search.clone();
@@ -1738,55 +1863,33 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 .copied()
                 .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
                 .unwrap_or("non-string panic payload");
+            eprintln!("SEARCH ERROR changed handler: {message}");
         }
     });
 
     let search_text_for_activate = search_text.clone();
-    let search_suppressed_for_activate = search_suppressed.clone();
     let search_debounce_for_activate = search_debounce.clone();
     let filter_for_activate = filter.clone();
     let connection_for_activate = connection.clone();
     let sort_for_activate = sort.clone();
     let gallery_for_activate = gallery.clone();
-    let suggestion_revealer_for_activate = suggestion_revealer.clone();
+    let suggestion_popover_for_activate = suggestion_popover.clone();
     search.connect_activate(move |entry| {
         if let Some(source) = search_debounce_for_activate.borrow_mut().take() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.remove()));
         }
-        search_suppressed_for_activate.set(true);
-        entry.set_text("");
-        search_suppressed_for_activate.set(false);
-        search_text_for_activate.replace(String::new());
-        suggestion_revealer_for_activate.set_reveal_child(false);
+        let query = entry.text().to_string();
+        search_text_for_activate.replace(query.clone());
+        suggestion_popover_for_activate.popdown();
         refresh_grid(
             &connection_for_activate,
             filter_for_activate.get(),
-            "",
+            &query,
             sort_for_activate.get(),
             &gallery_for_activate,
         );
-        entry.grab_focus();
+        trace_search_focus("activate", entry, &suggestion_popover_for_activate);
     });
-
-    // The suggestions are an inline popup, so close them for any click whose
-    // target is outside the search area while retaining the current text.
-    let search_area_for_click = search_area.clone();
-    let suggestion_revealer_for_click = suggestion_revealer.clone();
-    let search_click = gtk::GestureClick::new();
-    search_click.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let window_for_search_click = window.clone();
-    search_click.connect_pressed(move |_, _, x, y| {
-        let inside_search = window_for_search_click
-            .pick(x, y, gtk::PickFlags::DEFAULT)
-            .is_some_and(|picked| {
-                picked.is_ancestor(&search_area_for_click)
-                    || search_area_for_click.is_ancestor(&picked)
-            });
-        if !inside_search {
-            suggestion_revealer_for_click.set_reveal_child(false);
-        }
-    });
-    window.add_controller(search_click);
 
     let import = gtk::Button::from_icon_name("folder-open-symbolic");
     import.set_tooltip_text(Some("Add Folder to Library"));
@@ -2137,6 +2240,18 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     header_tools.append(&settings);
     right_header.pack_end(&header_tools);
 
+    // Keep the search field usable on phone-sized windows. Import and refresh
+    // remain available from the sidebar/context actions, while the sort and
+    // settings menus stay in the header.
+    let tiny_header = adw::Breakpoint::new(
+        adw::BreakpointCondition::parse("max-width: 1050px")
+            .expect("valid tiny header breakpoint"),
+    );
+    tiny_header.add_setter(&import, "visible", Some(&false.to_value()));
+    tiny_header.add_setter(&refresh, "visible", Some(&false.to_value()));
+    tiny_header.add_setter(&header_tools, "visible", Some(&false.to_value()));
+    window.add_breakpoint(tiny_header);
+
     right_column.append(&right_header);
     right_column.append(&content);
 
@@ -2210,7 +2325,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .layout-left-header button, .layout-right-header button { color: #eeeeee; border-radius: 6px; }\
         .layout-left-header .sidebar-toggle-button, .layout-left-header .sidebar-toggle-button image { color: #f5f5f5; opacity: 1; }\
         .layout-left-header button:hover, .layout-right-header button:hover { background: rgba(255,255,255,0.12); }\
-        .search-field { min-width: 160px; min-height: 30px; padding: 0 10px; border-radius: 7px; background: #202020; border: 1px solid #151515; color: #f5f5f5; box-shadow: inset 0 1px rgba(0,0,0,0.55), 0 1px rgba(255,255,255,0.10); }\
+        .search-field { min-width: 220px; min-height: 30px; padding: 0 10px; border-radius: 7px; background: #202020; border: 1px solid #151515; color: #f5f5f5; box-shadow: inset 0 1px rgba(0,0,0,0.55), 0 1px rgba(255,255,255,0.10); }\
         .search-field image { color: #bdbdbd; }\
         .search-field entry { background: transparent; border: none; box-shadow: none; color: #f5f5f5; }\
         .photo-grid { background: #292929; }\

@@ -19,3 +19,8 @@
 # Keep source
 !/src/
 !/src/**
+
+# Keep the isolated GUI search regression check
+!/scripts/
+/scripts/*
+!/scripts/check_search_input.py
