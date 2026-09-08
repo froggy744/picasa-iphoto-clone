@@ -177,7 +177,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let space_open_slot_for_key = space_open_slot.clone();
     let one_to_one_for_key = info.one_to_one.clone();
     let space_toggle_in_progress_for_key = space_toggle_in_progress.clone();
-    let collection_navigation_for_key = collection_navigation_slot.clone();
     let search_popup_for_key = search_popup_slot.clone();
     let window_for_fullscreen_key = window.clone();
     window_escape.connect_key_pressed(move |_, key, _, _| {
@@ -223,15 +222,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         {
             lightbox_for_window_escape.navigate_collection(if key == gtk::gdk::Key::Up { -1 } else { 1 });
             glib::Propagation::Stop
-        } else if !lightbox_for_window_escape.root.is_visible()
-            && (key == gtk::gdk::Key::Up || key == gtk::gdk::Key::Down)
-        {
-            if let Some(navigate) = collection_navigation_for_key.borrow().as_ref() {
-                navigate(if key == gtk::gdk::Key::Up { -1 } else { 1 });
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
         } else if key == gtk::gdk::Key::space {
             if lightbox_for_window_escape.root.is_visible() {
                 if one_to_one_for_key.is_active() {
@@ -553,6 +543,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let gallery_for_collection_nav = gallery.clone();
     let lightbox_for_collection_nav = lightbox.clone();
     let sidebar_selection_for_collection_nav = sidebar_selection_slot.clone();
+    let selected_photo_for_collection_nav = selected_photo.clone();
     let collection_navigation: Rc<dyn Fn(i32)> = Rc::new(move |direction| {
         if direction == 0 {
             return;
@@ -575,6 +566,61 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 else {
                     return;
                 };
+
+                let first_available_folder = folders.iter().position(|folder| {
+                    let mut photos = db::photos(
+                        &connection_for_collection_nav.borrow(),
+                        Some(folder.id),
+                        false,
+                        (!search.is_empty()).then_some(search.as_str()),
+                    )
+                    .unwrap_or_default();
+                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                    !photos.is_empty()
+                });
+
+                // Folders are the end of the forward sequence. Reverse
+                // navigation from the first folder returns to the last
+                // available album and selects its last photo.
+                if direction < 0 && Some(current_index) == first_available_folder {
+                    let albums = db::albums(&connection_for_collection_nav.borrow())
+                        .unwrap_or_default();
+                    for album in albums.into_iter().rev() {
+                        let mut photos = db::photos_in_album(
+                            &connection_for_collection_nav.borrow(),
+                            album.id,
+                            (!search.is_empty()).then_some(search.as_str()),
+                        )
+                        .unwrap_or_default();
+                        retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                        sort_photos(&mut photos, sort_for_collection_nav.get());
+                        if photos.is_empty() {
+                            continue;
+                        }
+
+                        let new_filter = sidebar::SidebarFilter::Album(album.id);
+                        filter_for_collection_nav.set(new_filter);
+                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
+                            sidebar::set_active_filter(sidebar, new_filter);
+                        }
+                        apply_gallery_grouping(
+                            &gallery_for_collection_nav,
+                            new_filter,
+                            sort_for_collection_nav.get(),
+                            group_mode_for_collection_nav.get(),
+                        );
+                        gallery_for_collection_nav.replace(&photos);
+                        gallery_for_collection_nav.select_last_photo();
+                        let objects = photos
+                            .iter()
+                            .map(crate::photo_object::PhotoObject::from_photo)
+                            .collect::<Vec<_>>();
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, photos.len() - 1);
+                        }
+                        return;
+                    }
+                }
 
                 let mut candidate = current_index as isize + step;
                 while candidate >= 0 && candidate < folders.len() as isize {
@@ -629,6 +675,116 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 else {
                     return;
                 };
+                let first_available_album = albums.iter().position(|album| {
+                    let mut photos = db::photos_in_album(
+                        &connection_for_collection_nav.borrow(),
+                        album.id,
+                        (!search.is_empty()).then_some(search.as_str()),
+                    )
+                    .unwrap_or_default();
+                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                    !photos.is_empty()
+                });
+                let last_available_album = albums.iter().rposition(|album| {
+                    let mut photos = db::photos_in_album(
+                        &connection_for_collection_nav.borrow(),
+                        album.id,
+                        (!search.is_empty()).then_some(search.as_str()),
+                    )
+                    .unwrap_or_default();
+                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                    !photos.is_empty()
+                });
+
+                // The album sequence is connected to Recently Added at its
+                // upper boundary. Selecting the last item here makes reverse
+                // navigation feel continuous instead of opening another
+                // album unexpectedly.
+                if direction < 0 && Some(current_index) == first_available_album {
+                    let mut photos = db::photos(
+                        &connection_for_collection_nav.borrow(),
+                        None,
+                        false,
+                        (!search.is_empty()).then_some(search.as_str()),
+                    )
+                    .unwrap_or_default();
+                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                    limit_recently_added(
+                        &connection_for_collection_nav.borrow(),
+                        sidebar::SidebarFilter::RecentlyAdded,
+                        &mut photos,
+                    );
+                    sort_photos(&mut photos, sort_for_collection_nav.get());
+                    if !photos.is_empty() {
+                        let new_filter = sidebar::SidebarFilter::RecentlyAdded;
+                        filter_for_collection_nav.set(new_filter);
+                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
+                            sidebar::set_active_filter(sidebar, new_filter);
+                        }
+                        apply_gallery_grouping(
+                            &gallery_for_collection_nav,
+                            new_filter,
+                            sort_for_collection_nav.get(),
+                            group_mode_for_collection_nav.get(),
+                        );
+                        gallery_for_collection_nav.replace(&photos);
+                        gallery_for_collection_nav.select_last_photo();
+                        let objects = photos
+                            .iter()
+                            .map(crate::photo_object::PhotoObject::from_photo)
+                            .collect::<Vec<_>>();
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, photos.len() - 1);
+                        }
+                        return;
+                    }
+                }
+
+                // The last album connects to the first available folder.
+                if direction > 0 && Some(current_index) == last_available_album {
+                    let folders = db::folders(&connection_for_collection_nav.borrow())
+                        .unwrap_or_default();
+                    for folder in folders {
+                        let mut photos = db::photos(
+                            &connection_for_collection_nav.borrow(),
+                            Some(folder.id),
+                            false,
+                            (!search.is_empty()).then_some(search.as_str()),
+                        )
+                        .unwrap_or_default();
+                        retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                        sort_photos(&mut photos, sort_for_collection_nav.get());
+                        if photos.is_empty() {
+                            continue;
+                        }
+
+                        let new_filter = sidebar::SidebarFilter::Folder(folder.id);
+                        filter_for_collection_nav.set(new_filter);
+                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
+                            sidebar::set_active_filter(sidebar, new_filter);
+                            let sidebar = sidebar.clone();
+                            let folder_id = folder.id;
+                            glib::timeout_add_local_once(Duration::from_millis(100), move || {
+                                sidebar::scroll_to_folder(&sidebar, folder_id);
+                            });
+                        }
+                        apply_gallery_grouping(
+                            &gallery_for_collection_nav,
+                            new_filter,
+                            sort_for_collection_nav.get(),
+                            group_mode_for_collection_nav.get(),
+                        );
+                        gallery_for_collection_nav.replace(&photos);
+                        let objects = photos
+                            .iter()
+                            .map(crate::photo_object::PhotoObject::from_photo)
+                            .collect::<Vec<_>>();
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, 0);
+                        }
+                        return;
+                    }
+                }
 
                 let mut candidate = current_index as isize + step;
                 while candidate >= 0 && candidate < albums.len() as isize {
@@ -668,12 +824,327 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     candidate += step;
                 }
             }
-            _ => {
-                // Library destinations (Photos/Favourites/Recently Added) do
-                // not have a folder/album Up/Down relationship.
+            sidebar::SidebarFilter::All
+            | sidebar::SidebarFilter::Favorites
+            | sidebar::SidebarFilter::RecentlyAdded => {
+                // Photos connects forward to Favorites at its last item.
+                if current_filter == sidebar::SidebarFilter::All && direction > 0 {
+                    let mut photos = db::photos(
+                        &connection_for_collection_nav.borrow(),
+                        None,
+                        true,
+                        (!search.is_empty()).then_some(search.as_str()),
+                    )
+                    .unwrap_or_default();
+                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                    sort_photos(&mut photos, sort_for_collection_nav.get());
+                    if !photos.is_empty() {
+                        let new_filter = sidebar::SidebarFilter::Favorites;
+                        filter_for_collection_nav.set(new_filter);
+                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
+                            sidebar::set_active_filter(sidebar, new_filter);
+                        }
+                        apply_gallery_grouping(
+                            &gallery_for_collection_nav,
+                            new_filter,
+                            sort_for_collection_nav.get(),
+                            group_mode_for_collection_nav.get(),
+                        );
+                        gallery_for_collection_nav.replace(&photos);
+                        let objects = photos
+                            .iter()
+                            .map(crate::photo_object::PhotoObject::from_photo)
+                            .collect::<Vec<_>>();
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, 0);
+                        }
+                        return;
+                    }
+                }
+
+                // Favorites sits between Photos and Recently Added in the
+                // keyboard sequence. Keep both boundaries continuous and
+                // select the correct end of the destination collection.
+                if current_filter == sidebar::SidebarFilter::Favorites
+                    && direction < 0
+                {
+                    let mut photos = db::photos(
+                        &connection_for_collection_nav.borrow(),
+                        None,
+                        false,
+                        (!search.is_empty()).then_some(search.as_str()),
+                    )
+                    .unwrap_or_default();
+                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                    sort_photos(&mut photos, sort_for_collection_nav.get());
+                    if !photos.is_empty() {
+                        let new_filter = sidebar::SidebarFilter::All;
+                        filter_for_collection_nav.set(new_filter);
+                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
+                            sidebar::set_active_filter(sidebar, new_filter);
+                        }
+                        apply_gallery_grouping(
+                            &gallery_for_collection_nav,
+                            new_filter,
+                            sort_for_collection_nav.get(),
+                            group_mode_for_collection_nav.get(),
+                        );
+                        gallery_for_collection_nav.replace(&photos);
+                        gallery_for_collection_nav.select_last_photo();
+                        let objects = photos
+                            .iter()
+                            .map(crate::photo_object::PhotoObject::from_photo)
+                            .collect::<Vec<_>>();
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, photos.len() - 1);
+                        }
+                        return;
+                    }
+                }
+
+                if current_filter == sidebar::SidebarFilter::Favorites
+                    && direction > 0
+                {
+                    let mut photos = db::photos(
+                        &connection_for_collection_nav.borrow(),
+                        None,
+                        false,
+                        (!search.is_empty()).then_some(search.as_str()),
+                    )
+                    .unwrap_or_default();
+                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                    limit_recently_added(
+                        &connection_for_collection_nav.borrow(),
+                        sidebar::SidebarFilter::RecentlyAdded,
+                        &mut photos,
+                    );
+                    sort_photos(&mut photos, sort_for_collection_nav.get());
+                    if !photos.is_empty() {
+                        let new_filter = sidebar::SidebarFilter::RecentlyAdded;
+                        filter_for_collection_nav.set(new_filter);
+                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
+                            sidebar::set_active_filter(sidebar, new_filter);
+                        }
+                        apply_gallery_grouping(
+                            &gallery_for_collection_nav,
+                            new_filter,
+                            sort_for_collection_nav.get(),
+                            group_mode_for_collection_nav.get(),
+                        );
+                        gallery_for_collection_nav.replace(&photos);
+                        let objects = photos
+                            .iter()
+                            .map(crate::photo_object::PhotoObject::from_photo)
+                            .collect::<Vec<_>>();
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, 0);
+                        }
+                        return;
+                    }
+                }
+
+                if current_filter == sidebar::SidebarFilter::RecentlyAdded
+                    && direction < 0
+                {
+                    let mut photos = db::photos(
+                        &connection_for_collection_nav.borrow(),
+                        None,
+                        true,
+                        (!search.is_empty()).then_some(search.as_str()),
+                    )
+                    .unwrap_or_default();
+                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                    sort_photos(&mut photos, sort_for_collection_nav.get());
+                    if !photos.is_empty() {
+                        let new_filter = sidebar::SidebarFilter::Favorites;
+                        filter_for_collection_nav.set(new_filter);
+                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
+                            sidebar::set_active_filter(sidebar, new_filter);
+                        }
+                        apply_gallery_grouping(
+                            &gallery_for_collection_nav,
+                            new_filter,
+                            sort_for_collection_nav.get(),
+                            group_mode_for_collection_nav.get(),
+                        );
+                        gallery_for_collection_nav.replace(&photos);
+                        gallery_for_collection_nav.select_last_photo();
+                        let objects = photos
+                            .iter()
+                            .map(crate::photo_object::PhotoObject::from_photo)
+                            .collect::<Vec<_>>();
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, photos.len() - 1);
+                        }
+                        return;
+                    }
+                }
+
+                // Recently Added connects forward to the first album. This
+                // boundary must win over folder-based navigation, otherwise
+                // the selected photo's folder can jump to an unrelated album.
+                if current_filter == sidebar::SidebarFilter::RecentlyAdded && direction > 0 {
+                    let albums = db::albums(&connection_for_collection_nav.borrow())
+                        .unwrap_or_default();
+                    for album in albums {
+                        let mut photos = db::photos_in_album(
+                            &connection_for_collection_nav.borrow(),
+                            album.id,
+                            (!search.is_empty()).then_some(search.as_str()),
+                        )
+                        .unwrap_or_default();
+                        retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                        sort_photos(&mut photos, sort_for_collection_nav.get());
+                        if photos.is_empty() {
+                            continue;
+                        }
+
+                        let new_filter = sidebar::SidebarFilter::Album(album.id);
+                        filter_for_collection_nav.set(new_filter);
+                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
+                            sidebar::set_active_filter(sidebar, new_filter);
+                        }
+                        apply_gallery_grouping(
+                            &gallery_for_collection_nav,
+                            new_filter,
+                            sort_for_collection_nav.get(),
+                            group_mode_for_collection_nav.get(),
+                        );
+                        gallery_for_collection_nav.replace(&photos);
+                        let objects = photos
+                            .iter()
+                            .map(crate::photo_object::PhotoObject::from_photo)
+                            .collect::<Vec<_>>();
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, 0);
+                        }
+                        return;
+                    }
+                }
+
+                // Library views contain photos from multiple folders. Use the
+                // selected thumbnail's folder as the current position.
+                let Some(current_folder_id) = selected_photo_for_collection_nav
+                    .borrow()
+                    .as_ref()
+                    .map(|photo| photo.folder_id())
+                    .filter(|folder_id| *folder_id > 0)
+                else {
+                    return;
+                };
+                let folders = db::folders(&connection_for_collection_nav.borrow())
+                    .unwrap_or_default();
+                let Some(current_index) = folders
+                    .iter()
+                    .position(|folder| folder.id == current_folder_id)
+                else {
+                    return;
+                };
+
+                let mut candidate = current_index as isize + step;
+                let favorites_only = current_filter == sidebar::SidebarFilter::Favorites;
+                while candidate >= 0 && candidate < folders.len() as isize {
+                    let folder = &folders[candidate as usize];
+                    let mut photos = db::photos(
+                        &connection_for_collection_nav.borrow(),
+                        Some(folder.id),
+                        favorites_only,
+                        (!search.is_empty()).then_some(search.as_str()),
+                    )
+                    .unwrap_or_default();
+                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
+                    limit_recently_added(
+                        &connection_for_collection_nav.borrow(),
+                        current_filter,
+                        &mut photos,
+                    );
+                    sort_photos(&mut photos, sort_for_collection_nav.get());
+
+                    if !photos.is_empty() {
+                        let new_filter = sidebar::SidebarFilter::Folder(folder.id);
+                        filter_for_collection_nav.set(new_filter);
+                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
+                            sidebar::set_active_filter(sidebar, new_filter);
+                            let sidebar = sidebar.clone();
+                            let folder_id = folder.id;
+                            glib::timeout_add_local_once(Duration::from_millis(100), move || {
+                                sidebar::scroll_to_folder(&sidebar, folder_id);
+                            });
+                        }
+                        apply_gallery_grouping(
+                            &gallery_for_collection_nav,
+                            new_filter,
+                            sort_for_collection_nav.get(),
+                            group_mode_for_collection_nav.get(),
+                        );
+                        gallery_for_collection_nav.replace(&photos);
+                        let objects = photos
+                            .iter()
+                            .map(crate::photo_object::PhotoObject::from_photo)
+                            .collect::<Vec<_>>();
+                        if lightbox_for_collection_nav.root.is_visible() {
+                            lightbox_for_collection_nav.open(objects, 0);
+                        }
+                        return;
+                    }
+
+                    candidate += step;
+                }
+            }
+            sidebar::SidebarFilter::Albums => {
+                // The Albums home view is not a photo thumbnail grid.
             }
         }
     });
+
+    // Keep ordinary Up/Down navigation inside the thumbnail grid. Ctrl+Up and
+    // Ctrl+Down explicitly change folders, while a plain arrow at the first
+    // or last row crosses to the adjacent non-empty folder automatically.
+    let gallery_for_folder_navigation = gallery.clone();
+    let collection_navigation_for_thumbnails = collection_navigation.clone();
+    let filter_for_thumbnail_navigation = filter.clone();
+    let thumbnail_navigation = gtk::EventControllerKey::new();
+    thumbnail_navigation.set_propagation_phase(gtk::PropagationPhase::Capture);
+    thumbnail_navigation.connect_key_pressed(move |_, key, _, modifiers| {
+        let direction = match key {
+            gtk::gdk::Key::Up => -1,
+            gtk::gdk::Key::Down => 1,
+            _ => return glib::Propagation::Proceed,
+        };
+        let control = modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+        let has_other_modifier = modifiers.intersects(
+            gtk::gdk::ModifierType::ALT_MASK
+                | gtk::gdk::ModifierType::SUPER_MASK
+                | gtk::gdk::ModifierType::META_MASK,
+        );
+        if has_other_modifier {
+            return glib::Propagation::Proceed;
+        }
+
+        let has_collection_sequence = matches!(
+            filter_for_thumbnail_navigation.get(),
+            sidebar::SidebarFilter::All
+                | sidebar::SidebarFilter::Favorites
+                | sidebar::SidebarFilter::RecentlyAdded
+                | sidebar::SidebarFilter::Folder(_)
+                | sidebar::SidebarFilter::Album(_)
+        );
+        let crosses_folder = has_collection_sequence
+            && (control || gallery_for_folder_navigation.is_at_vertical_boundary(direction));
+        if !crosses_folder {
+            return glib::Propagation::Proceed;
+        }
+
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "SEARCH TRACE thumbnail_folder_navigation key={key:?} direction={direction} control={control}"
+            );
+        }
+        collection_navigation_for_thumbnails(direction);
+        glib::Propagation::Stop
+    });
+    gallery.root.add_controller(thumbnail_navigation);
+
     collection_navigation_slot.replace(Some(collection_navigation.clone()));
     lightbox.set_collection_navigation_handler(move |direction| collection_navigation(direction));
 
@@ -1689,8 +2160,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     connect_type_to_search(window.upcast_ref::<gtk::Widget>(), &search, begin_typed_search);
 
     // Once a search has been entered, the entry retains focus. Forward the
-    // horizontal navigation keys to the gallery so they do not only move the
-    // text cursor after a folder suggestion has been selected.
+    // gallery navigation keys so they do not only move the text cursor after
+    // a folder suggestion has been selected.
     let gallery_for_search_navigation = gallery.clone();
     let search_for_navigation = search.clone();
     let popup_for_navigation = suggestion_popover.clone();
@@ -1702,7 +2173,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 | gtk::gdk::ModifierType::ALT_MASK
                 | gtk::gdk::ModifierType::SUPER_MASK
                 | gtk::gdk::ModifierType::META_MASK,
-        ) || !matches!(key, gtk::gdk::Key::Left | gtk::gdk::Key::Right)
+        ) || !matches!(
+            key,
+            gtk::gdk::Key::Left
+                | gtk::gdk::Key::Right
+                | gtk::gdk::Key::Up
+                | gtk::gdk::Key::Down
+        )
         {
             return glib::Propagation::Proceed;
         }
@@ -1713,7 +2190,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             focus == search_for_navigation.upcast_ref::<gtk::Widget>().clone()
                 || focus.is_ancestor(&search_for_navigation)
         });
-        if !focused_in_search || popup_for_navigation.is_visible() {
+        if !focused_in_search
+            || (popup_for_navigation.is_visible()
+                && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::Down))
+        {
             return glib::Propagation::Proceed;
         }
         gallery_for_search_navigation.root.grab_focus();
