@@ -481,6 +481,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let settings_search = search_text.clone();
     let settings_sort = sort.clone();
     let settings_lightbox = lightbox.clone();
+    let settings_sidebar = sidebar_for_unavailable.clone();
+    let settings_on_unavailable = availability_refresh.clone();
     let settings_folder_watch_changed = {
         let connection = connection.clone();
         let manager = folder_watch_manager.clone();
@@ -507,6 +509,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let search = settings_search.clone();
         let sort = settings_sort.clone();
         let lightbox = settings_lightbox.clone();
+        let sidebar = settings_sidebar.clone();
+        let on_unavailable = settings_on_unavailable.clone();
         let folder_watch_changed = settings_folder_watch_changed.clone();
         settings_window.present(
             &settings_parent,
@@ -520,6 +524,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     sort.get(),
                     &gallery,
                 );
+                if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
+                    if let Ok(counts) = db::sidebar_counts(&connection.borrow()) {
+                        sidebar::refresh_library_counts(&sidebar, counts, &on_unavailable);
+                    }
+                }
             }),
             folder_watch_changed,
         );
