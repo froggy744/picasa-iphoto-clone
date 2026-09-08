@@ -7,6 +7,23 @@ use std::path::Path;
 use super::model::{Background, CollageProject};
 
 pub fn export(project: &CollageProject, destination: &Path) -> Result<()> {
+    let offline = project
+        .items
+        .iter()
+        .filter(|item| !crate::source::file_available(&item.photo.path))
+        .map(|item| item.photo.filename.as_str())
+        .collect::<Vec<_>>();
+    if !offline.is_empty() {
+        let files = offline
+            .iter()
+            .map(|filename| format!("• {filename}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(anyhow::anyhow!(
+            "Cannot export collage because these original files are offline:\n{files}"
+        ));
+    }
+
     let width = 3840u32;
     let height = (width as f32 / project.aspect.value()).round() as u32;
     trace_export(&format!("destination={}", destination.display()));

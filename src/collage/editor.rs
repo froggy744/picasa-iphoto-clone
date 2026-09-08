@@ -319,6 +319,8 @@ fn refresh_preview(
         let inner = gtk::Fixed::new();
         inner.set_hexpand(true);
         inner.set_vexpand(true);
+        let tile = gtk::Overlay::new();
+        tile.set_child(Some(&inner));
         let picture = gtk::Picture::new();
         picture.set_content_fit(gtk::ContentFit::Cover);
         picture.set_can_shrink(true);
@@ -342,7 +344,16 @@ fn refresh_preview(
             picture.set_tooltip_text(Some("Thumbnail unavailable"));
         }
         inner.put(&picture, 0.0, 0.0);
-        frame.set_child(Some(&inner));
+        let offline_badge = gtk::Label::new(Some("!"));
+        offline_badge.set_halign(gtk::Align::Start);
+        offline_badge.set_valign(gtk::Align::Start);
+        offline_badge.set_margin_top(8);
+        offline_badge.set_margin_start(8);
+        offline_badge.add_css_class("offline-badge");
+        offline_badge.set_tooltip_text(Some("Original photo offline"));
+        offline_badge.set_visible(!crate::source::cached_file_available(&item.photo.path));
+        tile.add_overlay(&offline_badge);
+        frame.set_child(Some(&tile));
         canvas.put(&frame, 0.0, 0.0);
         frame.set_cursor_from_name(Some("grab"));
         let drag = gtk::GestureDrag::new();
