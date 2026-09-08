@@ -9,8 +9,6 @@ use libadwaita as adw;
 use super::model::{AspectRatio, Background, CollageOrientation, CollageProject, LayoutKind};
 
 const MAX_PREVIEW_CORNER_RADIUS: i32 = 48;
-const COLLAGE_CONTROLS_WIDTH: i32 = 266; // 230px width + 18px margins on each side
-const COLLAGE_FRAME_MARGINS: i32 = 48; // 24px on each side
 
 fn collage_css() -> String {
     let mut css = String::from(
@@ -114,13 +112,13 @@ pub fn build(
         gtk::AspectFrame::new(0.5, 0.5, project.borrow().effective_aspect_ratio(), false);
     aspect_frame.set_hexpand(true);
     aspect_frame.set_vexpand(true);
-    aspect_frame.set_halign(gtk::Align::Center);
-    aspect_frame.set_valign(gtk::Align::Center);
+    aspect_frame.set_halign(gtk::Align::Fill);
+    aspect_frame.set_valign(gtk::Align::Fill);
     aspect_frame.set_margin_top(24);
     aspect_frame.set_margin_bottom(24);
     aspect_frame.set_margin_start(24);
     aspect_frame.set_margin_end(24);
-    aspect_frame.set_child(Some(&canvas));
+    aspect_frame.set_child(Some(&preview_bounds(&canvas)));
     let frames: Rc<RefCell<Vec<PreviewFrame>>> = Rc::new(RefCell::new(Vec::new()));
 
     let refresh = {
@@ -339,11 +337,13 @@ pub fn build(
     controls.append(&spacing);
     {
         let project = project.clone();
-        let refresh = refresh.clone();
+        let canvas = canvas.clone();
+        let frames = frames.clone();
         spacing.connect_value_changed(move |scale| {
-            project.borrow_mut().spacing = scale.value() as f32;
-            project.borrow_mut().relayout();
-            refresh();
+            let mut project = project.borrow_mut();
+            project.spacing = scale.value() as f32;
+            project.relayout();
+            update_geometry(&canvas, &frames, &project);
         });
     }
 
@@ -612,12 +612,15 @@ fn update_geometry(
     frames: &Rc<RefCell<Vec<PreviewFrame>>>,
     project: &CollageProject,
 ) {
-    let (width, height) = preview_geometry_size(canvas, project);
+    let (width, height) = preview_geometry_size(canvas);
+    if width < 1.0 || height < 1.0 {
+        return; // Wait for the first real allocation; never invent a minimum.
+    }
     for (item, preview) in project.items.iter().zip(frames.borrow().iter()) {
         let x = item.x * width;
         let y = item.y * height;
-        let w = (item.width * width).round().max(1.0) as i32;
-        let h = (item.height * height).round().max(1.0) as i32;
+        let w = (item.width * width).round().clamp(1.0, width) as i32;
+        let h = (item.height * height).round().clamp(1.0, height) as i32;
         for radius in 0..=MAX_PREVIEW_CORNER_RADIUS {
             preview
                 .outer
@@ -635,7 +638,6 @@ fn update_geometry(
                 .add_css_class(&format!("collage-photo-radius-{radius}"));
         }
         preview.outer.set_size_request(w, h);
-        preview.inner.set_size_request(w, h);
         let contain = matches!(project.layout, LayoutKind::Mosaic | LayoutKind::SmartMosaic)
             && project.keep_photo_aspect;
         let source_ratio = item.photo.aspect_ratio.max(0.01);
@@ -686,50 +688,116 @@ fn update_geometry(
     }
 }
 
-fn preview_geometry_size(canvas: &gtk::Fixed, project: &CollageProject) -> (f32, f32) {
-    let current_width = canvas.width().max(1) as f32;
-    let current_height = canvas.height().max(1) as f32;
-    let Some(aspect_frame) = canvas.parent() else {
-        return (current_width, current_height);
-    };
-    let Some(root) = aspect_frame.parent() else {
-        return (current_width, current_height);
-    };
+// The canvas contains explicit tile sizes, but none may contribute to the
+// editor/window minimum. The ordinary child measures zero; the overlay canvas
+// receives exactly the allocation that GtkAspectFrame has fitted to its parent.
+fn preview_bounds(canvas: &gtk::Fixed) -> gtk::Overlay {
+    let bounds = gtk::Overlay::new();
+    bounds.set_child(Some(&gtk::DrawingArea::new()));
+    bounds.add_overlay(canvas);
+    bounds.set_measure_overlay(canvas, false);
+    bounds.set_clip_overlay(canvas, true);
+    bounds.connect_get_child_position(|bounds, _| {
+        Some(gtk::gdk::Rectangle::new(
+            0,
+            0,
+            bounds.width(),
+            bounds.height(),
+        ))
+    });
+    bounds
+}
 
-    // The Fixed's children have explicit sizes derived from the canvas. Cap
-    // those sizes to the real content area so their minimum size cannot make
-    // the horizontal collage layout grow recursively.
-    let controls_width = root
-        .first_child()
-        .map(|controls| controls.width())
-        .unwrap_or_default()
-        .max(COLLAGE_CONTROLS_WIDTH);
-    let window_width = canvas
-        .root()
-        .map(|window| window.width())
-        .filter(|width| *width > 0)
-        .unwrap_or(root.width());
-    let window_height = canvas
-        .root()
-        .map(|window| window.height())
-        .filter(|height| *height > 0)
-        .unwrap_or(root.height());
-    let sidebar_width = canvas
-        .ancestor(adw::OverlaySplitView::static_type())
-        .and_then(|widget| widget.downcast::<adw::OverlaySplitView>().ok())
-        .filter(|split| split.shows_sidebar() && !split.is_collapsed())
-        .map(|split| (split.width() as f64 * split.sidebar_width_fraction()) as i32)
-        .unwrap_or_default();
-    let available_width =
-        (window_width - sidebar_width - controls_width - COLLAGE_FRAME_MARGINS).max(1) as f32;
-    let available_height = window_height
-        .saturating_sub(46 + 58 + COLLAGE_FRAME_MARGINS)
-        .max(1) as f32;
-    let aspect = project.effective_aspect_ratio();
-    let max_width = available_width.min(available_height * aspect);
-    let width = current_width.min(max_width.max(1.0));
-    let height = (width / aspect).min(current_height);
-    (width, height.max(1.0))
+fn preview_geometry_size(canvas: &gtk::Fixed) -> (f32, f32) {
+    // The allocation already accounts for headers, sidebar, controls, margins
+    // and canvas CSS. Do not feed a whole-window height estimate back into it.
+    (canvas.width().max(0) as f32, canvas.height().max(0) as f32)
+}
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::*;
+    use crate::collage::model::{CollageItem, CollagePhoto};
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn spacing_changes_do_not_propagate_preview_minimum_or_rebuild_tiles() {
+        adw::init().expect("GTK display required");
+        let window = gtk::Window::new();
+        let editor = build(&window, Vec::new(), Rc::new(|| {}), Rc::new(|| {}));
+        editor.project.borrow_mut().items = (0..9)
+            .map(|i| CollageItem {
+                photo: CollagePhoto {
+                    id: i,
+                    path: String::new(),
+                    filename: String::new(),
+                    thumbnail_path: None,
+                    library_rotation: 0,
+                    aspect_ratio: if i % 2 == 0 { 1.5 } else { 0.65 },
+                },
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                rotation: 0.0,
+                z: i as usize,
+            })
+            .collect();
+        editor.project.borrow_mut().relayout();
+        refresh_preview(&editor.canvas, &editor.frames, &editor.project);
+        let tiles = editor
+            .frames
+            .borrow()
+            .iter()
+            .map(|f| f.outer.clone())
+            .collect::<Vec<_>>();
+        let controls = editor.root.first_child().unwrap();
+        let mut child = controls.first_child();
+        let spacing = loop {
+            let widget = child.expect("Spacing control");
+            if widget
+                .clone()
+                .downcast::<gtk::Label>()
+                .is_ok_and(|l| l.text() == "Spacing")
+            {
+                break widget
+                    .next_sibling()
+                    .unwrap()
+                    .downcast::<gtk::Scale>()
+                    .unwrap();
+            }
+            child = widget.next_sibling();
+        };
+        let toast = adw::ToastOverlay::new();
+        toast.set_child(Some(&editor.root));
+        let baseline = toast.measure(gtk::Orientation::Vertical, 1200).0;
+        for (width, height) in [(1200, 800), (900, 720), (1400, 850)] {
+            toast.allocate(width, height, -1, None);
+            // Manual allocation has no frame clock; perform the resize tick
+            // that the live canvas runs before painting each new allocation.
+            update_geometry(&editor.canvas, &editor.frames, &editor.project.borrow());
+            assert!(editor.canvas.width() > 0 && editor.canvas.height() > 0);
+            for step in (0..=20).chain((0..20).rev()) {
+                spacing.set_value(step as f64 * 0.004);
+                toast.allocate(width, height, -1, None);
+                assert_eq!(toast.measure(gtk::Orientation::Vertical, width).0, baseline);
+                assert!(editor.canvas.height() <= height);
+                assert!(editor.canvas.width() <= width);
+                for (frame, original) in editor.frames.borrow().iter().zip(&tiles) {
+                    assert_eq!(&frame.outer, original);
+                    assert!(frame.outer.width_request() <= editor.canvas.width());
+                    assert!(
+                        frame.outer.height_request() <= editor.canvas.height(),
+                        "step={step} bounds={width}x{height} requested={} canvas={}x{}",
+                        frame.outer.height_request(),
+                        editor.canvas.width(),
+                        editor.canvas.height()
+                    );
+                }
+            }
+        }
+        window.close();
+    }
 }
 
 fn choose_export_path(window: &gtk::Window, project: Rc<RefCell<CollageProject>>) {
