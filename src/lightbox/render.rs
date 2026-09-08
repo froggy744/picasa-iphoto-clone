@@ -221,7 +221,18 @@ fn show_photo(
                 }
             }
             Err(error) => {
+                // A failed decode must not leave the previous photo visible.
+                // This is especially important when navigating from a valid
+                // image to a corrupt source: retaining the old paintable makes
+                // the viewer appear to open the wrong photo.
+                picture.set_paintable(gtk::gdk::Paintable::NONE);
+                picture.set_filename(Option::<&str>::None);
+                picture.set_size_request(1, 1);
                 if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "UI TRACE lightbox_decode_failed path={} error={}",
+                        cache_path, error
+                    );
                 }
             }
         }
@@ -476,6 +487,11 @@ fn show_cached_preview(picture: &gtk::Picture, photo: &PhotoObject) {
                 photo.path()
             );
         }
+    } else {
+        // `Picture` can retain its previous paintable across lightbox opens.
+        // Clear it before decoding a photo with no usable cached thumbnail.
+        picture.set_paintable(gtk::gdk::Paintable::NONE);
+        picture.set_filename(Option::<&str>::None);
     }
 }
 
