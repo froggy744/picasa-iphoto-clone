@@ -102,6 +102,12 @@ impl InfoBar {
         root.append(&details);
 
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        // Keep the action cluster anchored to the trailing edge when the
+        // optional preview, filename, or metadata is hidden. Without an
+        // expanding child, an empty/missing-thumbnail state makes the whole
+        // bottom bar's contents drift to the left.
+        actions.set_hexpand(true);
+        actions.set_halign(gtk::Align::End);
         actions.set_valign(gtk::Align::Center);
 
         let favorite = gtk::Button::from_icon_name("emote-love-symbolic");
