@@ -6,7 +6,7 @@ use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
 
-use super::model::{AspectRatio, Background, CollageProject, LayoutKind};
+use super::model::{AspectRatio, Background, CollageOrientation, CollageProject, LayoutKind};
 
 const MAX_PREVIEW_CORNER_RADIUS: i32 = 48;
 const COLLAGE_CONTROLS_WIDTH: i32 = 266; // 230px width + 18px margins on each side
@@ -108,7 +108,8 @@ pub fn build(
     canvas.set_hexpand(true);
     canvas.set_vexpand(true);
     canvas.add_css_class("collage-canvas");
-    let aspect_frame = gtk::AspectFrame::new(0.5, 0.5, project.borrow().aspect.value(), false);
+    let aspect_frame =
+        gtk::AspectFrame::new(0.5, 0.5, project.borrow().effective_aspect_ratio(), false);
     aspect_frame.set_hexpand(true);
     aspect_frame.set_vexpand(true);
     aspect_frame.set_halign(gtk::Align::Center);
@@ -145,7 +146,12 @@ pub fn build(
     add_section_label(&controls, "Layout");
     let layout = gtk::DropDown::from_strings(&["Mosaic", "Grid"]);
     layout.set_selected(1);
-    controls.append(&layout);
+    let orientation = gtk::DropDown::from_strings(&["Landscape", "Portrait"]);
+    orientation.set_selected(0);
+    let layout_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    layout_controls.append(&layout);
+    layout_controls.append(&orientation);
+    controls.append(&layout_controls);
     {
         let project = project.clone();
         let refresh = refresh.clone();
@@ -160,23 +166,90 @@ pub fn build(
     }
 
     add_section_label(&controls, "Aspect ratio");
-    let aspect = gtk::DropDown::from_strings(&["Square 1:1", "4:3", "3:2", "16:9"]);
+    let aspect = gtk::DropDown::from_strings(&["Square 1:1", "4:3", "3:2", "16:9", "Custom"]);
     aspect.set_selected(3);
     controls.append(&aspect);
+    let custom_width = gtk::SpinButton::with_range(1.0, 10_000.0, 1.0);
+    custom_width.set_value(16.0);
+    custom_width.set_numeric(true);
+    custom_width.set_digits(0);
+    custom_width.set_tooltip_text(Some("Custom aspect width"));
+    let custom_height = gtk::SpinButton::with_range(1.0, 10_000.0, 1.0);
+    custom_height.set_value(9.0);
+    custom_height.set_numeric(true);
+    custom_height.set_digits(0);
+    custom_height.set_tooltip_text(Some("Custom aspect height"));
+    let custom_ratio = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    custom_ratio.append(&custom_width);
+    custom_ratio.append(&gtk::Label::new(Some(":")));
+    custom_ratio.append(&custom_height);
+    custom_ratio.set_visible(false);
+    controls.append(&custom_ratio);
     {
         let project = project.clone();
         let refresh = refresh.clone();
         let aspect_frame = aspect_frame.clone();
+        let custom_ratio = custom_ratio.clone();
         aspect.connect_selected_notify(move |dropdown| {
             let value = match dropdown.selected() {
                 0 => AspectRatio::Square,
                 1 => AspectRatio::FourThree,
                 2 => AspectRatio::ThreeTwo,
-                _ => AspectRatio::SixteenNine,
+                3 => AspectRatio::SixteenNine,
+                _ => AspectRatio::Custom,
             };
-            project.borrow_mut().aspect = value;
-            aspect_frame.set_ratio(value.value());
+            let ratio = {
+                let mut project_data = project.borrow_mut();
+                project_data.aspect = value;
+                project_data.relayout();
+                project_data.effective_aspect_ratio()
+            };
+            aspect_frame.set_ratio(ratio);
+            custom_ratio.set_visible(value == AspectRatio::Custom);
             refresh();
+        });
+    }
+    {
+        let project = project.clone();
+        let refresh = refresh.clone();
+        let aspect_frame = aspect_frame.clone();
+        orientation.connect_selected_notify(move |dropdown| {
+            let orientation = if dropdown.selected() == 1 {
+                CollageOrientation::Portrait
+            } else {
+                CollageOrientation::Landscape
+            };
+            let ratio = {
+                let mut project_data = project.borrow_mut();
+                project_data.orientation = orientation;
+                project_data.relayout();
+                project_data.effective_aspect_ratio()
+            };
+            aspect_frame.set_ratio(ratio);
+            refresh();
+        });
+    }
+    for custom_control in [&custom_width, &custom_height] {
+        let project = project.clone();
+        let refresh = refresh.clone();
+        let aspect_frame = aspect_frame.clone();
+        let custom_width = custom_width.clone();
+        let custom_height = custom_height.clone();
+        custom_control.connect_value_changed(move |_| {
+            let ratio = custom_width.value() as f32 / custom_height.value().max(1.0) as f32;
+            let is_custom = {
+                let mut project_data = project.borrow_mut();
+                project_data.custom_aspect = ratio;
+                let is_custom = project_data.aspect == AspectRatio::Custom;
+                if is_custom {
+                    project_data.relayout();
+                }
+                is_custom
+            };
+            if is_custom {
+                aspect_frame.set_ratio(project.borrow().effective_aspect_ratio());
+                refresh();
+            }
         });
     }
 
@@ -569,15 +642,12 @@ fn preview_geometry_size(canvas: &gtk::Fixed, project: &CollageProject) -> (f32,
         .filter(|split| split.shows_sidebar() && !split.is_collapsed())
         .map(|split| (split.width() as f64 * split.sidebar_width_fraction()) as i32)
         .unwrap_or_default();
-    let available_width = (window_width
-        - sidebar_width
-        - controls_width
-        - COLLAGE_FRAME_MARGINS)
-        .max(1) as f32;
+    let available_width =
+        (window_width - sidebar_width - controls_width - COLLAGE_FRAME_MARGINS).max(1) as f32;
     let available_height = window_height
-        .saturating_sub(COLLAGE_FRAME_MARGINS)
+        .saturating_sub(46 + 58 + COLLAGE_FRAME_MARGINS)
         .max(1) as f32;
-    let aspect = project.aspect.value();
+    let aspect = project.effective_aspect_ratio();
     let max_width = available_width.min(available_height * aspect);
     let width = current_width.min(max_width.max(1.0));
     let height = (width / aspect).min(current_height);

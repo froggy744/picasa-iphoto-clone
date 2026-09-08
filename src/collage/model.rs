@@ -9,6 +9,27 @@ pub struct CollagePhoto {
     pub filename: String,
     pub thumbnail_path: Option<String>,
     pub library_rotation: i32,
+    pub aspect_ratio: f32,
+}
+
+fn photo_aspect_ratio(photo: &PhotoObject) -> f32 {
+    let width = photo.width();
+    let height = photo.height();
+    if width <= 0 || height <= 0 {
+        return 1.5;
+    }
+    let width = width as f32;
+    let height = height as f32;
+    let ratio = if photo.rotation().rem_euclid(180) == 90 {
+        height / width
+    } else {
+        width / height
+    };
+    if ratio.is_finite() && ratio > 0.0 {
+        ratio
+    } else {
+        1.5
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +44,7 @@ pub enum AspectRatio {
     FourThree,
     ThreeTwo,
     SixteenNine,
+    Custom,
 }
 
 impl AspectRatio {
@@ -32,8 +54,15 @@ impl AspectRatio {
             Self::FourThree => 4.0 / 3.0,
             Self::ThreeTwo => 3.0 / 2.0,
             Self::SixteenNine => 16.0 / 9.0,
+            Self::Custom => 1.0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CollageOrientation {
+    Landscape,
+    Portrait,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +86,8 @@ pub struct CollageItem {
 #[derive(Clone, Debug)]
 pub struct CollageProject {
     pub aspect: AspectRatio,
+    pub custom_aspect: f32,
+    pub orientation: CollageOrientation,
     pub background: Background,
     pub round_corners: bool,
     pub corner_radius: f32,
@@ -73,6 +104,8 @@ impl CollageProject {
         }
         let mut project = Self {
             aspect: AspectRatio::SixteenNine,
+            custom_aspect: 16.0 / 9.0,
+            orientation: CollageOrientation::Landscape,
             background: Background::White,
             round_corners: false,
             corner_radius: 0.06,
@@ -89,6 +122,7 @@ impl CollageProject {
                         filename: photo.filename(),
                         thumbnail_path: photo.cached_thumbnail_path(),
                         library_rotation: photo.rotation(),
+                        aspect_ratio: photo_aspect_ratio(&photo),
                     },
                     x: 0.0,
                     y: 0.0,
@@ -105,6 +139,22 @@ impl CollageProject {
 
     pub fn relayout(&mut self) {
         crate::collage::layout::apply(self);
+    }
+
+    pub fn base_aspect_ratio(&self) -> f32 {
+        if self.aspect == AspectRatio::Custom {
+            self.custom_aspect.max(0.01)
+        } else {
+            self.aspect.value()
+        }
+    }
+
+    pub fn effective_aspect_ratio(&self) -> f32 {
+        let ratio = self.base_aspect_ratio();
+        match self.orientation {
+            CollageOrientation::Landscape => ratio.max(1.0 / ratio),
+            CollageOrientation::Portrait => ratio.min(1.0 / ratio),
+        }
     }
 
     pub fn add_photos(&mut self, photos: Vec<PhotoObject>) {
@@ -126,6 +176,7 @@ impl CollageProject {
                         filename: photo.filename(),
                         thumbnail_path: photo.cached_thumbnail_path(),
                         library_rotation: photo.rotation(),
+                        aspect_ratio: photo_aspect_ratio(&photo),
                     },
                     x: 0.0,
                     y: 0.0,
@@ -161,6 +212,7 @@ impl CollageProject {
                             filename: photo.filename(),
                             thumbnail_path: photo.cached_thumbnail_path(),
                             library_rotation: photo.rotation(),
+                            aspect_ratio: photo_aspect_ratio(&photo),
                         },
                         x: 0.0,
                         y: 0.0,

@@ -25,7 +25,7 @@ pub fn export(project: &CollageProject, destination: &Path) -> Result<()> {
     }
 
     let width = 3840u32;
-    let height = (width as f32 / project.aspect.value()).round() as u32;
+    let height = (width as f32 / project.effective_aspect_ratio()).round() as u32;
     trace_export(&format!("destination={}", destination.display()));
     trace_export(&format!(
         "canvas={}x{} items={}",

@@ -27,74 +27,87 @@ fn grid(project: &mut CollageProject) {
 }
 
 fn mosaic(project: &mut CollageProject) {
-    let count = project.items.len().max(1);
-    // A slightly roomier logical grid leaves enough free cells for occasional
-    // 2x1 and 1x2 tiles instead of forcing the packing into a square grid.
-    let columns = ((count as f32 * 1.5).sqrt().ceil() as usize).max(2);
-    let rows = (count + columns - 1) / columns;
+    let count = project.items.len();
+    if count == 0 {
+        return;
+    }
     let gap = project.spacing.clamp(0.0, 0.08);
-    let cell_width = (1.0 - gap * (columns + 1) as f32) / columns as f32;
-    let cell_height = (1.0 - gap * (rows + 1) as f32) / rows as f32;
-    let seed = project.seed;
-    let item_count = project.items.len();
+    let canvas_ratio = project.effective_aspect_ratio().max(0.01);
+    let usable_width = (canvas_ratio - gap * 2.0).max(0.01);
+    let usable_height = (1.0 - gap * 2.0).max(0.01);
+    let target_rows = ((count as f32 / canvas_ratio.max(0.5)).sqrt().round() as usize).max(1);
+    let target_height = usable_height / target_rows as f32;
 
-    let mut occupied = vec![vec![false; columns]; rows];
-    for (index, item) in project.items.iter_mut().enumerate() {
-        let prefer_wide = mixed_seed(seed, index as u64) & 1 == 0;
-        let prefer_tall = mixed_seed(seed, index as u64) & 2 == 0;
-        let remaining = item_count.saturating_sub(index + 1);
-        let free_cells = occupied.iter().flatten().filter(|cell| !**cell).count();
-        let mut placement = None;
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    let mut current = Vec::new();
+    let mut aspect_sum = 0.0;
+    for index in 0..count {
+        let next_sum = aspect_sum + project.items[index].photo.aspect_ratio.max(0.1);
+        let next_height = usable_width / next_sum;
+        let remaining = count - index - 1;
+        let should_finish = !current.is_empty()
+            && next_height < target_height * 0.72
+            && (rows.len() + 1 < target_rows || remaining == 0);
+        if should_finish {
+            rows.push(current);
+            current = Vec::new();
+            aspect_sum = 0.0;
+        }
+        current.push(index);
+        aspect_sum += project.items[index].photo.aspect_ratio.max(0.1);
+    }
+    if !current.is_empty() {
+        rows.push(current);
+    }
 
-        let larger_tiles = count >= 3;
-        let candidates = if larger_tiles && prefer_wide {
-            [(2, 1), (1, 2), (1, 1)]
-        } else if larger_tiles && prefer_tall {
-            [(1, 2), (2, 1), (1, 1)]
-        } else {
-            [(1, 1), (2, 1), (1, 2)]
-        };
-        for (cell_widths, cell_heights) in candidates {
-            if cell_widths * cell_heights > free_cells.saturating_sub(remaining) {
-                continue;
-            }
-            'search: for row in 0..rows {
-                for column in 0..columns {
-                    if column + cell_widths > columns || row + cell_heights > rows {
-                        continue;
-                    }
-                    let mut region_occupied = false;
-                    for cell_row in row..row + cell_heights {
-                        for cell_column in column..column + cell_widths {
-                            if occupied[cell_row][cell_column] {
-                                region_occupied = true;
-                            }
-                        }
-                    }
-                    if region_occupied {
-                        continue;
-                    }
-                    placement = Some((column, row, cell_widths, cell_heights));
-                    break 'search;
-                }
-            }
-            if placement.is_some() {
-                break;
+    let natural_heights: Vec<f32> = rows
+        .iter()
+        .map(|row| {
+            usable_width
+                / row
+                    .iter()
+                    .map(|&index| project.items[index].photo.aspect_ratio.max(0.1))
+                    .sum::<f32>()
+        })
+        .collect();
+    let height_scale = usable_height / natural_heights.iter().sum::<f32>().max(0.01);
+    let mut y = gap;
+    for (row_index, row) in rows.iter().enumerate() {
+        let row_height = natural_heights[row_index] * height_scale;
+        let total_gap = gap * (row.len().saturating_sub(1)) as f32;
+        let available = (canvas_ratio - gap * 2.0 - total_gap).max(0.01);
+        let aspect_sum = row
+            .iter()
+            .map(|&index| project.items[index].photo.aspect_ratio.max(0.1))
+            .sum::<f32>();
+        let mut x = gap;
+        for (position, &index) in row.iter().enumerate() {
+            let item_width = if position + 1 == row.len() {
+                (canvas_ratio - gap - x).max(0.01)
+            } else {
+                available * project.items[index].photo.aspect_ratio.max(0.1) / aspect_sum
+            };
+            let item = &mut project.items[index];
+            item.x = x / canvas_ratio;
+            item.y = y;
+            item.width = item_width / canvas_ratio;
+            item.height = row_height;
+            item.rotation = 0.0;
+            item.z = index;
+            x += item_width + gap;
+        }
+        y += row_height + gap;
+    }
+    // The final row reaches the exact bottom edge, avoiding accumulated float
+    // error from row rounding while keeping all coordinates normalized.
+    if let Some(last_row) = rows.last() {
+        if let Some(&index) = last_row.first() {
+            let last_y = project.items[index].y;
+            let final_height = (1.0 - gap - last_y).max(0.01);
+            for &index in last_row {
+                project.items[index].height = final_height;
             }
         }
-
-        let (column, row, cell_widths, cell_heights) = placement.unwrap_or((0, 0, 1, 1));
-        for cell_row in row..row + cell_heights {
-            for cell_column in column..column + cell_widths {
-                occupied[cell_row][cell_column] = true;
-            }
-        }
-        item.x = gap + column as f32 * (cell_width + gap);
-        item.y = gap + row as f32 * (cell_height + gap);
-        item.width = cell_width * cell_widths as f32 + gap * (cell_widths - 1) as f32;
-        item.height = cell_height * cell_heights as f32 + gap * (cell_heights - 1) as f32;
-        item.rotation = 0.0;
-        item.z = index;
     }
 }
 
@@ -117,11 +130,13 @@ fn mixed_seed(seed: u64, index: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collage::model::{CollageItem, CollagePhoto};
+    use crate::collage::model::{CollageItem, CollageOrientation, CollagePhoto};
 
     fn project(count: usize, layout: LayoutKind, seed: u64) -> CollageProject {
         CollageProject {
             aspect: crate::collage::model::AspectRatio::SixteenNine,
+            custom_aspect: 16.0 / 9.0,
+            orientation: crate::collage::model::CollageOrientation::Landscape,
             background: crate::collage::model::Background::White,
             round_corners: false,
             corner_radius: 0.06,
@@ -136,6 +151,7 @@ mod tests {
                         filename: String::new(),
                         thumbnail_path: None,
                         library_rotation: 0,
+                        aspect_ratio: 1.5,
                     },
                     x: 0.0,
                     y: 0.0,
@@ -245,5 +261,17 @@ mod tests {
             let value = next_unit(&mut state);
             assert!((0.0..=1.0).contains(&value));
         }
+    }
+
+    #[test]
+    fn orientation_changes_effective_ratio_without_changing_base_ratio() {
+        let mut project = project(3, LayoutKind::Mosaic, 7);
+        project.aspect = crate::collage::model::AspectRatio::ThreeTwo;
+        project.orientation = CollageOrientation::Landscape;
+        assert!((project.effective_aspect_ratio() - 3.0 / 2.0).abs() < f32::EPSILON);
+
+        project.orientation = CollageOrientation::Portrait;
+        assert!((project.effective_aspect_ratio() - 2.0 / 3.0).abs() < f32::EPSILON);
+        assert_eq!(project.aspect, crate::collage::model::AspectRatio::ThreeTwo);
     }
 }
