@@ -139,9 +139,7 @@ impl SquareTile {
             return;
         };
         if let Some(badge) = overlay_image(&frame, "favorite-badge") {
-            badge.set_visible(
-                self.imp().favorite_indicators_visible.get() && photo.favorite(),
-            );
+            badge.set_visible(self.imp().favorite_indicators_visible.get() && photo.favorite());
         }
     }
 
@@ -258,9 +256,7 @@ impl SquareTile {
             });
         }
         if let Some(badge) = favorite_badge {
-            badge.set_visible(
-                self.imp().favorite_indicators_visible.get() && photo.favorite(),
-            );
+            badge.set_visible(self.imp().favorite_indicators_visible.get() && photo.favorite());
         }
         if let Some(placeholder) = placeholder {
             placeholder.set_visible(existing.is_none());

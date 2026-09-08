@@ -9,6 +9,8 @@ use libadwaita as adw;
 use super::model::{AspectRatio, Background, CollageProject, LayoutKind};
 
 const MAX_PREVIEW_CORNER_RADIUS: i32 = 48;
+const COLLAGE_CONTROLS_WIDTH: i32 = 266; // 230px width + 18px margins on each side
+const COLLAGE_FRAME_MARGINS: i32 = 48; // 24px on each side
 
 fn collage_css() -> String {
     let mut css = String::from(
@@ -105,16 +107,16 @@ pub fn build(
     let canvas = gtk::Fixed::new();
     canvas.set_hexpand(true);
     canvas.set_vexpand(true);
-    canvas.set_margin_top(24);
-    canvas.set_margin_bottom(24);
-    canvas.set_margin_start(24);
-    canvas.set_margin_end(24);
     canvas.add_css_class("collage-canvas");
     let aspect_frame = gtk::AspectFrame::new(0.5, 0.5, project.borrow().aspect.value(), false);
     aspect_frame.set_hexpand(true);
     aspect_frame.set_vexpand(true);
     aspect_frame.set_halign(gtk::Align::Center);
     aspect_frame.set_valign(gtk::Align::Center);
+    aspect_frame.set_margin_top(24);
+    aspect_frame.set_margin_bottom(24);
+    aspect_frame.set_margin_start(24);
+    aspect_frame.set_margin_end(24);
     aspect_frame.set_child(Some(&canvas));
     let frames: Rc<RefCell<Vec<PreviewFrame>>> = Rc::new(RefCell::new(Vec::new()));
 
@@ -476,8 +478,7 @@ fn update_geometry(
     frames: &Rc<RefCell<Vec<PreviewFrame>>>,
     project: &CollageProject,
 ) {
-    let width = canvas.width().max(1) as f32;
-    let height = canvas.height().max(1) as f32;
+    let (width, height) = preview_geometry_size(canvas, project);
     for (item, preview) in project.items.iter().zip(frames.borrow().iter()) {
         let x = item.x * width;
         let y = item.y * height;
@@ -521,6 +522,55 @@ fn update_geometry(
             }
         }
     }
+}
+
+fn preview_geometry_size(canvas: &gtk::Fixed, project: &CollageProject) -> (f32, f32) {
+    let current_width = canvas.width().max(1) as f32;
+    let current_height = canvas.height().max(1) as f32;
+    let Some(aspect_frame) = canvas.parent() else {
+        return (current_width, current_height);
+    };
+    let Some(root) = aspect_frame.parent() else {
+        return (current_width, current_height);
+    };
+
+    // The Fixed's children have explicit sizes derived from the canvas. Cap
+    // those sizes to the real content area so their minimum size cannot make
+    // the horizontal collage layout grow recursively.
+    let controls_width = root
+        .first_child()
+        .map(|controls| controls.width())
+        .unwrap_or_default()
+        .max(COLLAGE_CONTROLS_WIDTH);
+    let window_width = canvas
+        .root()
+        .map(|window| window.width())
+        .filter(|width| *width > 0)
+        .unwrap_or(root.width());
+    let window_height = canvas
+        .root()
+        .map(|window| window.height())
+        .filter(|height| *height > 0)
+        .unwrap_or(root.height());
+    let sidebar_width = canvas
+        .ancestor(adw::OverlaySplitView::static_type())
+        .and_then(|widget| widget.downcast::<adw::OverlaySplitView>().ok())
+        .filter(|split| split.shows_sidebar() && !split.is_collapsed())
+        .map(|split| (split.width() as f64 * split.sidebar_width_fraction()) as i32)
+        .unwrap_or_default();
+    let available_width = (window_width
+        - sidebar_width
+        - controls_width
+        - COLLAGE_FRAME_MARGINS)
+        .max(1) as f32;
+    let available_height = window_height
+        .saturating_sub(COLLAGE_FRAME_MARGINS)
+        .max(1) as f32;
+    let aspect = project.aspect.value();
+    let max_width = available_width.min(available_height * aspect);
+    let width = current_width.min(max_width.max(1.0));
+    let height = (width / aspect).min(current_height);
+    (width, height.max(1.0))
 }
 
 fn choose_export_path(window: &gtk::Window, project: Rc<RefCell<CollageProject>>) {

@@ -272,12 +272,16 @@ fn update_folder_suggestions(
         return;
     }
 
-    let query = query.to_lowercase();
+    let query = normalized_search_text(query);
+    if query.chars().count() < 2 {
+        popover.popdown();
+        return;
+    }
     let matches = folders
         .iter()
         .filter(|folder| {
-            folder.name.to_lowercase().contains(&query)
-                || folder.path.to_lowercase().contains(&query)
+            normalized_search_text(&folder.name).contains(&query)
+                || normalized_search_text(&folder.path).contains(&query)
         })
         .collect::<Vec<_>>();
 
@@ -328,4 +332,16 @@ fn update_folder_suggestions(
             popover.popup();
         }
     }
+}
+
+fn normalized_search_text(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect()
 }

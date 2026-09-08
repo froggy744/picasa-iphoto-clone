@@ -96,6 +96,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let connection = Rc::new(RefCell::new(connection));
     let folders = db::folders(&connection.borrow()).unwrap_or_default();
+    let folder_cache = Rc::new(RefCell::new(folders.clone()));
     let albums = db::albums(&connection.borrow()).unwrap_or_default();
     let sidebar_counts = db::sidebar_counts(&connection.borrow()).unwrap_or_default();
     let sort = Rc::new(Cell::new(PhotoSort {
@@ -313,6 +314,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let availability_refresh_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let availability_refresh: Rc<dyn Fn()> = {
         let connection = connection.clone();
+        let folder_cache = folder_cache.clone();
         let gallery = gallery_for_actions.clone();
         let sidebar = sidebar_for_unavailable.clone();
         let slot = availability_refresh_slot.clone();
@@ -320,6 +322,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let import_folder = import_folder.clone();
         let delete_album = delete_album.clone();
         Rc::new(move || {
+            if let Ok(folders) = db::folders(&connection.borrow()) {
+                folder_cache.replace(folders);
+            }
             refresh_availability_ui(
                 &connection,
                 &gallery,
@@ -2250,6 +2255,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let gallery_for_search = gallery.clone();
     let connection_for_search = connection.clone();
+    let folder_cache_for_search = folder_cache.clone();
     let filter_for_search = filter.clone();
     let search_text_for_search = search_text.clone();
     let sort_for_search = sort.clone();
@@ -2280,8 +2286,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             // Imports and refreshes can change the folder hierarchy after the
             // window was created. Read the current records so suggestions do
             // not lag behind the sidebar and scan results.
-            let folders_for_search = db::folders(&connection_for_search.borrow())
-                .unwrap_or_default();
+            let folders_for_search = folder_cache_for_search.borrow().clone();
             search_text_for_search.replace(query.clone());
             eprintln!(
                 "SEARCH TRACE changed folders_cached count={} query_chars={} entry_width={} area_width={} header_width={} sidebar_shown={} split_collapsed={}",
