@@ -38,8 +38,8 @@ fn main() {
         gio::ApplicationFlags::default(),
     );
     application.connect_activate(|application| {
-        // Startup intentionally opens SQLite and reads indexed rows only. Scanner and
-        // thumbnail generation are reachable only from explicit import/refresh actions.
+        // Startup loads indexed rows and recovers missing cached previews.
+        // Folder discovery runs through import/refresh actions and folder watches.
         match db::open_default() {
             Ok(connection) => window::build(application, connection).present(),
             Err(error) => {

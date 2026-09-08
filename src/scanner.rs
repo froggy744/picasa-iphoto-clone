@@ -43,6 +43,9 @@ pub enum ScanEvent {
     ThumbnailsStarted {
         total: usize,
     },
+    ThumbnailsDeferred {
+        total: usize,
+    },
     ThumbnailCreated {
         path: PathBuf,
     },
@@ -68,7 +71,7 @@ impl ScanControl {
         self.0.store(true, Ordering::Release);
     }
 
-    fn is_cancelled(&self) -> bool {
+    pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
 }

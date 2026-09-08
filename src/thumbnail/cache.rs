@@ -81,10 +81,9 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
         return Ok(destination);
     }
     if failure_marker.is_file() {
-        if is_heif(path) {
-            // HEIF was previously admitted by the scanner without having a
-            // decoder, so old libraries can contain a stale failure marker.
-            // Retry those files now that an HEIF decoder is available.
+        if !known_decode_failure(path, &destination) {
+            // Legacy markers also recorded offline/read errors. Retry them
+            // once; only confirmed decode failures now suppress future work.
             let _ = fs::remove_file(&failure_marker);
         } else {
             thumb_trace!(
@@ -113,13 +112,26 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
     if let Ok(mut entries) = in_flight.lock() {
         entries.remove(&destination);
     }
-    if result.is_err() {
+    if result.as_ref().is_err_and(|error| {
+        !error
+            .chain()
+            .any(|cause| cause.is::<std::io::Error>() || cause.is::<glib::Error>())
+            && crate::source::file_available(path)
+    }) {
         // Avoid retrying a known corrupt/unsupported source on every launch.
         // The marker is keyed by the source fingerprint, so a changed file
         // naturally gets a new cache key and can be attempted again.
-        let _ = fs::write(&failure_marker, b"thumbnail generation failed\n");
+        let _ = fs::write(&failure_marker, DECODE_FAILURE_MARKER);
     }
     result
+}
+
+const DECODE_FAILURE_MARKER: &[u8] = b"thumbnail decode failed v2\n";
+
+fn known_decode_failure(path: &str, destination: &Path) -> bool {
+    !is_heif(path)
+        && fs::read(destination.with_extension("failed"))
+            .is_ok_and(|contents| contents == DECODE_FAILURE_MARKER)
 }
 
 fn create_uncached(path: &str, destination: &PathBuf) -> Result<PathBuf> {

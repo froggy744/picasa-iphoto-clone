@@ -88,9 +88,12 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
         priority_trace("skip_existing", &path, &destination);
         return;
     }
-    let failure_marker = destination.with_extension("failed");
-    if failure_marker.is_file() {
+    if known_decode_failure(&path, &destination) {
         priority_trace("skip_known_bad", &path, &destination);
+        return;
+    }
+    if !crate::source::cached_file_available(&path) {
+        priority_trace("skip_offline", &path, &destination);
         return;
     }
 
@@ -129,7 +132,7 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
                 let failure_marker = destination.with_extension("failed");
                 let _pending_guard = PendingGuard(destination.clone());
                 let deadline = started + PRIORITY_HANDOFF_TIMEOUT;
-                while !destination.is_file() && !failure_marker.is_file() {
+                while !destination.is_file() && !known_decode_failure(&path, &destination) {
                     if cache_entry_in_flight(&destination) {
                         if std::time::Instant::now() >= deadline {
                             break;
@@ -137,7 +140,9 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
                         std::thread::sleep(std::time::Duration::from_millis(25));
                         continue;
                     }
-                    let _ = create(&path, mtime, size_bytes);
+                    if create(&path, mtime, size_bytes).is_err() {
+                        break;
+                    }
                     if destination.is_file() || failure_marker.is_file()
                         || std::time::Instant::now() >= deadline
                     {
@@ -217,6 +222,7 @@ pub fn wait_for_priority_requests() {
 
 // Structural split only: included files remain in this module scope.
 include!("thumbnail/cache.rs");
+include!("thumbnail/recovery.rs");
 include!("thumbnail/viewer.rs");
 include!("thumbnail/nef.rs");
 include!("thumbnail/decoders.rs");

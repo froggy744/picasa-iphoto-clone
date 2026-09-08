@@ -23,6 +23,11 @@ fn query_exists(reference: &str, directory: bool) -> bool {
     file(reference).query_exists(gio::Cancellable::NONE)
 }
 
+/// Probe again after a reconnect, without retaining a previous offline result.
+pub fn file_available(reference: &str) -> bool {
+    query_exists(reference, false)
+}
+
 pub fn cached_source_available(reference: &str) -> bool {
     let key = format!("source:{reference}");
     let mut cache = availability_cache().lock().unwrap();

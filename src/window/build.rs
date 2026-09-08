@@ -1709,21 +1709,29 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     sidebar_selection_slot.replace(Some(sidebar.clone()));
     sidebar::set_active_filter(&sidebar, filter.get());
 
-    // Refresh availability when the desktop reports a mount/unmount. This is
-    // deliberately limited to cache/UI updates; it does not start a scan.
+    // Reconnecting sources also resumes previews for already indexed photos.
+    let thumbnail_recovery_requested = Rc::new(Cell::new(true));
+    let thumbnail_recovery_deferred = Rc::new(Cell::new(false));
+    let reconnected_sources = Rc::new(RefCell::new(ReconnectedSources {
+        mounted: mounted_source_roots(),
+        ..Default::default()
+    }));
     let volume_monitor = gio::VolumeMonitor::get();
     let mount_refresh_pending = Rc::new(Cell::new(false));
     let schedule_mount_refresh: Rc<dyn Fn()> = {
         let availability_refresh = availability_refresh.clone();
         let pending = mount_refresh_pending.clone();
+        let reconnected_sources = reconnected_sources.clone();
         Rc::new(move || {
             if pending.replace(true) {
                 return;
             }
             let availability_refresh = availability_refresh.clone();
             let pending = pending.clone();
+            let reconnected_sources = reconnected_sources.clone();
             glib::timeout_add_local_once(Duration::from_millis(250), move || {
                 pending.set(false);
+                reconnected_sources.borrow_mut().update(mounted_source_roots());
                 availability_refresh();
             });
         })
@@ -2969,86 +2977,58 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }
     });
 
-    // A previously interrupted import can leave valid DB records without
-    // previews. Rebuild those previews off the GTK thread at startup.
-    // Check the complete indexed library in the worker. The initial gallery
-    // is intentionally limited to Recently Added, but recovery must not miss
-    // older photos whose thumbnails are absent.
-    let recovery_photos = all_startup_photos;
-    let startup_paths = startup_photos
-        .iter()
-        .map(|photo| photo.path.clone())
-        .collect::<std::collections::HashSet<_>>();
-    scan_job.borrow_mut().kind = Some(ScanJobKind::Maintenance);
-    let sender = scan_sender.clone();
-    let generation = scan_job.borrow().generation;
-    std::thread::spawn(move || {
-            let mut missing_thumbnails: Vec<_> = recovery_photos
-                .iter()
-                .filter_map(|photo| {
-                    let cache = crate::thumbnail::cache_path(
-                        &photo.path,
-                        photo.mtime,
-                        photo.size_bytes,
-                    )
-                    .ok()?;
-                    (!cache.is_file()).then(|| {
-                        (photo.path.clone(), photo.mtime, photo.size_bytes)
-                    })
-                })
-                .collect();
-            // The first viewport must become usable before older library
-            // photos consume the thumbnail workers. The remaining work is
-            // then processed in small batches so newly visible requests can
-            // get ahead while the user scrolls.
-            missing_thumbnails.sort_by_key(|(path, _, _)| !startup_paths.contains(path));
-            if missing_thumbnails.is_empty() {
-                let _ = sender.send(ScanUiEvent {
-                    generation,
-                    event: scanner::ScanEvent::Finished {
-                        imported: 0,
-                        failed: 0,
-                    },
-                });
+    // Recover existing indexed photos at startup, on mount changes, or after
+    // manual Refresh. Offline drives may stay disconnected for hours; leave
+    // them idle until one of those events requests another recovery pass.
+    let startup_paths = std::sync::Arc::new(
+        startup_photos
+            .iter()
+            .map(|photo| photo.path.clone())
+            .collect::<std::collections::HashSet<_>>(),
+    );
+    let start_thumbnail_recovery: Rc<dyn Fn()> = {
+        let connection = connection.clone();
+        let scan_job = scan_job.clone();
+        let sender = scan_sender.clone();
+        let requested = thumbnail_recovery_requested.clone();
+        let reconnected_sources = reconnected_sources.clone();
+        Rc::new(move || {
+            if scan_job.borrow().kind.is_some()
+                || (!requested.get() && reconnected_sources.borrow().pending.is_empty())
+            {
                 return;
             }
-            let _ = sender.send(ScanUiEvent {
-                generation,
-                event: scanner::ScanEvent::ThumbnailsStarted {
-                    total: missing_thumbnails.len(),
-                },
-            });
-            let mut failed = 0;
-            for chunk in missing_thumbnails.chunks(64) {
-                let results = crate::thumbnail::create_many(chunk, |path| {
-                    let _ = sender.send(ScanUiEvent {
-                        generation,
-                        event: scanner::ScanEvent::ThumbnailCreated {
-                            path: std::path::PathBuf::from(path),
-                        },
-                    });
-                });
-                for ((path, _, _), result) in chunk.iter().zip(results) {
-                    if let Err(error) = result {
-                        failed += 1;
-                        let _ = sender.send(ScanUiEvent {
-                            generation,
-                            event: scanner::ScanEvent::Failed {
-                                path: std::path::PathBuf::from(path),
-                                error: format!("thumbnail: {error}"),
-                            },
-                        });
-                    }
-                }
+            let Ok(mut photos) = db::photos(&connection.borrow(), None, false, None) else {
+                return;
+            };
+            if !requested.get() {
+                let sources = reconnected_sources.borrow();
+                photos.retain(|photo| sources.includes(&photo.path));
             }
-            let _ = sender.send(ScanUiEvent {
-                generation,
-                event: scanner::ScanEvent::Finished {
-                    imported: 0,
-                    failed,
-                },
-            });
-    });
+            retain_enabled_formats(&connection.borrow(), &mut photos);
+            requested.set(false);
+            reconnected_sources.borrow_mut().pending.clear();
+            // Unrelated mounts need no cache checks, worker, or progress UI.
+            if photos.is_empty() {
+                return;
+            }
+            let mut job = scan_job.borrow_mut();
+            job.generation = job.generation.wrapping_add(1);
+            job.kind = Some(ScanJobKind::Maintenance);
+            job.imported_total = 0;
+            job.failed_total = 0;
+            let control = scanner::ScanControl::default();
+            job.active = Some(control.clone());
+            spawn_thumbnail_recovery(
+                photos,
+                startup_paths.clone(),
+                job.generation,
+                sender.clone(),
+                control,
+            );
+        })
+    };
+    start_thumbnail_recovery();
 
     let parent = window.clone();
     let connection_for_import = connection.clone();
@@ -3115,8 +3095,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let connection_for_refresh = connection.clone();
     let availability_refresh_for_app_refresh = availability_refresh.clone();
     let toast_overlay_for_refresh = toast_overlay.clone();
+    let recovery_requested_for_refresh = thumbnail_recovery_requested.clone();
 
     refresh.connect_clicked(move |_| {
+        recovery_requested_for_refresh.set(true);
         availability_refresh_for_app_refresh();
 
         // Always read the live folder list. The list captured when the window
@@ -3285,6 +3267,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let mut thumbnail_total: usize = 0;
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
+        // Drain event-triggered recovery requests once the current scan ends.
+        // With no request, this checks only a flag and performs no disk probes.
+        start_thumbnail_recovery();
         priority_thumbnail_paths.extend(crate::thumbnail::take_priority_completions());
         let priority_completions = priority_thumbnail_paths.len();
         let priority_pending = crate::thumbnail::priority_pending_count();
@@ -3443,6 +3428,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     }
                 }
 
+                scanner::ScanEvent::ThumbnailsDeferred { total } => {
+                    thumbnail_recovery_deferred.set(*total > 0);
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!("THUMB RECOVERY deferred_offline={total}");
+                    }
+                }
                 scanner::ScanEvent::ThumbnailsStarted { total } => {
                     if std::env::var_os("PICASA_TRACE").is_some() {
                     }
@@ -3525,6 +3516,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         continue;
                     }
 
+                    // An entirely offline (or already cached) pass did no work.
+                    // Leave it quiet while waiting for the next reconnect.
+                    if kind == Some(ScanJobKind::Maintenance) && thumbnail_total == 0 {
+                        scan_job_for_events.borrow_mut().kind = None;
+                        continue;
+                    }
+
                     crate::settings::refresh_library_availability_stats(
                         connection_for_events.clone(),
                     );
@@ -3546,7 +3544,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         }
                         Some(ScanJobKind::Maintenance) => {
                             if total_failed == 0 {
-                                "Thumbnail recovery complete".to_string()
+                                if thumbnail_recovery_deferred.get() {
+                                    "Available thumbnails recovered · waiting for offline sources".to_string()
+                                } else {
+                                    "Thumbnail recovery complete".to_string()
+                                }
                             } else {
                                 format!("Thumbnail recovery complete · {total_failed} failed")
                             }

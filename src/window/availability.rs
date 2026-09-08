@@ -2,6 +2,160 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 static AVAILABILITY_GENERATION: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Default)]
+struct ReconnectedSources {
+    mounted: std::collections::HashSet<String>,
+    pending: std::collections::HashSet<String>,
+}
+
+impl ReconnectedSources {
+    fn update(&mut self, mounted: std::collections::HashSet<String>) {
+        self.pending.extend(mounted.difference(&self.mounted).cloned());
+        // A drive may disappear again while recovery waits for another scan.
+        self.pending.retain(|root| mounted.contains(root));
+        self.mounted = mounted;
+    }
+
+    fn includes(&self, path: &str) -> bool {
+        let file = crate::source::file(path);
+        self.pending.iter().any(|root| {
+            let root = crate::source::file(root);
+            file.equal(&root) || file.has_prefix(&root)
+        })
+    }
+}
+
+fn mounted_source_roots() -> std::collections::HashSet<String> {
+    let mut roots = std::collections::HashSet::new();
+    for mount in gio::VolumeMonitor::get().mounts() {
+        let root = mount.root();
+        roots.insert(root.uri().to_string());
+        if let Some(path) = root.path() {
+            roots.insert(gio::File::for_path(path).uri().to_string());
+        }
+    }
+    #[cfg(unix)]
+    for mount in gio::UnixMountEntry::mounts().0 {
+        roots.insert(gio::File::for_path(mount.mount_path()).uri().to_string());
+    }
+    roots
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    use super::*;
+
+    fn roots(paths: &[&str]) -> std::collections::HashSet<String> {
+        paths.iter().map(|path| path.to_string()).collect()
+    }
+
+    #[test]
+    fn unchanged_mounts_and_unmounts_do_not_request_recovery() {
+        let initial = roots(&["file:///", "file:///media/usb"]);
+        let mut sources = ReconnectedSources {
+            mounted: initial.clone(),
+            ..Default::default()
+        };
+        sources.update(initial.clone());
+        assert!(sources.pending.is_empty());
+        sources.update(roots(&["file:///"]));
+        assert!(sources.pending.is_empty());
+        sources.update(initial.clone());
+        assert_eq!(sources.pending, roots(&["file:///media/usb"]));
+        sources.pending.clear();
+        sources.update(initial);
+        assert!(sources.pending.is_empty());
+    }
+
+    #[test]
+    fn reconnect_scope_matches_path_components_and_uri_references() {
+        let mut sources = ReconnectedSources::default();
+        sources.update(roots(&["file:///media/usb", "smb://server/photos"]));
+        assert!(sources.includes("/media/usb/album/photo.jpg"));
+        assert!(sources.includes("file:///media/usb/album/photo.jpg"));
+        assert!(sources.includes("/media/usb"));
+        assert!(sources.includes("smb://server/photos/album/photo.jpg"));
+        assert!(!sources.includes("/media/usb-backup/photo.jpg"));
+        assert!(!sources.includes("/media/other/photo.jpg"));
+        assert!(!sources.includes("smb://server/photos-backup/photo.jpg"));
+        assert!(!sources.includes("smb://other/photos/photo.jpg"));
+    }
+
+    #[test]
+    fn queued_reconnects_accumulate_and_disconnected_drives_are_removed() {
+        let mut sources = ReconnectedSources::default();
+        sources.update(roots(&["file:///media/one"]));
+        sources.update(roots(&["file:///media/one", "file:///media/two"]));
+        assert_eq!(sources.pending.len(), 2);
+        sources.update(roots(&["file:///media/two"]));
+        assert_eq!(sources.pending, roots(&["file:///media/two"]));
+        sources.update(roots(&[]));
+        assert!(sources.pending.is_empty());
+    }
+}
+
+fn spawn_thumbnail_recovery(
+    photos: Vec<db::Photo>,
+    startup_paths: std::sync::Arc<std::collections::HashSet<String>>,
+    generation: u64,
+    sender: std::sync::mpsc::Sender<ScanUiEvent>,
+    control: scanner::ScanControl,
+) {
+    std::thread::spawn(move || {
+        let send = |event| {
+            let _ = sender.send(ScanUiEvent { generation, event });
+        };
+        let items = photos
+            .into_iter()
+            .map(|photo| (photo.path, photo.mtime, photo.size_bytes))
+            .collect();
+        let (mut ready, mut offline) = crate::thumbnail::recovery_items(items);
+        ready.sort_by_key(|(path, _, _)| !startup_paths.contains(path));
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!("THUMB RECOVERY ready={} offline={offline}", ready.len());
+        }
+        if !ready.is_empty() && !control.is_cancelled() {
+            send(scanner::ScanEvent::ThumbnailsStarted { total: ready.len() });
+        }
+        let mut failed = 0;
+        for chunk in ready.chunks(64) {
+            if control.is_cancelled() {
+                break;
+            }
+            let results = crate::thumbnail::create_many_cancellable(
+                chunk,
+                || control.is_cancelled(),
+                |path| {
+                    send(scanner::ScanEvent::ThumbnailCreated { path: path.into() });
+                },
+            );
+            for ((path, _, _), result) in chunk.iter().zip(results) {
+                if let Some(Err(error)) = result {
+                    // The drive can disappear during an active thumbnail pass.
+                    if !crate::source::file_available(path) {
+                        offline += 1;
+                        continue;
+                    }
+                    failed += 1;
+                    send(scanner::ScanEvent::Failed {
+                        path: path.into(),
+                        error: format!("thumbnail: {error}"),
+                    });
+                }
+            }
+        }
+        send(scanner::ScanEvent::ThumbnailsDeferred { total: offline });
+        send(if control.is_cancelled() {
+            scanner::ScanEvent::Cancelled { imported: 0 }
+        } else {
+            scanner::ScanEvent::Finished {
+                imported: 0,
+                failed,
+            }
+        });
+    });
+}
+
 fn run_ui_guarded(label: &str, action: impl FnOnce()) {
     let started = std::time::Instant::now();
     if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)) {
