@@ -2,6 +2,7 @@ mod editor;
 mod layout;
 mod model;
 mod render;
+mod smart_mosaic;
 
 pub use editor::{build as build_editor, CollageEditor};
 

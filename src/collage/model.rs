@@ -35,6 +35,7 @@ fn photo_aspect_ratio(photo: &PhotoObject) -> f32 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutKind {
     Mosaic,
+    SmartMosaic,
     Grid,
 }
 
@@ -110,7 +111,7 @@ impl CollageProject {
             background: Background::White,
             round_corners: false,
             corner_radius: 0.06,
-            layout: LayoutKind::Grid,
+            layout: LayoutKind::SmartMosaic,
             keep_photo_aspect: true,
             spacing: 0.018,
             seed: 1,

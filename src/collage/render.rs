@@ -71,12 +71,23 @@ pub fn export(project: &CollageProject, destination: &Path) -> Result<()> {
             DynamicImage::ImageRgba8(decoded),
             item.photo.library_rotation,
         );
-        let mut image =
-            if project.layout == super::model::LayoutKind::Mosaic && project.keep_photo_aspect {
-                fit_inside_tile(source, target_width, target_height, background)
-            } else {
-                cover(source, target_width, target_height)
-            };
+        let contain = matches!(
+            project.layout,
+            super::model::LayoutKind::Mosaic | super::model::LayoutKind::SmartMosaic
+        ) && project.keep_photo_aspect;
+        // Contain builds a complete background-backed tile before rounding.
+        // The alpha mask therefore affects the letterbox as well as the photo.
+        let mut image = if contain {
+            fit_inside_tile(
+                source,
+                target_width,
+                target_height,
+                background,
+                project.round_corners.then_some(project.corner_radius),
+            )
+        } else {
+            cover(source, target_width, target_height)
+        };
         if item.rotation.abs() > 0.1 {
             image = rotate(&image, item.rotation.to_radians(), background);
         }
@@ -225,14 +236,61 @@ fn fit_inside_tile(
     width: u32,
     height: u32,
     background: image::Rgba<u8>,
+    photo_corner_radius: Option<f32>,
 ) -> RgbaImage {
     let width = width.max(1);
     let height = height.max(1);
     let image = source.resize(width, height, image::imageops::FilterType::Lanczos3);
-    let image = image.to_rgba8();
+    let mut image = image.to_rgba8();
+    // Mask the visible fitted photo before it is placed in the full tile.
+    // This radius is deliberately based on the photo, not the tile.
+    if let Some(corner_radius) = photo_corner_radius {
+        round_corners(&mut image, corner_radius);
+    }
     let mut output = RgbaImage::from_pixel(width, height, background);
     let x = (width.saturating_sub(image.width()) / 2) as i64;
     let y = (height.saturating_sub(image.height()) / 2) as i64;
     image::imageops::overlay(&mut output, &image, x, y);
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contain_rounds_the_complete_background_backed_tile() {
+        let source = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            80,
+            20,
+            image::Rgba([220, 20, 20, 255]),
+        ));
+        let background = image::Rgba([30, 40, 50, 255]);
+        let mut tile = fit_inside_tile(source, 40, 40, background, Some(0.2));
+
+        // Before masking, the letterbox is part of the opaque tile.
+        assert_eq!(*tile.get_pixel(20, 0), background);
+        round_corners(&mut tile, 0.2);
+
+        // The mask removes complete-tile corners, while the letterbox remains
+        // visible along the straight edge of the rounded tile.
+        assert_eq!(tile.get_pixel(0, 0).0[3], 0);
+        assert_eq!(*tile.get_pixel(20, 0), background);
+    }
+
+    #[test]
+    fn contain_rounds_the_fitted_photo_independently() {
+        let source = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            80,
+            20,
+            image::Rgba([220, 20, 20, 255]),
+        ));
+        let background = image::Rgba([30, 40, 50, 255]);
+        let tile = fit_inside_tile(source, 40, 40, background, Some(0.4));
+
+        // The fitted 40x10 photo starts at y=15. Its own corner is masked,
+        // while the adjacent letterbox remains opaque tile background.
+        assert_eq!(*tile.get_pixel(0, 15), background);
+        assert_eq!(*tile.get_pixel(20, 0), background);
+    }
 }

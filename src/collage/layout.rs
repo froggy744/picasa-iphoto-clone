@@ -4,6 +4,7 @@ pub fn apply(project: &mut CollageProject) {
     match project.layout {
         LayoutKind::Grid => grid(project),
         LayoutKind::Mosaic => mosaic(project),
+        LayoutKind::SmartMosaic => super::smart_mosaic::apply(project),
     }
 }
 
@@ -218,7 +219,7 @@ pub(crate) fn next_unit(state: &mut u64) -> f32 {
     ((*state >> 11) as f64 / ((1u64 << 53) - 1) as f64) as f32
 }
 
-fn mixed_seed(seed: u64, index: u64) -> u64 {
+pub(super) fn mixed_seed(seed: u64, index: u64) -> u64 {
     let mut value = seed ^ index.wrapping_mul(0x9e3779b97f4a7c15);
     value ^= value >> 30;
     value = value.wrapping_mul(0xbf58476d1ce4e5b9);
@@ -484,5 +485,96 @@ mod tests {
         project.orientation = CollageOrientation::Portrait;
         assert!((project.effective_aspect_ratio() - 2.0 / 3.0).abs() < f32::EPSILON);
         assert_eq!(project.aspect, crate::collage::model::AspectRatio::ThreeTwo);
+    }
+
+    fn smart_project(count: usize, portrait_canvas: bool) -> CollageProject {
+        let mut project = project(count, LayoutKind::SmartMosaic, 42);
+        let aspects = [0.48, 2.35, 0.62, 1.75, 0.78, 1.35, 2.05, 0.55, 1.1];
+        for (index, item) in project.items.iter_mut().enumerate() {
+            item.photo.aspect_ratio = aspects[index % aspects.len()];
+        }
+        if portrait_canvas {
+            project.orientation = CollageOrientation::Portrait;
+        }
+        project
+    }
+
+    fn assert_valid_smart_layout(project: &CollageProject) {
+        assert!(inside(project));
+        for (index, item) in project.items.iter().enumerate() {
+            assert!(project.items[index + 1..]
+                .iter()
+                .all(|other| !overlaps(item, other)));
+        }
+        let used = project
+            .items
+            .iter()
+            .map(|item| item.width * item.height)
+            .sum::<f32>();
+        assert!(used > 0.78, "too much unused canvas: {used}");
+        let mismatch = project
+            .items
+            .iter()
+            .map(|item| {
+                let tile = item.width * project.effective_aspect_ratio() / item.height.max(0.001);
+                (tile / item.photo.aspect_ratio).ln().abs()
+            })
+            .sum::<f32>()
+            / project.items.len() as f32;
+        assert!(mismatch < 0.95, "average aspect mismatch: {mismatch}");
+    }
+
+    #[test]
+    fn smart_mosaic_handles_mixed_sets_and_canvas_orientations() {
+        for &(count, portrait) in &[(3, false), (7, false), (9, true), (16, false), (18, true)] {
+            let mut project = smart_project(count, portrait);
+            project.relayout();
+            assert_valid_smart_layout(&project);
+        }
+    }
+
+    #[test]
+    fn smart_mosaic_is_deterministic_and_shuffle_changes_the_composition() {
+        let mut first = smart_project(9, false);
+        let mut second = first.clone();
+        first.relayout();
+        second.relayout();
+        let geometry = |project: &CollageProject| {
+            project
+                .items
+                .iter()
+                .map(|i| {
+                    (
+                        i.photo.id,
+                        i.x.to_bits(),
+                        i.y.to_bits(),
+                        i.width.to_bits(),
+                        i.height.to_bits(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(geometry(&first), geometry(&second));
+        let before = geometry(&first);
+        first.shuffle();
+        assert_valid_smart_layout(&first);
+        assert_ne!(before, geometry(&first));
+    }
+
+    #[test]
+    fn smart_mosaic_allows_limited_crop_when_no_crop_is_disabled() {
+        let mut project = smart_project(8, false);
+        project.keep_photo_aspect = false;
+        project.relayout();
+        assert_valid_smart_layout(&project);
+        let worst = project
+            .items
+            .iter()
+            .map(|item| {
+                let tile = item.width * project.effective_aspect_ratio() / item.height.max(0.001);
+                (tile / item.photo.aspect_ratio).ln().abs()
+            })
+            .fold(0.0, f32::max);
+        assert!(worst < 1.75, "severe crop selected: {worst}");
     }
 }

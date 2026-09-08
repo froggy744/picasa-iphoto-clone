@@ -19,6 +19,7 @@ fn collage_css() -> String {
          .collage-black { background: #000000; }\
          .collage-light-gray { background: #eeeeee; }\
          .collage-photo { border: 1px solid alpha(@theme_fg_color, 0.18); border-radius: 0; box-shadow: 0 3px 12px alpha(#000000, 0.28); }\
+         .collage-contained-photo { border: none; box-shadow: none; }\
          .collage-dragging { opacity: 0.62; }\
          .collage-drop-target { border: 3px solid #4d9fdb; box-shadow: 0 0 0 3px alpha(#4d9fdb, 0.45), 0 3px 12px alpha(#000000, 0.35); }\
          .collage-photo-rounded { }",
@@ -34,6 +35,7 @@ fn collage_css() -> String {
 struct PreviewFrame {
     outer: gtk::Widget,
     inner: gtk::Fixed,
+    photo: gtk::Frame,
 }
 
 pub struct CollageEditor {
@@ -144,7 +146,7 @@ pub fn build(
     }
 
     add_section_label(&controls, "Layout");
-    let layout = gtk::DropDown::from_strings(&["Mosaic", "Grid"]);
+    let layout = gtk::DropDown::from_strings(&["Mosaic", "Smart Mosaic", "Grid"]);
     layout.set_selected(1);
     let orientation = gtk::DropDown::from_strings(&["Landscape", "Portrait"]);
     orientation.set_selected(0);
@@ -163,13 +165,17 @@ pub fn build(
         layout.connect_selected_notify(move |dropdown| {
             let layout_kind = match dropdown.selected() {
                 0 => LayoutKind::Mosaic,
+                1 => LayoutKind::SmartMosaic,
                 _ => LayoutKind::Grid,
             };
             let mut project_data = project.borrow_mut();
             project_data.layout = layout_kind;
             project_data.relayout();
             drop(project_data);
-            keep_photo_aspect.set_visible(layout_kind == LayoutKind::Mosaic);
+            keep_photo_aspect.set_visible(matches!(
+                layout_kind,
+                LayoutKind::Mosaic | LayoutKind::SmartMosaic
+            ));
             refresh();
         });
     }
@@ -179,7 +185,10 @@ pub fn build(
         keep_photo_aspect.connect_toggled(move |button| {
             let mut project_data = project.borrow_mut();
             project_data.keep_photo_aspect = button.is_active();
-            if project_data.layout == LayoutKind::Mosaic {
+            if matches!(
+                project_data.layout,
+                LayoutKind::Mosaic | LayoutKind::SmartMosaic
+            ) {
                 project_data.relayout();
                 drop(project_data);
                 refresh();
@@ -406,6 +415,19 @@ fn refresh_preview(
     for (index, item) in project_data.items.iter().enumerate() {
         let frame = gtk::Frame::new(None);
         frame.add_css_class("collage-photo");
+        // In Contain mode GtkPicture leaves the letterbox transparent. Put
+        // that background on the rounded, clipping tile rather than on the
+        // picture so its corners are part of the tile too.
+        frame.add_css_class(match project_data.background {
+            Background::White => "collage-white",
+            Background::Black => "collage-black",
+            Background::LightGray => "collage-light-gray",
+        });
+        frame.set_overflow(if project_data.round_corners {
+            gtk::Overflow::Hidden
+        } else {
+            gtk::Overflow::Visible
+        });
         if project_data.round_corners {
             frame.add_css_class("collage-photo-rounded");
         }
@@ -417,13 +439,9 @@ fn refresh_preview(
         let tile = gtk::Overlay::new();
         tile.set_child(Some(&inner));
         let picture = gtk::Picture::new();
-        picture.set_content_fit(
-            if project_data.layout == LayoutKind::Mosaic && project_data.keep_photo_aspect {
-                gtk::ContentFit::Contain
-            } else {
-                gtk::ContentFit::Cover
-            },
-        );
+        // The containing frame is sized to the fitted rectangle in
+        // update_geometry, so the picture itself can always cover it.
+        picture.set_content_fit(gtk::ContentFit::Cover);
         picture.set_can_shrink(true);
         picture.set_hexpand(true);
         picture.set_vexpand(true);
@@ -444,7 +462,10 @@ fn refresh_preview(
             picture.set_paintable(gtk::gdk::Paintable::NONE);
             picture.set_tooltip_text(Some("Thumbnail unavailable"));
         }
-        inner.put(&picture, 0.0, 0.0);
+        let photo_frame = gtk::Frame::new(None);
+        photo_frame.add_css_class("collage-contained-photo");
+        photo_frame.set_child(Some(&picture));
+        inner.put(&photo_frame, 0.0, 0.0);
         let offline_badge = gtk::Label::new(Some("!"));
         offline_badge.set_halign(gtk::Align::Start);
         offline_badge.set_valign(gtk::Align::Start);
@@ -559,6 +580,7 @@ fn refresh_preview(
         frames.borrow_mut().push(PreviewFrame {
             outer: frame.upcast(),
             inner,
+            photo: photo_frame,
         });
     }
     if std::env::var_os("PICASA_TRACE").is_some() {
@@ -600,6 +622,9 @@ fn update_geometry(
             preview
                 .outer
                 .remove_css_class(&format!("collage-photo-radius-{radius}"));
+            preview
+                .photo
+                .remove_css_class(&format!("collage-photo-radius-{radius}"));
         }
         if project.round_corners {
             let radius = (w.min(h) as f32 * project.corner_radius)
@@ -611,8 +636,37 @@ fn update_geometry(
         }
         preview.outer.set_size_request(w, h);
         preview.inner.set_size_request(w, h);
-        if let Some(picture) = preview.inner.first_child() {
-            picture.set_size_request(w, h);
+        let contain = matches!(project.layout, LayoutKind::Mosaic | LayoutKind::SmartMosaic)
+            && project.keep_photo_aspect;
+        let source_ratio = item.photo.aspect_ratio.max(0.01);
+        let tile_ratio = w as f32 / h.max(1) as f32;
+        let (photo_w, photo_h) = if contain && source_ratio > tile_ratio {
+            (w, ((w as f32 / source_ratio).round() as i32).clamp(1, h))
+        } else if contain {
+            (((h as f32 * source_ratio).round() as i32).clamp(1, w), h)
+        } else {
+            (w, h)
+        };
+        let photo_x = (w - photo_w) / 2;
+        let photo_y = (h - photo_h) / 2;
+        preview.photo.set_size_request(photo_w, photo_h);
+        preview
+            .inner
+            .move_(&preview.photo, photo_x as f64, photo_y as f64);
+        preview
+            .photo
+            .set_overflow(if project.round_corners && contain {
+                gtk::Overflow::Hidden
+            } else {
+                gtk::Overflow::Visible
+            });
+        if project.round_corners && contain {
+            let radius = (photo_w.min(photo_h) as f32 * project.corner_radius)
+                .round()
+                .clamp(0.0, MAX_PREVIEW_CORNER_RADIUS as f32) as i32;
+            preview
+                .photo
+                .add_css_class(&format!("collage-photo-radius-{radius}"));
         }
         canvas.move_(&preview.outer, x as f64, y as f64);
         if item.rotation.abs() > f32::EPSILON {
@@ -623,15 +677,11 @@ fn update_geometry(
                     -(w as f32 / 2.0),
                     -(h as f32 / 2.0),
                 ));
-            if let Some(picture) = preview.inner.first_child() {
-                preview
-                    .inner
-                    .set_child_transform(&picture, Some(&transform));
-            }
+            preview
+                .inner
+                .set_child_transform(&preview.photo, Some(&transform));
         } else {
-            if let Some(picture) = preview.inner.first_child() {
-                preview.inner.set_child_transform(&picture, None);
-            }
+            preview.inner.set_child_transform(&preview.photo, None);
         }
     }
 }
