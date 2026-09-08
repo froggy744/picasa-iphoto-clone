@@ -33,82 +33,182 @@ fn mosaic(project: &mut CollageProject) {
     }
     let gap = project.spacing.clamp(0.0, 0.08);
     let canvas_ratio = project.effective_aspect_ratio().max(0.01);
-    let usable_width = (canvas_ratio - gap * 2.0).max(0.01);
-    let usable_height = (1.0 - gap * 2.0).max(0.01);
-    let target_rows = ((count as f32 / canvas_ratio.max(0.5)).sqrt().round() as usize).max(1);
-    let target_height = usable_height / target_rows as f32;
+    // Work in physical canvas coordinates (width = aspect, height = 1.0),
+    // then normalize the finished rectangles for the shared preview/export
+    // model. Splitting a region consumes the gap at the split, so every leaf
+    // is packed into one rectangle without overlap or cumulative drift.
+    let horizontal_gap = gap * canvas_ratio;
+    let indices = (0..count).collect::<Vec<_>>();
+    split_mosaic_region(
+        project,
+        &indices,
+        horizontal_gap,
+        gap,
+        (canvas_ratio - horizontal_gap * 2.0).max(0.01),
+        (1.0 - gap * 2.0).max(0.01),
+        canvas_ratio,
+        gap,
+    );
+}
 
-    let mut rows: Vec<Vec<usize>> = Vec::new();
-    let mut current = Vec::new();
-    let mut aspect_sum = 0.0;
-    for index in 0..count {
-        let next_sum = aspect_sum + project.items[index].photo.aspect_ratio.max(0.1);
-        let next_height = usable_width / next_sum;
-        let remaining = count - index - 1;
-        let should_finish = !current.is_empty()
-            && next_height < target_height * 0.72
-            && (rows.len() + 1 < target_rows || remaining == 0);
-        if should_finish {
-            rows.push(current);
-            current = Vec::new();
-            aspect_sum = 0.0;
-        }
-        current.push(index);
-        aspect_sum += project.items[index].photo.aspect_ratio.max(0.1);
-    }
-    if !current.is_empty() {
-        rows.push(current);
+fn split_mosaic_region(
+    project: &mut CollageProject,
+    indices: &[usize],
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    canvas_ratio: f32,
+    gap: f32,
+) {
+    if indices.len() == 1 {
+        let item = &mut project.items[indices[0]];
+        item.x = (x / canvas_ratio).clamp(0.0, 1.0);
+        item.y = y.clamp(0.0, 1.0);
+        item.width = (width / canvas_ratio).min((1.0 - item.x).max(0.0));
+        item.height = height.min((1.0 - item.y).max(0.0));
+        item.rotation = 0.0;
+        item.z = indices[0];
+        return;
     }
 
-    let natural_heights: Vec<f32> = rows
-        .iter()
-        .map(|row| {
-            usable_width
-                / row
-                    .iter()
-                    .map(|&index| project.items[index].photo.aspect_ratio.max(0.1))
-                    .sum::<f32>()
-        })
-        .collect();
-    let height_scale = usable_height / natural_heights.iter().sum::<f32>().max(0.01);
-    let mut y = gap;
-    for (row_index, row) in rows.iter().enumerate() {
-        let row_height = natural_heights[row_index] * height_scale;
-        let total_gap = gap * (row.len().saturating_sub(1)) as f32;
-        let available = (canvas_ratio - gap * 2.0 - total_gap).max(0.01);
-        let aspect_sum = row
+    let target = if indices.len() >= 4 { 0.58 } else { 0.5 };
+    let mut best = (f32::INFINITY, true, 1, 0.5);
+    for split_vertical in [true, false] {
+        let total_weight = indices
             .iter()
-            .map(|&index| project.items[index].photo.aspect_ratio.max(0.1))
+            .map(|&index| mosaic_weight(&project.items[index], split_vertical))
             .sum::<f32>();
-        let mut x = gap;
-        for (position, &index) in row.iter().enumerate() {
-            let item_width = if position + 1 == row.len() {
-                (canvas_ratio - gap - x).max(0.01)
+        let mut accumulated = 0.0;
+        for split in 1..indices.len() {
+            accumulated += mosaic_weight(&project.items[indices[split - 1]], split_vertical);
+            let weighted_fraction = accumulated / total_weight.max(0.01);
+            let first_fraction = mosaic_split_fraction(
+                weighted_fraction,
+                target,
+                indices.len(),
+                project.keep_photo_aspect,
+            );
+            let (first_width, first_height, second_width, second_height) = if split_vertical {
+                let split_gap = mosaic_split_gap(width, height, true, canvas_ratio, gap);
+                let available = width - split_gap;
+                let first_width = available * first_fraction;
+                (first_width, height, width - first_width - split_gap, height)
             } else {
-                available * project.items[index].photo.aspect_ratio.max(0.1) / aspect_sum
+                let split_gap = mosaic_split_gap(width, height, false, canvas_ratio, gap);
+                let available = height - split_gap;
+                let first_height = available * first_fraction;
+                (
+                    width,
+                    first_height,
+                    width,
+                    height - first_height - split_gap,
+                )
             };
-            let item = &mut project.items[index];
-            item.x = x / canvas_ratio;
-            item.y = y;
-            item.width = item_width / canvas_ratio;
-            item.height = row_height;
-            item.rotation = 0.0;
-            item.z = index;
-            x += item_width + gap;
-        }
-        y += row_height + gap;
-    }
-    // The final row reaches the exact bottom edge, avoiding accumulated float
-    // error from row rounding while keeping all coordinates normalized.
-    if let Some(last_row) = rows.last() {
-        if let Some(&index) = last_row.first() {
-            let last_y = project.items[index].y;
-            let final_height = (1.0 - gap - last_y).max(0.01);
-            for &index in last_row {
-                project.items[index].height = final_height;
+            let crop_cost =
+                region_crop_cost(project, &indices[..split], first_width / first_height)
+                    + region_crop_cost(project, &indices[split..], second_width / second_height);
+            let balance_cost = (first_fraction - target).abs() * 0.12;
+            let orientation_cost = if (width / height >= 1.15) == split_vertical {
+                0.0
+            } else {
+                0.04
+            };
+            let score = crop_cost + balance_cost + orientation_cost;
+            if score < best.0 {
+                best = (score, split_vertical, split, first_fraction);
             }
         }
     }
+    let (_, split_vertical, best_split, first_fraction) = best;
+    let (first, second) = indices.split_at(best_split);
+
+    if split_vertical {
+        let split_gap = mosaic_split_gap(width, height, true, canvas_ratio, gap);
+        let available = width - split_gap;
+        let first_width = available * first_fraction;
+        let second_x = x + first_width + split_gap;
+        split_mosaic_region(project, first, x, y, first_width, height, canvas_ratio, gap);
+        split_mosaic_region(
+            project,
+            second,
+            second_x,
+            y,
+            width - first_width - split_gap,
+            height,
+            canvas_ratio,
+            gap,
+        );
+    } else {
+        let split_gap = mosaic_split_gap(width, height, false, canvas_ratio, gap);
+        let available = height - split_gap;
+        let first_height = available * first_fraction;
+        let second_y = y + first_height + split_gap;
+        split_mosaic_region(project, first, x, y, width, first_height, canvas_ratio, gap);
+        split_mosaic_region(
+            project,
+            second,
+            x,
+            second_y,
+            width,
+            height - first_height - split_gap,
+            canvas_ratio,
+            gap,
+        );
+    }
+}
+
+fn mosaic_split_gap(width: f32, height: f32, vertical: bool, canvas_ratio: f32, gap: f32) -> f32 {
+    let requested = if vertical { gap * canvas_ratio } else { gap };
+    let available = if vertical { width } else { height };
+    requested.min(available * 0.2)
+}
+
+fn mosaic_weight(item: &super::model::CollageItem, vertical: bool) -> f32 {
+    let aspect = item.photo.aspect_ratio.max(0.1);
+    if vertical {
+        aspect
+    } else {
+        1.0 / aspect
+    }
+}
+
+fn mosaic_split_fraction(
+    weighted_fraction: f32,
+    target: f32,
+    item_count: usize,
+    keep_photo_aspect: bool,
+) -> f32 {
+    let feature_target = if item_count == 2 && !keep_photo_aspect {
+        0.65
+    } else {
+        target
+    };
+    let bias = if keep_photo_aspect {
+        0.08
+    } else if item_count == 2 {
+        0.65
+    } else {
+        0.25
+    };
+    (weighted_fraction * (1.0 - bias) + feature_target * bias).clamp(0.28, 0.72)
+}
+
+fn region_crop_cost(project: &CollageProject, indices: &[usize], tile_ratio: f32) -> f32 {
+    indices
+        .iter()
+        .map(|&index| {
+            let source_ratio = project.items[index].photo.aspect_ratio.max(0.1);
+            let mismatch = (tile_ratio.max(0.01) / source_ratio).ln().abs();
+            let weight = if project.keep_photo_aspect { 5.0 } else { 1.0 };
+            let extreme_penalty = if project.keep_photo_aspect && mismatch > 1.2 {
+                100.0
+            } else {
+                0.0
+            };
+            weight * (mismatch * mismatch + (mismatch - 0.8).max(0.0) * 2.0) + extreme_penalty
+        })
+        .sum()
 }
 
 pub(crate) fn next_unit(state: &mut u64) -> f32 {
@@ -141,6 +241,7 @@ mod tests {
             round_corners: false,
             corner_radius: 0.06,
             layout,
+            keep_photo_aspect: true,
             spacing: 0.02,
             seed,
             items: (0..count)
@@ -233,6 +334,116 @@ mod tests {
                 .iter()
                 .all(|other| !overlaps(item, other)));
         }
+    }
+
+    #[test]
+    fn mosaic_portrait_fills_the_usable_canvas() {
+        let mut project = project(7, LayoutKind::Mosaic, 7);
+        project.orientation = CollageOrientation::Portrait;
+        project.relayout();
+        assert!(inside(&project));
+        assert!(
+            project
+                .items
+                .iter()
+                .map(|item| item.width * item.height)
+                .sum::<f32>()
+                > 0.80
+        );
+    }
+
+    #[test]
+    fn mosaic_landscape_has_packed_varied_tiles() {
+        let mut project = project(6, LayoutKind::Mosaic, 7);
+        project.keep_photo_aspect = false;
+        project.relayout();
+        assert!(inside(&project));
+        assert!(
+            project
+                .items
+                .iter()
+                .map(|item| item.width * item.height)
+                .sum::<f32>()
+                > 0.80
+        );
+        let widths = project
+            .items
+            .iter()
+            .map(|item| item.width)
+            .collect::<Vec<_>>();
+        let heights = project
+            .items
+            .iter()
+            .map(|item| item.height)
+            .collect::<Vec<_>>();
+        assert!(
+            widths.iter().copied().fold(0.0, f32::max)
+                > widths.iter().copied().fold(f32::INFINITY, f32::min) * 1.4
+                || heights.iter().copied().fold(0.0, f32::max)
+                    > heights.iter().copied().fold(f32::INFINITY, f32::min) * 1.4
+        );
+    }
+
+    #[test]
+    fn mosaic_mixed_photo_aspects_stays_packed() {
+        let mut project = project(8, LayoutKind::Mosaic, 7);
+        for (index, item) in project.items.iter_mut().enumerate() {
+            item.photo.aspect_ratio = [0.55, 1.9, 0.75, 1.4, 2.1, 0.65, 1.1, 1.8][index];
+        }
+        project.relayout();
+        assert!(inside(&project));
+        for (index, item) in project.items.iter().enumerate() {
+            assert!(project.items[index + 1..]
+                .iter()
+                .all(|other| !overlaps(item, other)));
+        }
+    }
+
+    #[test]
+    fn mosaic_mixed_photo_crop_cost_is_bounded() {
+        let mut project = project(8, LayoutKind::Mosaic, 7);
+        for (index, item) in project.items.iter_mut().enumerate() {
+            item.photo.aspect_ratio = [0.55, 1.9, 0.75, 1.4, 2.1, 0.65, 1.1, 1.8][index];
+        }
+        project.relayout();
+        let canvas_ratio = project.effective_aspect_ratio();
+        let costs = project.items.iter().map(|item| {
+            let tile_ratio = item.width * canvas_ratio / item.height.max(0.01);
+            let mismatch = (tile_ratio / item.photo.aspect_ratio.max(0.1)).ln().abs();
+            mismatch * mismatch + (mismatch - 0.8).max(0.0) * 2.0
+        });
+        let costs = costs.collect::<Vec<_>>();
+        assert!((costs.iter().sum::<f32>() / costs.len() as f32) < 1.0);
+        assert!(costs.iter().all(|cost| *cost < 2.5));
+    }
+
+    #[test]
+    fn keeping_photo_aspect_reduces_average_mismatch() {
+        let mut normal = project(8, LayoutKind::Mosaic, 7);
+        let aspects = [0.55, 1.9, 0.75, 1.4, 2.1, 0.65, 1.1, 1.8];
+        for (item, aspect) in normal.items.iter_mut().zip(aspects) {
+            item.photo.aspect_ratio = aspect;
+        }
+        normal.keep_photo_aspect = false;
+        normal.relayout();
+
+        let mut kept = normal.clone();
+        kept.keep_photo_aspect = true;
+        kept.relayout();
+
+        let average_mismatch = |project: &CollageProject| {
+            project
+                .items
+                .iter()
+                .map(|item| {
+                    let tile_ratio =
+                        item.width * project.effective_aspect_ratio() / item.height.max(0.01);
+                    (tile_ratio / item.photo.aspect_ratio.max(0.1)).ln().abs()
+                })
+                .sum::<f32>()
+                / project.items.len() as f32
+        };
+        assert!(average_mismatch(&kept) < average_mismatch(&normal));
     }
 
     #[test]

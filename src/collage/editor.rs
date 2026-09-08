@@ -152,16 +152,38 @@ pub fn build(
     layout_controls.append(&layout);
     layout_controls.append(&orientation);
     controls.append(&layout_controls);
+    let keep_photo_aspect = gtk::CheckButton::with_label("Keep photo aspect ratio");
+    keep_photo_aspect.set_active(project.borrow().keep_photo_aspect);
+    keep_photo_aspect.set_visible(layout.selected() == 0);
+    controls.append(&keep_photo_aspect);
     {
         let project = project.clone();
         let refresh = refresh.clone();
+        let keep_photo_aspect = keep_photo_aspect.clone();
         layout.connect_selected_notify(move |dropdown| {
-            project.borrow_mut().layout = match dropdown.selected() {
+            let layout_kind = match dropdown.selected() {
                 0 => LayoutKind::Mosaic,
                 _ => LayoutKind::Grid,
             };
-            project.borrow_mut().relayout();
+            let mut project_data = project.borrow_mut();
+            project_data.layout = layout_kind;
+            project_data.relayout();
+            drop(project_data);
+            keep_photo_aspect.set_visible(layout_kind == LayoutKind::Mosaic);
             refresh();
+        });
+    }
+    {
+        let project = project.clone();
+        let refresh = refresh.clone();
+        keep_photo_aspect.connect_toggled(move |button| {
+            let mut project_data = project.borrow_mut();
+            project_data.keep_photo_aspect = button.is_active();
+            if project_data.layout == LayoutKind::Mosaic {
+                project_data.relayout();
+                drop(project_data);
+                refresh();
+            }
         });
     }
 
@@ -395,7 +417,13 @@ fn refresh_preview(
         let tile = gtk::Overlay::new();
         tile.set_child(Some(&inner));
         let picture = gtk::Picture::new();
-        picture.set_content_fit(gtk::ContentFit::Cover);
+        picture.set_content_fit(
+            if project_data.layout == LayoutKind::Mosaic && project_data.keep_photo_aspect {
+                gtk::ContentFit::Contain
+            } else {
+                gtk::ContentFit::Cover
+            },
+        );
         picture.set_can_shrink(true);
         picture.set_hexpand(true);
         picture.set_vexpand(true);

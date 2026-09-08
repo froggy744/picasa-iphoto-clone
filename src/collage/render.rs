@@ -71,7 +71,12 @@ pub fn export(project: &CollageProject, destination: &Path) -> Result<()> {
             DynamicImage::ImageRgba8(decoded),
             item.photo.library_rotation,
         );
-        let mut image = cover(source, target_width, target_height);
+        let mut image =
+            if project.layout == super::model::LayoutKind::Mosaic && project.keep_photo_aspect {
+                fit_inside_tile(source, target_width, target_height, background)
+            } else {
+                cover(source, target_width, target_height)
+            };
         if item.rotation.abs() > 0.1 {
             image = rotate(&image, item.rotation.to_radians(), background);
         }
@@ -213,4 +218,21 @@ fn cover(source: DynamicImage, width: u32, height: u32) -> RgbaImage {
     image
         .resize_to_fill(width, height, image::imageops::FilterType::Lanczos3)
         .to_rgba8()
+}
+
+fn fit_inside_tile(
+    source: DynamicImage,
+    width: u32,
+    height: u32,
+    background: image::Rgba<u8>,
+) -> RgbaImage {
+    let width = width.max(1);
+    let height = height.max(1);
+    let image = source.resize(width, height, image::imageops::FilterType::Lanczos3);
+    let image = image.to_rgba8();
+    let mut output = RgbaImage::from_pixel(width, height, background);
+    let x = (width.saturating_sub(image.width()) / 2) as i64;
+    let y = (height.saturating_sub(image.height()) / 2) as i64;
+    image::imageops::overlay(&mut output, &image, x, y);
+    output
 }

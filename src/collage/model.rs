@@ -92,6 +92,7 @@ pub struct CollageProject {
     pub round_corners: bool,
     pub corner_radius: f32,
     pub layout: LayoutKind,
+    pub keep_photo_aspect: bool,
     pub spacing: f32,
     pub seed: u64,
     pub items: Vec<CollageItem>,
@@ -110,6 +111,7 @@ impl CollageProject {
             round_corners: false,
             corner_radius: 0.06,
             layout: LayoutKind::Grid,
+            keep_photo_aspect: true,
             spacing: 0.018,
             seed: 1,
             items: photos
