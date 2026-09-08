@@ -145,16 +145,24 @@ pub fn build(
 
     add_section_label(&controls, "Layout");
     let layout = gtk::DropDown::from_strings(&["Mosaic", "Smart Mosaic", "Grid"]);
-    layout.set_selected(1);
+    layout.set_selected(match project.borrow().layout {
+        LayoutKind::Mosaic => 0,
+        LayoutKind::SmartMosaic => 1,
+        LayoutKind::Grid => 2,
+    });
     let orientation = gtk::DropDown::from_strings(&["Landscape", "Portrait"]);
-    orientation.set_selected(0);
+    orientation
+        .set_selected(matches!(project.borrow().orientation, CollageOrientation::Portrait) as u32);
     let layout_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     layout_controls.append(&layout);
     layout_controls.append(&orientation);
     controls.append(&layout_controls);
     let keep_photo_aspect = gtk::CheckButton::with_label("Keep photo aspect ratio");
     keep_photo_aspect.set_active(project.borrow().keep_photo_aspect);
-    keep_photo_aspect.set_visible(layout.selected() == 0);
+    keep_photo_aspect.set_visible(matches!(
+        project.borrow().layout,
+        LayoutKind::Mosaic | LayoutKind::SmartMosaic
+    ));
     controls.append(&keep_photo_aspect);
     {
         let project = project.clone();
@@ -196,10 +204,16 @@ pub fn build(
 
     add_section_label(&controls, "Aspect ratio");
     let aspect = gtk::DropDown::from_strings(&["Square 1:1", "4:3", "3:2", "16:9", "Custom"]);
-    aspect.set_selected(3);
+    aspect.set_selected(match project.borrow().aspect {
+        AspectRatio::Square => 0,
+        AspectRatio::FourThree => 1,
+        AspectRatio::ThreeTwo => 2,
+        AspectRatio::SixteenNine => 3,
+        AspectRatio::Custom => 4,
+    });
     controls.append(&aspect);
     let custom_width = gtk::SpinButton::with_range(1.0, 10_000.0, 1.0);
-    custom_width.set_value(16.0);
+    custom_width.set_value((project.borrow().custom_aspect * 9.0).round().max(1.0) as f64);
     custom_width.set_numeric(true);
     custom_width.set_digits(0);
     custom_width.set_tooltip_text(Some("Custom aspect width"));
@@ -212,7 +226,7 @@ pub fn build(
     custom_ratio.append(&custom_width);
     custom_ratio.append(&gtk::Label::new(Some(":")));
     custom_ratio.append(&custom_height);
-    custom_ratio.set_visible(false);
+    custom_ratio.set_visible(project.borrow().aspect == AspectRatio::Custom);
     controls.append(&custom_ratio);
     {
         let project = project.clone();
@@ -284,6 +298,11 @@ pub fn build(
 
     add_section_label(&controls, "Background");
     let background = gtk::DropDown::from_strings(&["White", "Black", "Light Grey"]);
+    background.set_selected(match project.borrow().background {
+        Background::White => 0,
+        Background::Black => 1,
+        Background::LightGray => 2,
+    });
     controls.append(&background);
     {
         let project = project.clone();
@@ -347,9 +366,60 @@ pub fn build(
         });
     }
 
+    let reset_defaults = gtk::Button::with_label("Reset defaults");
+    reset_defaults.set_width_request(120);
+    reset_defaults.set_height_request(30);
+    reset_defaults.set_tooltip_text(Some("Restore default collage settings"));
+    {
+        let project = project.clone();
+        let layout = layout.clone();
+        let orientation = orientation.clone();
+        let aspect = aspect.clone();
+        let custom_width = custom_width.clone();
+        let custom_height = custom_height.clone();
+        let background = background.clone();
+        let round_corners = round_corners.clone();
+        let corner_radius = corner_radius.clone();
+        let spacing = spacing.clone();
+        let aspect_frame = aspect_frame.clone();
+        let custom_ratio = custom_ratio.clone();
+        reset_defaults.connect_clicked(move |_| {
+            {
+                let mut project_data = project.borrow_mut();
+                project_data.layout = LayoutKind::SmartMosaic;
+                project_data.orientation = CollageOrientation::Landscape;
+                project_data.aspect = AspectRatio::SixteenNine;
+                project_data.custom_aspect = 16.0 / 9.0;
+                project_data.background = Background::White;
+                project_data.round_corners = false;
+                project_data.corner_radius = 0.06;
+                project_data.spacing = 0.018;
+                project_data.keep_photo_aspect = true;
+            }
+            layout.set_selected(1);
+            orientation.set_selected(0);
+            aspect.set_selected(3);
+            custom_width.set_value(16.0);
+            custom_height.set_value(9.0);
+            background.set_selected(0);
+            round_corners.set_active(false);
+            corner_radius.set_value(0.06);
+            spacing.set_value(0.018);
+            custom_ratio.set_visible(false);
+            aspect_frame.set_ratio(16.0 / 9.0);
+            let mut project_data = project.borrow_mut();
+            project_data.relayout();
+        });
+    }
+
     let shuffle = gtk::Button::with_label("Shuffle");
     shuffle.set_sensitive(true);
-    controls.append(&shuffle);
+    shuffle.set_hexpand(true);
+    let reset_shuffle_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    reset_shuffle_row.set_hexpand(true);
+    reset_shuffle_row.append(&reset_defaults);
+    reset_shuffle_row.append(&shuffle);
+    controls.append(&reset_shuffle_row);
     {
         let project = project.clone();
         let refresh = refresh.clone();
