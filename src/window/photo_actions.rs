@@ -509,6 +509,7 @@ fn refresh_photo_actions_grid(context: &PhotoActionContext) {
     let Some(gallery) = context.gallery.borrow().upgrade() else {
         return;
     };
+    gallery.refresh_favorite_indicators();
     let search = context.search.borrow().clone();
     refresh_grid(
         &context.connection,

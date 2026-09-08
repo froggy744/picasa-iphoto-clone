@@ -82,6 +82,7 @@ const STANDARD_GTK4_CSS: &str = r#"
     button.clear-action-button:hover { color: #1f2325; background: #f0f0f0; border-color: #777777; }
     button.clear-action-button:active { background: #d2d2d2; }
     .favorite-btn.active, .favorite-btn.active image { color: #e01b24; }
+    .favorite-badge { color: #e01b24; }
     .one-to-one-btn:checked { color: @accent_fg_color; background: @accent_bg_color; }
     .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; }
     .section-count { font-size: 13px; }
@@ -199,6 +200,7 @@ fn apply_gallery_grouping(
     sort: PhotoSort,
     mode: grid::GroupMode,
 ) {
+    gallery.set_favorite_indicators_visible(filter != sidebar::SidebarFilter::Favorites);
     // Grouping is a Library feature: Photos, Favourites and Recently Added.
     // Albums and individual folders deliberately keep the ordinary flat grid.
     if is_library_filter(filter) && mode != grid::GroupMode::None {

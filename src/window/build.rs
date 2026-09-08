@@ -1340,6 +1340,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             return;
         }
         photo.set_favorite(favorite);
+        gallery_for_favorite.refresh_favorite_indicators();
 
         if !favorite && filter_for_favorite.get() == sidebar::SidebarFilter::Favorites {
             lightbox_for_favorite.close();
@@ -2860,6 +2861,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         button.clear-action-button:hover { color: #1f2325; background: #f0f0f0; border-color: #777777; }\
         button.clear-action-button:active { background: #d2d2d2; }\
         .favorite-btn.active, .favorite-btn.active image { color: #ff453a; }\
+        .favorite-badge { color: #ff453a; }\
         .one-to-one-btn:checked { color: #ffffff; background: #4d9fdb; }\
         .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; color: #a9a9a9; }\
         .section-count { font-size: 13px; color: #bcbcbc; }\

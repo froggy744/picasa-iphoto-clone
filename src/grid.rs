@@ -45,6 +45,7 @@ mod square_tile {
     pub struct SquareTile {
         pub width: Cell<i32>,
         pub height: Cell<i32>,
+        pub favorite_indicators_visible: Cell<bool>,
         pub photo: RefCell<Option<PhotoObject>>,
     }
 
@@ -109,6 +110,7 @@ impl SquareTile {
         let tile: Self = glib::Object::new();
         tile.imp().width.set(width.max(1));
         tile.imp().height.set(height.max(1));
+        tile.imp().favorite_indicators_visible.set(true);
         child.as_ref().set_parent(&tile);
         tile
     }
@@ -122,6 +124,25 @@ impl SquareTile {
         self.imp().width.set(width);
         self.imp().height.set(height);
         self.queue_resize();
+    }
+
+    fn set_favorite_indicator_visible(&self, visible: bool) {
+        self.imp().favorite_indicators_visible.set(visible);
+        self.refresh_favorite_indicator();
+    }
+
+    fn refresh_favorite_indicator(&self) {
+        let Some(photo) = self.imp().photo.borrow().clone() else {
+            return;
+        };
+        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+        if let Some(badge) = overlay_image(&frame, "favorite-badge") {
+            badge.set_visible(
+                self.imp().favorite_indicators_visible.get() && photo.favorite(),
+            );
+        }
     }
 
     fn bind_photo(&self, photo: &PhotoObject) {
@@ -188,6 +209,7 @@ impl SquareTile {
             return;
         };
         let placeholder = picture.next_sibling().and_downcast::<gtk::Image>();
+        let favorite_badge = overlay_image(&frame, "favorite-badge");
         let unavailable_badge = frame.last_child().and_downcast::<gtk::Button>();
         let cached = photo.cached_thumbnail_path();
         let thumbnail_available = if probe_thumbnail {
@@ -235,6 +257,11 @@ impl SquareTile {
                 None
             });
         }
+        if let Some(badge) = favorite_badge {
+            badge.set_visible(
+                self.imp().favorite_indicators_visible.get() && photo.favorite(),
+            );
+        }
         if let Some(placeholder) = placeholder {
             placeholder.set_visible(existing.is_none());
         }
@@ -244,6 +271,19 @@ impl SquareTile {
             picture.add_css_class("missing-thumbnail");
         }
     }
+}
+
+fn overlay_image(frame: &gtk::Overlay, css_class: &str) -> Option<gtk::Image> {
+    let mut child = frame.first_child();
+    while let Some(current) = child {
+        if let Some(image) = current.downcast_ref::<gtk::Image>() {
+            if image.has_css_class(css_class) {
+                return Some(image.clone());
+            }
+        }
+        child = current.next_sibling();
+    }
+    None
 }
 
 /// Nikon RAW thumbnails can contain a letterboxed embedded preview whose
@@ -485,6 +525,16 @@ impl Gallery {
             checkmark.set_margin_end(8);
             checkmark.add_css_class("selection-badge");
             frame.add_overlay(&checkmark);
+
+            let favorite_badge = gtk::Image::from_icon_name("emote-love-symbolic");
+            favorite_badge.set_pixel_size(18);
+            favorite_badge.set_halign(gtk::Align::End);
+            favorite_badge.set_valign(gtk::Align::End);
+            favorite_badge.set_margin_bottom(8);
+            favorite_badge.set_margin_end(8);
+            favorite_badge.add_css_class("favorite-badge");
+            favorite_badge.set_visible(false);
+            frame.add_overlay(&favorite_badge);
 
             let unavailable_badge = gtk::Button::with_label("!");
             unavailable_badge.set_halign(gtk::Align::Start);
@@ -800,6 +850,22 @@ impl Gallery {
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.refresh_thumbnail();
+        }
+    }
+
+    pub fn set_favorite_indicators_visible(&self, visible: bool) {
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            tile.set_favorite_indicator_visible(visible);
+        }
+    }
+
+    pub fn refresh_favorite_indicators(&self) {
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            tile.refresh_favorite_indicator();
         }
     }
 
