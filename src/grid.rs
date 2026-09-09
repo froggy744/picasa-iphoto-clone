@@ -618,14 +618,15 @@ impl Gallery {
         // GridView children are recycled and the pointer may land on any
         // descendant of a tile. Use one stable controller on GridView, pick
         // the tile under the pointer, and only claim the event after a bound
-        // photo has been identified. This also preserves an existing
-        // multi-selection by claiming the secondary-button sequence before
-        // GridView's selection controller handles it.
+        // photo has been identified. Select an unselected clicked photo so
+        // context-menu actions and focus restoration target that thumbnail.
+        // Right-clicking within an existing multi-selection preserves it.
         let right_click = gtk::GestureClick::new();
         right_click.set_button(3);
         right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
         let context_menu_for_grid = context_menu.clone();
         let root_for_context = root.clone();
+        let selection_for_context = selection.clone();
         right_click.connect_pressed(move |gesture, _, x, y| {
             let Some(picked) = root_for_context.pick(x, y, gtk::PickFlags::DEFAULT) else {
                 return;
@@ -637,6 +638,14 @@ impl Gallery {
                 return;
             };
             let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+                return;
+            };
+            let Some(position) = (0..selection_for_context.n_items()).find(|position| {
+                selection_for_context
+                    .item(*position)
+                    .and_downcast::<PhotoObject>()
+                    .is_some_and(|item| item.id() == photo.id())
+            }) else {
                 return;
             };
             let Some(frame) = tile.first_child().and_downcast::<gtk::Overlay>() else {
@@ -652,6 +661,17 @@ impl Gallery {
                 .unwrap_or_else(|| gtk::graphene::Point::new(0.0, 0.0));
 
             gesture.set_state(gtk::EventSequenceState::Claimed);
+            if !selection_for_context.is_selected(position) {
+                selection_for_context.select_item(position, true);
+            }
+            let scroll = gtk::ScrollInfo::new();
+            scroll.set_enable_horizontal(false);
+            scroll.set_enable_vertical(false);
+            root_for_context.scroll_to(
+                position,
+                gtk::ListScrollFlags::FOCUS,
+                Some(scroll),
+            );
             (context_menu_for_grid)(
                 photo,
                 frame_widget,
@@ -920,6 +940,16 @@ impl Gallery {
         }
     }
 
+    pub fn update_favorites(&self, ids: &[i64], favorite: bool) {
+        let ids = ids.iter().copied().collect::<HashSet<_>>();
+        for photo in self.current_photos.borrow().iter() {
+            if ids.contains(&photo.id()) {
+                photo.set_favorite(favorite);
+            }
+        }
+        self.refresh_favorite_indicators();
+    }
+
     pub fn refresh_thumbnails_for_paths(&self, paths: &[std::path::PathBuf]) {
         if paths.is_empty() {
             return;
@@ -1149,6 +1179,42 @@ impl Gallery {
         gtk::BitsetIter::init_first(&selected).map(|(_, position)| position as usize)
     }
 
+    pub fn scroll_position(&self) -> f64 {
+        self.root
+            .vadjustment()
+            .map(|adjustment| adjustment.value())
+            .unwrap_or_else(|| self.last_scroll_y.get())
+    }
+
+    pub fn restore_view(&self, photo_id: i64, scroll_y: f64) {
+        let Some(position) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .position(|photo| photo.id() == photo_id)
+        else {
+            return;
+        };
+        let root = self.root.clone();
+        let selection = self.selection.clone();
+        glib::idle_add_local_once(move || {
+            selection.select_item(position as u32, true);
+            let scroll = gtk::ScrollInfo::new();
+            scroll.set_enable_horizontal(false);
+            scroll.set_enable_vertical(false);
+            root.scroll_to(
+                position as u32,
+                gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                Some(scroll),
+            );
+            if let Some(adjustment) = root.vadjustment() {
+                let upper = (adjustment.upper() - adjustment.page_size())
+                    .max(adjustment.lower());
+                adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+            }
+        });
+    }
+
     pub fn is_at_vertical_boundary(&self, direction: i32) -> bool {
         let Some(position) = self.selected_position() else {
             return false;
@@ -1175,7 +1241,19 @@ impl Gallery {
         {
             photo.set_edit_recipe(recipe.to_string());
         }
-        self.refresh_thumbnails();
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            let matches = tile
+                .imp()
+                .photo
+                .borrow()
+                .as_ref()
+                .is_some_and(|photo| photo.id() == id);
+            if matches {
+                tile.refresh_thumbnail();
+            }
+        }
     }
 
     pub fn update_dimensions(&self, id: i64, width: Option<i64>, height: Option<i64>) {

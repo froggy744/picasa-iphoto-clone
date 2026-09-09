@@ -1384,6 +1384,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 return;
             };
             lightbox.close();
+            let library_scroll_y = gallery.scroll_position();
             while let Some(child) = edit_page.first_child() {
                 edit_page.remove(&child);
             }
@@ -1392,27 +1393,21 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let close = {
                 let main_stack = main_stack.clone();
                 let one_to_one = info.one_to_one.clone();
+                let gallery = gallery.clone();
                 Rc::new(move || {
                     one_to_one.set_active(false);
                     main_stack.set_visible_child_name("photos");
+                    gallery.restore_view(id, library_scroll_y);
                 }) as Rc<dyn Fn()>
             };
             let saved = {
                 let gallery = gallery.clone();
-                let gallery_for_focus = gallery.clone();
                 let selected_photo = selected_photo.clone();
                 let info = info.clone();
                 Rc::new(move |photo: crate::photo_object::PhotoObject| {
                     gallery.update_edit_recipe(photo.id(), &photo.edit_recipe());
                     selected_photo.replace(Some(photo.clone()));
                     info.set_photo(Some(&photo));
-                    let photo_id = photo.id();
-                    gallery.select_photo(photo_id);
-                    let gallery_for_focus = gallery_for_focus.clone();
-                    glib::idle_add_local_once(move || {
-                        gallery_for_focus.select_photo(photo_id);
-                        gallery_for_focus.root.grab_focus();
-                    });
                 }) as Rc<dyn Fn(crate::photo_object::PhotoObject)>
             };
             let editor = crate::edit::build_editor(
@@ -1433,8 +1428,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let info_favorite = info.clone();
     let gallery_for_favorite = gallery.clone();
     let filter_for_favorite = filter.clone();
-    let search_for_favorite = search_text.clone();
-    let sort_for_favorite = sort.clone();
     let lightbox_for_favorite = lightbox.clone();
     let sidebar_refresh_for_favorite = availability_refresh.clone();
     let sidebar_for_favorite = sidebar_for_unavailable.clone();
@@ -1450,23 +1443,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             return;
         }
         photo.set_favorite(favorite);
-        gallery_for_favorite.refresh_favorite_indicators();
-
-        if !favorite && filter_for_favorite.get() == sidebar::SidebarFilter::Favorites {
-            lightbox_for_favorite.close();
-            selected_for_favorite.replace(None);
-            info_favorite.set_photo(None);
-            let search = search_for_favorite.borrow().clone();
-            refresh_grid(
-                &db_for_favorite,
-                filter_for_favorite.get(),
-                &search,
-                sort_for_favorite.get(),
-                &gallery_for_favorite,
-            );
-        } else {
-            info_favorite.set_photo(Some(&photo));
-        }
+        gallery_for_favorite.update_favorites(&[photo.id()], favorite);
+        info_favorite.set_photo(Some(&photo));
         if let Some(sidebar) = sidebar_for_favorite.borrow().as_ref().cloned() {
             if let Ok(counts) = db::sidebar_counts(&db_for_favorite.borrow()) {
                 sidebar::refresh_library_counts(
@@ -1476,7 +1454,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 );
             }
         }
-
         if std::env::var_os("PICASA_TRACE").is_some() {
             eprintln!(
                 "UI TRACE photo_favourite_changed id={} favourite={} filter={:?} lightbox_visible={}",

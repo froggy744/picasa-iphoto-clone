@@ -37,29 +37,6 @@ fn photo_context_menu_contains(widget: &gtk::Widget) -> bool {
     })
 }
 
-fn restore_grid_focus_after_context_menu(context: &PhotoActionContext) {
-    if context
-        .lightbox
-        .upgrade()
-        .is_some_and(|lightbox| lightbox.root.is_visible())
-    {
-        return;
-    }
-    let Some(gallery) = context.gallery.borrow().upgrade() else {
-        return;
-    };
-    glib::idle_add_local_once(move || {
-        if let Some(position) = gallery.selected_position() {
-            gallery.root.scroll_to(
-                position as u32,
-                gtk::ListScrollFlags::FOCUS,
-                None,
-            );
-        }
-        gallery.root.grab_focus();
-    });
-}
-
 fn show_photo_context_menu(
     photo: crate::photo_object::PhotoObject,
     anchor: gtk::Widget,
@@ -181,6 +158,7 @@ fn show_photo_context_menu(
 
     let add_action = |text: &str| {
         let button = gtk::Button::new();
+        button.set_focus_on_click(false);
         button.set_halign(gtk::Align::Fill);
         button.set_height_request(28);
         button.set_margin_top(0);
@@ -239,6 +217,7 @@ fn show_photo_context_menu(
     let selection_provider: Rc<dyn Fn() -> Vec<i64>> =
         Rc::new(move || selection_for_provider.clone());
     let add_to_album = gtk::MenuButton::new();
+    add_to_album.set_focus_on_click(false);
     add_to_album.set_direction(gtk::ArrowType::None);
     add_to_album.set_halign(gtk::Align::Fill);
     add_to_album.add_css_class("flat");
@@ -296,12 +275,10 @@ fn show_photo_context_menu(
     {
         let clipboard = context.edit_clipboard.clone();
         let recipe = clicked_recipe.clone();
-        let copy_context = context.clone();
         let dismiss_menu = dismiss_menu.clone();
         copy_edits.connect_clicked(move |_| {
             clipboard.replace(Some(recipe.clone()));
             dismiss_menu();
-            restore_grid_focus_after_context_menu(&copy_context);
         });
     }
     {
@@ -335,7 +312,6 @@ fn show_photo_context_menu(
                 lightbox.refresh_current();
             }
             dismiss_menu();
-            restore_grid_focus_after_context_menu(&paste_context);
         });
     }
     {
@@ -383,11 +359,10 @@ fn show_photo_context_menu(
     favorite.connect_clicked(move |button| {
         let target = !favorite_photo.favorite();
         let ids = favorite_selection();
-        let count = ids.len();
-        for id in ids {
+        for id in &ids {
             if let Err(error) = db::set_favorite(
                 &favorite_context.connection.borrow(),
-                id,
+                *id,
                 target,
             ) {
                 show_error(
@@ -412,7 +387,9 @@ fn show_photo_context_menu(
             favorite_context.info.set_photo(Some(&favorite_photo));
         }
         dismiss_menu_for_favorite();
-        refresh_photo_actions_grid(&favorite_context);
+        if let Some(gallery) = favorite_context.gallery.borrow().upgrade() {
+            gallery.update_favorites(&ids, target);
+        }
         refresh_favorite_sidebar(&favorite_context);
     });
 
