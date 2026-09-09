@@ -506,19 +506,58 @@ fn show_photo_context_menu(
     });
 
     let wallpaper_path = photo.path();
+    let wallpaper_rotation = photo.rotation();
+    let wallpaper_recipe = photo.edit_recipe();
+    let wallpaper_width = photo.width();
+    let wallpaper_height = photo.height();
+    let wallpaper_mtime = photo.mtime();
+    let wallpaper_size = photo.size_bytes();
     let wallpaper_window = context.window.clone();
     let dismiss_menu_for_wallpaper = dismiss_menu.clone();
     wallpaper.connect_clicked(move |_| {
         dismiss_menu_for_wallpaper();
-        if let Err(error) = set_as_wallpaper(&wallpaper_path) {
-            if let Some(window) = wallpaper_window.upgrade() {
-                show_error(
-                    window.upcast_ref(),
-                    "Could not set wallpaper",
-                    &error.to_string(),
-                );
+        let path = wallpaper_path.clone();
+        let recipe = wallpaper_recipe.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = prepare_wallpaper(
+                &path,
+                wallpaper_rotation,
+                &recipe,
+                wallpaper_width,
+                wallpaper_height,
+                wallpaper_mtime,
+                wallpaper_size,
+            )
+            .map_err(|error| error.to_string());
+            let _ = sender.send(result);
+        });
+
+        let window = wallpaper_window.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+            match receiver.try_recv() {
+                Ok(Ok(path)) => {
+                    if let Err(error) = apply_wallpaper(&path) {
+                        if let Some(window) = window.upgrade() {
+                            show_error(
+                                window.upcast_ref(),
+                                "Could not set wallpaper",
+                                &error.to_string(),
+                            );
+                        }
+                    }
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(error)) => {
+                    if let Some(window) = window.upgrade() {
+                        show_error(window.upcast_ref(), "Could not set wallpaper", &error);
+                    }
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
             }
-        }
+        });
     });
 
     // These actions are not implemented yet; do not present them as working
@@ -650,7 +689,15 @@ fn open_file_in_manager(file: &gio::File) {
     }
 }
 
-fn set_as_wallpaper(reference: &str) -> anyhow::Result<()> {
+fn prepare_wallpaper(
+    reference: &str,
+    rotation: i32,
+    edit_recipe: &str,
+    source_width: i64,
+    source_height: i64,
+    mtime: i64,
+    size_bytes: i64,
+) -> anyhow::Result<std::path::PathBuf> {
     let local_path = crate::source::materialize(reference)?;
     let local_path = std::fs::canonicalize(&local_path).map_err(|error| {
         anyhow::anyhow!(
@@ -658,7 +705,45 @@ fn set_as_wallpaper(reference: &str) -> anyhow::Result<()> {
             local_path.to_string_lossy()
         )
     })?;
-    let uri = gio::File::for_path(local_path).uri();
+
+    let recipe = crate::edit::EditRecipe::decode(edit_recipe);
+    let direct_file = rotation.rem_euclid(360) == 0
+        && recipe.is_default()
+        && crate::image_format::for_path(reference)
+            .is_some_and(|format| matches!(format.id, "jpeg" | "png"));
+    if direct_file {
+        return Ok(local_path);
+    }
+
+    let directory = crate::thumbnail::cache_dir()?.join("wallpaper");
+    std::fs::create_dir_all(&directory)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"picasa-wallpaper-v1\0");
+    hasher.update(reference.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(mtime.to_string().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(size_bytes.to_string().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(rotation.to_string().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(edit_recipe.as_bytes());
+    let destination = directory.join(format!("{}.jpg", hasher.finalize().to_hex()));
+    if !destination.is_file() {
+        let image = crate::edit::render::render_for_export(
+            reference,
+            rotation,
+            edit_recipe,
+            source_width,
+            source_height,
+        )?;
+        crate::edit::render::save_jpeg(&image, &destination, 95)?;
+    }
+    Ok(destination)
+}
+
+fn apply_wallpaper(path: &std::path::Path) -> anyhow::Result<()> {
+    let uri = gio::File::for_path(path).uri();
 
     let schema_source = gio::SettingsSchemaSource::default()
         .ok_or_else(|| anyhow::anyhow!("Desktop wallpaper settings are unavailable."))?;
