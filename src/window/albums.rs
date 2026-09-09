@@ -41,6 +41,7 @@ fn configure_infobar_album_menu(button: &gtk::MenuButton, context: PhotoActionCo
         context,
         selected_ids,
         Rc::new(|| {}),
+        Rc::new(|| {}),
     )));
 }
 
@@ -48,6 +49,7 @@ fn build_album_popover(
     context: PhotoActionContext,
     selected_ids: Rc<dyn Fn() -> Vec<i64>>,
     dismiss_parent: Rc<dyn Fn()>,
+    after_existing_album: Rc<dyn Fn()>,
 ) -> gtk::Popover {
     let popover = gtk::Popover::new();
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -89,6 +91,7 @@ fn build_album_popover(
         let item_selection = selected_ids.clone();
         let popover_for_item = popover.clone();
         let dismiss_parent_for_item = dismiss_parent.clone();
+        let after_existing_album_for_item = after_existing_album.clone();
         item.connect_clicked(move |_| {
             popover_for_item.popdown();
             dismiss_parent_for_item();
@@ -107,6 +110,7 @@ fn build_album_popover(
                 return;
             }
             refresh_album_ui(&item_context);
+            after_existing_album_for_item();
         });
         menu.append(&item);
     }

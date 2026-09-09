@@ -1215,6 +1215,29 @@ impl Gallery {
         });
     }
 
+    pub fn restore_context_view(&self, photo_id: i64, scroll_y: f64) {
+        let Some(position) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .position(|photo| photo.id() == photo_id)
+        else {
+            return;
+        };
+        let root = self.root.clone();
+        glib::idle_add_local_once(move || {
+            let scroll = gtk::ScrollInfo::new();
+            scroll.set_enable_horizontal(false);
+            scroll.set_enable_vertical(false);
+            root.scroll_to(position as u32, gtk::ListScrollFlags::FOCUS, Some(scroll));
+            if let Some(adjustment) = root.vadjustment() {
+                let upper = (adjustment.upper() - adjustment.page_size())
+                    .max(adjustment.lower());
+                adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+            }
+        });
+    }
+
     pub fn is_at_vertical_boundary(&self, direction: i32) -> bool {
         let Some(position) = self.selected_position() else {
             return false;

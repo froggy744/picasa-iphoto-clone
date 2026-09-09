@@ -232,12 +232,26 @@ fn show_photo_context_menu(
     album_row.append(&album_label);
     album_row.append(&album_arrow);
     add_to_album.set_child(Some(&album_row));
+    let album_scroll_y = context
+        .gallery
+        .borrow()
+        .upgrade()
+        .map(|gallery| gallery.scroll_position())
+        .unwrap_or_default();
+    let album_photo_id = photo.id();
+    let album_gallery = context.gallery.clone();
+    let restore_album_view: Rc<dyn Fn()> = Rc::new(move || {
+        if let Some(gallery) = album_gallery.borrow().upgrade() {
+            gallery.restore_context_view(album_photo_id, album_scroll_y);
+        }
+    });
     let album_popover = build_album_popover(
         context.clone(),
         selection_provider.clone(),
         {
             dismiss_menu.clone()
         },
+        restore_album_view,
     );
     // This submenu lives inside a mouse context menu. Keep its transient
     // buttons from becoming the window focus: removing a focused submenu and
