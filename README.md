@@ -102,7 +102,7 @@ PIC's editing tools are aimed at the kind of quick changes many people used Pica
 - Adjust spacing and background
 - Export the finished collage as a high-resolution image
 
-<img src="samples/ZoomIN.png" alt="PIC Thumbsnail Zoom In Mode" width="900">
+<img src="samples/ZoomIN.jpg" alt="PIC Thumbsnail Zoom In Mode" width="900">
 
 ## Fast photo viewing
 
@@ -141,7 +141,7 @@ Existing unchanged photos are not needlessly rebuilt every time a folder is refr
 
 ---
 
-<img src="samples/ZoomOUT.png" alt="PIC Thumbsnail Zoom Out Mode" width="900">
+<img src="samples/ZoomOUT.jpg" alt="PIC Thumbsnail Zoom Out Mode" width="900">
 
 # Image Format Support
 
