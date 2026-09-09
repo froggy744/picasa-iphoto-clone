@@ -38,7 +38,7 @@ Editing is integrated into the normal photo workflow instead of feeling like a s
 
 ## Collage Creator
 
-<img src="samples/Screenshot-Collage2.png" alt="PIC Collage Creator" width="900">
+<img src="samples/Collage2.png" alt="PIC Collage Creator" width="900">
 
 PIC also includes a built-in **Collage Creator**.
 
@@ -62,6 +62,9 @@ Collages can be shuffled until you find an arrangement you like and then exporte
 - Pan around large photos while viewing at full size
 - Rotate photos
 - See photo date, camera, dimensions and file size at a glance
+
+<img src="samples/Offline%Indicators.jpg" alt="PIC Collage Creator" width="900">
+
 
 ## Organise without changing your folder structure
 
@@ -98,6 +101,8 @@ PIC's editing tools are aimed at the kind of quick changes many people used Pica
 - Change collage aspect/orientation
 - Adjust spacing and background
 - Export the finished collage as a high-resolution image
+
+<img src="samples/Grid%Zoom%In.jpg" alt="PIC Grid Zoom In" 
 
 ## Fast photo viewing
 
