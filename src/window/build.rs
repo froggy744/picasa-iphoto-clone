@@ -412,8 +412,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         },
         {
             let action_context = action_context.clone();
-            move |photo, anchor| {
-                show_photo_context_menu(photo, anchor, action_context.clone(), 0.0, 0.0);
+            move |photo, anchor, x, y| {
+                show_photo_context_menu(photo, anchor, action_context.clone(), x, y);
             }
         },
         {
