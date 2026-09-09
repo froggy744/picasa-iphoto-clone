@@ -231,6 +231,8 @@ PIC was started because I wanted this kind of photo application on **Linux**, an
 
 I have also experimented with a Windows build, but Windows support is still secondary and should currently be considered a work in progress.
 
+<img src="samples/search.jpg" alt="PIC Search Mode" width="900">
+
 ---
 
 # Running PIC from Source
