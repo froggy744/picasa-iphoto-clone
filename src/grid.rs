@@ -429,7 +429,6 @@ pub struct Gallery {
     store: gio::ListStore,
     selection: gtk::MultiSelection,
     collage_selection_mode: Rc<Cell<bool>>,
-    collage_click: gtk::GestureClick,
     collage_selected_ids: Rc<RefCell<HashSet<i64>>>,
     current_columns: Rc<Cell<u32>>,
     last_layout_width: Rc<Cell<i32>>,
@@ -450,13 +449,13 @@ impl Gallery {
         initial_tile_width: i32,
         selected: impl Fn(Option<PhotoObject>) + 'static,
         activate: impl Fn(Vec<PhotoObject>, usize) + 'static,
-        context_menu: impl Fn(PhotoObject, gtk::Widget, f64, f64) + 'static,
+        context_menu: impl Fn(PhotoObject, gtk::Widget) + 'static,
         unavailable: impl Fn(PhotoObject, gtk::Widget) + 'static,
         on_zoom_changed: impl Fn(i32) + 'static,
     ) -> Self {
         let selected: Rc<dyn Fn(Option<PhotoObject>)> = Rc::new(selected);
         let activate: Rc<dyn Fn(Vec<PhotoObject>, usize)> = Rc::new(activate);
-        let context_menu: Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)> = Rc::new(context_menu);
+        let context_menu: Rc<dyn Fn(PhotoObject, gtk::Widget)> = Rc::new(context_menu);
         let unavailable: Rc<dyn Fn(PhotoObject, gtk::Widget)> = Rc::new(unavailable);
         let on_zoom_changed: Rc<dyn Fn(i32)> = Rc::new(on_zoom_changed);
         let store = gio::ListStore::new::<PhotoObject>();
@@ -500,6 +499,7 @@ impl Gallery {
         let factory = gtk::SignalListItemFactory::new();
         let tile_width_for_setup = tile_width.clone();
         let tile_height_for_setup = tile_height.clone();
+        let context_menu_for_setup = context_menu.clone();
         let unavailable_for_setup = unavailable.clone();
         factory.connect_setup(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -590,6 +590,22 @@ impl Gallery {
             tile.set_valign(gtk::Align::Start);
             list_item.set_child(Some(&tile));
 
+            let right_click = gtk::GestureClick::new();
+            right_click.set_button(3);
+            right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let list_item_for_context = list_item.clone();
+            let context_menu = context_menu_for_setup.clone();
+            let frame_for_context = frame.clone();
+            right_click.connect_pressed(move |gesture, _, _, _| {
+                // Claim the secondary-button event before invoking the menu.
+                // Otherwise GtkGridView's selection controller can collapse
+                // an existing multi-selection to the clicked item first.
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                if let Some(photo) = list_item_for_context.item().and_downcast::<PhotoObject>() {
+                    (context_menu)(photo, frame_for_context.clone().upcast());
+                }
+            });
+            frame.add_controller(right_click);
         });
 
         factory.connect_bind(|_, object| {
@@ -616,77 +632,13 @@ impl Gallery {
         root.set_valign(gtk::Align::Fill);
         root.add_css_class("section-grid");
 
-        // Keep one secondary-button controller on the stable GridView rather
-        // than installing controllers on recycled list-item frames.
-        let right_click = gtk::GestureClick::new();
-        right_click.set_button(3);
-        right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let context_menu_for_root = context_menu.clone();
-        let root_for_context = root.clone();
-        right_click.connect_pressed(move |gesture, _, x, y| {
-            let Some(picked) = root_for_context.pick(x, y, gtk::PickFlags::DEFAULT) else {
-                return;
-            };
-            let tile = picked
-                .clone()
-                .downcast::<SquareTile>()
-                .ok()
-                .or_else(|| {
-                    picked
-                        .ancestor(SquareTile::static_type())
-                        .and_downcast::<SquareTile>()
-                });
-            let Some(tile) = tile else {
-                return;
-            };
-            let Some(photo) = tile.imp().photo.borrow().clone() else {
-                return;
-            };
-            let Some(frame) = tile.first_child().and_downcast::<gtk::Overlay>() else {
-                return;
-            };
-            let Some(frame_point) = root_for_context.compute_point(
-                &frame,
-                &gtk::graphene::Point::new(x as f32, y as f32),
-            ) else {
-                return;
-            };
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "UI TRACE grid_right_click_received button=3 x={:.1} y={:.1} picked={} photo_id={} frame=({:.1},{:.1})",
-                    x,
-                    y,
-                    picked.type_().name(),
-                    photo.id(),
-                    frame_point.x(),
-                    frame_point.y()
-                );
-                eprintln!(
-                    "UI TRACE grid_context_menu photo_id={} x_local={:.1} y_local={:.1}",
-                    photo.id(),
-                    frame_point.x(),
-                    frame_point.y()
-                );
-            }
-            // Claim only after a real photo tile was identified, preserving
-            // the current multi-selection for context-menu actions.
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            (context_menu_for_root)(
-                photo,
-                frame.upcast::<gtk::Widget>(),
-                frame_point.x() as f64,
-                frame_point.y() as f64,
-            );
-        });
-        root.add_controller(right_click);
-
         // Handle Add Photos clicks on the GridView itself, before the
         // built-in GridView selection controller sees them. This makes the
         // mode behave like a checklist: each click toggles one item and does
         // not collapse the other selected photos.
         let collage_click = gtk::GestureClick::new();
         collage_click.set_button(1);
-        collage_click.set_propagation_phase(gtk::PropagationPhase::None);
+        collage_click.set_propagation_phase(gtk::PropagationPhase::Capture);
         let mode = collage_selection_mode.clone();
         let selection_for_click = selection.clone();
         let collage_selected_ids_for_click = collage_selected_ids.clone();
@@ -724,7 +676,7 @@ impl Gallery {
                 selection_for_click.select_item(position, false);
             }
         });
-        root.add_controller(collage_click.clone());
+        root.add_controller(collage_click);
 
         let selected_for_signal = selected.clone();
         selection.connect_selection_changed(move |selection, _, _| {
@@ -751,14 +703,6 @@ impl Gallery {
                 .iter()
                 .position(|photo| photo.id() == activated.id())
                 .unwrap_or(position as usize);
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "UI TRACE grid_activate position={} photo_id={} index={}",
-                    position,
-                    activated.id(),
-                    index
-                );
-            }
             (activate)(photos, index);
         });
 
@@ -771,7 +715,6 @@ impl Gallery {
             store,
             selection,
             collage_selection_mode,
-            collage_click,
             collage_selected_ids,
             current_columns: Rc::new(Cell::new(5)),
             last_layout_width: Rc::new(Cell::new(0)),
@@ -1242,11 +1185,6 @@ impl Gallery {
 
     pub fn set_collage_selection_mode(&self, active: bool) {
         self.collage_selection_mode.set(active);
-        self.collage_click.set_propagation_phase(if active {
-            gtk::PropagationPhase::Capture
-        } else {
-            gtk::PropagationPhase::None
-        });
         if !active {
             self.collage_selected_ids.borrow_mut().clear();
         }

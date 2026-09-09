@@ -58,13 +58,15 @@ impl Lightbox {
         let pan_drag = gtk::GestureDrag::new();
         pan_drag.set_button(1);
         pan_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+        pan_drag.set_exclusive(true);
 
         let one_to_one_for_drag_begin = one_to_one_active.clone();
         let viewport_for_drag_begin = picture_viewport.clone();
         let drag_start_h_begin = drag_start_h.clone();
         let drag_start_v_begin = drag_start_v.clone();
-        pan_drag.connect_drag_begin(move |_, x, y| {
+        pan_drag.connect_drag_begin(move |gesture, x, y| {
             if !one_to_one_for_drag_begin.get() {
+                gesture.set_state(gtk::EventSequenceState::Denied);
                 return;
             }
 
@@ -76,6 +78,7 @@ impl Lightbox {
                 && y < viewport_for_drag_begin.height() as f64;
 
             if !inside_viewport {
+                gesture.set_state(gtk::EventSequenceState::Denied);
                 return;
             }
 
@@ -153,29 +156,14 @@ impl Lightbox {
         let root_for_double = root.clone();
         let generation_for_double = load_generation.clone();
         let cancel_for_double = decode_cancel.clone();
-        let root_for_double_trace = root.clone();
-        let one_to_one_for_double_trace = one_to_one_active.clone();
-        double_click.connect_pressed(move |gesture, n_press, x, y| {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                let picked = root_for_double_trace
-                    .pick(x, y, gtk::PickFlags::DEFAULT)
-                    .map(|widget| widget.type_().name().to_string())
-                    .unwrap_or_else(|| "<none>".to_string());
-                eprintln!(
-                    "UI TRACE lightbox_double_click button=1 n_press={} x={:.1} y={:.1} picked={} one_to_one={}",
-                    n_press,
-                    x,
-                    y,
-                    picked,
-                    one_to_one_for_double_trace.get()
-                );
-            }
+        double_click.connect_pressed(move |gesture, n_press, _, _| {
             if n_press == 2 {
                 generation_for_double.set(generation_for_double.get().wrapping_add(1));
                 if let Some(active) = cancel_for_double.borrow_mut().take() {
                     active.store(true, Ordering::Release);
                 }
                 root_for_double.set_visible(false);
+                gesture.set_state(gtk::EventSequenceState::Claimed);
             }
         });
         // Double-click stays on the picture. The pan gesture is attached to
@@ -203,30 +191,14 @@ impl Lightbox {
 
         let outside_click = gtk::GestureClick::new();
         outside_click.set_button(1);
-        outside_click.set_propagation_phase(gtk::PropagationPhase::Bubble);
+        outside_click.set_propagation_phase(gtk::PropagationPhase::Capture);
 
         let root_for_outside = root.clone();
         let picture_for_outside = picture.clone();
-        let one_to_one_for_outside = one_to_one_active.clone();
 
         outside_click.connect_pressed(move |gesture, n_press, x, y| {
             if n_press > 1 {
                 return;
-            }
-
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                let picked = root_for_outside
-                    .pick(x, y, gtk::PickFlags::DEFAULT)
-                    .map(|widget| widget.type_().name().to_string())
-                    .unwrap_or_else(|| "<none>".to_string());
-                eprintln!(
-                    "UI TRACE lightbox_left_click button=1 n_press={} x={:.1} y={:.1} picked={} one_to_one={}",
-                    n_press,
-                    x,
-                    y,
-                    picked,
-                    one_to_one_for_outside.get()
-                );
             }
 
             let inside_picture = picture_for_outside
@@ -246,39 +218,19 @@ impl Lightbox {
         });
         root.add_controller(outside_click);
 
-        // Capture secondary clicks on the whole lightbox. The root is also
-        // the stable popover parent, while coordinates remain root-local.
+        // Capture secondary clicks on the actual full-size event surface.
+        // The ScrolledWindow fills the lightbox and remains under the pointer
+        // over the image as well as the centre/bottom-centre area. Using the
+        // same widget for both the gesture coordinates and popover anchor
+        // avoids the dead zones caused by root/overlay coordinate mismatch.
         let right_click = gtk::GestureClick::new();
         right_click.set_button(3);
         right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
         let photos_for_context = photos.clone();
         let index_for_context = index.clone();
         let context_menu_for_context = context_menu.clone();
-        let root_for_context = root.clone();
-        let picture_viewport_for_context = picture_viewport.clone();
-        let picture_for_context = picture.clone();
-        let one_to_one_for_context = one_to_one_active.clone();
-        right_click.connect_released(move |gesture, _, x, y| {
-            // Finish/claim the secondary-button sequence before creating the
-            // context popover. Opening a GtkPopover synchronously from the
-            // capture-phase press/release dispatch can cause the same gesture
-            // sequence to cancel the newly-created popup on some GTK4 paths.
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                let picked = root_for_context
-                    .pick(x, y, gtk::PickFlags::DEFAULT)
-                    .map(|widget| widget.type_().name().to_string())
-                    .unwrap_or_else(|| "<none>".to_string());
-                eprintln!(
-                    "UI TRACE lightbox_right_click_received button=3 x={x:.1} y={y:.1} root={}x{} mapped={} picked={} one_to_one={}",
-                    root_for_context.width(),
-                    root_for_context.height(),
-                    root_for_context.is_mapped(),
-                    picked,
-                    one_to_one_for_context.get()
-                );
-            }
+        let viewport_for_context = picture_viewport.clone();
+        right_click.connect_pressed(move |gesture, _, x, y| {
             let Some(photo) = photos_for_context
                 .borrow()
                 .get(index_for_context.get())
@@ -289,94 +241,23 @@ impl Lightbox {
             if let Some(handler) = context_menu_for_context.borrow().as_ref() {
                 if std::env::var_os("PICASA_TRACE").is_some() {
                     eprintln!(
-                        "UI TRACE lightbox_context_menu index={} path={} root=({}, {})",
+                        "UI TRACE lightbox_context_menu index={} path={} viewport=({}, {})",
                         index_for_context.get(),
                         photo.path(),
                         x,
                         y
                     );
                 }
-                // Anchor the menu to the actual widget under the photo whenever
-                // the pointer is inside the displayed GtkPicture. This mirrors
-                // the reliable grid path, where the popover is parented to the
-                // concrete photo widget rather than a scrolling/container widget.
-                let root_point = gtk::graphene::Point::new(x as f32, y as f32);
-                let picture_point = root_for_context.compute_point(&picture_for_context, &root_point);
-                let inside_picture = picture_point.as_ref().is_some_and(|point| {
-                    point.x() >= 0.0
-                        && point.y() >= 0.0
-                        && point.x() < picture_for_context.width() as f32
-                        && point.y() < picture_for_context.height() as f32
-                });
-
-                if inside_picture {
-                    let point = picture_point.expect("picture point checked above");
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "UI TRACE lightbox_context_menu_anchor anchor=GtkPicture local=({:.1},{:.1}) size={}x{} mapped={}",
-                            point.x(),
-                            point.y(),
-                            picture_for_context.width(),
-                            picture_for_context.height(),
-                            picture_for_context.is_mapped()
-                        );
-                    }
-                    let photo = photo.clone();
-                    let anchor = picture_for_context.clone().upcast::<gtk::Widget>();
-                    let local_x = point.x() as f64;
-                    let local_y = point.y() as f64;
-                    let context_menu = context_menu_for_context.clone();
-                    glib::idle_add_local_once(move || {
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!(
-                                "UI TRACE lightbox_context_menu_idle anchor=GtkPicture local=({local_x:.1},{local_y:.1})"
-                            );
-                        }
-                        if let Some(handler) = context_menu.borrow().as_ref() {
-                            handler(photo, anchor, local_x, local_y);
-                        }
-                    });
-                } else {
-                    let Some(viewport_point) = root_for_context.compute_point(
-                        &picture_viewport_for_context,
-                        &root_point,
-                    ) else {
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!(
-                                "UI TRACE lightbox_context_menu_coordinate_failed root=({x:.1},{y:.1})"
-                            );
-                        }
-                        return;
-                    };
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "UI TRACE lightbox_context_menu_anchor anchor=GtkScrolledWindow local=({:.1},{:.1}) size={}x{} mapped={}",
-                            viewport_point.x(),
-                            viewport_point.y(),
-                            picture_viewport_for_context.width(),
-                            picture_viewport_for_context.height(),
-                            picture_viewport_for_context.is_mapped()
-                        );
-                    }
-                    let anchor = picture_viewport_for_context.clone().upcast::<gtk::Widget>();
-                    let local_x = viewport_point.x() as f64;
-                    let local_y = viewport_point.y() as f64;
-                    let context_menu = context_menu_for_context.clone();
-                    glib::idle_add_local_once(move || {
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!(
-                                "UI TRACE lightbox_context_menu_idle anchor=GtkScrolledWindow local=({local_x:.1},{local_y:.1})"
-                            );
-                        }
-                        if let Some(handler) = context_menu.borrow().as_ref() {
-                            handler(photo, anchor, local_x, local_y);
-                        }
-                    });
-                }
+                handler(
+                    photo,
+                    viewport_for_context.clone().upcast::<gtk::Widget>(),
+                    x,
+                    y,
+                );
                 gesture.set_state(gtk::EventSequenceState::Claimed);
             }
         });
-        root.add_controller(right_click);
+        picture_viewport.add_controller(right_click);
 
         let picture_for_fit = picture.clone();
         let photos_for_fit = photos.clone();

@@ -10,6 +10,10 @@ fn show_photo_context_menu(
     let popover = gtk::Popover::new();
     popover.set_has_arrow(true);
     popover.set_parent(&anchor);
+    // Grid context menus use pointer-local coordinates. Lightbox passes a
+    // negative sentinel because its capture controller lives on a different
+    // widget than the stable popover anchor; in that case let GTK position the
+    // popover relative to the viewport instead of giving it invalid coords.
     if x >= 0.0 && y >= 0.0 {
         popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
             x.round() as i32,
@@ -20,7 +24,11 @@ fn show_photo_context_menu(
     }
 
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    // This popover is anchored to a virtualized GridView tile. In that
+    // context GTK can otherwise map the popover before it has calculated a
+    // natural size, resulting in a visible but unusable 0x0 menu.
     menu.set_width_request(340);
+    menu.set_height_request(1);
     menu.set_margin_top(6);
     menu.set_margin_bottom(6);
     menu.set_margin_start(6);
@@ -353,7 +361,25 @@ fn show_photo_context_menu(
     });
 
     popover.set_child(Some(&menu));
-    popover.popup();
+    // GridView tiles are virtualized. Defer opening until the selection and
+    // allocation pass triggered by the secondary-button event has completed;
+    // otherwise the popover can remain unmapped at 0x0.
+    let popover_for_popup = popover.clone();
+    glib::idle_add_local_once(move || {
+        popover_for_popup.popup();
+    });
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        let popover = popover.clone();
+        glib::idle_add_local_once(move || {
+            eprintln!(
+                "UI TRACE photo_context_menu visible={} mapped={} size={}x{}",
+                popover.is_visible(),
+                popover.is_mapped(),
+                popover.width(),
+                popover.height()
+            );
+        });
+    }
 }
 
 fn open_file_in_manager(file: &gio::File) {
