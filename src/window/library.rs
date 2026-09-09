@@ -188,7 +188,10 @@ fn confirm_action(
 
 #[cfg(test)]
 mod photo_action_tests {
-    use super::{sort_photos, valid_file_name, PhotoSort, SortDirection, SortField};
+    use super::{
+        sort_photos, valid_file_name, wallpaper_layout, PhotoSort, SortDirection, SortField,
+        WallpaperLayout,
+    };
     use crate::db::Photo;
 
     #[test]
@@ -197,6 +200,22 @@ mod photo_action_tests {
         assert!(!valid_file_name(""));
         assert!(!valid_file_name(".."));
         assert!(!valid_file_name("folder/photo.jpg"));
+    }
+
+    #[test]
+    fn wallpaper_layout_preserves_portraits_and_panorama_width() {
+        assert_eq!(
+            wallpaper_layout(3000, 4500, 1920, 1080),
+            WallpaperLayout::PortraitBlur
+        );
+        assert_eq!(
+            wallpaper_layout(6000, 4000, 1920, 1080),
+            WallpaperLayout::Cover
+        );
+        assert_eq!(
+            wallpaper_layout(8000, 2000, 1920, 1080),
+            WallpaperLayout::PanoramaBlur
+        );
     }
 
     fn photo(

@@ -516,6 +516,21 @@ fn show_photo_context_menu(
     let dismiss_menu_for_wallpaper = dismiss_menu.clone();
     wallpaper.connect_clicked(move |_| {
         dismiss_menu_for_wallpaper();
+        let target_size = wallpaper_window
+            .upgrade()
+            .and_then(|window| {
+                let surface = window.surface()?;
+                let display = gtk::prelude::WidgetExt::display(&window);
+                let monitor = display.monitor_at_surface(&surface)?;
+                let geometry = monitor.geometry();
+                let scale = f64::from(monitor.scale_factor().max(1));
+                Some((
+                    (f64::from(geometry.width()) * scale).round() as u32,
+                    (f64::from(geometry.height()) * scale).round() as u32,
+                ))
+            })
+            .filter(|(width, height)| *width > 0 && *height > 0)
+            .unwrap_or((1920, 1080));
         let path = wallpaper_path.clone();
         let recipe = wallpaper_recipe.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -528,6 +543,7 @@ fn show_photo_context_menu(
                 wallpaper_height,
                 wallpaper_mtime,
                 wallpaper_size,
+                target_size,
             )
             .map_err(|error| error.to_string());
             let _ = sender.send(result);
@@ -697,28 +713,20 @@ fn prepare_wallpaper(
     source_height: i64,
     mtime: i64,
     size_bytes: i64,
+    target_size: (u32, u32),
 ) -> anyhow::Result<std::path::PathBuf> {
-    let local_path = crate::source::materialize(reference)?;
-    let local_path = std::fs::canonicalize(&local_path).map_err(|error| {
+    let source_path = crate::source::materialize(reference)?;
+    std::fs::canonicalize(&source_path).map_err(|error| {
         anyhow::anyhow!(
             "Could not access {}: {error}",
-            local_path.to_string_lossy()
+            source_path.to_string_lossy()
         )
     })?;
-
-    let recipe = crate::edit::EditRecipe::decode(edit_recipe);
-    let direct_file = rotation.rem_euclid(360) == 0
-        && recipe.is_default()
-        && crate::image_format::for_path(reference)
-            .is_some_and(|format| matches!(format.id, "jpeg" | "png"));
-    if direct_file {
-        return Ok(local_path);
-    }
 
     let directory = crate::thumbnail::cache_dir()?.join("wallpaper");
     std::fs::create_dir_all(&directory)?;
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"picasa-wallpaper-v1\0");
+    hasher.update(b"picasa-wallpaper-v2-fit\0");
     hasher.update(reference.as_bytes());
     hasher.update(b"\0");
     hasher.update(mtime.to_string().as_bytes());
@@ -728,6 +736,10 @@ fn prepare_wallpaper(
     hasher.update(rotation.to_string().as_bytes());
     hasher.update(b"\0");
     hasher.update(edit_recipe.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(target_size.0.to_string().as_bytes());
+    hasher.update(b"x");
+    hasher.update(target_size.1.to_string().as_bytes());
     let destination = directory.join(format!("{}.jpg", hasher.finalize().to_hex()));
     if !destination.is_file() {
         let image = crate::edit::render::render_for_export(
@@ -737,9 +749,101 @@ fn prepare_wallpaper(
             source_width,
             source_height,
         )?;
-        crate::edit::render::save_jpeg(&image, &destination, 95)?;
+        let wallpaper = compose_wallpaper(image, target_size.0, target_size.1);
+        crate::edit::render::save_jpeg(&wallpaper, &destination, 95)?;
     }
     Ok(destination)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WallpaperLayout {
+    Cover,
+    PortraitBlur,
+    PanoramaBlur,
+}
+
+fn wallpaper_layout(
+    source_width: u32,
+    source_height: u32,
+    target_width: u32,
+    target_height: u32,
+) -> WallpaperLayout {
+    if source_width < source_height {
+        return WallpaperLayout::PortraitBlur;
+    }
+    let source_ratio = source_width as f64 / source_height.max(1) as f64;
+    let target_ratio = target_width.max(1) as f64 / target_height.max(1) as f64;
+    if source_ratio > target_ratio * 1.45 {
+        WallpaperLayout::PanoramaBlur
+    } else {
+        WallpaperLayout::Cover
+    }
+}
+
+fn compose_wallpaper(
+    source: image::RgbaImage,
+    target_width: u32,
+    target_height: u32,
+) -> image::RgbaImage {
+    let target_width = target_width.max(1);
+    let target_height = target_height.max(1);
+    let layout = wallpaper_layout(
+        source.width(),
+        source.height(),
+        target_width,
+        target_height,
+    );
+    let source = image::DynamicImage::ImageRgba8(source);
+    if layout == WallpaperLayout::Cover {
+        return source
+            .resize_to_fill(
+                target_width,
+                target_height,
+                image::imageops::FilterType::Lanczos3,
+            )
+            .to_rgba8();
+    }
+
+    let preview_width = (target_width / 8).max(1);
+    let preview_height = (target_height / 8).max(1);
+    let background = source
+        .resize_to_fill(
+            preview_width,
+            preview_height,
+            image::imageops::FilterType::Triangle,
+        )
+        .to_rgba8();
+    let background = image::imageops::blur(&background, 8.0);
+    let mut canvas = image::DynamicImage::ImageRgba8(background)
+        .resize_exact(
+            target_width,
+            target_height,
+            image::imageops::FilterType::CatmullRom,
+        )
+        .to_rgba8();
+
+    let foreground = if layout == WallpaperLayout::PanoramaBlur {
+        // Keep at least 80% of a panorama. A small centre crop reduces the
+        // letterbox area while retaining the wide composition.
+        let crop_width = ((source.width() as f64 * 0.8).round() as u32)
+            .max(1)
+            .min(source.width());
+        let left = source.width().saturating_sub(crop_width) / 2;
+        source.crop_imm(left, 0, crop_width, source.height())
+    } else {
+        source
+    };
+    let foreground = foreground
+        .resize(
+            target_width,
+            target_height,
+            image::imageops::FilterType::Lanczos3,
+        )
+        .to_rgba8();
+    let x = i64::from(target_width.saturating_sub(foreground.width()) / 2);
+    let y = i64::from(target_height.saturating_sub(foreground.height()) / 2);
+    image::imageops::overlay(&mut canvas, &foreground, x, y);
+    canvas
 }
 
 fn apply_wallpaper(path: &std::path::Path) -> anyhow::Result<()> {
@@ -762,6 +866,9 @@ fn apply_wallpaper(path: &std::path::Path) -> anyhow::Result<()> {
     settings.set_string("picture-uri", uri.as_str())?;
     if schema.has_key("picture-uri-dark") {
         settings.set_string("picture-uri-dark", uri.as_str())?;
+    }
+    if schema.has_key("picture-options") {
+        settings.set_string("picture-options", "zoom")?;
     }
     gio::Settings::sync();
     Ok(())
