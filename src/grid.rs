@@ -208,6 +208,7 @@ impl SquareTile {
         };
         let placeholder = picture.next_sibling().and_downcast::<gtk::Image>();
         let favorite_badge = overlay_image(&frame, "favorite-badge");
+        let edited_badge = overlay_image(&frame, "edited-badge");
         let unavailable_badge = frame.last_child().and_downcast::<gtk::Button>();
         let cached = photo.cached_thumbnail_path();
         let thumbnail_available = if probe_thumbnail {
@@ -258,6 +259,11 @@ impl SquareTile {
         }
         if let Some(badge) = favorite_badge {
             badge.set_visible(self.imp().favorite_indicators_visible.get() && photo.favorite());
+        }
+        if let Some(badge) = edited_badge {
+            let edited = !crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default();
+            badge.set_visible(edited);
+            badge.set_tooltip_text(if edited { Some("Edited") } else { None });
         }
         if let Some(placeholder) = placeholder {
             placeholder.set_visible(existing.is_none());
@@ -540,6 +546,17 @@ impl Gallery {
             favorite_badge.add_css_class("favorite-badge");
             favorite_badge.set_visible(false);
             frame.add_overlay(&favorite_badge);
+
+            let edited_badge = gtk::Image::from_icon_name("document-edit-symbolic");
+            edited_badge.set_pixel_size(18);
+            edited_badge.set_halign(gtk::Align::Start);
+            edited_badge.set_valign(gtk::Align::End);
+            edited_badge.set_margin_bottom(8);
+            edited_badge.set_margin_start(8);
+            edited_badge.add_css_class("edited-badge");
+            edited_badge.set_tooltip_text(Some("Edited"));
+            edited_badge.set_visible(false);
+            frame.add_overlay(&edited_badge);
 
             let unavailable_badge = gtk::Button::with_label("!");
             unavailable_badge.set_halign(gtk::Align::Start);

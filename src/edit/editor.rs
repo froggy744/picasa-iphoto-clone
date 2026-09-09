@@ -12,11 +12,31 @@ use super::model::{CropRect, EditRecipe, EditSession};
 pub struct EditEditor {
     pub root: gtk::Box,
     photo_id: i64,
+    zoom_in_action: Rc<dyn Fn()>,
+    zoom_out_action: Rc<dyn Fn()>,
+    fit_action: Rc<dyn Fn()>,
+    one_to_one_action: Rc<dyn Fn(bool)>,
 }
 
 impl EditEditor {
     pub fn photo_id(&self) -> i64 {
         self.photo_id
+    }
+
+    pub fn zoom_in(&self) {
+        (self.zoom_in_action)();
+    }
+
+    pub fn zoom_out(&self) {
+        (self.zoom_out_action)();
+    }
+
+    pub fn fit(&self) {
+        (self.fit_action)();
+    }
+
+    pub fn set_one_to_one(&self, enabled: bool) {
+        (self.one_to_one_action)(enabled);
     }
 }
 
@@ -87,6 +107,14 @@ pub fn build(
     let redo = gtk::Button::from_icon_name("edit-redo-symbolic");
     redo.set_tooltip_text(Some("Redo"));
     toolbar.append(&redo);
+
+    let toolbar_zoom_out = gtk::Button::with_label("−");
+    toolbar_zoom_out.set_tooltip_text(Some("Zoom out"));
+    toolbar.append(&toolbar_zoom_out);
+    let toolbar_zoom_in = gtk::Button::with_label("+");
+    toolbar_zoom_in.set_tooltip_text(Some("Zoom in"));
+    toolbar.append(&toolbar_zoom_in);
+
     let reset = gtk::Button::with_label("Reset");
     reset.set_tooltip_text(Some("Reset all edits to the original"));
     toolbar.append(&reset);
@@ -144,7 +172,13 @@ pub fn build(
     picture.set_can_shrink(true);
     picture.set_hexpand(true);
     picture.set_vexpand(true);
-    preview_area.set_child(Some(&picture));
+
+    let picture_scroll = gtk::ScrolledWindow::new();
+    picture_scroll.set_hexpand(true);
+    picture_scroll.set_vexpand(true);
+    picture_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+    picture_scroll.set_child(Some(&picture));
+    preview_area.set_child(Some(&picture_scroll));
 
     let crop_overlay = gtk::DrawingArea::new();
     crop_overlay.set_hexpand(true);
@@ -172,8 +206,63 @@ pub fn build(
     let syncing = Rc::new(Cell::new(false));
     let pending_crop = Rc::new(RefCell::new(CropRect::default()));
     let preview_dimensions = Rc::new(Cell::new((1i32, 1i32)));
+    // 0.0 means fit-to-canvas. Positive values are display zoom factors.
+    let canvas_zoom = Rc::new(Cell::new(0.0f64));
+    let native_one_to_one = Rc::new(Cell::new(false));
     let generation = Rc::new(Cell::new(0u64));
     let preview_debounce: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+
+    // Drag-to-pan for the editing canvas. Keep this controller on the
+    // stationary ScrolledWindow so pointer coordinates do not move with the
+    // image. Crop mode sits in an overlay above it and therefore keeps its own
+    // drag gesture without conflict.
+    let pan_origin_h = Rc::new(Cell::new(0.0f64));
+    let pan_origin_v = Rc::new(Cell::new(0.0f64));
+    let pan_drag = gtk::GestureDrag::new();
+    pan_drag.set_button(1);
+    pan_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let picture_scroll = picture_scroll.clone();
+        let pan_origin_h = pan_origin_h.clone();
+        let pan_origin_v = pan_origin_v.clone();
+        pan_drag.connect_drag_begin(move |_, _, _| {
+            let hadj = picture_scroll.hadjustment();
+            let vadj = picture_scroll.vadjustment();
+            pan_origin_h.set(hadj.value());
+            pan_origin_v.set(vadj.value());
+            if hadj.upper() > hadj.page_size() || vadj.upper() > vadj.page_size() {
+                picture_scroll.set_cursor_from_name(Some("grabbing"));
+            }
+        });
+    }
+    {
+        let picture_scroll = picture_scroll.clone();
+        let pan_origin_h = pan_origin_h.clone();
+        let pan_origin_v = pan_origin_v.clone();
+        pan_drag.connect_drag_update(move |_, dx, dy| {
+            let hadj = picture_scroll.hadjustment();
+            let vadj = picture_scroll.vadjustment();
+            let max_h = (hadj.upper() - hadj.page_size()).max(hadj.lower());
+            let max_v = (vadj.upper() - vadj.page_size()).max(vadj.lower());
+            hadj.set_value((pan_origin_h.get() - dx).clamp(hadj.lower(), max_h));
+            vadj.set_value((pan_origin_v.get() - dy).clamp(vadj.lower(), max_v));
+        });
+    }
+    {
+        let picture_scroll = picture_scroll.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let native_one_to_one = native_one_to_one.clone();
+        pan_drag.connect_drag_end(move |_, _, _| {
+            picture_scroll.set_cursor_from_name(
+                if native_one_to_one.get() || canvas_zoom.get() > 1.0 {
+                    Some("grab")
+                } else {
+                    None
+                },
+            );
+        });
+    }
+    picture_scroll.add_controller(pan_drag);
 
     add_section_label(&tools_box, "Basic fixes");
     let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -260,6 +349,9 @@ pub fn build(
         let photo = photo.clone();
         let generation = generation.clone();
         let preview_dimensions = preview_dimensions.clone();
+        let picture_scroll = picture_scroll.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let native_one_to_one = native_one_to_one.clone();
         let crop_overlay = crop_overlay.clone();
         let preview_debounce = preview_debounce.clone();
         Rc::new(move || {
@@ -273,6 +365,9 @@ pub fn build(
             let photo = photo.clone();
             let generation = generation.clone();
             let preview_dimensions = preview_dimensions.clone();
+            let picture_scroll = picture_scroll.clone();
+            let canvas_zoom = canvas_zoom.clone();
+            let native_one_to_one = native_one_to_one.clone();
             let crop_overlay = crop_overlay.clone();
             let preview_debounce_for_fire = preview_debounce.clone();
             let source = glib::timeout_add_local_once(Duration::from_millis(90), move || {
@@ -282,6 +377,17 @@ pub fn build(
                 let recipe = session.borrow().recipe.clone();
                 let path = photo.path();
                 let rotation = photo.rotation();
+                let native = native_one_to_one.get();
+                let (target_width, target_height) = if native {
+                    let mut width = if photo.width() > 0 { photo.width() as u32 } else { u32::MAX };
+                    let mut height = if photo.height() > 0 { photo.height() as u32 } else { u32::MAX };
+                    if matches!(rotation.rem_euclid(360), 90 | 270) {
+                        std::mem::swap(&mut width, &mut height);
+                    }
+                    (width, height)
+                } else {
+                    (1800, 1400)
+                };
                 busy.set_visible(true);
                 busy.start();
                 status.set_text("Rendering preview…");
@@ -291,8 +397,8 @@ pub fn build(
                         &path,
                         rotation,
                         &recipe,
-                        1800,
-                        1400,
+                        target_width,
+                        target_height,
                     )
                     .map(|image| (image.width(), image.height(), image.into_raw()));
                     let _ = sender.send(result);
@@ -302,6 +408,8 @@ pub fn build(
                 let busy = busy.clone();
                 let generation = generation.clone();
                 let preview_dimensions = preview_dimensions.clone();
+                let picture_scroll = picture_scroll.clone();
+                let canvas_zoom = canvas_zoom.clone();
                 let crop_overlay = crop_overlay.clone();
                 glib::timeout_add_local(Duration::from_millis(25), move || {
                     let Ok(result) = receiver.try_recv() else {
@@ -324,6 +432,20 @@ pub fn build(
                             );
                             preview_dimensions.set((width as i32, height as i32));
                             picture.set_paintable(Some(&texture));
+                            if native {
+                                apply_canvas_one_to_one(
+                                    &picture,
+                                    &picture_scroll,
+                                    (width as i32, height as i32),
+                                );
+                            } else {
+                                apply_canvas_zoom(
+                                    &picture,
+                                    &picture_scroll,
+                                    (width as i32, height as i32),
+                                    canvas_zoom.get(),
+                                );
+                            }
                             status.set_text(&format!("{} × {} preview", width, height));
                             crop_overlay.queue_draw();
                         }
@@ -409,12 +531,33 @@ pub fn build(
         let update_history_buttons = update_history_buttons.clone();
         let crop_overlay = crop_overlay.clone();
         let crop_actions = crop_actions.clone();
+        let picture = picture.clone();
+        let picture_scroll = picture_scroll.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let native_one_to_one = native_one_to_one.clone();
         reset.connect_clicked(move |_| {
             session.borrow_mut().reset();
             sync_controls();
             update_history_buttons();
             crop_overlay.set_visible(false);
             crop_actions.set_visible(false);
+
+            // Reset is a full editor reset: edits plus canvas presentation.
+            // Return to Fit and clear any native 1:1 / panned viewport state.
+            native_one_to_one.set(false);
+            canvas_zoom.set(0.0);
+            apply_canvas_zoom(
+                &picture,
+                &picture_scroll,
+                preview_dimensions.get(),
+                0.0,
+            );
+            let hadj = picture_scroll.hadjustment();
+            let vadj = picture_scroll.vadjustment();
+            hadj.set_value(hadj.lower());
+            vadj.set_value(vadj.lower());
+
             queue_preview();
         });
     }
@@ -424,11 +567,100 @@ pub fn build(
         tools_toggle.connect_toggled(move |button| tools_scroll.set_visible(button.is_active()));
     }
 
+    let fit_action: Rc<dyn Fn()> = {
+        let picture = picture.clone();
+        let picture_scroll = picture_scroll.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let native_one_to_one = native_one_to_one.clone();
+        Rc::new(move || {
+            native_one_to_one.set(false);
+            canvas_zoom.set(0.0);
+            apply_canvas_zoom(&picture, &picture_scroll, preview_dimensions.get(), 0.0);
+        })
+    };
+    // Canvas zoom is stored as a multiplier relative to Fit, not as an
+    // absolute source-pixel scale. 0.0 means exactly Fit. +/- move in small
+    // 10% Fit-relative steps so only the explicit 1:1 control can jump to
+    // native pixels, even when the preview texture is close to viewport size.
+    let zoom_out_action: Rc<dyn Fn()> = {
+        let picture = picture.clone();
+        let picture_scroll = picture_scroll.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let native_one_to_one = native_one_to_one.clone();
+        Rc::new(move || {
+            native_one_to_one.set(false);
+            let dimensions = preview_dimensions.get();
+            let current_multiplier = if canvas_zoom.get() <= 0.0 {
+                1.0
+            } else {
+                canvas_zoom.get()
+            };
+            let next_multiplier = (current_multiplier - 0.10).clamp(0.25, 8.0);
+            canvas_zoom.set(next_multiplier);
+            apply_canvas_zoom(&picture, &picture_scroll, dimensions, next_multiplier);
+        })
+    };
+    let zoom_in_action: Rc<dyn Fn()> = {
+        let picture = picture.clone();
+        let picture_scroll = picture_scroll.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let native_one_to_one = native_one_to_one.clone();
+        Rc::new(move || {
+            native_one_to_one.set(false);
+            let dimensions = preview_dimensions.get();
+            let current_multiplier = if canvas_zoom.get() <= 0.0 {
+                1.0
+            } else {
+                canvas_zoom.get()
+            };
+            let next_multiplier = (current_multiplier + 0.10).clamp(0.25, 8.0);
+            canvas_zoom.set(next_multiplier);
+            apply_canvas_zoom(&picture, &picture_scroll, dimensions, next_multiplier);
+        })
+    };
+    {
+        let zoom_out_action = zoom_out_action.clone();
+        toolbar_zoom_out.connect_clicked(move |_| zoom_out_action());
+    }
+    {
+        let zoom_in_action = zoom_in_action.clone();
+        toolbar_zoom_in.connect_clicked(move |_| zoom_in_action());
+    }
+
+    let one_to_one_action: Rc<dyn Fn(bool)> = {
+        let native_one_to_one = native_one_to_one.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let queue_preview = queue_preview.clone();
+        let fit_action = fit_action.clone();
+        Rc::new(move |enabled| {
+            if enabled {
+                native_one_to_one.set(true);
+                // Native 1:1 has its own sizing path. Do not encode it as a
+                // normal Fit-relative zoom multiplier.
+                canvas_zoom.set(0.0);
+                queue_preview();
+            } else {
+                fit_action();
+            }
+        })
+    };
+
     {
         let crop_overlay = crop_overlay.clone();
         let crop_actions = crop_actions.clone();
         let pending_crop = pending_crop.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let native_one_to_one = native_one_to_one.clone();
+        let picture = picture.clone();
+        let picture_scroll = picture_scroll.clone();
+        let preview_dimensions = preview_dimensions.clone();
         crop.connect_clicked(move |_| {
+            canvas_zoom.set(0.0);
+            native_one_to_one.set(false);
+            apply_canvas_zoom(&picture, &picture_scroll, preview_dimensions.get(), 0.0);
             pending_crop.replace(CropRect::default());
             crop_overlay.set_visible(true);
             crop_actions.set_visible(true);
@@ -589,7 +821,74 @@ pub fn build(
     EditEditor {
         root,
         photo_id: photo.id(),
+        zoom_in_action,
+        zoom_out_action,
+        fit_action,
+        one_to_one_action,
     }
+}
+
+fn fit_zoom_for_canvas(scroll: &gtk::ScrolledWindow, dimensions: (i32, i32)) -> f64 {
+    let source_w = dimensions.0.max(1) as f64;
+    let source_h = dimensions.1.max(1) as f64;
+    // Leave a small breathing margin so the first + click visibly enlarges
+    // the photo instead of jumping straight from Fit to native 100%.
+    let viewport_w = (scroll.width() - 24).max(1) as f64;
+    let viewport_h = (scroll.height() - 24).max(1) as f64;
+    (viewport_w / source_w)
+        .min(viewport_h / source_h)
+        .min(1.0)
+        .max(0.01)
+}
+
+fn apply_canvas_zoom(
+    picture: &gtk::Picture,
+    scroll: &gtk::ScrolledWindow,
+    dimensions: (i32, i32),
+    zoom: f64,
+) {
+    if zoom <= 0.0 {
+        picture.set_can_shrink(true);
+        picture.set_hexpand(true);
+        picture.set_vexpand(true);
+        picture.set_halign(gtk::Align::Fill);
+        picture.set_valign(gtk::Align::Fill);
+        picture.set_size_request(1, 1);
+        scroll.set_cursor_from_name(None);
+        scroll.hadjustment().set_value(0.0);
+        scroll.vadjustment().set_value(0.0);
+        return;
+    }
+    // Positive zoom values are multipliers of the current Fit scale.
+    let fit = fit_zoom_for_canvas(scroll, dimensions);
+    let effective_zoom = (fit * zoom).clamp(0.01, 8.0);
+    let width = ((dimensions.0.max(1) as f64 * effective_zoom).round() as i32).max(1);
+    let height = ((dimensions.1.max(1) as f64 * effective_zoom).round() as i32).max(1);
+    // Keep shrinking enabled: disabling it makes GtkPicture insist on the
+    // paintable's intrinsic size and defeats incremental size requests.
+    picture.set_can_shrink(true);
+    picture.set_hexpand(false);
+    picture.set_vexpand(false);
+    picture.set_halign(gtk::Align::Center);
+    picture.set_valign(gtk::Align::Center);
+    picture.set_size_request(width, height);
+    scroll.set_cursor_from_name(if zoom > 1.0 { Some("grab") } else { None });
+    picture.queue_resize();
+}
+
+fn apply_canvas_one_to_one(
+    picture: &gtk::Picture,
+    scroll: &gtk::ScrolledWindow,
+    dimensions: (i32, i32),
+) {
+    picture.set_can_shrink(true);
+    picture.set_hexpand(false);
+    picture.set_vexpand(false);
+    picture.set_halign(gtk::Align::Center);
+    picture.set_valign(gtk::Align::Center);
+    picture.set_size_request(dimensions.0.max(1), dimensions.1.max(1));
+    scroll.set_cursor_from_name(Some("grab"));
+    picture.queue_resize();
 }
 
 fn add_section_label(parent: &gtk::Box, text: &str) {

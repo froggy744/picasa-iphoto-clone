@@ -83,6 +83,7 @@ const STANDARD_GTK4_CSS: &str = r#"
     button.clear-action-button:active { background: #d2d2d2; }
     .favorite-btn.active, .favorite-btn.active image { color: #e01b24; }
     .favorite-badge { color: #e01b24; }
+    .edited-badge { color: @accent_bg_color; }
     .one-to-one-btn:checked { color: @accent_fg_color; background: @accent_bg_color; }
     .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; }
     .section-count { font-size: 13px; }
@@ -303,6 +304,7 @@ struct PhotoActionContext {
     navigate_to_folder: Rc<dyn Fn(i64, i64)>,
     open_collage: Rc<dyn Fn(Vec<i64>)>,
     open_edit: Rc<dyn Fn(i64)>,
+    edit_clipboard: Rc<RefCell<Option<String>>>,
     window: glib::WeakRef<gtk::Window>,
 }
 

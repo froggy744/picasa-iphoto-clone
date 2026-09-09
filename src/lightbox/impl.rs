@@ -218,61 +218,46 @@ impl Lightbox {
         });
         root.add_controller(outside_click);
 
-        // Capture secondary clicks on the stable photo viewport.
-        let make_context_click = {
-            let photos = photos.clone();
-            let index = index.clone();
-            let context_menu = context_menu.clone();
-            let root = root.clone();
-            let picture_viewport = picture_viewport.clone();
-            let menu_anchor: gtk::Widget = picture_viewport.clone().upcast();
-            move || {
-                let right_click = gtk::GestureClick::new();
-                right_click.set_button(3);
-                right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
-                let photos = photos.clone();
-                let index = index.clone();
-                let context_menu = context_menu.clone();
-                let menu_anchor = menu_anchor.clone();
-                right_click.connect_pressed(move |gesture, _, x, y| {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "UI TRACE lightbox_context_click received visible={} targetable={}",
-                            menu_anchor.is_visible(),
-                            menu_anchor.can_target()
-                        );
-                    }
-                    let Some(photo) = photos.borrow().get(index.get()).cloned() else {
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                        }
-                        return;
-                    };
-                    if let Some(handler) = context_menu.borrow().as_ref() {
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!(
-                                "UI TRACE lightbox_context_menu index={} path={}",
-                                index.get(),
-                                photo.path()
-                            );
-                        }
-                        let point = gtk::graphene::Point::new(x as f32, y as f32);
-                        let Some(root_point) = picture_viewport.compute_point(&root, &point) else {
-                            return;
-                        };
-                        handler(
-                            photo,
-                            root.clone().upcast::<gtk::Widget>(),
-                            root_point.x() as f64,
-                            root_point.y() as f64,
-                        );
-                        gesture.set_state(gtk::EventSequenceState::Claimed);
-                    } else if std::env::var_os("PICASA_TRACE").is_some() {
-                    }
-                });
-                right_click
+        // Capture secondary clicks on the actual full-size event surface.
+        // The ScrolledWindow fills the lightbox and remains under the pointer
+        // over the image as well as the centre/bottom-centre area. Using the
+        // same widget for both the gesture coordinates and popover anchor
+        // avoids the dead zones caused by root/overlay coordinate mismatch.
+        let right_click = gtk::GestureClick::new();
+        right_click.set_button(3);
+        right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let photos_for_context = photos.clone();
+        let index_for_context = index.clone();
+        let context_menu_for_context = context_menu.clone();
+        let viewport_for_context = picture_viewport.clone();
+        right_click.connect_pressed(move |gesture, _, x, y| {
+            let Some(photo) = photos_for_context
+                .borrow()
+                .get(index_for_context.get())
+                .cloned()
+            else {
+                return;
+            };
+            if let Some(handler) = context_menu_for_context.borrow().as_ref() {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "UI TRACE lightbox_context_menu index={} path={} viewport=({}, {})",
+                        index_for_context.get(),
+                        photo.path(),
+                        x,
+                        y
+                    );
+                }
+                handler(
+                    photo,
+                    viewport_for_context.clone().upcast::<gtk::Widget>(),
+                    x,
+                    y,
+                );
+                gesture.set_state(gtk::EventSequenceState::Claimed);
             }
-        };
-        picture_viewport.add_controller(make_context_click());
+        });
+        picture_viewport.add_controller(right_click);
 
         let picture_for_fit = picture.clone();
         let photos_for_fit = photos.clone();

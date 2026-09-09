@@ -272,6 +272,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     };
     let import_folder_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let edit_open_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> = Rc::new(RefCell::new(None));
+    let edit_clipboard: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let open_edit: Rc<dyn Fn(i64)> = {
         let slot = edit_open_slot.clone();
         Rc::new(move |id| {
@@ -377,6 +378,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         navigate_to_folder: navigate_to_folder.clone(),
         open_collage: open_collage.clone(),
         open_edit: open_edit.clone(),
+        edit_clipboard: edit_clipboard.clone(),
         refresh_albums_home: {
             let slot = albums_home_refresh_slot.clone();
             Rc::new(move |albums| {
@@ -1357,9 +1359,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 edit_page.remove(&child);
             }
             let photo = crate::photo_object::PhotoObject::from_photo(&db_photo);
+            info.one_to_one.set_active(false);
             let close = {
                 let main_stack = main_stack.clone();
-                Rc::new(move || main_stack.set_visible_child_name("photos")) as Rc<dyn Fn()>
+                let one_to_one = info.one_to_one.clone();
+                Rc::new(move || {
+                    one_to_one.set_active(false);
+                    main_stack.set_visible_child_name("photos");
+                }) as Rc<dyn Fn()>
             };
             let saved = {
                 let gallery = gallery.clone();
@@ -1447,9 +1454,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     });
 
     let lightbox_for_one_to_one = lightbox.clone();
+    let edit_editor_for_one_to_one = edit_editor.clone();
+    let main_stack_for_one_to_one = main_stack.clone();
     let space_toggle_in_progress_for_toggle = space_toggle_in_progress.clone();
     info.one_to_one.connect_toggled(move |button| {
-        lightbox_for_one_to_one.set_one_to_one(button.is_active());
+        if main_stack_for_one_to_one.visible_child_name().as_deref() == Some("edit") {
+            if let Some(editor) = edit_editor_for_one_to_one.borrow().as_ref() {
+                editor.set_one_to_one(button.is_active());
+            }
+        } else {
+            lightbox_for_one_to_one.set_one_to_one(button.is_active());
+        }
         if space_toggle_in_progress_for_toggle.get() {
             space_toggle_in_progress_for_toggle.set(false);
         }
@@ -1487,14 +1502,41 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     });
 
     let gallery_for_zoom_out = gallery.clone();
-    info.grid_zoom_out
-        .connect_clicked(move |_| gallery_for_zoom_out.zoom_out());
+    let edit_editor_for_zoom_out = edit_editor.clone();
+    let main_stack_for_zoom_out = main_stack.clone();
+    info.grid_zoom_out.connect_clicked(move |_| {
+        if main_stack_for_zoom_out.visible_child_name().as_deref() == Some("edit") {
+            if let Some(editor) = edit_editor_for_zoom_out.borrow().as_ref() {
+                editor.zoom_out();
+            }
+        } else {
+            gallery_for_zoom_out.zoom_out();
+        }
+    });
     let gallery_for_zoom_reset = gallery.clone();
-    info.grid_zoom_reset
-        .connect_clicked(move |_| gallery_for_zoom_reset.set_zoom(DEFAULT_GRID_THUMBNAIL_SIZE));
+    let edit_editor_for_zoom_reset = edit_editor.clone();
+    let main_stack_for_zoom_reset = main_stack.clone();
+    info.grid_zoom_reset.connect_clicked(move |_| {
+        if main_stack_for_zoom_reset.visible_child_name().as_deref() == Some("edit") {
+            if let Some(editor) = edit_editor_for_zoom_reset.borrow().as_ref() {
+                editor.fit();
+            }
+        } else {
+            gallery_for_zoom_reset.set_zoom(DEFAULT_GRID_THUMBNAIL_SIZE);
+        }
+    });
     let gallery_for_zoom_in = gallery.clone();
-    info.grid_zoom_in
-        .connect_clicked(move |_| gallery_for_zoom_in.zoom_in());
+    let edit_editor_for_zoom_in = edit_editor.clone();
+    let main_stack_for_zoom_in = main_stack.clone();
+    info.grid_zoom_in.connect_clicked(move |_| {
+        if main_stack_for_zoom_in.visible_child_name().as_deref() == Some("edit") {
+            if let Some(editor) = edit_editor_for_zoom_in.borrow().as_ref() {
+                editor.zoom_in();
+            }
+        } else {
+            gallery_for_zoom_in.zoom_in();
+        }
+    });
 
     let selected_for_rotate = selected_photo.clone();
     let db_for_rotate = connection.clone();
@@ -2168,11 +2210,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let open_edit = open_edit.clone();
         let selected_photo = selected_photo.clone();
         let main_stack = main_stack.clone();
+        let one_to_one = info.one_to_one.clone();
         info.edit.connect_clicked(move |_| {
             // The bottom Edit button is a true open/close toggle. This keeps
             // the editing workspace optional instead of forcing users to use
             // Back/Done just to return to normal browsing.
             if main_stack.visible_child_name().as_deref() == Some("edit") {
+                one_to_one.set_active(false);
                 main_stack.set_visible_child_name("photos");
                 return;
             }
@@ -2949,6 +2993,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         button.clear-action-button:active { background: #d2d2d2; }\
         .favorite-btn.active, .favorite-btn.active image { color: #ff453a; }\
         .favorite-badge { color: #ff453a; }\
+        .edited-badge { color: #0a84ff; }\
         .one-to-one-btn:checked { color: #ffffff; background: #4d9fdb; }\
         .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; color: #a9a9a9; }\
         .section-count { font-size: 13px; color: #bcbcbc; }\

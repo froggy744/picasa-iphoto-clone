@@ -10,12 +10,18 @@ fn show_photo_context_menu(
     let popover = gtk::Popover::new();
     popover.set_has_arrow(true);
     popover.set_parent(&anchor);
-    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-        x.round() as i32,
-        y.round() as i32,
-        1,
-        1,
-    )));
+    // Grid context menus use pointer-local coordinates. Lightbox passes a
+    // negative sentinel because its capture controller lives on a different
+    // widget than the stable popover anchor; in that case let GTK position the
+    // popover relative to the viewport instead of giving it invalid coords.
+    if x >= 0.0 && y >= 0.0 {
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+            x.round() as i32,
+            y.round() as i32,
+            1,
+            1,
+        )));
+    }
 
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
     // This popover is anchored to a virtualized GridView tile. In that
@@ -84,6 +90,90 @@ fn show_photo_context_menu(
         }
         (collage_context.open_collage)(collage_ids.clone());
     });
+
+    menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let copy_edits = add_action("Copy Edits");
+    let paste_edits = add_action("Paste Edits");
+    let reset_edits = add_action("Reset Edits");
+    let clicked_recipe = photo.edit_recipe();
+    let clicked_is_edited = !crate::edit::EditRecipe::decode(&clicked_recipe).is_default();
+    copy_edits.set_sensitive(clicked_is_edited);
+    paste_edits.set_sensitive(context.edit_clipboard.borrow().is_some());
+    reset_edits.set_sensitive(clicked_is_edited || selection_ids.iter().any(|id| {
+        db::photo(&context.connection.borrow(), *id)
+            .ok()
+            .flatten()
+            .is_some_and(|item| !crate::edit::EditRecipe::decode(&item.edit_recipe).is_default())
+    }));
+
+    {
+        let clipboard = context.edit_clipboard.clone();
+        let recipe = clicked_recipe.clone();
+        let popover = popover.clone();
+        copy_edits.connect_clicked(move |_| {
+            clipboard.replace(Some(recipe.clone()));
+            popover.popdown();
+        });
+    }
+    {
+        let paste_context = context.clone();
+        let paste_selection = selection_ids.clone();
+        let popover = popover.clone();
+        paste_edits.connect_clicked(move |button| {
+            let Some(recipe) = paste_context.edit_clipboard.borrow().clone() else {
+                return;
+            };
+            for id in &paste_selection {
+                if let Err(error) = db::set_edit_recipe(&paste_context.connection.borrow(), *id, &recipe) {
+                    show_error(button.upcast_ref(), "Could not paste edits", &error.to_string());
+                    return;
+                }
+                if let Some(gallery) = paste_context.gallery.borrow().upgrade() {
+                    gallery.update_edit_recipe(*id, &recipe);
+                }
+                let selected = {
+                    paste_context.selected_photo.borrow().as_ref().cloned()
+                };
+                if let Some(selected) = selected {
+                    if selected.id() == *id {
+                        selected.set_edit_recipe(recipe.clone());
+                        paste_context.selected_photo.replace(Some(selected.clone()));
+                        paste_context.info.set_photo(Some(&selected));
+                    }
+                }
+            }
+            popover.popdown();
+            refresh_photo_actions_grid(&paste_context);
+        });
+    }
+    {
+        let reset_context = context.clone();
+        let reset_selection = selection_ids.clone();
+        let popover = popover.clone();
+        reset_edits.connect_clicked(move |button| {
+            for id in &reset_selection {
+                if let Err(error) = db::set_edit_recipe(&reset_context.connection.borrow(), *id, "") {
+                    show_error(button.upcast_ref(), "Could not reset edits", &error.to_string());
+                    return;
+                }
+                if let Some(gallery) = reset_context.gallery.borrow().upgrade() {
+                    gallery.update_edit_recipe(*id, "");
+                }
+                let selected = {
+                    reset_context.selected_photo.borrow().as_ref().cloned()
+                };
+                if let Some(selected) = selected {
+                    if selected.id() == *id {
+                        selected.set_edit_recipe(String::new());
+                        reset_context.selected_photo.replace(Some(selected.clone()));
+                        reset_context.info.set_photo(Some(&selected));
+                    }
+                }
+            }
+            popover.popdown();
+            refresh_photo_actions_grid(&reset_context);
+        });
+    }
 
     let favorite_label = if photo.favorite() {
         "Remove from Favourites"
