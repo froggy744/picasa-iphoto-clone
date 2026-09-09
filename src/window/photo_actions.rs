@@ -37,6 +37,29 @@ fn photo_context_menu_contains(widget: &gtk::Widget) -> bool {
     })
 }
 
+fn restore_grid_focus_after_context_menu(context: &PhotoActionContext) {
+    if context
+        .lightbox
+        .upgrade()
+        .is_some_and(|lightbox| lightbox.root.is_visible())
+    {
+        return;
+    }
+    let Some(gallery) = context.gallery.borrow().upgrade() else {
+        return;
+    };
+    glib::idle_add_local_once(move || {
+        if let Some(position) = gallery.selected_position() {
+            gallery.root.scroll_to(
+                position as u32,
+                gtk::ListScrollFlags::FOCUS,
+                None,
+            );
+        }
+        gallery.root.grab_focus();
+    });
+}
+
 fn show_photo_context_menu(
     photo: crate::photo_object::PhotoObject,
     anchor: gtk::Widget,
@@ -273,10 +296,12 @@ fn show_photo_context_menu(
     {
         let clipboard = context.edit_clipboard.clone();
         let recipe = clicked_recipe.clone();
+        let copy_context = context.clone();
         let dismiss_menu = dismiss_menu.clone();
         copy_edits.connect_clicked(move |_| {
             clipboard.replace(Some(recipe.clone()));
             dismiss_menu();
+            restore_grid_focus_after_context_menu(&copy_context);
         });
     }
     {
@@ -306,8 +331,11 @@ fn show_photo_context_menu(
                     }
                 }
             }
+            if let Some(lightbox) = paste_context.lightbox.upgrade() {
+                lightbox.refresh_current();
+            }
             dismiss_menu();
-            refresh_photo_actions_grid(&paste_context);
+            restore_grid_focus_after_context_menu(&paste_context);
         });
     }
     {
