@@ -218,6 +218,7 @@ fn show_photo_context_menu(
         Rc::new(move || selection_for_provider.clone());
     let add_to_album = gtk::MenuButton::new();
     add_to_album.set_focus_on_click(false);
+    add_to_album.set_focusable(false);
     add_to_album.set_direction(gtk::ArrowType::None);
     add_to_album.set_halign(gtk::Align::Fill);
     add_to_album.add_css_class("flat");
@@ -231,13 +232,30 @@ fn show_photo_context_menu(
     album_row.append(&album_label);
     album_row.append(&album_arrow);
     add_to_album.set_child(Some(&album_row));
-    add_to_album.set_popover(Some(&build_album_popover(
+    let album_popover = build_album_popover(
         context.clone(),
         selection_provider.clone(),
         {
             dismiss_menu.clone()
         },
-    )));
+    );
+    // This submenu lives inside a mouse context menu. Keep its transient
+    // buttons from becoming the window focus: removing a focused submenu and
+    // parent menu makes GtkGridView focus its first item and scroll to top.
+    // The separately built infobar album menu remains keyboard-focusable.
+    album_popover.set_focusable(false);
+    if let Some(album_menu) = album_popover.child() {
+        let mut child = album_menu.first_child();
+        while let Some(widget) = child {
+            let next = widget.next_sibling();
+            if let Ok(button) = widget.downcast::<gtk::Button>() {
+                button.set_focus_on_click(false);
+                button.set_focusable(false);
+            }
+            child = next;
+        }
+    }
+    add_to_album.set_popover(Some(&album_popover));
     menu.append(&add_to_album);
 
     let collage_ids = selection_ids.clone();
