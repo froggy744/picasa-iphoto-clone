@@ -373,7 +373,7 @@ pub fn photo_fingerprints(
 pub fn photo(connection: &Connection, id: i64) -> Result<Option<Photo>> {
     Ok(connection
         .query_row(
-            "SELECT p.id,p.path,p.folder_id,p.taken_at,p.camera,p.width,p.height,p.size_bytes,p.mtime,p.added_at,p.rotation,p.favorite,p.trashed,f.path
+            "SELECT p.id,p.path,p.folder_id,p.taken_at,p.camera,p.width,p.height,p.size_bytes,p.mtime,p.added_at,p.rotation,p.edit_recipe,p.favorite,p.trashed,f.path
              FROM photos p LEFT JOIN folders f ON f.id = p.folder_id WHERE p.id = ?1",
             [id],
             photo_from_row,
@@ -389,7 +389,7 @@ pub fn photos(
 ) -> Result<Vec<Photo>> {
     let search = search.map(|value| format!("%{}%", value.replace('%', "\\%").replace('_', "\\_")));
     let mut statement = connection.prepare(
-        "SELECT p.id,p.path,p.folder_id,p.taken_at,p.camera,p.width,p.height,p.size_bytes,p.mtime,p.added_at,p.rotation,p.favorite,p.trashed,f.path
+        "SELECT p.id,p.path,p.folder_id,p.taken_at,p.camera,p.width,p.height,p.size_bytes,p.mtime,p.added_at,p.rotation,p.edit_recipe,p.favorite,p.trashed,f.path
          FROM photos p LEFT JOIN folders f ON f.id = p.folder_id
          WHERE p.trashed = 0 AND (?1 IS NULL OR p.folder_id IN
              (WITH RECURSIVE descendants(id) AS (
@@ -432,7 +432,7 @@ pub fn photos_in_album(
 ) -> Result<Vec<Photo>> {
     let search = search.map(|value| format!("%{}%", value.replace('%', "\\%").replace('_', "\\_")));
     let mut statement = connection.prepare(
-        "SELECT p.id,p.path,p.folder_id,p.taken_at,p.camera,p.width,p.height,p.size_bytes,p.mtime,p.added_at,p.rotation,p.favorite,p.trashed,f.path
+        "SELECT p.id,p.path,p.folder_id,p.taken_at,p.camera,p.width,p.height,p.size_bytes,p.mtime,p.added_at,p.rotation,p.edit_recipe,p.favorite,p.trashed,f.path
          FROM album_photos ap
          JOIN photos p ON p.id = ap.photo_id
          LEFT JOIN folders f ON f.id = p.folder_id
@@ -472,6 +472,15 @@ pub fn set_favorite_for_folder(
         params![favorite, folder_id],
     )?;
     Ok(changed)
+}
+
+
+pub fn set_edit_recipe(connection: &Connection, id: i64, recipe: &str) -> Result<()> {
+    connection.execute(
+        "UPDATE photos SET edit_recipe = ?1 WHERE id = ?2",
+        params![recipe, id],
+    )?;
+    Ok(())
 }
 
 pub fn set_rotation(connection: &Connection, id: i64, rotation: i32) -> Result<()> {

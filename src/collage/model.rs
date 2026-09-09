@@ -9,22 +9,19 @@ pub struct CollagePhoto {
     pub filename: String,
     pub thumbnail_path: Option<String>,
     pub library_rotation: i32,
+    pub edit_recipe: String,
     pub aspect_ratio: f32,
 }
 
 fn photo_aspect_ratio(photo: &PhotoObject) -> f32 {
-    let width = photo.width();
-    let height = photo.height();
-    if width <= 0 || height <= 0 {
-        return 1.5;
+    let mut width = photo.width().max(1) as u32;
+    let mut height = photo.height().max(1) as u32;
+    if photo.rotation().rem_euclid(180) == 90 {
+        std::mem::swap(&mut width, &mut height);
     }
-    let width = width as f32;
-    let height = height as f32;
-    let ratio = if photo.rotation().rem_euclid(180) == 90 {
-        height / width
-    } else {
-        width / height
-    };
+    let recipe = crate::edit::EditRecipe::decode(&photo.edit_recipe());
+    let (width, height) = crate::edit::render::estimated_output_dimensions(width, height, &recipe);
+    let ratio = width as f32 / height.max(1) as f32;
     if ratio.is_finite() && ratio > 0.0 {
         ratio
     } else {
@@ -125,6 +122,7 @@ impl CollageProject {
                         filename: photo.filename(),
                         thumbnail_path: photo.cached_thumbnail_path(),
                         library_rotation: photo.rotation(),
+                        edit_recipe: photo.edit_recipe(),
                         aspect_ratio: photo_aspect_ratio(&photo),
                     },
                     x: 0.0,
@@ -179,6 +177,7 @@ impl CollageProject {
                         filename: photo.filename(),
                         thumbnail_path: photo.cached_thumbnail_path(),
                         library_rotation: photo.rotation(),
+                        edit_recipe: photo.edit_recipe(),
                         aspect_ratio: photo_aspect_ratio(&photo),
                     },
                     x: 0.0,
@@ -215,6 +214,7 @@ impl CollageProject {
                             filename: photo.filename(),
                             thumbnail_path: photo.cached_thumbnail_path(),
                             library_rotation: photo.rotation(),
+                            edit_recipe: photo.edit_recipe(),
                             aspect_ratio: photo_aspect_ratio(&photo),
                         },
                         x: 0.0,

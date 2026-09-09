@@ -39,6 +39,12 @@ fn migrate_photo_schema(connection: &Connection) -> Result<()> {
             [],
         )?;
     }
+    if !columns.iter().any(|column| column == "edit_recipe") {
+        connection.execute(
+            "ALTER TABLE photos ADD COLUMN edit_recipe TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
     // Existing records have no import timestamp. Their stable row IDs retain
     // the database's historical insertion order until they are refreshed.
     connection.execute("UPDATE photos SET added_at = id WHERE added_at = 0", [])?;

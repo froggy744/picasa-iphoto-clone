@@ -219,6 +219,7 @@ mod photo_action_tests {
             mtime,
             added_at: mtime.unwrap_or_default(),
             rotation: 0,
+            edit_recipe: String::new(),
             favorite: false,
             trashed: false,
         }

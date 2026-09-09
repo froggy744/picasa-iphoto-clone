@@ -2,6 +2,7 @@ mod albums_view;
 mod collage;
 mod db;
 mod diagnostics;
+mod edit;
 mod folder_watcher;
 mod grid;
 mod image_format;

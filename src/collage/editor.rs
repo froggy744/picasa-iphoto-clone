@@ -521,9 +521,11 @@ fn refresh_preview(
             .as_deref()
             .filter(|path| std::path::Path::new(path).is_file())
         {
-            if let Some(rotated) =
-                crate::photo_texture::rotated_thumbnail(path, item.photo.library_rotation)
-            {
+            if let Some(rotated) = crate::photo_texture::edited_thumbnail(
+                path,
+                item.photo.library_rotation,
+                &item.photo.edit_recipe,
+            ) {
                 picture.set_paintable(Some(&rotated));
             } else {
                 picture.set_filename(Some(path));
@@ -803,6 +805,7 @@ mod sizing_tests {
                     filename: String::new(),
                     thumbnail_path: None,
                     library_rotation: 0,
+                    edit_recipe: String::new(),
                     aspect_ratio: if i % 2 == 0 { 1.5 } else { 0.65 },
                 },
                 x: 0.0,

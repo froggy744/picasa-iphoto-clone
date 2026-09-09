@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS photos (
   mtime INTEGER,
   added_at INTEGER NOT NULL DEFAULT 0,
   rotation INTEGER DEFAULT 0,
+  edit_recipe TEXT NOT NULL DEFAULT '',
   favorite BOOLEAN DEFAULT 0,
   trashed BOOLEAN DEFAULT 0
 );
@@ -81,6 +82,7 @@ pub struct Photo {
     pub mtime: Option<i64>,
     pub added_at: i64,
     pub rotation: i32,
+    pub edit_recipe: String,
     pub favorite: bool,
     pub trashed: bool,
 }

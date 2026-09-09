@@ -271,6 +271,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         })
     };
     let import_folder_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let edit_open_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> = Rc::new(RefCell::new(None));
+    let open_edit: Rc<dyn Fn(i64)> = {
+        let slot = edit_open_slot.clone();
+        Rc::new(move |id| {
+            if let Some(callback) = slot.borrow().as_ref() {
+                callback(id);
+            }
+        })
+    };
     let collage_open_slot: Rc<RefCell<Option<Rc<dyn Fn(Vec<i64>)>>>> =
         Rc::new(RefCell::new(None));
     let collage_add_mode_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
@@ -367,6 +376,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         on_unavailable: availability_refresh.clone(),
         navigate_to_folder: navigate_to_folder.clone(),
         open_collage: open_collage.clone(),
+        open_edit: open_edit.clone(),
         refresh_albums_home: {
             let slot = albums_home_refresh_slot.clone();
             Rc::new(move |albums| {
@@ -1262,6 +1272,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     collage_page.set_hexpand(true);
     collage_page.set_vexpand(true);
     main_stack.add_named(&collage_page, Some("collage"));
+    let edit_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    edit_page.set_hexpand(true);
+    edit_page.set_vexpand(true);
+    main_stack.add_named(&edit_page, Some("edit"));
     main_stack.set_visible_child_name("photos");
     content.append(&main_stack);
     content.append(&info.root);
@@ -1320,6 +1334,55 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     }
                 }),
             );
+        })));
+    }
+
+    let edit_editor: Rc<RefCell<Option<crate::edit::EditEditor>>> = Rc::new(RefCell::new(None));
+    {
+        let parent = window.clone().upcast::<gtk::Window>();
+        let connection = connection.clone();
+        let main_stack = main_stack.clone();
+        let edit_page = edit_page.clone();
+        let edit_editor = edit_editor.clone();
+        let gallery = gallery.clone();
+        let selected_photo = selected_photo.clone();
+        let info = info.clone();
+        let lightbox = lightbox.clone();
+        edit_open_slot.replace(Some(Rc::new(move |id| {
+            let Some(db_photo) = db::photo(&connection.borrow(), id).ok().flatten() else {
+                return;
+            };
+            lightbox.close();
+            while let Some(child) = edit_page.first_child() {
+                edit_page.remove(&child);
+            }
+            let photo = crate::photo_object::PhotoObject::from_photo(&db_photo);
+            let close = {
+                let main_stack = main_stack.clone();
+                Rc::new(move || main_stack.set_visible_child_name("photos")) as Rc<dyn Fn()>
+            };
+            let saved = {
+                let gallery = gallery.clone();
+                let selected_photo = selected_photo.clone();
+                let info = info.clone();
+                Rc::new(move |photo: crate::photo_object::PhotoObject| {
+                    gallery.update_edit_recipe(photo.id(), &photo.edit_recipe());
+                    if selected_photo.borrow().as_ref().map(|item| item.id()) == Some(photo.id()) {
+                        selected_photo.replace(Some(photo.clone()));
+                        info.set_photo(Some(&photo));
+                    }
+                }) as Rc<dyn Fn(crate::photo_object::PhotoObject)>
+            };
+            let editor = crate::edit::build_editor(
+                &parent,
+                connection.clone(),
+                photo,
+                close,
+                saved,
+            );
+            edit_page.append(&editor.root);
+            edit_editor.replace(Some(editor));
+            main_stack.set_visible_child_name("edit");
         })));
     }
 
@@ -1478,36 +1541,38 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             Some("Cancel"),
         );
 
-        let filename = photo.filename();
+        let filename = std::path::Path::new(&photo.filename())
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(|stem| format!("{stem}.jpg"))
+            .unwrap_or_else(|| "export.jpg".to_string());
         dialog.set_current_name(&filename);
 
         dialog.connect_response(move |dialog, response| {
             if response == gtk::ResponseType::Accept {
                 if let Some(file) = dialog.file() {
                     if let Some(destination) = file.path() {
-                        let source = photo.path();
+                        // PhotoObject is a GTK object and must stay on the GTK
+                        // thread. Copy only Send-safe scalar/string values into
+                        // the export worker.
+                        let reference = photo.path();
                         let rotation = photo.rotation();
-
+                        let edit_recipe = photo.edit_recipe();
+                        let source_width = photo.width();
+                        let source_height = photo.height();
                         std::thread::spawn(move || {
-                            let result = image::open(&source).and_then(|image| {
-                                let rotated = match rotation {
-                                    90 => image::DynamicImage::ImageRgba8(
-                                        image::imageops::rotate90(&image.to_rgba8()),
-                                    ),
-                                    180 => image::DynamicImage::ImageRgba8(
-                                        image::imageops::rotate180(&image.to_rgba8()),
-                                    ),
-                                    270 => image::DynamicImage::ImageRgba8(
-                                        image::imageops::rotate270(&image.to_rgba8()),
-                                    ),
-                                    _ => image,
-                                };
-
-                                rotated.save(&destination).map_err(image::ImageError::from)
+                            let result = crate::edit::render::render_for_export(
+                                &reference,
+                                rotation,
+                                &edit_recipe,
+                                source_width,
+                                source_height,
+                            )
+                            .and_then(|image| {
+                                crate::edit::render::save_jpeg(&image, &destination, 92)
                             });
-
                             if let Err(error) = result {
-                                eprintln!("Could not export photo: {error}");
+                                eprintln!("Could not export photo: {error:#}");
                             }
                         });
                     }
@@ -2096,6 +2161,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 gallery.set_collage_selection_mode(false);
                 main_stack.set_visible_child_name("collage");
                 button.set_visible(false);
+            }
+        });
+    }
+    {
+        let open_edit = open_edit.clone();
+        let selected_photo = selected_photo.clone();
+        info.edit.connect_clicked(move |_| {
+            if let Some(photo) = selected_photo.borrow().as_ref() {
+                open_edit(photo.id());
             }
         });
     }

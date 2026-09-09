@@ -47,6 +47,8 @@ fn show_photo(
     let result_slot_for_worker = result_slot.clone();
     let decode_path = path.clone();
     let rotation = photo.rotation();
+    let edit_recipe_text = photo.edit_recipe();
+    let edit_recipe = crate::edit::EditRecipe::decode(&edit_recipe_text);
     let target_started = std::time::Instant::now();
     let (target_width, target_height, logical_width, logical_height, scale_factor, fallback) =
         viewer_decode_target(root, rotation, zoom.get() < 0.0);
@@ -104,6 +106,7 @@ fn show_photo(
                 }
                 let rotation_started = std::time::Instant::now();
                 let image = rotate_image(image, rotation);
+                let image = crate::edit::render::apply_recipe(image, &edit_recipe);
                 if std::env::var_os("PICASA_TRACE").is_some() {
                     eprintln!(
                         "VIEW PERF user_orientation_ms={} rotation={} output={}x{}",
@@ -170,6 +173,7 @@ fn show_photo(
                     *native_texture.borrow_mut() = Some(NativeTextureCache {
                         path: cache_path.clone(),
                         rotation,
+                        edit_recipe: edit_recipe_text.clone(),
                         texture: texture.clone(),
                     });
                 }
@@ -190,6 +194,7 @@ fn show_photo(
                         &display_texture_cache_for_result,
                         cache_path.clone(),
                         rotation,
+                        edit_recipe_text.clone(),
                         target_width,
                         target_height,
                         texture.clone(),
@@ -252,6 +257,7 @@ fn display_texture_cache_lookup(
     cache: &DisplayTextureCache,
     path: &str,
     rotation: i32,
+    edit_recipe: &str,
     target_width: u32,
     target_height: u32,
 ) -> Option<gtk::gdk::MemoryTexture> {
@@ -259,6 +265,7 @@ fn display_texture_cache_lookup(
     let position = cache.iter().position(|entry| {
         entry.path == path
             && entry.rotation == rotation
+            && entry.edit_recipe == edit_recipe
             && entry.target_width == target_width
             && entry.target_height == target_height
     })?;
@@ -272,6 +279,7 @@ fn display_texture_cache_insert(
     cache: &DisplayTextureCache,
     path: String,
     rotation: i32,
+    edit_recipe: String,
     target_width: u32,
     target_height: u32,
     texture: gtk::gdk::MemoryTexture,
@@ -280,12 +288,14 @@ fn display_texture_cache_insert(
     cache.retain(|entry| {
         !(entry.path == path
             && entry.rotation == rotation
+            && entry.edit_recipe == edit_recipe
             && entry.target_width == target_width
             && entry.target_height == target_height)
     });
     cache.push_front(DisplayTextureCacheEntry {
         path,
         rotation,
+        edit_recipe,
         target_width,
         target_height,
         texture,
@@ -317,6 +327,7 @@ fn prepare_navigation_photo(
         display_cache,
         &path,
         photo.rotation(),
+        &photo.edit_recipe(),
         target_width,
         target_height,
     ) {
@@ -381,7 +392,7 @@ fn prepare_navigation_photo(
     );
     if photo.rotation().rem_euclid(360) == 0 {
         picture.set_filename(Some(thumbnail));
-    } else if let Some(rotated) = crate::photo_texture::rotated_thumbnail(&thumbnail, photo.rotation())
+    } else if let Some(rotated) = crate::photo_texture::edited_thumbnail(&thumbnail, photo.rotation(), &photo.edit_recipe())
     {
         picture.set_paintable(Some(&rotated));
     } else {
@@ -420,12 +431,13 @@ fn set_fit_geometry_from_intrinsic(
 }
 
 fn presentation_native_dimensions(photo: &PhotoObject) -> (i64, i64) {
-    let (width, height) = (photo.width(), photo.height());
+    let (mut width, mut height) = (photo.width().max(1) as u32, photo.height().max(1) as u32);
     if matches!(photo.rotation().rem_euclid(360), 90 | 270) {
-        (height, width)
-    } else {
-        (width, height)
+        std::mem::swap(&mut width, &mut height);
     }
+    let recipe = crate::edit::EditRecipe::decode(&photo.edit_recipe());
+    let (width, height) = crate::edit::render::estimated_output_dimensions(width, height, &recipe);
+    (i64::from(width), i64::from(height))
 }
 
 fn reset_viewport(viewport: &gtk::ScrolledWindow) {
@@ -474,7 +486,7 @@ fn show_cached_preview(picture: &gtk::Picture, photo: &PhotoObject) {
         .cached_thumbnail_path()
         .filter(|path| std::path::Path::new(path).is_file())
     {
-        if let Some(rotated) = crate::photo_texture::rotated_thumbnail(&thumbnail, photo.rotation())
+        if let Some(rotated) = crate::photo_texture::edited_thumbnail(&thumbnail, photo.rotation(), &photo.edit_recipe())
         {
             picture.set_paintable(Some(&rotated));
         } else {
@@ -576,9 +588,10 @@ fn fit_picture(
         .as_ref()
         .map(gtk::gdk::Paintable::intrinsic_height)
         .unwrap_or(0);
+    let (native_width, native_height) = presentation_native_dimensions(photo);
     let (fitted_width, fitted_height) = fitted_picture_dimensions(
-        photo.width(),
-        photo.height(),
+        native_width,
+        native_height,
         intrinsic_width,
         intrinsic_height,
         viewport_width,

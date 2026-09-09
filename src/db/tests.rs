@@ -11,9 +11,10 @@ fn photo_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
         mtime: row.get(8)?,
         added_at: row.get(9)?,
         rotation: row.get(10)?,
-        favorite: row.get(11)?,
-        trashed: row.get(12)?,
-        folder_path: row.get(13)?,
+        edit_recipe: row.get(11)?,
+        favorite: row.get(12)?,
+        trashed: row.get(13)?,
+        folder_path: row.get(14)?,
     })
 }
 

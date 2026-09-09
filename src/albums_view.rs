@@ -269,7 +269,7 @@ fn album_card(
             picture.set_paintable(Some(&cropped));
         // Respect user rotation without regenerating the cached thumbnail.
         } else if let Some(rotated) =
-            crate::photo_texture::rotated_thumbnail(&path_string, photo.rotation)
+            crate::photo_texture::edited_thumbnail(&path_string, photo.rotation, &photo.edit_recipe)
         {
             picture.set_paintable(Some(&rotated));
         } else {

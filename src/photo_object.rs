@@ -34,6 +34,8 @@ mod imp {
         #[property(get, set)]
         pub rotation: Cell<i32>,
         #[property(get, set)]
+        pub edit_recipe: RefCell<String>,
+        #[property(get, set)]
         pub favorite: Cell<bool>,
         #[property(get, set)]
         pub folder_id: Cell<i64>,
@@ -89,6 +91,7 @@ impl PhotoObject {
             .property("size-bytes", photo.size_bytes.unwrap_or_default())
             .property("mtime", photo.mtime.unwrap_or_default())
             .property("rotation", photo.rotation)
+            .property("edit-recipe", &photo.edit_recipe)
             .property("favorite", photo.favorite)
             .property("folder-id", photo.folder_id.unwrap_or_default())
             .property("folder-path", photo.folder_path.clone())

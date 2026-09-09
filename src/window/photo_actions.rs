@@ -37,6 +37,7 @@ fn show_photo_context_menu(
     };
 
     let open = add_action("Open");
+    let edit = add_action("Edit Photo…");
     let open_with = add_action("Open With…");
     let open_in_folder = (!matches!(
         context.filter.get(),
@@ -168,6 +169,14 @@ fn show_photo_context_menu(
     menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     let delete = add_action("Delete");
     delete.add_css_class("destructive-action");
+
+    let edit_context = context.clone();
+    let edit_id = photo.id();
+    let popover_for_edit = popover.clone();
+    edit.connect_clicked(move |_| {
+        popover_for_edit.popdown();
+        (edit_context.open_edit)(edit_id);
+    });
 
     let photo_for_open = photo.clone();
     let popover_for_open = popover.clone();

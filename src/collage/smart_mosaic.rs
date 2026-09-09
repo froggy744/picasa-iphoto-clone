@@ -346,6 +346,7 @@ mod tests {
                     filename: String::new(),
                     thumbnail_path: None,
                     library_rotation: 0,
+                    edit_recipe: String::new(),
                     aspect_ratio: aspects[i % aspects.len()],
                 },
                 x: 0.0,

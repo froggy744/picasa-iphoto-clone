@@ -302,6 +302,7 @@ struct PhotoActionContext {
     refresh_albums_home: Rc<dyn Fn(&[db::Album])>,
     navigate_to_folder: Rc<dyn Fn(i64, i64)>,
     open_collage: Rc<dyn Fn(Vec<i64>)>,
+    open_edit: Rc<dyn Fn(i64)>,
     window: glib::WeakRef<gtk::Window>,
 }
 

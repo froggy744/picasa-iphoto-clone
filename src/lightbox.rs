@@ -82,12 +82,14 @@ type CollectionNavigationHandler = Rc<RefCell<Option<Box<dyn Fn(i32)>>>>;
 struct NativeTextureCache {
     path: String,
     rotation: i32,
+    edit_recipe: String,
     texture: gtk::gdk::MemoryTexture,
 }
 
 struct DisplayTextureCacheEntry {
     path: String,
     rotation: i32,
+    edit_recipe: String,
     target_width: u32,
     target_height: u32,
     texture: gtk::gdk::MemoryTexture,

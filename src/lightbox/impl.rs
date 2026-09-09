@@ -620,10 +620,10 @@ impl Lightbox {
                 .photos
                 .borrow()
                 .get(self.index.get())
-                .map(|photo| (photo.path(), photo.rotation()));
+                .map(|photo| (photo.path(), photo.rotation(), photo.edit_recipe()));
 
-            if let (Some(cache), Some((path, rotation))) = (cached, current) {
-                if cache.path == path && cache.rotation == rotation {
+            if let (Some(cache), Some((path, rotation, edit_recipe))) = (cached, current) {
+                if cache.path == path && cache.rotation == rotation && cache.edit_recipe == edit_recipe {
                     self.picture.set_paintable(Some(&cache.texture));
                     fit_picture(
                         &self.picture,

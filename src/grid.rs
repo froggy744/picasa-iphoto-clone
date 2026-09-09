@@ -231,12 +231,13 @@ impl SquareTile {
             // responsive.
             if crate::image_format::uses(&photo.path(), crate::image_format::DecoderKind::Raw)
                 && photo.rotation().rem_euclid(360) == 0
+                && crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default()
             {
                 picture.set_filename(Some(path));
             } else if let Some(cropped) = raw_cached_thumbnail(&photo, path) {
                 picture.set_paintable(Some(&cropped));
             } else if let Some(rotated) =
-                crate::photo_texture::rotated_thumbnail(path, photo.rotation())
+                crate::photo_texture::edited_thumbnail(path, photo.rotation(), &photo.edit_recipe())
             {
                 picture.set_paintable(Some(&rotated));
             } else {
@@ -299,8 +300,11 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
     }
 
     let rotation = photo.rotation().rem_euclid(360);
-    if let Some(paintable) = raw_thumbnail_cache_get(&source_path, rotation) {
-        return Some(paintable);
+    let recipe = crate::edit::EditRecipe::decode(&photo.edit_recipe());
+    if recipe.is_default() {
+        if let Some(paintable) = raw_thumbnail_cache_get(&source_path, rotation) {
+            return Some(paintable);
+        }
     }
 
     let mut image = image::open(path).ok()?.to_rgba8();
@@ -339,6 +343,9 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
         270 => image::imageops::rotate270(&image),
         _ => image,
     };
+    if !recipe.is_default() {
+        image = crate::edit::render::apply_recipe(image, &recipe);
+    }
 
     let width = image.width() as i32;
     let height = image.height() as i32;
@@ -351,7 +358,9 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
         width as usize * 4,
     );
     let paintable: gtk::gdk::Paintable = texture.upcast();
-    raw_thumbnail_cache_insert(source_path, rotation, paintable.clone());
+    if recipe.is_default() {
+        raw_thumbnail_cache_insert(source_path, rotation, paintable.clone());
+    }
     Some(paintable)
 }
 
@@ -1109,6 +1118,18 @@ impl Gallery {
         } else {
             position.saturating_add(columns) >= item_count
         }
+    }
+
+    pub fn update_edit_recipe(&self, id: i64, recipe: &str) {
+        if let Some(photo) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .find(|photo| photo.id() == id)
+        {
+            photo.set_edit_recipe(recipe.to_string());
+        }
+        self.refresh_thumbnails();
     }
 
     pub fn update_dimensions(&self, id: i64, width: Option<i64>, height: Option<i64>) {

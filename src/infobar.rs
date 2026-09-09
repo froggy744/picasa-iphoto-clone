@@ -14,6 +14,7 @@ pub struct InfoBar {
     subtitle: gtk::Label,
     details: gtk::Box,
     pub favorite: gtk::Button,
+    pub edit: gtk::Button,
     pub collage: gtk::Button,
     pub add_to_album: gtk::MenuButton,
     pub one_to_one: gtk::ToggleButton,
@@ -115,6 +116,10 @@ impl InfoBar {
         favorite.add_css_class("favorite-btn");
         favorite.set_tooltip_text(Some("Add to Favourites"));
 
+        let edit = gtk::Button::from_icon_name("document-edit-symbolic");
+        configure_action_button(&edit);
+        edit.set_tooltip_text(Some("Edit photo"));
+
         let collage = gtk::Button::from_icon_name("view-grid-symbolic");
         configure_action_button(&collage);
         collage.set_tooltip_text(Some("Start a new blank collage"));
@@ -179,6 +184,7 @@ impl InfoBar {
         more.set_tooltip_text(Some("Settings"));
 
         actions.append(&favorite);
+        actions.append(&edit);
         actions.append(&collage);
         actions.append(&add_to_album);
         actions.append(&grid_zoom_menu);
@@ -214,6 +220,7 @@ impl InfoBar {
             subtitle,
             details,
             favorite,
+            edit,
             collage,
             add_to_album,
             one_to_one,
@@ -237,6 +244,7 @@ impl InfoBar {
             self.details.set_visible(false);
             set_metric_values(&self.details, ["—", "—", "—", "—"]);
             self.favorite.set_sensitive(false);
+            self.edit.set_sensitive(false);
             self.add_to_album.set_sensitive(false);
             self.rotate.set_sensitive(false);
             self.export.set_sensitive(false);
@@ -252,9 +260,11 @@ impl InfoBar {
         let cached = photo.cached_thumbnail_path();
         let existing = cached.as_deref().filter(|path| Path::new(path).is_file());
         if let Some(thumb_path) = existing {
-            if let Some(rotated) =
-                crate::photo_texture::rotated_thumbnail(thumb_path, photo.rotation())
-            {
+            if let Some(rotated) = crate::photo_texture::edited_thumbnail(
+                thumb_path,
+                photo.rotation(),
+                &photo.edit_recipe(),
+            ) {
                 self.preview.set_paintable(Some(&rotated));
             } else {
                 self.preview.set_from_file(Some(thumb_path));
@@ -282,6 +292,7 @@ impl InfoBar {
         set_metric_values(&self.details, [formatted_date, camera, dimensions, size]);
 
         self.favorite.set_sensitive(true);
+        self.edit.set_sensitive(true);
         self.add_to_album.set_sensitive(true);
         self.rotate.set_sensitive(true);
         self.export.set_sensitive(true);
