@@ -63,7 +63,7 @@ Collages can be shuffled until you find an arrangement you like and then exporte
 - Rotate photos
 - See photo date, camera, dimensions and file size at a glance
 
-<img src="samples/Offline%Indicators.jpg" alt="PIC Collage Creator" width="900">
+<img src="samples/Offline Indicators.jpg" alt="PIC Collage Creator" width="900">
 
 
 ## Organise without changing your folder structure
@@ -102,7 +102,7 @@ PIC's editing tools are aimed at the kind of quick changes many people used Pica
 - Adjust spacing and background
 - Export the finished collage as a high-resolution image
 
-<img src="samples/Grid%Zoom%In.jpg" alt="PIC Grid Zoom In" 
+<img src="samples/Grid Zoom In.jpg" alt="PIC Grid Zoom In" 
 
 ## Fast photo viewing
 
@@ -140,6 +140,8 @@ PIC can add photos to the library while thumbnail work continues separately, all
 Existing unchanged photos are not needlessly rebuilt every time a folder is refreshed.
 
 ---
+
+<img src="samples/Albums and Favourite.jpg" alt="PIC Collage Creator" width="900">
 
 # Image Format Support
 
