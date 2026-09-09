@@ -3026,7 +3026,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         button.clear-action-button:active { background: #d2d2d2; }\
         .favorite-btn.active, .favorite-btn.active image { color: #ff453a; }\
         .favorite-badge { color: #ff453a; }\
-        .edited-badge { color: #0a84ff; }\
+        .edited-badge { color: #ededed; }\
         .one-to-one-btn:checked { color: #ffffff; background: #4d9fdb; }\
         .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; color: #a9a9a9; }\
         .section-count { font-size: 13px; color: #bcbcbc; }\

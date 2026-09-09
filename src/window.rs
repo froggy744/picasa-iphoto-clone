@@ -87,7 +87,7 @@ const STANDARD_GTK4_CSS: &str = r#"
     button.clear-action-button:active { background: #d2d2d2; }
     .favorite-btn.active, .favorite-btn.active image { color: #e01b24; }
     .favorite-badge { color: #e01b24; }
-    .edited-badge { color: @accent_bg_color; }
+    .edited-badge { color: @theme_fg_color; }
     .one-to-one-btn:checked { color: @accent_fg_color; background: @accent_bg_color; }
     .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; }
     .section-count { font-size: 13px; }
