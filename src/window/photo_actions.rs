@@ -1,4 +1,4 @@
-use gio::prelude::AppInfoExt;
+use gio::prelude::{AppInfoExt, SettingsExt};
 
 thread_local! {
     static ACTIVE_PHOTO_MENU: RefCell<Option<gtk::Widget>> = RefCell::new(None);
@@ -434,6 +434,7 @@ fn show_photo_context_menu(
     let move_file = add_action("Move…");
     let rename = add_action("Rename…");
     let file_manager = add_action("Open in File Manager");
+    let wallpaper = add_action("Set as Wallpaper");
     let print = add_action("Print");
     let properties = add_action("Properties");
     {
@@ -502,6 +503,22 @@ fn show_photo_context_menu(
     file_manager.connect_clicked(move |_| {
         open_file_in_manager(&file_for_manager);
         dismiss_menu_for_manager();
+    });
+
+    let wallpaper_path = photo.path();
+    let wallpaper_window = context.window.clone();
+    let dismiss_menu_for_wallpaper = dismiss_menu.clone();
+    wallpaper.connect_clicked(move |_| {
+        dismiss_menu_for_wallpaper();
+        if let Err(error) = set_as_wallpaper(&wallpaper_path) {
+            if let Some(window) = wallpaper_window.upgrade() {
+                show_error(
+                    window.upcast_ref(),
+                    "Could not set wallpaper",
+                    &error.to_string(),
+                );
+            }
+        }
     });
 
     // These actions are not implemented yet; do not present them as working
@@ -631,6 +648,38 @@ fn open_file_in_manager(file: &gio::File) {
             None::<&gio::AppLaunchContext>,
         );
     }
+}
+
+fn set_as_wallpaper(reference: &str) -> anyhow::Result<()> {
+    let local_path = crate::source::materialize(reference)?;
+    let local_path = std::fs::canonicalize(&local_path).map_err(|error| {
+        anyhow::anyhow!(
+            "Could not access {}: {error}",
+            local_path.to_string_lossy()
+        )
+    })?;
+    let uri = gio::File::for_path(local_path).uri();
+
+    let schema_source = gio::SettingsSchemaSource::default()
+        .ok_or_else(|| anyhow::anyhow!("Desktop wallpaper settings are unavailable."))?;
+    let schema = schema_source
+        .lookup("org.gnome.desktop.background", true)
+        .ok_or_else(|| anyhow::anyhow!("This desktop does not support setting the wallpaper here."))?;
+    if !schema.has_key("picture-uri") {
+        anyhow::bail!("This desktop does not expose a wallpaper setting.");
+    }
+
+    let settings = gio::Settings::new_full(
+        &schema,
+        None::<&gio::SettingsBackend>,
+        None,
+    );
+    settings.set_string("picture-uri", uri.as_str())?;
+    if schema.has_key("picture-uri-dark") {
+        settings.set_string("picture-uri-dark", uri.as_str())?;
+    }
+    gio::Settings::sync();
+    Ok(())
 }
 
 fn show_open_with_dialog(parent: &gtk::Widget, file: &gio::File) {
