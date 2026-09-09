@@ -96,14 +96,25 @@ pub fn build(
     tools_toggle.set_tooltip_text(Some("Show or hide editing controls"));
     toolbar.append(&tools_toggle);
 
+    let export = gtk::Button::with_label("Export");
+    export.set_tooltip_text(Some("Export the current edited photo as a new JPEG"));
+    toolbar.append(&export);
+
     let done = gtk::Button::with_label("Done");
     done.add_css_class("suggested-action");
     toolbar.append(&done);
     root.append(&toolbar);
 
-    let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    // The editor tools use a real split pane, matching the adjustable main
+    // sidebar. Users can drag the divider to give the controls or preview more
+    // room instead of being locked to one fixed editing-panel width.
+    let body = gtk::Paned::new(gtk::Orientation::Horizontal);
     body.set_hexpand(true);
     body.set_vexpand(true);
+    body.set_position(315);
+    body.set_resize_start_child(false);
+    body.set_shrink_start_child(false);
+    body.set_wide_handle(true);
     root.append(&body);
 
     let tools_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -116,7 +127,7 @@ pub fn build(
     tools_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     tools_scroll.set_width_request(315);
     tools_scroll.set_child(Some(&tools_box));
-    body.append(&tools_scroll);
+    body.set_start_child(Some(&tools_scroll));
 
     let preview_area = gtk::Overlay::new();
     preview_area.set_hexpand(true);
@@ -126,7 +137,7 @@ pub fn build(
     preview_area.set_margin_start(18);
     preview_area.set_margin_end(18);
     preview_area.add_css_class("edit-preview");
-    body.append(&preview_area);
+    body.set_end_child(Some(&preview_area));
 
     let picture = gtk::Picture::new();
     picture.set_content_fit(gtk::ContentFit::Contain);
@@ -225,6 +236,22 @@ pub fn build(
     };
     controls.sync(&session.borrow().recipe);
 
+    // Ordinary wheel scrolling over a slider should continue scrolling the
+    // tools panel. Only the narrow track area in the middle of the scale keeps
+    // the normal GTK wheel-to-adjust behavior.
+    for scale in [
+        &controls.straighten,
+        &controls.exposure,
+        &controls.fill_light,
+        &controls.highlights,
+        &controls.shadows,
+        &controls.temperature,
+        &controls.saturation,
+        &controls.sharpen,
+    ] {
+        configure_scale_scroll(scale, &tools_scroll);
+    }
+
     let queue_preview: Rc<dyn Fn()> = {
         let session = session.clone();
         let picture = picture.clone();
@@ -260,9 +287,14 @@ pub fn build(
                 status.set_text("Rendering preview…");
                 let (sender, receiver) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    let result =
-                        super::render::render_for_viewer(&path, rotation, &recipe, 1800, 1400)
-                            .map(|image| (image.width(), image.height(), image.into_raw()));
+                    let result = super::render::render_for_viewer(
+                        &path,
+                        rotation,
+                        &recipe,
+                        1800,
+                        1400,
+                    )
+                    .map(|image| (image.width(), image.height(), image.into_raw()));
                     let _ = sender.send(result);
                 });
                 let picture = picture.clone();
@@ -317,101 +349,21 @@ pub fn build(
 
     connect_scale(
         &controls.straighten,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
+        session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(),
         |recipe, value| recipe.straighten = value,
     );
-    connect_scale(
-        &controls.exposure,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.exposure = v,
-    );
-    connect_scale(
-        &controls.fill_light,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.fill_light = v,
-    );
-    connect_scale(
-        &controls.highlights,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.highlights = v,
-    );
-    connect_scale(
-        &controls.shadows,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.shadows = v,
-    );
-    connect_scale(
-        &controls.temperature,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.temperature = v,
-    );
-    connect_scale(
-        &controls.saturation,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.saturation = v,
-    );
-    connect_scale(
-        &controls.sharpen,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.sharpen = v,
-    );
+    connect_scale(&controls.exposure, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.exposure = v);
+    connect_scale(&controls.fill_light, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.fill_light = v);
+    connect_scale(&controls.highlights, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.highlights = v);
+    connect_scale(&controls.shadows, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.shadows = v);
+    connect_scale(&controls.temperature, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.temperature = v);
+    connect_scale(&controls.saturation, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.saturation = v);
+    connect_scale(&controls.sharpen, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.sharpen = v);
 
-    connect_toggle(
-        &controls.auto_contrast,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.auto_contrast = v,
-    );
-    connect_toggle(
-        &controls.auto_color,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.auto_color = v,
-    );
-    connect_toggle(
-        &controls.black_white,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.black_white = v,
-    );
-    connect_toggle(
-        &controls.sepia,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.sepia = v,
-    );
+    connect_toggle(&controls.auto_contrast, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.auto_contrast = v);
+    connect_toggle(&controls.auto_color, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.auto_color = v);
+    connect_toggle(&controls.black_white, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.black_white = v);
+    connect_toggle(&controls.sepia, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.sepia = v);
 
     let sync_controls: Rc<dyn Fn()> = {
         let controls = controls.clone();
@@ -493,24 +445,46 @@ pub fn build(
             crop_actions.set_visible(false);
         });
     }
-    {
+    let apply_crop: Rc<dyn Fn()> = {
         let session = session.clone();
         let crop_overlay = crop_overlay.clone();
         let crop_actions = crop_actions.clone();
         let pending_crop = pending_crop.clone();
         let queue_preview = queue_preview.clone();
         let update_history_buttons = update_history_buttons.clone();
-        crop_apply.connect_clicked(move |_| {
+        Rc::new(move || {
+            if !crop_overlay.is_visible() {
+                return;
+            }
             let child = *pending_crop.borrow();
-            session
-                .borrow_mut()
-                .mutate(|recipe| recipe.crop = recipe.crop.compose(child));
+            session.borrow_mut().mutate(|recipe| recipe.crop = recipe.crop.compose(child));
             pending_crop.replace(CropRect::default());
             crop_overlay.set_visible(false);
             crop_actions.set_visible(false);
             update_history_buttons();
             queue_preview();
+        })
+    };
+    {
+        let apply_crop = apply_crop.clone();
+        crop_apply.connect_clicked(move |_| apply_crop());
+    }
+    {
+        let apply_crop = apply_crop.clone();
+        let crop_overlay = crop_overlay.clone();
+        let key = gtk::EventControllerKey::new();
+        key.set_propagation_phase(gtk::PropagationPhase::Capture);
+        key.connect_key_pressed(move |_, key, _, _| {
+            if crop_overlay.is_visible()
+                && matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
+            {
+                apply_crop();
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
         });
+        root.add_controller(key);
     }
     {
         let session = session.clone();
@@ -520,9 +494,7 @@ pub fn build(
         let queue_preview = queue_preview.clone();
         let update_history_buttons = update_history_buttons.clone();
         crop_reset.connect_clicked(move |_| {
-            session
-                .borrow_mut()
-                .mutate(|recipe| recipe.crop = CropRect::default());
+            session.borrow_mut().mutate(|recipe| recipe.crop = CropRect::default());
             pending_crop.replace(CropRect::default());
             crop_overlay.set_visible(false);
             crop_actions.set_visible(false);
@@ -531,16 +503,62 @@ pub fn build(
         });
     }
 
-    configure_crop_overlay(
-        &crop_overlay,
-        pending_crop.clone(),
-        preview_dimensions.clone(),
-    );
+    configure_crop_overlay(&crop_overlay, pending_crop.clone(), preview_dimensions.clone());
 
     {
         let on_close = on_close.clone();
         back.connect_clicked(move |_| on_close());
     }
+    {
+        let session = session.clone();
+        let photo = photo.clone();
+        let parent = parent.clone();
+        export.connect_clicked(move |_| {
+            let dialog = gtk::FileChooserNative::new(
+                Some("Export Edited Photo"),
+                Some(&parent),
+                gtk::FileChooserAction::Save,
+                Some("Export"),
+                Some("Cancel"),
+            );
+            let filename = std::path::Path::new(&photo.filename())
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .map(|stem| format!("{stem}-edited.jpg"))
+                .unwrap_or_else(|| "export-edited.jpg".to_string());
+            dialog.set_current_name(&filename);
+
+            let reference = photo.path();
+            let rotation = photo.rotation();
+            let source_width = photo.width();
+            let source_height = photo.height();
+            let session = session.clone();
+            dialog.connect_response(move |dialog, response| {
+                if response == gtk::ResponseType::Accept {
+                    if let Some(destination) = dialog.file().and_then(|file| file.path()) {
+                        let edit_recipe = session.borrow().recipe.encode();
+                        let reference = reference.clone();
+                        std::thread::spawn(move || {
+                            let result = super::render::render_for_export(
+                                &reference,
+                                rotation,
+                                &edit_recipe,
+                                source_width,
+                                source_height,
+                            )
+                            .and_then(|image| super::render::save_jpeg(&image, &destination, 92));
+                            if let Err(error) = result {
+                                eprintln!("Could not export edited photo: {error:#}");
+                            }
+                        });
+                    }
+                }
+                dialog.destroy();
+            });
+            dialog.show();
+        });
+    }
+
     {
         let connection = connection.clone();
         let session = session.clone();
@@ -550,9 +568,7 @@ pub fn build(
         let parent = parent.clone();
         done.connect_clicked(move |_| {
             let encoded = session.borrow().recipe.encode();
-            if let Err(error) =
-                crate::db::set_edit_recipe(&connection.borrow(), photo.id(), &encoded)
-            {
+            if let Err(error) = crate::db::set_edit_recipe(&connection.borrow(), photo.id(), &encoded) {
                 let dialog = libadwaita::AlertDialog::builder()
                     .heading("Could not save edits")
                     .body(error.to_string())
@@ -613,15 +629,87 @@ fn connect_scale(
     update_history: Rc<dyn Fn()>,
     assign: impl Fn(&mut EditRecipe, f32) + 'static,
 ) {
+    let dragging = Rc::new(Cell::new(false));
+    let press = gtk::GestureClick::new();
+    press.set_button(1);
+    press.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let session = session.clone();
+        let dragging = dragging.clone();
+        press.connect_pressed(move |_, _, _, _| {
+            dragging.set(true);
+            session.borrow_mut().begin_action();
+        });
+    }
+    {
+        let session = session.clone();
+        let dragging = dragging.clone();
+        let update_history = update_history.clone();
+        press.connect_released(move |_, _, _, _| {
+            if dragging.replace(false) {
+                session.borrow_mut().end_action();
+                update_history();
+            }
+        });
+    }
+    scale.add_controller(press);
+
     scale.connect_value_changed(move |scale| {
         if syncing.get() {
             return;
         }
         let value = scale.value() as f32;
-        session.borrow_mut().mutate(|recipe| assign(recipe, value));
-        update_history();
+        if dragging.get() {
+            session.borrow_mut().mutate_active(|recipe| assign(recipe, value));
+        } else {
+            // Keyboard steps and deliberate wheel steps remain normal single
+            // undoable actions; only a continuous mouse drag is coalesced.
+            session.borrow_mut().mutate(|recipe| assign(recipe, value));
+            update_history();
+        }
         queue_preview();
     });
+}
+
+fn configure_scale_scroll(scale: &gtk::Scale, tools_scroll: &gtk::ScrolledWindow) {
+    let pointer_y = Rc::new(Cell::new(f64::NAN));
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let pointer_y = pointer_y.clone();
+        motion.connect_motion(move |_, _, y| pointer_y.set(y));
+    }
+    {
+        let pointer_y = pointer_y.clone();
+        motion.connect_leave(move |_| pointer_y.set(f64::NAN));
+    }
+    scale.add_controller(motion);
+
+    let controller = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let scale_for_scroll = scale.clone();
+    let tools_scroll = tools_scroll.clone();
+    controller.connect_scroll(move |_, _, dy| {
+        // GTK Scale reacts to wheel input across its full allocation, including
+        // value text and padding. Reserve only a narrow central track band for
+        // adjustment; everywhere else scrolls the editing tools normally.
+        let y = pointer_y.get();
+        let center = scale_for_scroll.height() as f64 / 2.0;
+        if y.is_finite() && (y - center).abs() <= 7.0 {
+            return glib::Propagation::Proceed;
+        }
+
+        if dy != 0.0 {
+            let adjustment = tools_scroll.vadjustment();
+            let max = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+            let step = adjustment.step_increment().max(24.0);
+            adjustment.set_value(
+                (adjustment.value() + dy.signum() * step * 2.0)
+                    .clamp(adjustment.lower(), max),
+            );
+        }
+        glib::Propagation::Stop
+    });
+    scale.add_controller(controller);
 }
 
 fn connect_toggle(
@@ -652,12 +740,7 @@ fn configure_crop_overlay(
     let preview_for_draw = preview_dimensions.clone();
     overlay.set_draw_func(move |_, context, width, height| {
         let (image_width, image_height) = preview_for_draw.get();
-        let (x, y, w, h) = contained_rect(
-            width as f64,
-            height as f64,
-            image_width as f64,
-            image_height as f64,
-        );
+        let (x, y, w, h) = contained_rect(width as f64, height as f64, image_width as f64, image_height as f64);
         let crop = pending_for_draw.borrow().normalized();
         let sx = x + crop.left as f64 * w;
         let sy = y + crop.top as f64 * h;
@@ -704,15 +787,12 @@ fn configure_crop_overlay(
             let (Some((sx, sy)), Some((cx, cy))) = (start, current) else {
                 return;
             };
-            pending.replace(
-                CropRect {
-                    left: sx.min(cx) as f32,
-                    top: sy.min(cy) as f32,
-                    right: sx.max(cx) as f32,
-                    bottom: sy.max(cy) as f32,
-                }
-                .normalized(),
-            );
+            pending.replace(CropRect {
+                left: sx.min(cx) as f32,
+                top: sy.min(cy) as f32,
+                right: sx.max(cx) as f32,
+                bottom: sy.max(cy) as f32,
+            }.normalized());
             overlay.queue_draw();
         });
     }
@@ -734,28 +814,15 @@ fn point_to_normalized(
     if width <= 0.0 || height <= 0.0 {
         return None;
     }
-    Some((
-        ((px - x) / width).clamp(0.0, 1.0),
-        ((py - y) / height).clamp(0.0, 1.0),
-    ))
+    Some((((px - x) / width).clamp(0.0, 1.0), ((py - y) / height).clamp(0.0, 1.0)))
 }
 
-fn contained_rect(
-    container_w: f64,
-    container_h: f64,
-    image_w: f64,
-    image_h: f64,
-) -> (f64, f64, f64, f64) {
+fn contained_rect(container_w: f64, container_h: f64, image_w: f64, image_h: f64) -> (f64, f64, f64, f64) {
     if container_w <= 0.0 || container_h <= 0.0 || image_w <= 0.0 || image_h <= 0.0 {
         return (0.0, 0.0, container_w.max(0.0), container_h.max(0.0));
     }
     let scale = (container_w / image_w).min(container_h / image_h);
     let width = image_w * scale;
     let height = image_h * scale;
-    (
-        (container_w - width) * 0.5,
-        (container_h - height) * 0.5,
-        width,
-        height,
-    )
+    ((container_w - width) * 0.5, (container_h - height) * 0.5, width, height)
 }

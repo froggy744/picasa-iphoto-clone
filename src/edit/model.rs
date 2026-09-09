@@ -200,6 +200,7 @@ pub struct EditSession {
     pub recipe: EditRecipe,
     undo: Vec<EditRecipe>,
     redo: Vec<EditRecipe>,
+    active_action: Option<EditRecipe>,
 }
 
 impl EditSession {
@@ -208,6 +209,7 @@ impl EditSession {
             recipe,
             undo: Vec::new(),
             redo: Vec::new(),
+            active_action: None,
         }
     }
 
@@ -229,7 +231,36 @@ impl EditSession {
         self.replace(next);
     }
 
+    /// Begin one continuous UI action, such as dragging a slider. Intermediate
+    /// values update the preview immediately, but only the recipe that existed
+    /// before the drag is added to Undo when the action finishes.
+    pub fn begin_action(&mut self) {
+        if self.active_action.is_none() {
+            self.active_action = Some(self.recipe.clone());
+        }
+    }
+
+    pub fn mutate_active(&mut self, update: impl FnOnce(&mut EditRecipe)) {
+        update(&mut self.recipe);
+        self.redo.clear();
+    }
+
+    pub fn end_action(&mut self) {
+        let Some(previous) = self.active_action.take() else {
+            return;
+        };
+        if previous == self.recipe {
+            return;
+        }
+        self.undo.push(previous);
+        if self.undo.len() > 100 {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
     pub fn undo(&mut self) -> bool {
+        self.end_action();
         let Some(previous) = self.undo.pop() else {
             return false;
         };
@@ -239,6 +270,7 @@ impl EditSession {
     }
 
     pub fn redo(&mut self) -> bool {
+        self.end_action();
         let Some(next) = self.redo.pop() else {
             return false;
         };
@@ -267,12 +299,7 @@ mod tests {
     #[test]
     fn recipe_round_trip() {
         let mut recipe = EditRecipe::default();
-        recipe.crop = CropRect {
-            left: 0.1,
-            top: 0.2,
-            right: 0.8,
-            bottom: 0.9,
-        };
+        recipe.crop = CropRect { left: 0.1, top: 0.2, right: 0.8, bottom: 0.9 };
         recipe.exposure = 0.7;
         recipe.auto_color = true;
         recipe.sepia = true;
@@ -287,20 +314,27 @@ mod tests {
 
     #[test]
     fn composed_crop_stays_normalized() {
-        let outer = CropRect {
-            left: 0.1,
-            top: 0.1,
-            right: 0.9,
-            bottom: 0.9,
-        };
-        let inner = CropRect {
-            left: 0.25,
-            top: 0.25,
-            right: 0.75,
-            bottom: 0.75,
-        };
+        let outer = CropRect { left: 0.1, top: 0.1, right: 0.9, bottom: 0.9 };
+        let inner = CropRect { left: 0.25, top: 0.25, right: 0.75, bottom: 0.75 };
         let result = outer.compose(inner);
         assert!((result.left - 0.3).abs() < 0.001);
         assert!((result.right - 0.7).abs() < 0.001);
+    }
+
+    #[test]
+    fn continuous_slider_drag_is_one_undo_action() {
+        let mut session = EditSession::new(EditRecipe::default());
+        session.begin_action();
+        session.mutate_active(|recipe| recipe.exposure = 0.2);
+        session.mutate_active(|recipe| recipe.exposure = 0.7);
+        session.mutate_active(|recipe| recipe.exposure = 1.1);
+        session.end_action();
+
+        assert!((session.recipe.exposure - 1.1).abs() < 0.001);
+        assert!(session.undo());
+        assert!(session.recipe.exposure.abs() < 0.001);
+        assert!(!session.undo());
+        assert!(session.redo());
+        assert!((session.recipe.exposure - 1.1).abs() < 0.001);
     }
 }

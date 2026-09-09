@@ -39,12 +39,7 @@ pub fn edited_thumbnail(
         width as usize * 4,
     );
     let paintable: gtk::gdk::Paintable = texture.upcast();
-    cache_insert(
-        path.to_string(),
-        rotation,
-        edit_recipe.to_string(),
-        paintable.clone(),
-    );
+    cache_insert(path.to_string(), rotation, edit_recipe.to_string(), paintable.clone());
     Some(paintable)
 }
 
@@ -56,12 +51,9 @@ pub fn rotated_thumbnail(path: &str, rotation: i32) -> Option<gtk::gdk::Paintabl
 fn cache_get(path: &str, rotation: i32, recipe: &str) -> Option<gtk::gdk::Paintable> {
     EDITED_THUMBNAIL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        let position =
-            cache
-                .iter()
-                .position(|(cached_path, cached_rotation, cached_recipe, _)| {
-                    cached_path == path && *cached_rotation == rotation && cached_recipe == recipe
-                })?;
+        let position = cache.iter().position(|(cached_path, cached_rotation, cached_recipe, _)| {
+            cached_path == path && *cached_rotation == rotation && cached_recipe == recipe
+        })?;
         let entry = cache.remove(position)?;
         let paintable = entry.3.clone();
         cache.push_back(entry);

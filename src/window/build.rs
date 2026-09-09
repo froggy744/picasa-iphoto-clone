@@ -2167,7 +2167,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     {
         let open_edit = open_edit.clone();
         let selected_photo = selected_photo.clone();
+        let main_stack = main_stack.clone();
         info.edit.connect_clicked(move |_| {
+            // The bottom Edit button is a true open/close toggle. This keeps
+            // the editing workspace optional instead of forcing users to use
+            // Back/Done just to return to normal browsing.
+            if main_stack.visible_child_name().as_deref() == Some("edit") {
+                main_stack.set_visible_child_name("photos");
+                return;
+            }
             if let Some(photo) = selected_photo.borrow().as_ref() {
                 open_edit(photo.id());
             }
