@@ -449,13 +449,13 @@ impl Gallery {
         initial_tile_width: i32,
         selected: impl Fn(Option<PhotoObject>) + 'static,
         activate: impl Fn(Vec<PhotoObject>, usize) + 'static,
-        context_menu: impl Fn(PhotoObject, gtk::Widget) + 'static,
+        context_menu: impl Fn(PhotoObject, gtk::Widget, f64, f64) + 'static,
         unavailable: impl Fn(PhotoObject, gtk::Widget) + 'static,
         on_zoom_changed: impl Fn(i32) + 'static,
     ) -> Self {
         let selected: Rc<dyn Fn(Option<PhotoObject>)> = Rc::new(selected);
         let activate: Rc<dyn Fn(Vec<PhotoObject>, usize)> = Rc::new(activate);
-        let context_menu: Rc<dyn Fn(PhotoObject, gtk::Widget)> = Rc::new(context_menu);
+        let context_menu: Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)> = Rc::new(context_menu);
         let unavailable: Rc<dyn Fn(PhotoObject, gtk::Widget)> = Rc::new(unavailable);
         let on_zoom_changed: Rc<dyn Fn(i32)> = Rc::new(on_zoom_changed);
         let store = gio::ListStore::new::<PhotoObject>();
@@ -499,7 +499,6 @@ impl Gallery {
         let factory = gtk::SignalListItemFactory::new();
         let tile_width_for_setup = tile_width.clone();
         let tile_height_for_setup = tile_height.clone();
-        let context_menu_for_setup = context_menu.clone();
         let unavailable_for_setup = unavailable.clone();
         factory.connect_setup(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -590,22 +589,6 @@ impl Gallery {
             tile.set_valign(gtk::Align::Start);
             list_item.set_child(Some(&tile));
 
-            let right_click = gtk::GestureClick::new();
-            right_click.set_button(3);
-            right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
-            let list_item_for_context = list_item.clone();
-            let context_menu = context_menu_for_setup.clone();
-            let frame_for_context = frame.clone();
-            right_click.connect_pressed(move |gesture, _, _, _| {
-                // Claim the secondary-button event before invoking the menu.
-                // Otherwise GtkGridView's selection controller can collapse
-                // an existing multi-selection to the clicked item first.
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                if let Some(photo) = list_item_for_context.item().and_downcast::<PhotoObject>() {
-                    (context_menu)(photo, frame_for_context.clone().upcast());
-                }
-            });
-            frame.add_controller(right_click);
         });
 
         factory.connect_bind(|_, object| {
@@ -631,6 +614,52 @@ impl Gallery {
         root.set_halign(gtk::Align::Fill);
         root.set_valign(gtk::Align::Fill);
         root.add_css_class("section-grid");
+
+        // GridView children are recycled and the pointer may land on any
+        // descendant of a tile. Use one stable controller on GridView, pick
+        // the tile under the pointer, and only claim the event after a bound
+        // photo has been identified. This also preserves an existing
+        // multi-selection by claiming the secondary-button sequence before
+        // GridView's selection controller handles it.
+        let right_click = gtk::GestureClick::new();
+        right_click.set_button(3);
+        right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let context_menu_for_grid = context_menu.clone();
+        let root_for_context = root.clone();
+        right_click.connect_pressed(move |gesture, _, x, y| {
+            let Some(picked) = root_for_context.pick(x, y, gtk::PickFlags::DEFAULT) else {
+                return;
+            };
+            let Some(tile) = picked
+                .ancestor(SquareTile::static_type())
+                .and_downcast::<SquareTile>()
+            else {
+                return;
+            };
+            let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+                return;
+            };
+            let Some(frame) = tile.first_child().and_downcast::<gtk::Overlay>() else {
+                return;
+            };
+
+            let frame_widget = frame.clone().upcast::<gtk::Widget>();
+            let local = root_for_context
+                .compute_point(
+                    &frame_widget,
+                    &gtk::graphene::Point::new(x as f32, y as f32),
+                )
+                .unwrap_or_else(|| gtk::graphene::Point::new(0.0, 0.0));
+
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            (context_menu_for_grid)(
+                photo,
+                frame_widget,
+                local.x() as f64,
+                local.y() as f64,
+            );
+        });
+        root.add_controller(right_click);
 
         // Handle Add Photos clicks on the GridView itself, before the
         // built-in GridView selection controller sees them. This makes the

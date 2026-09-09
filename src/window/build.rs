@@ -181,6 +181,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let search_popup_for_key = search_popup_slot.clone();
     let window_for_fullscreen_key = window.clone();
     window_escape.connect_key_pressed(move |_, key, _, _| {
+        // Escape dismisses the photo context menu before it closes the
+        // lightbox or affects the gallery. This mirrors normal context-menu
+        // behaviour and keeps one Escape press scoped to one UI layer.
+        if key == gtk::gdk::Key::Escape && dismiss_active_photo_context_menu() {
+            return glib::Propagation::Stop;
+        }
+
         // Editing text must not invoke gallery Space/arrow-key shortcuts.
         if !lightbox_for_window_escape.root.is_visible()
             && gtk::prelude::RootExt::focus(&window_for_fullscreen_key)
@@ -361,6 +368,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         })
     };
+    let context_menu_host: Rc<RefCell<Option<glib::WeakRef<gtk::Overlay>>>> =
+        Rc::new(RefCell::new(None));
     let action_context = PhotoActionContext {
         connection: connection.clone(),
         gallery: gallery_for_actions.clone(),
@@ -388,6 +397,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             })
         },
         window: window.clone().upcast::<gtk::Window>().downgrade(),
+        context_menu_host: context_menu_host.clone(),
     };
     let grid_thumbnail_size = grid_thumbnail_size_from_setting(&connection.borrow());
 
@@ -412,8 +422,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         },
         {
             let action_context = action_context.clone();
-            move |photo, anchor| {
-                show_photo_context_menu(photo, anchor, action_context.clone(), 0.0, 0.0);
+            move |photo, anchor, x, y| {
+                show_photo_context_menu(photo, anchor, action_context.clone(), x, y);
             }
         },
         {
@@ -1246,6 +1256,25 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     grid_overlay.set_vexpand(true);
     grid_overlay.set_child(Some(&grid_surface));
     grid_overlay.add_overlay(&lightbox.root);
+    context_menu_host.borrow_mut().replace(grid_overlay.downgrade());
+
+    // The context menu is a normal GtkOverlay child, so give it the
+    // autohide behaviour GtkPopover used to provide. Any pointer press
+    // outside the active menu dismisses it. Presses on menu buttons are
+    // left alone so their normal clicked handlers still run.
+    let context_menu_autohide = gtk::GestureClick::new();
+    context_menu_autohide.set_button(0);
+    context_menu_autohide.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let grid_overlay_for_menu_autohide = grid_overlay.clone();
+    context_menu_autohide.connect_pressed(move |_, _, x, y| {
+        let inside_menu = grid_overlay_for_menu_autohide
+            .pick(x, y, gtk::PickFlags::DEFAULT)
+            .is_some_and(|picked| photo_context_menu_contains(&picked));
+        if !inside_menu {
+            dismiss_active_photo_context_menu();
+        }
+    });
+    grid_overlay.add_controller(context_menu_autohide);
 
     let photo_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
     photo_page.set_hexpand(true);
@@ -2988,6 +3017,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .metric-val { font-size: 13px; font-weight: 500; color: #eeeeee; }\
         .photo-action-button { min-width: 34px; min-height: 34px; padding: 0; border-radius: 7px; color: #ededed; background: #3a3a3a; border: 1px solid #1b1b1b; box-shadow: inset 0 1px rgba(255,255,255,0.12); transition: background 150ms ease; }\
         .photo-action-button:hover { background: #505050; }\
+        .photo-context-menu, .photo-context-menu viewport { background: #3a3a3a; }\
+        .photo-context-menu { border: 1px solid #686868; border-radius: 8px; box-shadow: 0 5px 18px rgba(0,0,0,0.70); }\
+        .photo-context-menu button { min-height: 32px; padding: 6px 10px; color: #f5f5f5; }\
+        .photo-context-menu button:hover { background: #505050; }\
         button.clear-action-button { color: #2e3436; background: #e6e6e6; border: 1px solid #9a9a9a; }\
         button.clear-action-button:hover { color: #1f2325; background: #f0f0f0; border-color: #777777; }\
         button.clear-action-button:active { background: #d2d2d2; }\
