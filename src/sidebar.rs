@@ -882,7 +882,7 @@ fn populate_library(list: &gtk::ListBox, counts: SidebarCounts, on_unavailable: 
     append_filter(
         list,
         "image-x-generic-symbolic",
-        "Photos",
+        "All Photos",
         None,
         Some(counts.photos),
         SidebarFilter::All,

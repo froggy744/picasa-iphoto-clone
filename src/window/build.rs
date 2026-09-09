@@ -1399,14 +1399,20 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             };
             let saved = {
                 let gallery = gallery.clone();
+                let gallery_for_focus = gallery.clone();
                 let selected_photo = selected_photo.clone();
                 let info = info.clone();
                 Rc::new(move |photo: crate::photo_object::PhotoObject| {
                     gallery.update_edit_recipe(photo.id(), &photo.edit_recipe());
-                    if selected_photo.borrow().as_ref().map(|item| item.id()) == Some(photo.id()) {
-                        selected_photo.replace(Some(photo.clone()));
-                        info.set_photo(Some(&photo));
-                    }
+                    selected_photo.replace(Some(photo.clone()));
+                    info.set_photo(Some(&photo));
+                    let photo_id = photo.id();
+                    gallery.select_photo(photo_id);
+                    let gallery_for_focus = gallery_for_focus.clone();
+                    glib::idle_add_local_once(move || {
+                        gallery_for_focus.select_photo(photo_id);
+                        gallery_for_focus.root.grab_focus();
+                    });
                 }) as Rc<dyn Fn(crate::photo_object::PhotoObject)>
             };
             let editor = crate::edit::build_editor(
