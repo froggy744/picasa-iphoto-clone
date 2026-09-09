@@ -246,6 +246,7 @@ You will need the Rust toolchain together with the GTK4 and libadwaita developme
 Packaged releases and easier installation are still part of the ongoing work.
 
 ---
+<img src="samples/search.jpg" alt="PIC Search Mode" width="900">
 
 # Project Status
 
