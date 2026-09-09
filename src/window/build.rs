@@ -1265,16 +1265,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let context_menu_autohide = gtk::GestureClick::new();
     context_menu_autohide.set_button(0);
     context_menu_autohide.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let grid_overlay_for_menu_autohide = grid_overlay.clone();
+    let window_for_menu_autohide = window.clone();
     context_menu_autohide.connect_pressed(move |_, _, x, y| {
-        let inside_menu = grid_overlay_for_menu_autohide
+        let inside_menu = window_for_menu_autohide
             .pick(x, y, gtk::PickFlags::DEFAULT)
             .is_some_and(|picked| photo_context_menu_contains(&picked));
         if !inside_menu {
             dismiss_active_photo_context_menu();
         }
     });
-    grid_overlay.add_controller(context_menu_autohide);
+    window.add_controller(context_menu_autohide);
 
     let photo_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
     photo_page.set_hexpand(true);
