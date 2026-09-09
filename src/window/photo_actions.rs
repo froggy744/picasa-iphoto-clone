@@ -1,5 +1,42 @@
 use gio::prelude::AppInfoExt;
 
+thread_local! {
+    static ACTIVE_PHOTO_MENU: RefCell<Option<gtk::Widget>> = RefCell::new(None);
+}
+
+fn dismiss_active_photo_context_menu() -> bool {
+    ACTIVE_PHOTO_MENU.with(|active| {
+        let Some(menu) = active.borrow_mut().take() else {
+            return false;
+        };
+        menu.set_visible(false);
+        if menu.parent().is_some() {
+            menu.unparent();
+        }
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!("UI TRACE photo_context_menu_dismiss");
+        }
+        true
+    })
+}
+
+fn photo_context_menu_contains(widget: &gtk::Widget) -> bool {
+    ACTIVE_PHOTO_MENU.with(|active| {
+        let active = active.borrow();
+        let Some(menu) = active.as_ref() else {
+            return false;
+        };
+        let mut current = Some(widget.clone());
+        while let Some(item) = current {
+            if item == *menu {
+                return true;
+            }
+            current = item.parent();
+        }
+        false
+    })
+}
+
 fn show_photo_context_menu(
     photo: crate::photo_object::PhotoObject,
     anchor: gtk::Widget,
@@ -7,39 +44,150 @@ fn show_photo_context_menu(
     x: f64,
     y: f64,
 ) {
-    let popover = gtk::Popover::new();
-    popover.set_has_arrow(true);
-    popover.set_parent(&anchor);
-    // Grid context menus use pointer-local coordinates. Lightbox passes a
-    // negative sentinel because its capture controller lives on a different
-    // widget than the stable popover anchor; in that case let GTK position the
-    // popover relative to the viewport instead of giving it invalid coords.
-    if x >= 0.0 && y >= 0.0 {
-        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-            x.round() as i32,
-            y.round() as i32,
-            1,
-            1,
-        )));
-    }
+    // One stable context-menu host is shared by the grid and lightbox.
+    // The menu itself is a normal GtkOverlay child, not a GtkPopover.
+    // This avoids popup/grab/allocation races and recycled-tile parenting.
+    dismiss_active_photo_context_menu();
 
-    let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    // This popover is anchored to a virtualized GridView tile. In that
-    // context GTK can otherwise map the popover before it has calculated a
-    // natural size, resulting in a visible but unusable 0x0 menu.
-    menu.set_width_request(340);
-    menu.set_height_request(1);
-    menu.set_margin_top(6);
-    menu.set_margin_bottom(6);
-    menu.set_margin_start(6);
-    menu.set_margin_end(6);
+    let Some(host) = context
+        .context_menu_host
+        .borrow()
+        .as_ref()
+        .and_then(glib::WeakRef::upgrade)
+    else {
+        return;
+    };
+    let host_widget = host.clone().upcast::<gtk::Widget>();
+    let click_point = if anchor == host_widget {
+        gtk::graphene::Point::new(x as f32, y as f32)
+    } else {
+        let Some(point) = anchor.compute_point(
+            &host_widget,
+            &gtk::graphene::Point::new(x as f32, y as f32),
+        ) else {
+            return;
+        };
+        point
+    };
 
-    let add_action = |label: &str| {
-        let button = gtk::Button::with_label(label);
+    // This is a normal overlay widget rather than GtkPopoverMenu, so the
+    // theme would otherwise give every GtkButton regular toolbar/dialog
+    // padding.  Apply a small context-menu-specific CSS class so rows look
+    // and measure like menu items instead of large push buttons.
+    let css = gtk::CssProvider::new();
+    css.load_from_data(
+        ".photo-context-menu {
+             padding: 6px;
+             border-radius: 12px;
+             border: 1px solid alpha(currentColor, 0.10);
+             background-color: @popover_bg_color;
+             box-shadow: 0 4px 14px alpha(black, 0.16);
+         }
+         .photo-context-item {
+             min-height: 28px;
+             padding: 0 12px;
+             margin: 0;
+             border: 0;
+             border-radius: 6px;
+             background: transparent;
+             box-shadow: none;
+             font-size: 14px;
+             font-weight: 400;
+         }
+         .photo-context-item:hover {
+             background-color: alpha(currentColor, 0.07);
+         }
+         .photo-context-item:disabled {
+             background: transparent;
+             box-shadow: none;
+             opacity: 0.45;
+         }
+         .photo-context-item > label {
+             padding: 0;
+             margin: 0;
+             font-size: 14px;
+             font-weight: 400;
+         }
+         .photo-context-album {
+             min-height: 28px;
+             padding: 0;
+             margin: 0;
+             background: transparent;
+             box-shadow: none;
+         }
+         .photo-context-album > button {
+             min-height: 28px;
+             padding: 0 12px;
+             margin: 0;
+             border: 0;
+             border-radius: 6px;
+             background: transparent;
+             box-shadow: none;
+             font-size: 14px;
+             font-weight: 400;
+         }
+         .photo-context-album > button:hover {
+             background-color: alpha(currentColor, 0.07);
+         }
+         .photo-context-album label {
+             font-size: 14px;
+             font-weight: 400;
+         }
+         .photo-context-album > button > box {
+             padding: 0;
+             margin: 0;
+         }
+         .photo-context-separator {
+             min-height: 1px;
+             padding: 0;
+             margin: 4px 8px;
+         }"
+    );
+    gtk::style_context_add_provider_for_display(
+        &host.display(),
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+
+    let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    menu.set_width_request(236);
+    menu.set_margin_top(0);
+    menu.set_margin_bottom(0);
+    menu.set_margin_start(0);
+    menu.set_margin_end(0);
+
+    let add_action = |text: &str| {
+        let button = gtk::Button::new();
         button.set_halign(gtk::Align::Fill);
+        button.set_height_request(28);
+        button.set_margin_top(0);
+        button.set_margin_bottom(0);
         button.add_css_class("flat");
+        button.add_css_class("photo-context-item");
+
+        let label = gtk::Label::new(Some(text));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        button.set_child(Some(&label));
+
         menu.append(&button);
         button
+    };
+
+    let menu_to_hide: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
+    let dismiss_menu: Rc<dyn Fn()> = {
+        let menu_to_hide = menu_to_hide.clone();
+        Rc::new(move || {
+            if let Some(menu) = menu_to_hide.borrow_mut().take() {
+                menu.set_visible(false);
+                if menu.parent().is_some() {
+                    menu.unparent();
+                }
+            }
+            ACTIVE_PHOTO_MENU.with(|active| {
+                active.borrow_mut().take();
+            });
+        })
     };
 
     let open = add_action("Open");
@@ -50,7 +198,11 @@ fn show_photo_context_menu(
         sidebar::SidebarFilter::Albums
     ))
     .then(|| add_action("Open in Folder"));
-    menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    {
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        separator.add_css_class("photo-context-separator");
+        menu.append(&separator);
+    }
 
     let selection_ids = selected_photo_ids(&context, Some(photo.id()));
     if std::env::var_os("PICASA_TRACE").is_some() {
@@ -64,16 +216,24 @@ fn show_photo_context_menu(
     let selection_provider: Rc<dyn Fn() -> Vec<i64>> =
         Rc::new(move || selection_for_provider.clone());
     let add_to_album = gtk::MenuButton::new();
-    add_to_album.set_label("Add to Album");
     add_to_album.set_direction(gtk::ArrowType::None);
     add_to_album.set_halign(gtk::Align::Fill);
     add_to_album.add_css_class("flat");
+    add_to_album.add_css_class("photo-context-album");
+    add_to_album.set_height_request(28);
+    let album_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let album_label = gtk::Label::new(Some("Add to Album"));
+    album_label.set_xalign(0.0);
+    album_label.set_hexpand(true);
+    let album_arrow = gtk::Image::from_icon_name("pan-end-symbolic");
+    album_row.append(&album_label);
+    album_row.append(&album_arrow);
+    add_to_album.set_child(Some(&album_row));
     add_to_album.set_popover(Some(&build_album_popover(
         context.clone(),
         selection_provider.clone(),
         {
-            let popover = popover.clone();
-            Rc::new(move || popover.popdown())
+            dismiss_menu.clone()
         },
     )));
     menu.append(&add_to_album);
@@ -82,16 +242,20 @@ fn show_photo_context_menu(
     let collage = add_action("Create Collage…");
     collage.set_sensitive(collage_ids.len() >= 2);
     let collage_context = context.clone();
-    let collage_popover = popover.clone();
+    let dismiss_menu_for_collage = dismiss_menu.clone();
     collage.connect_clicked(move |_| {
-        collage_popover.popdown();
+        dismiss_menu_for_collage();
         if std::env::var_os("PICASA_TRACE").is_some() {
             eprintln!("COLLAGE TRACE open ids={:?}", collage_ids);
         }
         (collage_context.open_collage)(collage_ids.clone());
     });
 
-    menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    {
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        separator.add_css_class("photo-context-separator");
+        menu.append(&separator);
+    }
     let copy_edits = add_action("Copy Edits");
     let paste_edits = add_action("Paste Edits");
     let reset_edits = add_action("Reset Edits");
@@ -109,16 +273,16 @@ fn show_photo_context_menu(
     {
         let clipboard = context.edit_clipboard.clone();
         let recipe = clicked_recipe.clone();
-        let popover = popover.clone();
+        let dismiss_menu = dismiss_menu.clone();
         copy_edits.connect_clicked(move |_| {
             clipboard.replace(Some(recipe.clone()));
-            popover.popdown();
+            dismiss_menu();
         });
     }
     {
         let paste_context = context.clone();
         let paste_selection = selection_ids.clone();
-        let popover = popover.clone();
+        let dismiss_menu = dismiss_menu.clone();
         paste_edits.connect_clicked(move |button| {
             let Some(recipe) = paste_context.edit_clipboard.borrow().clone() else {
                 return;
@@ -142,14 +306,14 @@ fn show_photo_context_menu(
                     }
                 }
             }
-            popover.popdown();
+            dismiss_menu();
             refresh_photo_actions_grid(&paste_context);
         });
     }
     {
         let reset_context = context.clone();
         let reset_selection = selection_ids.clone();
-        let popover = popover.clone();
+        let dismiss_menu = dismiss_menu.clone();
         reset_edits.connect_clicked(move |button| {
             for id in &reset_selection {
                 if let Err(error) = db::set_edit_recipe(&reset_context.connection.borrow(), *id, "") {
@@ -170,7 +334,7 @@ fn show_photo_context_menu(
                     }
                 }
             }
-            popover.popdown();
+            dismiss_menu();
             refresh_photo_actions_grid(&reset_context);
         });
     }
@@ -184,7 +348,7 @@ fn show_photo_context_menu(
     let favorite_context = context.clone();
     let favorite_selection = selection_provider.clone();
     let favorite_photo = photo.clone();
-    let popover_for_favorite = popover.clone();
+    let dismiss_menu_for_favorite = dismiss_menu.clone();
     favorite.connect_clicked(move |button| {
         let target = !favorite_photo.favorite();
         let ids = favorite_selection();
@@ -216,7 +380,7 @@ fn show_photo_context_menu(
                 .replace(Some(favorite_photo.clone()));
             favorite_context.info.set_photo(Some(&favorite_photo));
         }
-        popover_for_favorite.popdown();
+        dismiss_menu_for_favorite();
         refresh_photo_actions_grid(&favorite_context);
         refresh_favorite_sidebar(&favorite_context);
     });
@@ -225,9 +389,9 @@ fn show_photo_context_menu(
         let remove = add_action("Remove from Album");
         let remove_context = context.clone();
         let remove_selection = selection_provider.clone();
-        let popover_for_remove = popover.clone();
+        let dismiss_menu_for_remove = dismiss_menu.clone();
         remove.connect_clicked(move |button| {
-            popover_for_remove.popdown();
+            dismiss_menu_for_remove();
             if let Err(error) = db::remove_photos_from_album(
                 &remove_context.connection.borrow(),
                 album_id,
@@ -247,72 +411,89 @@ fn show_photo_context_menu(
             refresh_album_ui(&remove_context);
         });
     }
-    menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    {
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        separator.add_css_class("photo-context-separator");
+        menu.append(&separator);
+    }
     let copy = add_action("Copy");
     let copy_location = add_action("Copy File Location");
-    menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    {
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        separator.add_css_class("photo-context-separator");
+        menu.append(&separator);
+    }
     let move_file = add_action("Move…");
     let rename = add_action("Rename…");
     let file_manager = add_action("Open in File Manager");
     let print = add_action("Print");
     let properties = add_action("Properties");
-    menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    {
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        separator.add_css_class("photo-context-separator");
+        menu.append(&separator);
+    }
     let delete = add_action("Delete");
     delete.add_css_class("destructive-action");
 
     let edit_context = context.clone();
     let edit_id = photo.id();
-    let popover_for_edit = popover.clone();
+    let dismiss_menu_for_edit = dismiss_menu.clone();
     edit.connect_clicked(move |_| {
-        popover_for_edit.popdown();
+        dismiss_menu_for_edit();
         (edit_context.open_edit)(edit_id);
     });
 
     let photo_for_open = photo.clone();
-    let popover_for_open = popover.clone();
+    let dismiss_menu_for_open = dismiss_menu.clone();
     let lightbox_for_open = context.lightbox.clone();
     open.connect_clicked(move |_| {
         if let Some(lightbox) = lightbox_for_open.upgrade() {
             lightbox.open(vec![photo_for_open.clone()], 0);
         }
-        popover_for_open.popdown();
+        dismiss_menu_for_open();
     });
 
     let file = crate::source::file(&photo.path());
     let open_with_file = file.clone();
-    let open_with_anchor = open_with.clone();
-    let popover_for_open_with = popover.clone();
+    let open_with_window = context.window.clone();
+    let dismiss_menu_for_open_with = dismiss_menu.clone();
     open_with.connect_clicked(move |_| {
-        popover_for_open_with.popdown();
-        show_open_with_dialog(open_with_anchor.upcast_ref(), &open_with_file);
+        // The menu is removed before the chooser is presented, so never use
+        // the menu button itself as the dialog parent.  It is unparented at
+        // that point and AdwAlertDialog can fall back to a corner placement.
+        dismiss_menu_for_open_with();
+        if let Some(window) = open_with_window.upgrade() {
+            show_open_with_dialog(window.upcast_ref(), &open_with_file);
+        }
     });
 
     if let Some(open_in_folder) = open_in_folder {
         let folder_id = photo.folder_id();
         let navigate_to_folder = context.navigate_to_folder.clone();
-        let popover_for_folder = popover.clone();
+        let dismiss_menu_for_folder = dismiss_menu.clone();
         let photo_id = photo.id();
         open_in_folder.connect_clicked(move |_| {
             if folder_id != 0 {
                 navigate_to_folder(folder_id, photo_id);
             }
-            popover_for_folder.popdown();
+            dismiss_menu_for_folder();
         });
     }
 
     let path_for_copy = photo.path();
     let display = anchor.display();
-    let popover_for_copy = popover.clone();
+    let dismiss_menu_for_copy = dismiss_menu.clone();
     copy_location.connect_clicked(move |_| {
         display.clipboard().set_text(&path_for_copy);
-        popover_for_copy.popdown();
+        dismiss_menu_for_copy();
     });
 
     let file_for_manager = file.clone();
-    let popover_for_manager = popover.clone();
+    let dismiss_menu_for_manager = dismiss_menu.clone();
     file_manager.connect_clicked(move |_| {
         open_file_in_manager(&file_for_manager);
-        popover_for_manager.popdown();
+        dismiss_menu_for_manager();
     });
 
     // These actions are not implemented yet; do not present them as working
@@ -324,9 +505,9 @@ fn show_photo_context_menu(
     let photo_for_rename = photo.clone();
     let anchor_for_rename = anchor.clone();
     let context_for_rename = context.clone();
-    let popover_for_rename = popover.clone();
+    let dismiss_menu_for_rename = dismiss_menu.clone();
     rename.connect_clicked(move |_| {
-        popover_for_rename.popdown();
+        dismiss_menu_for_rename();
         show_rename_dialog(
             &anchor_for_rename,
             photo_for_rename.clone(),
@@ -337,9 +518,9 @@ fn show_photo_context_menu(
     let photo_for_properties = photo.clone();
     let anchor_for_properties = anchor.clone();
     let context_for_properties = context.clone();
-    let popover_for_properties = popover.clone();
+    let dismiss_menu_for_properties = dismiss_menu.clone();
     properties.connect_clicked(move |_| {
-        popover_for_properties.popdown();
+        dismiss_menu_for_properties();
         show_properties_dialog(
             &anchor_for_properties,
             &photo_for_properties,
@@ -350,9 +531,9 @@ fn show_photo_context_menu(
     let photo_for_delete = photo;
     let anchor_for_delete = anchor.clone();
     let context_for_delete = context;
-    let popover_for_delete = popover.clone();
+    let dismiss_menu_for_delete = dismiss_menu.clone();
     delete.connect_clicked(move |_| {
-        popover_for_delete.popdown();
+        dismiss_menu_for_delete();
         show_delete_confirmation(
             &anchor_for_delete,
             photo_for_delete.clone(),
@@ -360,26 +541,65 @@ fn show_photo_context_menu(
         );
     });
 
-    popover.set_child(Some(&menu));
-    // GridView tiles are virtualized. Defer opening until the selection and
-    // allocation pass triggered by the secondary-button event has completed;
-    // otherwise the popover can remain unmapped at 0x0.
-    let popover_for_popup = popover.clone();
-    glib::idle_add_local_once(move || {
-        popover_for_popup.popup();
+    // Render the same menu UI for both grid thumbnails and lightbox photos.
+    // A normal overlay child is always allocated by GtkOverlay, so there is
+    // no GtkPopover 0x0/popup lifecycle to fail.
+    let menu_host = gtk::ScrolledWindow::new();
+    menu_host.add_css_class("photo-context-menu");
+    menu_host.add_css_class("card");
+    menu_host.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    menu_host.set_has_frame(false);
+    menu_host.set_propagate_natural_height(true);
+    // A context menu should never expand into a near full-height panel.
+    // Keep enough room for the common actions and scroll only the overflow.
+    menu_host.set_max_content_height((host.height() - 32).clamp(1, 460));
+    menu_host.set_width_request(272);
+    menu_host.set_halign(gtk::Align::Start);
+    menu_host.set_valign(gtk::Align::Start);
+    menu_host.set_can_target(true);
+    menu_host.set_child(Some(&menu));
+
+    // Centre the menu on the pointer instead of treating the pointer as the
+    // menu's top-left corner.  Measure after the complete menu has been built
+    // so the centring also follows dynamic items such as album actions.
+    let (_, natural_width, _, _) = menu_host.measure(gtk::Orientation::Horizontal, -1);
+    let measured_width = natural_width.max(272).min(host.width().max(1));
+    let (_, natural_height, _, _) =
+        menu_host.measure(gtk::Orientation::Vertical, measured_width);
+    let measured_height = natural_height
+        .max(1)
+        .min(menu_host.max_content_height().max(1));
+
+    let menu_x = (click_point.x().round() as i32 - measured_width / 2)
+        .clamp(0, (host.width() - measured_width).max(0));
+    let menu_y = (click_point.y().round() as i32 - measured_height / 2)
+        .clamp(0, (host.height() - measured_height).max(0));
+    menu_host.set_margin_start(menu_x);
+    menu_host.set_margin_top(menu_y);
+
+    let menu_widget = menu_host.clone().upcast::<gtk::Widget>();
+    menu_to_hide.borrow_mut().replace(menu_widget.clone());
+    ACTIVE_PHOTO_MENU.with(|active| {
+        active.borrow_mut().replace(menu_widget);
     });
+
     if std::env::var_os("PICASA_TRACE").is_some() {
-        let popover = popover.clone();
-        glib::idle_add_local_once(move || {
-            eprintln!(
-                "UI TRACE photo_context_menu visible={} mapped={} size={}x{}",
-                popover.is_visible(),
-                popover.is_mapped(),
-                popover.width(),
-                popover.height()
-            );
-        });
+        eprintln!(
+            "UI TRACE photo_context_menu_show host=GtkOverlay anchor={} host_size={}x{} point=({:.1},{:.1}) menu=({}, {}) measured={}x{}",
+            anchor.type_().name(),
+            host.width(),
+            host.height(),
+            click_point.x(),
+            click_point.y(),
+            menu_x,
+            menu_y,
+            measured_width,
+            measured_height
+        );
     }
+
+    host.add_overlay(&menu_host);
+    menu_host.set_visible(true);
 }
 
 fn open_file_in_manager(file: &gio::File) {

@@ -78,6 +78,10 @@ const STANDARD_GTK4_CSS: &str = r#"
     .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: alpha(@theme_fg_color, 0.55); }
     .photo-action-button { border-radius: 8px; color: @theme_fg_color; background: alpha(@theme_fg_color, 0.05); border: 1px solid alpha(@theme_fg_color, 0.10); box-shadow: none; }
     .photo-action-button:hover { background: alpha(@theme_fg_color, 0.12); }
+    .photo-context-menu, .photo-context-menu viewport { background: @window_bg_color; }
+    .photo-context-menu { border: 1px solid alpha(@theme_fg_color, 0.18); border-radius: 8px; box-shadow: 0 5px 18px alpha(#000000, 0.40); }
+    .photo-context-menu button { color: @theme_fg_color; min-height: 32px; padding: 6px 10px; }
+    .photo-context-menu button:hover { background: alpha(@theme_fg_color, 0.10); }
     button.clear-action-button { color: #2e3436; background: #e6e6e6; border: 1px solid #9a9a9a; }
     button.clear-action-button:hover { color: #1f2325; background: #f0f0f0; border-color: #777777; }
     button.clear-action-button:active { background: #d2d2d2; }
@@ -306,6 +310,7 @@ struct PhotoActionContext {
     open_edit: Rc<dyn Fn(i64)>,
     edit_clipboard: Rc<RefCell<Option<String>>>,
     window: glib::WeakRef<gtk::Window>,
+    context_menu_host: Rc<RefCell<Option<glib::WeakRef<gtk::Overlay>>>>,
 }
 
 include!("window/build.rs");

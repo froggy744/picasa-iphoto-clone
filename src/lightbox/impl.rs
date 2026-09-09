@@ -181,6 +181,14 @@ impl Lightbox {
         let viewport_for_visibility = picture_viewport.clone();
         root.connect_visible_notify(move |root| {
             if !root.is_visible() {
+                let mut child = root.first_child();
+                while let Some(widget) = child {
+                    child = widget.next_sibling();
+                    if widget.has_css_class("photo-context-menu") {
+                        widget.set_visible(false);
+                        widget.unparent();
+                    }
+                }
                 one_to_one_for_visibility.set(false);
                 zoom_for_visibility.set(0.0);
                 picture_for_visibility.set_can_shrink(true);
@@ -211,7 +219,24 @@ impl Lightbox {
                 })
                 .unwrap_or(false);
 
-            if !inside_picture {
+            // The photo context menu is a normal overlay child of the root.
+            // Treat clicks on it as inside the lightbox so the capture-phase
+            // backdrop handler does not close the viewer before its buttons
+            // receive the click.
+            let inside_context_menu = root_for_outside
+                .pick(x, y, gtk::PickFlags::DEFAULT)
+                .is_some_and(|picked| {
+                    let mut current = Some(picked);
+                    while let Some(widget) = current {
+                        if widget.has_css_class("photo-context-menu") {
+                            return true;
+                        }
+                        current = widget.parent();
+                    }
+                    false
+                });
+
+            if !inside_picture && !inside_context_menu {
                 root_for_outside.set_visible(false);
                 gesture.set_state(gtk::EventSequenceState::Claimed);
             }
