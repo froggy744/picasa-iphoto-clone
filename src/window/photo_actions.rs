@@ -334,6 +334,9 @@ fn show_photo_context_menu(
                     }
                 }
             }
+            if let Some(lightbox) = reset_context.lightbox.upgrade() {
+                lightbox.refresh_current();
+            }
             dismiss_menu();
             refresh_photo_actions_grid(&reset_context);
         });
