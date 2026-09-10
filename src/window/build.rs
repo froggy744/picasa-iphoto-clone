@@ -566,10 +566,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         show_photo_context_menu(photo, anchor, action_context_for_lightbox.clone(), x, y);
     });
 
-    // Folder-mode collection navigation. Left/Right and the mouse wheel stay
-    // inside the current folder; Up/Down switches to the previous/next folder
-    // shown by the sidebar. Other Library/Album/Favourites views do not use
-    // Up/Down for collection switching.
+    // Existing collection navigation remains available to the non-Folder
+    // lightbox views. Folder mode no longer switches collections: its gallery
+    // already contains the complete continuous folder stream.
     let connection_for_collection_nav = connection.clone();
     let filter_for_collection_nav = filter.clone();
     let search_for_collection_nav = search_text.clone();
@@ -586,7 +585,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
         let step: isize = if direction < 0 { -1 } else { 1 };
         let current_filter = filter_for_collection_nav.get();
-        if !matches!(current_filter, sidebar::SidebarFilter::Folder(_)) {
+        // Folder mode is already one continuous collection, so Up/Down must
+        // not rebuild the grid into another single-folder page. Other existing
+        // collection navigation (Albums/Library) keeps its previous behavior.
+        if matches!(current_filter, sidebar::SidebarFilter::Folder(_)) {
             return;
         }
         let search = search_for_collection_nav.borrow().clone();
@@ -1089,42 +1091,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }
     });
 
-    // In Folder mode, Up/Down is reserved for previous/next folder navigation.
-    // In every other view the key event is left untouched for normal GTK/grid
-    // behaviour. Left/Right remains available for thumbnail navigation.
-    let collection_navigation_for_thumbnails = collection_navigation.clone();
-    let filter_for_thumbnail_navigation = filter.clone();
-    let thumbnail_navigation = gtk::EventControllerKey::new();
-    thumbnail_navigation.set_propagation_phase(gtk::PropagationPhase::Capture);
-    thumbnail_navigation.connect_key_pressed(move |_, key, _, modifiers| {
-        let direction = match key {
-            gtk::gdk::Key::Up => -1,
-            gtk::gdk::Key::Down => 1,
-            _ => return glib::Propagation::Proceed,
-        };
-        if !matches!(
-            filter_for_thumbnail_navigation.get(),
-            sidebar::SidebarFilter::Folder(_)
-        ) {
-            return glib::Propagation::Proceed;
-        }
-        if modifiers.intersects(
-            gtk::gdk::ModifierType::ALT_MASK
-                | gtk::gdk::ModifierType::SUPER_MASK
-                | gtk::gdk::ModifierType::META_MASK,
-        ) {
-            return glib::Propagation::Proceed;
-        }
-
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "SEARCH TRACE thumbnail_folder_navigation key={key:?} direction={direction}"
-            );
-        }
-        collection_navigation_for_thumbnails(direction);
-        glib::Propagation::Stop
-    });
-    gallery.root.add_controller(thumbnail_navigation);
+    // Folder mode now uses native GridView keyboard behavior. Folder-to-folder
+    // movement comes from the continuous model itself; there is no special
+    // Up/Down collection switch here anymore.
 
     collection_navigation_slot.replace(Some(collection_navigation.clone()));
     let collection_navigation_for_lightbox = collection_navigation.clone();
@@ -1139,126 +1108,108 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let grid_scroll = gtk::ScrolledWindow::new();
     grid_scroll.set_vexpand(true);
     grid_scroll.set_hexpand(true);
-    // GtkGridView implements GtkScrollable and must remain the direct child of
-    // GtkScrolledWindow. Wrapping it in a Box/Viewport caused the restored vs
-    // maximized allocation bug and destroyed visible-item virtualization.
+    // GtkGridView remains the direct scrollable child for every non-Folder
+    // view, preserving its existing virtualization and selection behavior.
     grid_scroll.set_child(Some(&gallery.root));
 
+    let folder_scroll = gtk::ScrolledWindow::new();
+    folder_scroll.set_vexpand(true);
+    folder_scroll.set_hexpand(true);
+    // Folder mode uses its own virtualized ListView. Full-width folder headers
+    // are ordinary ListView rows, so they move away naturally with the photos.
+    folder_scroll.set_child(Some(&gallery.folder_root));
+
+    let gallery_scroll_stack = gtk::Stack::new();
+    gallery_scroll_stack.set_hexpand(true);
+    gallery_scroll_stack.set_vexpand(true);
+    gallery_scroll_stack.add_named(&grid_scroll, Some("grid"));
+    gallery_scroll_stack.add_named(&folder_scroll, Some("folders"));
+    {
+        let gallery_scroll_stack = gallery_scroll_stack.clone();
+        gallery.set_folder_view_changed_handler(move |folder_mode| {
+            gallery_scroll_stack.set_visible_child_name(if folder_mode {
+                "folders"
+            } else {
+                "grid"
+            });
+        });
+    }
+
     let gallery_for_group_scroll = gallery.clone();
-    let sidebar_for_scroll_location = sidebar_selection_slot.clone();
-    let filter_for_scroll_location = filter.clone();
     grid_scroll
         .vadjustment()
         .connect_value_changed(move |adjustment| {
-            let scroll_y = adjustment.value();
-            gallery_for_group_scroll.update_group_header_for_scroll(scroll_y);
+            gallery_for_group_scroll.update_group_header_for_scroll(adjustment.value());
+        });
 
-            // Sidebar folder tracking is deliberately limited to Folder view.
-            // Library, Favourites, Albums, Search, etc. must not move the folder
-            // sidebar merely because their grids contain photos from folders.
-            if matches!(filter_for_scroll_location.get(), sidebar::SidebarFilter::Folder(_)) {
+    let gallery_for_folder_scroll = gallery.clone();
+    let sidebar_for_scroll_location = sidebar_selection_slot.clone();
+    let filter_for_scroll_location = filter.clone();
+    folder_scroll
+        .vadjustment()
+        .connect_value_changed(move |adjustment| {
+            let scroll_y = adjustment.value();
+            // This stores the active adjustment for view restoration. Folder
+            // mode deliberately has no external/sticky group heading.
+            gallery_for_folder_scroll.update_group_header_for_scroll(scroll_y);
+
+            // Sidebar follow is Folder-mode only. It is visual tracking, not
+            // navigation: changing the highlighted row must never reload the
+            // continuous stream.
+            if matches!(
+                filter_for_scroll_location.get(),
+                sidebar::SidebarFilter::Folder(_)
+            ) {
+                let folder_id = gallery_for_folder_scroll
+                    .photo_for_scroll_position(scroll_y)
+                    .map(|photo| photo.folder_id())
+                    .filter(|folder_id| *folder_id > 0);
+                if let Some(folder_id) = folder_id {
+                    filter_for_scroll_location
+                        .set(sidebar::SidebarFilter::Folder(folder_id));
+                }
                 if let Some(sidebar) = sidebar_for_scroll_location.borrow().as_ref() {
-                    let folder_id = gallery_for_group_scroll
-                        .photo_for_scroll_position(scroll_y)
-                        .map(|photo| photo.folder_id());
                     sidebar::set_scroll_location(sidebar, folder_id);
                 }
             }
         });
 
-    let grid_zoom_scroll =
-        gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
-    let gallery_for_zoom_scroll = gallery.clone();
-    let grid_scroll_for_folder_wheel = grid_scroll.clone();
-    let filter_for_folder_wheel = filter.clone();
-    let collection_navigation_for_wheel = collection_navigation.clone();
-    grid_zoom_scroll.connect_scroll(move |controller, _, dy| {
-        if controller
-            .current_event_state()
-            .contains(gtk::gdk::ModifierType::CONTROL_MASK)
-        {
-            if dy < 0.0 {
-                gallery_for_zoom_scroll.zoom_in();
-            } else if dy > 0.0 {
-                gallery_for_zoom_scroll.zoom_out();
+    let make_zoom_controller = |gallery: Rc<grid::Gallery>| {
+        let controller =
+            gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        controller.connect_scroll(move |controller, _, dy| {
+            if controller
+                .current_event_state()
+                .contains(gtk::gdk::ModifierType::CONTROL_MASK)
+            {
+                if dy < 0.0 {
+                    gallery.zoom_in();
+                } else if dy > 0.0 {
+                    gallery.zoom_out();
+                }
+                return glib::Propagation::Stop;
             }
-            return glib::Propagation::Stop;
-        }
 
-        // Folder view should feel like one continuous photo strip. Let GTK
-        // perform ordinary smooth scrolling while there is more of the current
-        // folder to show. Only when the wheel continues past the top/bottom do
-        // we switch to the adjacent folder. Other views keep GTK's normal
-        // scrolling behaviour unchanged.
-        if dy == 0.0
-            || !matches!(
-                filter_for_folder_wheel.get(),
-                sidebar::SidebarFilter::Folder(_)
-            )
-        {
-            return glib::Propagation::Proceed;
-        }
-
-        let adjustment = grid_scroll_for_folder_wheel.vadjustment();
-        let lower = adjustment.lower();
-        let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
-        let value = adjustment.value();
-        // A tiny tolerance avoids requiring a mathematically exact endpoint
-        // with touchpads/high-resolution mouse wheels.
-        const EDGE_EPSILON: f64 = 2.0;
-        let direction = if dy < 0.0 { -1 } else { 1 };
-        let at_edge = if direction < 0 {
-            value <= lower + EDGE_EPSILON
-        } else {
-            value >= upper - EDGE_EPSILON
-        };
-
-        if !at_edge {
-            return glib::Propagation::Proceed;
-        }
-
-        let previous_filter = filter_for_folder_wheel.get();
-        collection_navigation_for_wheel(direction);
-        if filter_for_folder_wheel.get() == previous_filter {
-            // There is no adjacent folder in this direction. Leave the wheel
-            // event to GTK so the normal edge/overscroll behaviour remains.
-            return glib::Propagation::Proceed;
-        }
-
-        let gallery = gallery_for_zoom_scroll.clone();
-        let scrolled = grid_scroll_for_folder_wheel.clone();
-        glib::idle_add_local_once(move || {
-            let adjustment = scrolled.vadjustment();
-            let lower = adjustment.lower();
-            let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
-            if direction < 0 {
-                // Entering the previous folder from its bottom keeps the
-                // wheel direction spatially natural.
-                gallery.select_last_photo();
-                adjustment.set_value(upper);
-            } else {
-                // Entering the next folder starts at its top.
-                adjustment.set_value(lower);
-            }
-            gallery.root.grab_focus();
+            // Plain wheel/touchpad input is never intercepted. The current
+            // folder header and the following folder are part of one scroll.
+            glib::Propagation::Proceed
         });
-
-        glib::Propagation::Stop
-    });
-    grid_scroll.add_controller(grid_zoom_scroll);
+        controller
+    };
+    grid_scroll.add_controller(make_zoom_controller(gallery.clone()));
+    folder_scroll.add_controller(make_zoom_controller(gallery.clone()));
 
     // While the sidebar divider is being dragged, keep the gallery column
     // count fixed. Otherwise every few pixels can cross a column threshold
-    // and GtkGridView repeatedly reflows all visible thumbnails, which looks
-    // like the grid is juggling back and forth. The final width is applied
-    // once when the drag ends.
+    // and repeatedly rebuild visible rows. Apply the final width once after
+    // the drag ends.
     let sidebar_resize_active = Rc::new(Cell::new(false));
     let gallery_for_resize = gallery.clone();
     let sidebar_resize_active_for_tick = sidebar_resize_active.clone();
-    grid_scroll.add_tick_callback(move |scrolled, _clock| {
+    gallery_scroll_stack.add_tick_callback(move |surface, _clock| {
         crate::diagnostics::scroll_tick();
         if !sidebar_resize_active_for_tick.get() {
-            let width = scrolled.width();
+            let width = surface.width();
             if width > 100 {
                 gallery_for_resize.update_width(width);
             }
@@ -1270,11 +1221,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     grid_surface.set_hexpand(true);
     grid_surface.set_vexpand(true);
     grid_surface.add_css_class("photo-grid");
-    // The group heading sits outside the scroller, so it cannot change
-    // GtkGridView's item/row measurements. With grouping disabled it is hidden
-    // and the gallery has the same geometry as the pre-grouping implementation.
+    // Date grouping keeps its existing heading. Folder grouping hides this
+    // widget and renders its headers inside the folder scroller instead.
     grid_surface.append(&gallery.group_header);
-    grid_surface.append(&grid_scroll);
+    grid_surface.append(&gallery_scroll_stack);
 
     let grid_overlay = gtk::Overlay::new();
     grid_overlay.set_hexpand(true);
@@ -1515,11 +1465,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     });
 
     // Keep the UI state reset when the lightbox is closed through any path.
-    // Restore both the GridView selection and keyboard focus. Merely focusing
-    // the GridView container is not enough after the lightbox owned focus:
-    // GTK can lose the active list cursor, so arrow keys appear dead.
+    // Restore the current photo into the shared gallery selection and focus the
+    // view that is actually visible (GridView normally, Folder ListView while
+    // browsing the continuous Picasa-style Folder stream).
     let one_to_one_for_visibility = info.one_to_one.clone();
-    let gallery_for_lightbox_close = gallery.root.clone();
+    let gallery_for_lightbox_close = gallery.clone();
     let selected_photo_for_lightbox_close = selected_photo.clone();
     lightbox.root.connect_visible_notify(move |root| {
         if !root.is_visible() {
@@ -1528,17 +1478,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let gallery = gallery_for_lightbox_close.clone();
             let selected_photo = selected_photo_for_lightbox_close.borrow().clone();
             glib::idle_add_local_once(move || {
-                if let (Some(photo), Some(model)) = (selected_photo, gallery.model()) {
-                    for position in 0..model.n_items() {
-                        let matches = model
-                            .item(position)
-                            .and_downcast::<crate::photo_object::PhotoObject>()
-                            .is_some_and(|item| item.id() == photo.id());
-                        if matches {
-                            model.select_item(position, true);
-                            break;
-                        }
-                    }
+                if let Some(photo) = selected_photo {
+                    gallery.select_photo(photo.id());
                 }
                 gallery.grab_focus();
             });
@@ -1690,6 +1631,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let connection_for_albums = connection.clone();
         let album_home_click_slot = album_home_click_slot.clone();
         Rc::new(move |new_filter| {
+            let folder_target = if let sidebar::SidebarFilter::Folder(folder_id) = new_filter {
+                db::folders(&connection.borrow())
+                    .ok()
+                    .and_then(|folders| folders.into_iter().find(|folder| folder.id == folder_id))
+                    .map(|folder| (folder.id, folder.path))
+            } else {
+                None
+            };
+            // Once the continuous Folder stream is loaded, clicking another
+            // folder should be a scroll operation, not another database query
+            // and model rebuild. An active global search is the exception: its
+            // grid model is not the Folder stream, so it must be reloaded.
+            let reuse_folder_stream = search_text.borrow().is_empty()
+                && matches!(filter.get(), sidebar::SidebarFilter::Folder(_))
+                && folder_target.is_some();
+
             if let Some(source) = debounce.borrow_mut().take() {
                 source.remove();
             }
@@ -1724,7 +1681,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
             main_stack.set_visible_child_name("photos");
             apply_gallery_grouping(&gallery, new_filter, sort.get(), group_mode.get());
-            refresh_grid(&connection, new_filter, "", sort.get(), &gallery);
+            if let Some((folder_id, folder_path)) = folder_target {
+                if reuse_folder_stream && gallery.scroll_to_folder(folder_id, &folder_path) {
+                    return;
+                }
+                refresh_grid_to_folder(
+                    &connection,
+                    new_filter,
+                    "",
+                    sort.get(),
+                    &gallery,
+                    folder_id,
+                    folder_path,
+                );
+            } else {
+                refresh_grid(&connection, new_filter, "", sort.get(), &gallery);
+            }
         })
     };
 
@@ -1882,6 +1854,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         folder_display_mode,
         {
             let connection = connection.clone();
+            let filter = filter.clone();
+            let sort = sort.clone();
+            let gallery = gallery.clone();
+            let group_mode = group_mode.clone();
             Rc::new(move |mode| {
                 if let Err(error) = db::set_setting(
                     &connection.borrow(),
@@ -1889,6 +1865,43 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     mode.setting_value(),
                 ) {
                     eprintln!("Could not save folder display mode: {error}");
+                }
+
+                let current_filter = filter.get();
+                if let sidebar::SidebarFilter::Folder(folder_id) = current_filter {
+                    let folder_path = db::folders(&connection.borrow())
+                        .ok()
+                        .and_then(|folders| {
+                            folders
+                                .into_iter()
+                                .find(|folder| folder.id == folder_id)
+                                .map(|folder| folder.path)
+                        });
+                    apply_gallery_grouping(
+                        &gallery,
+                        current_filter,
+                        sort.get(),
+                        group_mode.get(),
+                    );
+                    if let Some(folder_path) = folder_path {
+                        refresh_grid_to_folder(
+                            &connection,
+                            current_filter,
+                            "",
+                            sort.get(),
+                            &gallery,
+                            folder_id,
+                            folder_path,
+                        );
+                    } else {
+                        refresh_grid(
+                            &connection,
+                            current_filter,
+                            "",
+                            sort.get(),
+                            &gallery,
+                        );
+                    }
                 }
             })
         },
@@ -2146,7 +2159,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let sidebar_resize_active_for_end = sidebar_resize_active.clone();
     let sidebar_resize_preview_end = sidebar_resize_preview.clone();
     let gallery_for_sidebar_drag_end = gallery.clone();
-    let grid_scroll_for_sidebar_drag_end = grid_scroll.clone();
+    let gallery_surface_for_sidebar_drag_end = gallery_scroll_stack.clone();
     sidebar_drag.connect_drag_end(move |_, _, _| {
         sidebar_resize_preview_end.set_visible(false);
         main_split_for_drag_end
@@ -2156,9 +2169,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         // Wait until the split view has received its single final allocation,
         // then perform exactly one responsive grid update.
         let gallery = gallery_for_sidebar_drag_end.clone();
-        let scrolled = grid_scroll_for_sidebar_drag_end.clone();
+        let surface = gallery_surface_for_sidebar_drag_end.clone();
         glib::idle_add_local_once(move || {
-            let width = scrolled.width();
+            let width = surface.width();
             if width > 100 {
                 gallery.update_width(width);
             }
@@ -2460,6 +2473,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let filter_for_search = filter.clone();
     let search_text_for_search = search_text.clone();
     let sort_for_search = sort.clone();
+    let group_mode_for_search = group_mode.clone();
     let search_suppressed_for_search = search_suppressed.clone();
     let search_debounce_for_search = search_debounce.clone();
     let destination_click_for_search = destination_click.clone();
@@ -2489,6 +2503,27 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             // not lag behind the sidebar and scan results.
             let folders_for_search = folder_cache_for_search.borrow().clone();
             search_text_for_search.replace(query.clone());
+            // Search is a global results view even when it was started from a
+            // folder. Temporarily leave the Folder stream while text is active;
+            // clearing the query restores the continuous Folder view.
+            if matches!(filter_for_search.get(), sidebar::SidebarFilter::Folder(_)) {
+                if query.is_empty() {
+                    apply_gallery_grouping(
+                        &gallery_for_search,
+                        filter_for_search.get(),
+                        sort_for_search.get(),
+                        group_mode_for_search.get(),
+                    );
+                } else {
+                    gallery_for_search.set_grouping(
+                        grid::GroupMode::None,
+                        grid::GroupDate::Taken,
+                    );
+                    if let Some(sidebar) = sidebar_selection_for_search.borrow().as_ref() {
+                        sidebar::set_scroll_location(sidebar, None);
+                    }
+                }
+            }
             eprintln!(
                 "SEARCH TRACE changed folders_cached count={} query_chars={} entry_width={} area_width={} header_width={} sidebar_shown={} split_collapsed={}",
                 folders_for_search.len(),
@@ -2576,6 +2611,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let filter_for_activate = filter.clone();
     let connection_for_activate = connection.clone();
     let sort_for_activate = sort.clone();
+    let group_mode_for_activate = group_mode.clone();
     let gallery_for_activate = gallery.clone();
     let suggestion_popover_for_activate = suggestion_popover.clone();
     search.connect_activate(move |entry| {
@@ -2585,6 +2621,18 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let query = entry.text().to_string();
         search_text_for_activate.replace(query.clone());
         suggestion_popover_for_activate.popdown();
+        if matches!(filter_for_activate.get(), sidebar::SidebarFilter::Folder(_)) {
+            if query.is_empty() {
+                apply_gallery_grouping(
+                    &gallery_for_activate,
+                    filter_for_activate.get(),
+                    sort_for_activate.get(),
+                    group_mode_for_activate.get(),
+                );
+            } else {
+                gallery_for_activate.set_grouping(grid::GroupMode::None, grid::GroupDate::Taken);
+            }
+        }
         refresh_grid(
             &connection_for_activate,
             filter_for_activate.get(),
@@ -2794,7 +2842,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     group_day.set_group(Some(&group_none));
     group_month.set_group(Some(&group_none));
     match group_mode.get() {
-        grid::GroupMode::None => group_none.set_active(true),
+        grid::GroupMode::None | grid::GroupMode::Folder => group_none.set_active(true),
         grid::GroupMode::Day => group_day.set_active(true),
         grid::GroupMode::Month => group_month.set_active(true),
     }
@@ -3034,6 +3082,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .search-field entry { background: transparent; border: none; box-shadow: none; color: #f5f5f5; }\
         .photo-grid { background: #292929; }\
         scrolledwindow undershoot { background: transparent; }\
+        listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }\
+        listview.folder-stream > row { padding: 0; margin: 0; background: transparent; background-image: none; box-shadow: none; }\
+        listview.folder-stream > row:hover, listview.folder-stream > row:selected, listview.folder-stream > row:focus, listview.folder-stream > row:active { background: transparent; background-image: none; outline: none; box-shadow: none; }\
+        .folder-section-header { background: transparent; }\
+        .folder-section-title { color: #f0f0f0; font-weight: 700; font-size: 14px; text-shadow: 0 1px #151515; }\
+        .folder-section-count { color: #a8a8a8; font-size: 12px; }\
+        .folder-section-icon { color: #c8c8c8; opacity: 0.9; }\
+        .folder-section-separator { margin-top: 7px; opacity: 0.42; }\
+        .folder-photo-row { background: transparent; }\
+        .folder-photo-selected { border-color: #78b9e8; box-shadow: 0 0 0 1px #c6e6ff, 0 3px 10px rgba(0,0,0,0.75); }\
+        .folder-photo-selected .selection-badge { opacity: 1; }\
         gridview.section-grid { background: transparent; padding: 20px 20px 24px 20px; }\
         gridview.section-grid > child, gridview.section-grid > item { padding: 6px; margin: 0; background: transparent; background-image: none; box-shadow: none; border-radius: 10px; }\
         gridview.section-grid > child:hover, gridview.section-grid > child:selected, gridview.section-grid > child:focus, gridview.section-grid > child:active, gridview.section-grid > item:hover, gridview.section-grid > item:selected, gridview.section-grid > item:focus, gridview.section-grid > item:active { background: transparent; background-image: none; outline: none; box-shadow: none; }\

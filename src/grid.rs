@@ -47,6 +47,7 @@ mod square_tile {
         pub height: Cell<i32>,
         pub favorite_indicators_visible: Cell<bool>,
         pub photo: RefCell<Option<PhotoObject>>,
+        pub visual_loaded: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -143,17 +144,27 @@ impl SquareTile {
         }
     }
 
-    fn bind_photo(&self, photo: &PhotoObject) {
-        if self
+    fn set_photo_deferred(&self, photo: &PhotoObject) {
+        let same_photo = self
             .imp()
             .photo
             .borrow()
             .as_ref()
-            .is_some_and(|current| current.id() == photo.id())
-        {
+            .is_some_and(|current| current.id() == photo.id());
+        if same_photo {
             return;
         }
+        self.unload_visual();
         self.imp().photo.replace(Some(photo.clone()));
+    }
+
+    fn load_visual(&self) {
+        if self.imp().visual_loaded.get() {
+            return;
+        }
+        let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
+            return;
+        };
         photo.set_original_available(crate::source::cached_file_available(&photo.path()));
         if let Some(path) = photo.cached_thumbnail_path() {
             let available = std::path::Path::new(&path).is_file();
@@ -176,6 +187,63 @@ impl SquareTile {
         }
         crate::diagnostics::visible_thumbnail(photo.thumbnail_available());
         self.refresh_thumbnail_with_probe(false);
+        self.imp().visual_loaded.set(true);
+    }
+
+    fn unload_visual(&self) {
+        self.imp().visual_loaded.set(false);
+        if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
+            if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
+                picture.set_paintable(gtk::gdk::Paintable::NONE);
+            }
+        }
+    }
+
+    fn bind_photo(&self, photo: &PhotoObject) {
+        self.set_photo_deferred(photo);
+        self.load_visual();
+    }
+
+    fn clear_photo(&self) {
+        self.unload_visual();
+        self.imp().photo.take();
+        if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
+            if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
+                picture.set_paintable(gtk::gdk::Paintable::NONE);
+                picture.set_tooltip_text(None);
+            }
+            for class_name in ["manual-selected", "folder-photo-selected"] {
+                frame.remove_css_class(class_name);
+            }
+            let mut child = frame.first_child();
+            while let Some(current) = child {
+                if let Some(image) = current.downcast_ref::<gtk::Image>() {
+                    if image.has_css_class("favorite-badge")
+                        || image.has_css_class("edited-badge")
+                        || image.has_css_class("selection-badge")
+                    {
+                        image.set_visible(false);
+                    }
+                }
+                if let Some(button) = current.downcast_ref::<gtk::Button>() {
+                    if button.has_css_class("offline-badge") {
+                        button.set_visible(false);
+                    }
+                }
+                child = current.next_sibling();
+            }
+        }
+    }
+
+    fn set_manual_selected(&self, selected: bool) {
+        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+        if selected {
+            frame.add_css_class("folder-photo-selected");
+        } else {
+            frame.remove_css_class("folder-photo-selected");
+        }
     }
 
     fn refresh_thumbnail(&self) {
@@ -401,6 +469,10 @@ pub enum GroupMode {
     None,
     Day,
     Month,
+    /// Internal grouping used by Folder mode. This is not a user-selectable
+    /// Library grouping preference; it divides the continuous Picasa-style
+    /// Folder stream into real, non-sticky scrolling sections.
+    Folder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -414,6 +486,323 @@ struct GroupRange {
     start: usize,
     end: usize,
     label: String,
+    // Folder groups also carry their id so equal basenames do not merge.
+    folder_id: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum FolderRowKind {
+    #[default]
+    Header,
+    Photos,
+}
+
+const FOLDER_PHOTO_CHUNK_SIZE: usize = 8;
+
+#[derive(Clone, Default)]
+pub(crate) struct FolderRowData {
+    kind: FolderRowKind,
+    folder_id: i64,
+    folder_path: String,
+    label: String,
+    count: usize,
+    photos: Vec<PhotoObject>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FolderVirtualRow {
+    kind: FolderRowKind,
+    start: usize,
+    end: usize,
+}
+
+/// Folder mode uses a stable virtualized model: one lightweight header row
+/// plus fixed-size photo chunks. Chunk boundaries never depend on zoom or
+/// viewport width, so changing columns cannot reshape the ListStore.
+fn folder_virtual_rows(ranges: &[GroupRange]) -> Vec<FolderVirtualRow> {
+    let mut rows = Vec::new();
+    for range in ranges {
+        rows.push(FolderVirtualRow {
+            kind: FolderRowKind::Header,
+            start: range.start,
+            end: range.start,
+        });
+        let mut start = range.start;
+        while start < range.end {
+            let end = (start + FOLDER_PHOTO_CHUNK_SIZE).min(range.end);
+            rows.push(FolderVirtualRow {
+                kind: FolderRowKind::Photos,
+                start,
+                end,
+            });
+            start = end;
+        }
+    }
+    rows
+}
+
+mod folder_row_object {
+    use std::cell::RefCell;
+
+    use glib::subclass::prelude::*;
+
+    use super::FolderRowData;
+
+    #[derive(Default)]
+    pub(crate) struct FolderRowObject {
+        pub(crate) data: RefCell<FolderRowData>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for FolderRowObject {
+        const NAME: &'static str = "PicasaFolderRowObject";
+        type Type = super::FolderRowObject;
+    }
+
+    impl ObjectImpl for FolderRowObject {}
+}
+
+glib::wrapper! {
+    pub(crate) struct FolderRowObject(ObjectSubclass<folder_row_object::FolderRowObject>);
+}
+
+impl FolderRowObject {
+    fn new(data: FolderRowData) -> Self {
+        let object: Self = glib::Object::new();
+        object.imp().data.replace(data);
+        object
+    }
+
+    fn data(&self) -> FolderRowData {
+        self.imp().data.borrow().clone()
+    }
+}
+
+fn make_folder_tile(
+    tile_width: i32,
+    tile_height: i32,
+    unavailable: &Rc<dyn Fn(PhotoObject, gtk::Widget)>,
+    selection: &gtk::MultiSelection,
+    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
+    activate: &Rc<dyn Fn(Vec<PhotoObject>, usize)>,
+    context_menu: &Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>,
+    collage_mode: &Rc<Cell<bool>>,
+    collage_ids: &Rc<RefCell<HashSet<i64>>>,
+    mapped_tiles: &Rc<RefCell<Vec<SquareTile>>>,
+    folder_root_holder: &Rc<RefCell<Option<gtk::ListView>>>,
+) -> SquareTile {
+    let frame = gtk::Overlay::new();
+    frame.set_overflow(gtk::Overflow::Hidden);
+    frame.add_css_class("photo-frame");
+    frame.add_css_class("photo-tile");
+
+    let picture = gtk::Picture::new();
+    picture.set_content_fit(gtk::ContentFit::Cover);
+    picture.set_can_shrink(true);
+    picture.set_size_request(1, 1);
+    picture.set_hexpand(true);
+    picture.set_vexpand(true);
+    picture.set_halign(gtk::Align::Fill);
+    picture.set_valign(gtk::Align::Fill);
+    picture.add_css_class("thumbnail");
+    frame.set_child(Some(&picture));
+
+    let placeholder = gtk::Image::from_icon_name("image-x-generic-symbolic");
+    placeholder.set_pixel_size(32);
+    placeholder.add_css_class("dim-label");
+    placeholder.set_visible(false);
+    frame.add_overlay(&placeholder);
+
+    let checkmark = gtk::Image::from_icon_name("object-select-symbolic");
+    checkmark.set_pixel_size(18);
+    checkmark.set_halign(gtk::Align::End);
+    checkmark.set_valign(gtk::Align::Start);
+    checkmark.set_margin_top(8);
+    checkmark.set_margin_end(8);
+    checkmark.add_css_class("selection-badge");
+    frame.add_overlay(&checkmark);
+
+    let favorite_badge = gtk::Image::from_icon_name("emote-love-symbolic");
+    favorite_badge.set_pixel_size(18);
+    favorite_badge.set_halign(gtk::Align::End);
+    favorite_badge.set_valign(gtk::Align::End);
+    favorite_badge.set_margin_bottom(8);
+    favorite_badge.set_margin_end(8);
+    favorite_badge.add_css_class("favorite-badge");
+    favorite_badge.set_visible(false);
+    frame.add_overlay(&favorite_badge);
+
+    let edited_badge = gtk::Image::from_icon_name("document-edit-symbolic");
+    edited_badge.set_pixel_size(18);
+    edited_badge.set_halign(gtk::Align::Start);
+    edited_badge.set_valign(gtk::Align::End);
+    edited_badge.set_margin_bottom(8);
+    edited_badge.set_margin_start(8);
+    edited_badge.add_css_class("edited-badge");
+    edited_badge.set_tooltip_text(Some("Edited"));
+    edited_badge.set_visible(false);
+    frame.add_overlay(&edited_badge);
+
+    let unavailable_badge = gtk::Button::with_label("!");
+    unavailable_badge.set_halign(gtk::Align::Start);
+    unavailable_badge.set_valign(gtk::Align::Start);
+    unavailable_badge.set_margin_top(8);
+    unavailable_badge.set_margin_start(8);
+    unavailable_badge.add_css_class("offline-badge");
+    unavailable_badge.set_tooltip_text(Some("Original photo unavailable"));
+    unavailable_badge.set_visible(false);
+    frame.add_overlay(&unavailable_badge);
+
+    let tile = SquareTile::new(tile_width, tile_height, &frame);
+    tile.set_hexpand(false);
+    tile.set_vexpand(false);
+    tile.set_valign(gtk::Align::Start);
+    tile.set_focusable(true);
+    tile.set_margin_top(6);
+    tile.set_margin_bottom(6);
+    tile.set_margin_start(6);
+    tile.set_margin_end(6);
+
+    let tile_for_unavailable = tile.clone();
+    let unavailable_for_click = unavailable.clone();
+    let badge_for_click = unavailable_badge.clone();
+    unavailable_badge.connect_clicked(move |_| {
+        let Some(photo) = tile_for_unavailable.imp().photo.borrow().as_ref().cloned() else {
+            return;
+        };
+        (unavailable_for_click)(photo, badge_for_click.clone().upcast());
+    });
+
+    let tile_for_left = tile.clone();
+    let selection_for_left = selection.clone();
+    let current_photos_for_left = current_photos.clone();
+    let activate_for_left = activate.clone();
+    let collage_mode_for_left = collage_mode.clone();
+    let collage_ids_for_left = collage_ids.clone();
+    let left_click = gtk::GestureClick::new();
+    left_click.set_button(1);
+    left_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    left_click.connect_pressed(move |gesture, n_press, _, _| {
+        let Some(photo) = tile_for_left.imp().photo.borrow().as_ref().cloned() else {
+            return;
+        };
+        let Some(position) = selection_position_for_id(&selection_for_left, photo.id()) else {
+            return;
+        };
+
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        tile_for_left.grab_focus();
+        if collage_mode_for_left.get() {
+            let mut selected_ids = collage_ids_for_left.borrow_mut();
+            if selected_ids.remove(&photo.id()) {
+                selection_for_left.unselect_item(position);
+            } else {
+                selected_ids.insert(photo.id());
+                selection_for_left.select_item(position, false);
+            }
+            return;
+        }
+
+        if n_press >= 2 {
+            selection_for_left.select_item(position, true);
+            let photos = current_photos_for_left.borrow().clone();
+            if let Some(index) = photos.iter().position(|item| item.id() == photo.id()) {
+                (activate_for_left)(photos, index);
+            }
+            return;
+        }
+
+        let modifiers = gesture.current_event_state();
+        if modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+            if selection_for_left.is_selected(position) {
+                selection_for_left.unselect_item(position);
+            } else {
+                selection_for_left.select_item(position, false);
+            }
+        } else if modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK) {
+            let selected = selection_for_left.selection();
+            let anchor = gtk::BitsetIter::init_first(&selected)
+                .map(|(_, position)| position)
+                .unwrap_or(position);
+            let start = anchor.min(position);
+            let end = anchor.max(position);
+            selection_for_left.unselect_all();
+            for item in start..=end {
+                selection_for_left.select_item(item, false);
+            }
+        } else {
+            selection_for_left.select_item(position, true);
+        }
+    });
+    tile.add_controller(left_click);
+
+    let tile_for_context = tile.clone();
+    let selection_for_context = selection.clone();
+    let context_menu_for_tile = context_menu.clone();
+    let right_click = gtk::GestureClick::new();
+    right_click.set_button(3);
+    right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    right_click.connect_pressed(move |gesture, _, x, y| {
+        let Some(photo) = tile_for_context.imp().photo.borrow().as_ref().cloned() else {
+            return;
+        };
+        let Some(position) = selection_position_for_id(&selection_for_context, photo.id()) else {
+            return;
+        };
+        let Some(frame) = tile_for_context.first_child().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+        let frame_widget = frame.clone().upcast::<gtk::Widget>();
+        let local = tile_for_context
+            .compute_point(
+                &frame_widget,
+                &gtk::graphene::Point::new(x as f32, y as f32),
+            )
+            .unwrap_or_else(|| gtk::graphene::Point::new(0.0, 0.0));
+
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        if !selection_for_context.is_selected(position) {
+            selection_for_context.select_item(position, true);
+        }
+        tile_for_context.grab_focus();
+        (context_menu_for_tile)(photo, frame_widget, local.x() as f64, local.y() as f64);
+    });
+    tile.add_controller(right_click);
+
+    let tile_for_map = tile.clone();
+    let mapped_for_map = mapped_tiles.clone();
+    let root_for_map = folder_root_holder.clone();
+    tile.connect_map(move |_| {
+        {
+            let mut mapped = mapped_for_map.borrow_mut();
+            if !mapped.iter().any(|candidate| candidate == &tile_for_map) {
+                mapped.push(tile_for_map.clone());
+            }
+        }
+        if let Some(root) = root_for_map.borrow().as_ref() {
+            if tile_near_folder_viewport(&tile_for_map, root) {
+                tile_for_map.load_visual();
+            } else {
+                let tile_for_idle = tile_for_map.clone();
+                let root_for_idle = root.clone();
+                glib::idle_add_local_once(move || {
+                    if tile_near_folder_viewport(&tile_for_idle, &root_for_idle) {
+                        tile_for_idle.load_visual();
+                    }
+                });
+            }
+        }
+    });
+    let tile_for_unmap = tile.clone();
+    let mapped_for_unmap = mapped_tiles.clone();
+    tile.connect_unmap(move |_| {
+        tile_for_unmap.unload_visual();
+        mapped_for_unmap
+            .borrow_mut()
+            .retain(|candidate| candidate != &tile_for_unmap);
+    });
+
+    tile
 }
 
 pub struct Gallery {
@@ -422,9 +811,14 @@ pub struct Gallery {
     // visible-item allocation and virtualization. Do not wrap this GridView
     // in a Box/Viewport to implement grouping.
     pub root: gtk::GridView,
+    pub folder_root: gtk::ListView,
     pub group_header: gtk::Box,
     group_title: gtk::Label,
     group_count: gtk::Label,
+    folder_store: gio::ListStore,
+    folder_selection: gtk::NoSelection,
+    mapped_folder_tiles: Rc<RefCell<Vec<SquareTile>>>,
+    folder_view_changed: Rc<RefCell<Option<Rc<dyn Fn(bool)>>>>,
     selected: Rc<dyn Fn(Option<PhotoObject>)>,
     store: gio::ListStore,
     selection: gtk::MultiSelection,
@@ -462,6 +856,7 @@ impl Gallery {
         let selection = gtk::MultiSelection::new(Some(store.clone()));
         let collage_selection_mode = Rc::new(Cell::new(false));
         let collage_selected_ids = Rc::new(RefCell::new(HashSet::new()));
+        let current_columns = Rc::new(Cell::new(5u32));
         // Independent thumbnail width/height. Change DEFAULT_TILE_WIDTH and
         // DEFAULT_TILE_HEIGHT above to choose your preferred starting size.
         let tile_width = Rc::new(Cell::new(
@@ -495,6 +890,8 @@ impl Gallery {
         group_count.add_css_class("dim-label");
         group_count.add_css_class("section-count");
         group_header.append(&group_count);
+
+        let current_photos = Rc::new(RefCell::new(Vec::<PhotoObject>::new()));
 
         let factory = gtk::SignalListItemFactory::new();
         let tile_width_for_setup = tile_width.clone();
@@ -729,9 +1126,9 @@ impl Gallery {
             (selected_for_signal)(photo);
         });
 
-        let current_photos = Rc::new(RefCell::new(Vec::<PhotoObject>::new()));
         let current_photos_for_activate = current_photos.clone();
         let selection_for_activate = selection.clone();
+        let activate_for_grid = activate.clone();
         root.connect_activate(move |_, position| {
             let Some(activated) = selection_for_activate
                 .model()
@@ -745,20 +1142,277 @@ impl Gallery {
                 .iter()
                 .position(|photo| photo.id() == activated.id())
                 .unwrap_or(position as usize);
-            (activate)(photos, index);
+            (activate_for_grid)(photos, index);
+        });
+
+        // Folder mode is a single virtualized ListView. Its model shape is
+        // stable across zoom levels: one header row per folder plus photo
+        // chunks of at most 8 items (the maximum supported column count).
+        // GTK therefore realizes only viewport-near chunks instead of one
+        // giant FlowBox containing every photo in a folder.
+        let folder_store = gio::ListStore::new::<FolderRowObject>();
+        let folder_selection = gtk::NoSelection::new(Some(folder_store.clone()));
+        let folder_factory = gtk::SignalListItemFactory::new();
+        let mapped_folder_tiles: Rc<RefCell<Vec<SquareTile>>> = Rc::new(RefCell::new(Vec::new()));
+        let folder_root_holder: Rc<RefCell<Option<gtk::ListView>>> = Rc::new(RefCell::new(None));
+
+        folder_factory.connect_setup(move |_, object| {
+            let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+
+            let row_root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            row_root.set_hexpand(true);
+            row_root.set_vexpand(false);
+            row_root.add_css_class("folder-stream-row");
+
+            let header_outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            header_outer.set_widget_name("picasa-folder-section-header");
+            header_outer.set_hexpand(true);
+            header_outer.set_margin_top(26);
+            header_outer.set_margin_bottom(8);
+            header_outer.set_margin_start(6);
+            header_outer.set_margin_end(6);
+            header_outer.add_css_class("folder-section-header");
+
+            let header_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            header_line.set_hexpand(true);
+            let folder_icon = gtk::Image::from_icon_name("folder-symbolic");
+            folder_icon.set_pixel_size(16);
+            folder_icon.add_css_class("folder-section-icon");
+            header_line.append(&folder_icon);
+
+            let title = gtk::Label::new(None);
+            title.set_widget_name("picasa-folder-section-title");
+            title.set_xalign(0.0);
+            title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            title.add_css_class("folder-section-title");
+            header_line.append(&title);
+
+            let count = gtk::Label::new(None);
+            count.set_widget_name("picasa-folder-section-count");
+            count.set_xalign(0.0);
+            count.add_css_class("dim-label");
+            count.add_css_class("folder-section-count");
+            header_line.append(&count);
+
+            let header_spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            header_spacer.set_hexpand(true);
+            header_line.append(&header_spacer);
+
+            let actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            actions.set_widget_name("picasa-folder-section-actions");
+            actions.add_css_class("folder-section-actions");
+            header_line.append(&actions);
+
+            header_outer.append(&header_line);
+            let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+            separator.add_css_class("folder-section-separator");
+            header_outer.append(&separator);
+            row_root.append(&header_outer);
+
+            let flow = gtk::FlowBox::new();
+            flow.set_widget_name("picasa-folder-chunk-flow");
+            flow.set_hexpand(true);
+            flow.set_vexpand(false);
+            flow.set_homogeneous(true);
+            flow.set_selection_mode(gtk::SelectionMode::None);
+            flow.set_row_spacing(0);
+            flow.set_column_spacing(0);
+            flow.set_min_children_per_line(1);
+            flow.set_max_children_per_line(FOLDER_PHOTO_CHUNK_SIZE as u32);
+            flow.add_css_class("folder-photo-flow");
+            row_root.append(&flow);
+
+            list_item.set_child(Some(&row_root));
+        });
+
+        let tile_width_for_folder_bind = tile_width.clone();
+        let tile_height_for_folder_bind = tile_height.clone();
+        let current_columns_for_folder_bind = current_columns.clone();
+        let unavailable_for_folder_bind = unavailable.clone();
+        let selection_for_folder_bind = selection.clone();
+        let current_photos_for_folder_bind = current_photos.clone();
+        let activate_for_folder_bind = activate.clone();
+        let context_menu_for_folder_bind = context_menu.clone();
+        let collage_mode_for_folder_bind = collage_selection_mode.clone();
+        let collage_ids_for_folder_bind = collage_selected_ids.clone();
+        let mapped_tiles_for_folder_bind = mapped_folder_tiles.clone();
+        let root_holder_for_folder_bind = folder_root_holder.clone();
+
+        folder_factory.connect_bind(move |_, object| {
+            let trace = std::env::var_os("PICASA_TRACE").is_some();
+            let bind_started = trace.then(Instant::now);
+            let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let Some(row) = list_item.item().and_downcast::<FolderRowObject>() else {
+                return;
+            };
+            let Some(row_root) = list_item.child().and_downcast::<gtk::Box>() else {
+                return;
+            };
+            let data = row.data();
+
+            row_root.set_widget_name(&format!("picasa-folder-row-{}", data.folder_id));
+            let Some(header) = row_root.first_child().and_downcast::<gtk::Box>() else {
+                return;
+            };
+            let Some(flow) = row_root.last_child().and_downcast::<gtk::FlowBox>() else {
+                return;
+            };
+
+            match data.kind {
+                FolderRowKind::Header => {
+                    row_root.set_height_request(58);
+                    header.set_visible(true);
+                    flow.set_visible(false);
+                    if let Some(title) = find_named_label(header.upcast_ref(), "picasa-folder-section-title") {
+                        title.set_text(&data.label);
+                        title.set_tooltip_text(Some(&data.folder_path));
+                    }
+                    if let Some(count) = find_named_label(header.upcast_ref(), "picasa-folder-section-count") {
+                        count.set_text(&format!(
+                            "{} {}",
+                            format_count(data.count),
+                            if data.count == 1 { "photo" } else { "photos" }
+                        ));
+                    }
+                    if list_item.position() == 0 {
+                        header.add_css_class("first-folder-section-header");
+                        header.set_margin_top(10);
+                    } else {
+                        header.remove_css_class("first-folder-section-header");
+                        header.set_margin_top(26);
+                    }
+                }
+                FolderRowKind::Photos => {
+                    header.set_visible(false);
+                    flow.set_visible(true);
+                    flow.set_max_children_per_line(current_columns_for_folder_bind.get().max(1));
+
+                    // A recycled ListItem keeps a fixed pool of at most eight
+                    // tile widgets. Rebinding changes only the PhotoObject; it
+                    // does not rebuild overlays, gestures, or badges.
+                    let mut tiles = flow_box_tiles(&flow);
+                    while tiles.len() < FOLDER_PHOTO_CHUNK_SIZE {
+                        let tile = make_folder_tile(
+                            tile_width_for_folder_bind.get(),
+                            tile_height_for_folder_bind.get(),
+                            &unavailable_for_folder_bind,
+                            &selection_for_folder_bind,
+                            &current_photos_for_folder_bind,
+                            &activate_for_folder_bind,
+                            &context_menu_for_folder_bind,
+                            &collage_mode_for_folder_bind,
+                            &collage_ids_for_folder_bind,
+                            &mapped_tiles_for_folder_bind,
+                            &root_holder_for_folder_bind,
+                        );
+                        flow.insert(&tile, -1);
+                        tiles.push(tile);
+                    }
+
+                    for (slot, tile) in tiles.iter().enumerate() {
+                        if let Some(photo) = data.photos.get(slot) {
+                            tile.set_visible(true);
+                            tile.set_tile_size(
+                                tile_width_for_folder_bind.get(),
+                                tile_height_for_folder_bind.get(),
+                            );
+                            tile.set_photo_deferred(photo);
+                            let selected = selection_position_for_id(
+                                &selection_for_folder_bind,
+                                photo.id(),
+                            )
+                            .is_some_and(|position| selection_for_folder_bind.is_selected(position));
+                            tile.set_manual_selected(selected);
+                            if tile.is_mapped() {
+                                if let Some(root) = root_holder_for_folder_bind.borrow().as_ref() {
+                                    if tile_near_folder_viewport(tile, root) {
+                                        tile.load_visual();
+                                    }
+                                }
+                            }
+                        } else {
+                            tile.clear_photo();
+                            tile.set_visible(false);
+                        }
+                    }
+                    row_root.set_height_request(folder_chunk_height(
+                        data.photos.len(),
+                        current_columns_for_folder_bind.get().max(1),
+                        tile_height_for_folder_bind.get(),
+                    ));
+                }
+            }
+
+            if trace {
+                let elapsed_ms = bind_started
+                    .map(|started| started.elapsed().as_millis())
+                    .unwrap_or(0);
+                if elapsed_ms >= 12 {
+                    eprintln!(
+                        "UI PERF folder_virtual_bind_slow row={} kind={:?} folder_id={} photos={} elapsed_ms={}",
+                        list_item.position(),
+                        data.kind,
+                        data.folder_id,
+                        data.photos.len(),
+                        elapsed_ms
+                    );
+                }
+            }
+        });
+
+        folder_factory.connect_unbind(move |_, object| {
+            let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let Some(row_root) = list_item.child().and_downcast::<gtk::Box>() else {
+                return;
+            };
+            let Some(flow) = row_root.last_child().and_downcast::<gtk::FlowBox>() else {
+                return;
+            };
+            for tile in flow_box_tiles(&flow) {
+                tile.clear_photo();
+                tile.set_visible(false);
+            }
+        });
+
+        let folder_root = gtk::ListView::new(Some(folder_selection.clone()), Some(folder_factory));
+        folder_root.set_single_click_activate(false);
+        folder_root.set_show_separators(false);
+        folder_root.set_hexpand(true);
+        folder_root.set_vexpand(true);
+        folder_root.set_halign(gtk::Align::Fill);
+        folder_root.set_valign(gtk::Align::Fill);
+        folder_root.add_css_class("folder-stream");
+        folder_root.add_css_class("photo-grid");
+        folder_root_holder.replace(Some(folder_root.clone()));
+
+        let folder_root_for_selection = folder_root.clone();
+        let selection_for_folder_style = selection.clone();
+        selection.connect_selection_changed(move |_, _, _| {
+            refresh_folder_selection_styles(&folder_root_for_selection, &selection_for_folder_style);
         });
 
         let gallery = Self {
             root,
+            folder_root,
             group_header,
             group_title,
             group_count,
+            folder_store,
+            folder_selection,
+            mapped_folder_tiles,
+            folder_view_changed: Rc::new(RefCell::new(None)),
             selected,
             store,
             selection,
             collage_selection_mode,
             collage_selected_ids,
-            current_columns: Rc::new(Cell::new(5)),
+            current_columns,
             last_layout_width: Rc::new(Cell::new(0)),
             tile_width,
             tile_height,
@@ -775,19 +1429,91 @@ impl Gallery {
     }
 
     pub fn update_width(&self, width: i32) {
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let started = trace.then(Instant::now);
+        let old_columns = self.current_columns.get();
+        let old_width = self.last_layout_width.get();
         let available = (width - 48).max(200);
         let columns = ((available as f64) / (self.tile_width.get() as f64 + 30.0))
             .floor()
             .clamp(1.0, 8.0) as u32;
-        if width == self.last_layout_width.get() && columns == self.current_columns.get() {
+        if width == old_width && columns == old_columns {
             return;
         }
+        if trace {
+            eprintln!(
+                "UI PERF update_width_begin mode={:?} width={} old_layout_width={} tile={}x{} old_columns={} new_columns={} photos={} folder_ranges={} folder_rows={}",
+                self.group_mode.get(),
+                width,
+                old_width,
+                self.tile_width.get(),
+                self.tile_height.get(),
+                old_columns,
+                columns,
+                self.current_photos.borrow().len(),
+                self.group_ranges.borrow().len(),
+                self.folder_store.n_items()
+            );
+        }
         self.last_layout_width.set(width);
+        let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        if columns == old_columns {
+            // Zooming within the same column count only changes tile geometry.
+            // Replacing the Folder ListStore here used to invalidate every
+            // realized row and cost ~0.8-1.1s for a 4.5k-photo library.
+            if folder_mode {
+                let mut flows = Vec::new();
+                collect_folder_flows(self.folder_root.upcast_ref(), &mut flows);
+                for flow in flows {
+                    update_folder_flow_layout(&flow, columns.max(1), self.tile_height.get());
+                }
+                self.folder_root.queue_resize();
+                self.refresh_folder_viewport_tiles();
+            } else {
+                self.root.queue_resize();
+                self.update_group_header_for_scroll(self.last_scroll_y.get());
+            }
+            if trace {
+                eprintln!(
+                    "UI PERF update_width_skip_reflow mode={:?} width={} columns={} reason=columns_unchanged",
+                    self.group_mode.get(),
+                    width,
+                    columns
+                );
+            }
+            return;
+        }
+
         self.current_columns.set(columns);
         self.root.set_min_columns(columns);
         self.root.set_max_columns(columns);
         self.root.queue_resize();
-        self.update_group_header_for_scroll(self.last_scroll_y.get());
+        if folder_mode {
+            // Fixed-chunk Folder mode is deliberately independent of the
+            // column count. Update only realized chunk FlowBoxes; the
+            // ListStore shape is stable and never rebuilt for zoom/width
+            // changes.
+            let mut flows = Vec::new();
+            collect_folder_flows(self.folder_root.upcast_ref(), &mut flows);
+            for flow in flows {
+                update_folder_flow_layout(&flow, columns.max(1), self.tile_height.get());
+            }
+            self.folder_root.queue_resize();
+            self.refresh_folder_viewport_tiles();
+        } else {
+            self.update_group_header_for_scroll(self.last_scroll_y.get());
+        }
+        if trace {
+            eprintln!(
+                "UI PERF update_width_end mode={:?} width={} columns={} rebuild_ms=0 total_ms={} folder_rows={} strategy={}",
+                self.group_mode.get(),
+                width,
+                columns,
+                started.map(|value| value.elapsed().as_millis()).unwrap_or(0),
+                self.folder_store.n_items(),
+                if folder_mode { "virtual_chunks_reflow_free" } else { "grid_columns" }
+            );
+        }
     }
 
     pub fn set_grouping(&self, mode: GroupMode, date: GroupDate) {
@@ -798,31 +1524,65 @@ impl Gallery {
             self.rebuild_group_ranges();
         }
 
-        let visible = mode != GroupMode::None && !self.group_ranges.borrow().is_empty();
-        self.group_header.set_visible(visible);
-        if visible {
-            self.update_group_header_for_scroll(self.last_scroll_y.get());
-        } else {
+        if mode == GroupMode::Folder {
+            // Folder headers live inside the scrolling ListView. The old
+            // external heading would be sticky, which is deliberately not
+            // Picasa-style.
+            self.group_header.set_visible(false);
             self.group_title.set_text("");
             self.group_count.set_text("");
+            if old_mode != GroupMode::Folder {
+                // The current model may still contain All Photos/Favourites in
+                // a global date order. Do not briefly render that as hundreds
+                // of false folder sections while the correctly ordered Folder
+                // stream is loading. The subsequent photo replacement builds
+                // the Folder rows once; reapplying Folder grouping must not
+                // build the same store a second time.
+                self.folder_store.remove_all();
+            }
+        } else {
+            let visible = mode != GroupMode::None && !self.group_ranges.borrow().is_empty();
+            self.group_header.set_visible(visible);
+            if visible {
+                self.update_group_header_for_scroll(self.last_scroll_y.get());
+            } else {
+                self.group_title.set_text("");
+                self.group_count.set_text("");
+            }
         }
+
+        if let Some(handler) = self.folder_view_changed.borrow().as_ref() {
+            handler(mode == GroupMode::Folder);
+        }
+    }
+
+    pub fn set_folder_view_changed_handler(&self, handler: impl Fn(bool) + 'static) {
+        let handler: Rc<dyn Fn(bool)> = Rc::new(handler);
+        handler(self.group_mode.get() == GroupMode::Folder);
+        self.folder_view_changed.replace(Some(handler));
     }
 
     pub fn update_group_header_for_scroll(&self, scroll_y: f64) {
         self.last_scroll_y.set(scroll_y.max(0.0));
-        if self.group_mode.get() == GroupMode::None {
+        let mode = self.group_mode.get();
+        if mode == GroupMode::Folder {
+            self.refresh_folder_viewport_tiles();
+            return;
+        }
+        if mode == GroupMode::None {
             return;
         }
 
         self.update_group_header_for_index(self.index_for_scroll_position(scroll_y));
     }
 
-    /// Return the photo at the leading visible grid row for a scroll position.
-    ///
-    /// This uses the same geometry as the sticky group heading, so sidebar
-    /// location tracking follows what the user is actually looking at without
-    /// changing selection or causing navigation.
+    /// Return the photo represented by the leading visible content. Folder
+    /// mode reads the virtualized ListView row at the viewport edge; other
+    /// modes keep the existing GridView geometry.
     pub fn photo_for_scroll_position(&self, scroll_y: f64) -> Option<PhotoObject> {
+        if self.group_mode.get() == GroupMode::Folder {
+            return self.photo_for_visible_folder_row();
+        }
         self.current_photos
             .borrow()
             .get(self.index_for_scroll_position(scroll_y))
@@ -849,17 +1609,76 @@ impl Gallery {
         if mode != GroupMode::None {
             for (index, photo) in photos.iter().enumerate() {
                 let label = group_label(photo, mode, date);
+                let folder_id = if mode == GroupMode::Folder {
+                    photo.folder_id()
+                } else {
+                    0
+                };
                 match ranges.last_mut() {
-                    Some(last) if last.label == label => last.end = index + 1,
+                    Some(last) if last.label == label && last.folder_id == folder_id => {
+                        last.end = index + 1
+                    }
                     _ => ranges.push(GroupRange {
                         start: index,
                         end: index + 1,
                         label,
+                        folder_id,
                     }),
                 }
             }
         }
         self.group_ranges.replace(ranges);
+    }
+
+    fn rebuild_folder_rows(&self) {
+        rebuild_folder_rows_for(
+            &self.current_photos,
+            &self.group_ranges,
+            &self.current_columns,
+            &self.folder_store,
+            &self.folder_selection,
+        );
+    }
+
+    fn refresh_folder_viewport_tiles(&self) {
+        let root = &self.folder_root;
+        let mut mapped = self.mapped_folder_tiles.borrow_mut();
+        mapped.retain(|tile| tile.is_mapped());
+        let mut near = 0usize;
+        for tile in mapped.iter() {
+            if tile_near_folder_viewport(tile, root) {
+                near += 1;
+                tile.load_visual();
+            } else {
+                tile.unload_visual();
+            }
+        }
+        let _ = near;
+    }
+
+    fn photo_for_visible_folder_row(&self) -> Option<PhotoObject> {
+        let width = self.folder_root.width().max(1) as f64;
+        for y in [6.0_f64, 20.0, 40.0, 64.0, 92.0, 120.0] {
+            let Some(picked) = self
+                .folder_root
+                .pick(width * 0.5, y, gtk::PickFlags::DEFAULT)
+            else {
+                continue;
+            };
+            let Some(folder_id) = folder_id_from_named_ancestor(&picked) else {
+                continue;
+            };
+            return self
+                .current_photos
+                .borrow()
+                .iter()
+                .find(|photo| photo.folder_id() == folder_id)
+                .cloned();
+        }
+        // During a resize/rebind there may briefly be no realized row at the
+        // probe point. Keep the existing sidebar location instead of falsely
+        // jumping it back to the first folder.
+        None
     }
 
     fn update_group_header_for_index(&self, index: usize) {
@@ -894,6 +1713,8 @@ impl Gallery {
     /// Zoom is driven by width. Height scales by the same factor, preserving
     /// the custom width/height shape configured above.
     pub fn set_zoom(&self, width: i32) {
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let zoom_started = trace.then(Instant::now);
         let old_width = self.tile_width.get().max(1);
         let old_height = self.tile_height.get().max(1);
         let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
@@ -903,29 +1724,93 @@ impl Gallery {
 
         let scale = width as f64 / old_width as f64;
         let height = ((old_height as f64) * scale).round().max(1.0) as i32;
+        if trace {
+            eprintln!(
+                "UI PERF folder_zoom_begin mode={:?} old_tile={}x{} new_tile={}x{} photos={} folders={} columns={} folder_rows={}",
+                self.group_mode.get(),
+                old_width,
+                old_height,
+                width,
+                height,
+                self.current_photos.borrow().len(),
+                self.group_ranges.borrow().len(),
+                self.current_columns.get(),
+                self.folder_store.n_items()
+            );
+        }
 
         self.tile_width.set(width);
         self.tile_height.set(height);
+        let callback_started = trace.then(Instant::now);
         (self.on_zoom_changed)(width);
+        if trace {
+            eprintln!(
+                "UI PERF folder_zoom_setting_callback ms={}",
+                callback_started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
+            );
+        }
 
+        let collect_started = trace.then(Instant::now);
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
+        let grid_tiles = tiles.len();
+        if self.group_mode.get() == GroupMode::Folder {
+            let mut mapped = self.mapped_folder_tiles.borrow_mut();
+            mapped.retain(|tile| tile.is_mapped());
+            tiles.extend(mapped.iter().filter(|tile| tile_near_folder_viewport(tile, &self.folder_root)).cloned());
+        } else {
+            collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        }
+        let total_tiles = tiles.len();
+        if trace {
+            eprintln!(
+                "UI PERF folder_zoom_collect_tiles grid={} folder={} total={} ms={}",
+                grid_tiles,
+                total_tiles.saturating_sub(grid_tiles),
+                total_tiles,
+                collect_started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
+            );
+        }
+        let resize_started = trace.then(Instant::now);
         for tile in tiles {
             tile.set_tile_size(width, height);
         }
+        if trace {
+            eprintln!(
+                "UI PERF folder_zoom_resize_tiles count={} ms={}",
+                total_tiles,
+                resize_started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
+            );
+        }
 
-        let root_width = self.root.width();
+        let root_width = if self.group_mode.get() == GroupMode::Folder {
+            self.folder_root.width()
+        } else {
+            self.root.width()
+        };
         self.last_layout_width.set(0);
+        let layout_started = trace.then(Instant::now);
         if root_width > 100 {
             self.update_width(root_width);
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
+        }
+        if trace {
+            eprintln!(
+                "UI PERF folder_zoom_end root_width={} columns={} folder_rows={} layout_ms={} total_ms={}",
+                root_width,
+                self.current_columns.get(),
+                self.folder_store.n_items(),
+                layout_started.map(|value| value.elapsed().as_millis()).unwrap_or(0),
+                zoom_started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
+            );
         }
     }
 
     pub fn refresh_thumbnails(&self) {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.refresh_thumbnail();
         }
@@ -934,6 +1819,7 @@ impl Gallery {
     pub fn set_favorite_indicators_visible(&self, visible: bool) {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.set_favorite_indicator_visible(visible);
         }
@@ -942,6 +1828,7 @@ impl Gallery {
     pub fn refresh_favorite_indicators(&self) {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.refresh_favorite_indicator();
         }
@@ -1003,20 +1890,34 @@ impl Gallery {
 
         if self.group_mode.get() != GroupMode::None {
             self.rebuild_group_ranges();
-            self.update_group_header_for_scroll(scroll_y);
+            if self.group_mode.get() == GroupMode::Folder {
+                self.rebuild_folder_rows();
+            } else {
+                self.update_group_header_for_scroll(scroll_y);
+            }
         }
 
         // Invalidate any pending progressive replacement before restoring the
-        // old adjustment after GridView has processed the ListStore removals.
+        // old adjustment after the active list widget has processed removals.
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
+        let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        let adjustment = if folder_mode {
+            self.folder_root.vadjustment()
+        } else {
+            self.root.vadjustment()
+        };
         schedule_scroll_restore(
-            &self.root,
+            adjustment,
             scroll_y,
             self.replace_generation.clone(),
             generation,
         );
-        self.root.grab_focus();
+        if folder_mode {
+            self.folder_root.grab_focus();
+        } else {
+            self.root.grab_focus();
+        }
     }
 
     pub fn refresh_thumbnails_for_paths(&self, paths: &[std::path::PathBuf]) {
@@ -1029,6 +1930,7 @@ impl Gallery {
             .collect::<HashSet<_>>();
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             let matches = tile
                 .imp()
@@ -1079,6 +1981,7 @@ impl Gallery {
 
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.refresh_availability();
         }
@@ -1097,6 +2000,15 @@ impl Gallery {
                     .all(|(object, photo)| object.id() == photo.id)
         };
         if unchanged {
+            // Entering Folder mode can intentionally clear the transient
+            // Folder ListView while the correctly ordered stream is prepared.
+            // If the DB result happens to have the same id order (for example
+            // a library containing only one folder), rebuild those rows rather
+            // than leaving the Folder view blank.
+            if self.group_mode.get() == GroupMode::Folder && self.folder_store.n_items() == 0 {
+                self.rebuild_group_ranges();
+                self.rebuild_folder_rows();
+            }
             return;
         }
 
@@ -1126,7 +2038,11 @@ impl Gallery {
         }
         if self.group_mode.get() != GroupMode::None {
             self.rebuild_group_ranges();
-            self.update_group_header_for_scroll(self.last_scroll_y.get());
+            if self.group_mode.get() == GroupMode::Folder {
+                self.rebuild_folder_rows();
+            } else {
+                self.update_group_header_for_scroll(self.last_scroll_y.get());
+            }
         }
         crate::diagnostics::refresh_finished(profile_started, objects.len());
     }
@@ -1157,6 +2073,8 @@ impl Gallery {
         let last_scroll_y = self.last_scroll_y.clone();
         let current_columns = self.current_columns.clone();
         let tile_height = self.tile_height.clone();
+        let folder_store = self.folder_store.clone();
+        let folder_selection = self.folder_selection.clone();
         let replace_generation = self.replace_generation.clone();
 
         glib::idle_add_local(move || {
@@ -1186,17 +2104,30 @@ impl Gallery {
 
             if end >= photos.len() {
                 rebuild_group_ranges_for(&current_photos, &group_mode, &group_date, &group_ranges);
-                update_group_header_for_index_for(
-                    &group_mode,
-                    &group_ranges,
-                    &group_header,
-                    &group_title,
-                    &group_count,
-                    (((last_scroll_y.get() - 20.0).max(0.0)
-                        / (tile_height.get().max(1) as f64 + 12.0))
-                        .floor() as usize)
-                        * current_columns.get().max(1) as usize,
-                );
+                if group_mode.get() == GroupMode::Folder {
+                    rebuild_folder_rows_for(
+                        &current_photos,
+                        &group_ranges,
+                        &current_columns,
+                        &folder_store,
+                        &folder_selection,
+                    );
+                    group_header.set_visible(false);
+                    group_title.set_text("");
+                    group_count.set_text("");
+                } else {
+                    update_group_header_for_index_for(
+                        &group_mode,
+                        &group_ranges,
+                        &group_header,
+                        &group_title,
+                        &group_count,
+                        (((last_scroll_y.get() - 20.0).max(0.0)
+                            / (tile_height.get().max(1) as f64 + 12.0))
+                            .floor() as usize)
+                            * current_columns.get().max(1) as usize,
+                    );
+                }
             }
             if end >= photos.len() && collage_selection_mode.get() {
                 selection.unselect_all();
@@ -1236,7 +2167,11 @@ impl Gallery {
         self.store.splice(self.store.n_items(), 0, &objects);
         if self.group_mode.get() != GroupMode::None {
             self.rebuild_group_ranges();
-            self.update_group_header_for_scroll(self.last_scroll_y.get());
+            if self.group_mode.get() == GroupMode::Folder {
+                self.rebuild_folder_rows();
+            } else {
+                self.update_group_header_for_scroll(self.last_scroll_y.get());
+            }
         }
     }
 
@@ -1249,8 +2184,12 @@ impl Gallery {
     }
 
     pub fn scroll_position(&self) -> f64 {
-        self.root
-            .vadjustment()
+        let adjustment = if self.group_mode.get() == GroupMode::Folder {
+            self.folder_root.vadjustment()
+        } else {
+            self.root.vadjustment()
+        };
+        adjustment
             .map(|adjustment| adjustment.value())
             .unwrap_or_else(|| self.last_scroll_y.get())
     }
@@ -1264,22 +2203,38 @@ impl Gallery {
         else {
             return;
         };
+        let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        let folder_row = folder_mode
+            .then(|| self.folder_row_index_for_photo(photo_id))
+            .flatten();
         let root = self.root.clone();
+        let folder_root = self.folder_root.clone();
         let selection = self.selection.clone();
         glib::idle_add_local_once(move || {
             selection.select_item(position as u32, true);
             let scroll = gtk::ScrollInfo::new();
             scroll.set_enable_horizontal(false);
             scroll.set_enable_vertical(false);
-            root.scroll_to(
-                position as u32,
-                gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
-                Some(scroll),
-            );
-            if let Some(adjustment) = root.vadjustment() {
-                let upper = (adjustment.upper() - adjustment.page_size())
-                    .max(adjustment.lower());
-                adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+            if folder_mode {
+                if let Some(row) = folder_row {
+                    folder_root.scroll_to(row, gtk::ListScrollFlags::FOCUS, Some(scroll));
+                }
+                if let Some(adjustment) = folder_root.vadjustment() {
+                    let upper = (adjustment.upper() - adjustment.page_size())
+                        .max(adjustment.lower());
+                    adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+                }
+            } else {
+                root.scroll_to(
+                    position as u32,
+                    gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                    Some(scroll),
+                );
+                if let Some(adjustment) = root.vadjustment() {
+                    let upper = (adjustment.upper() - adjustment.page_size())
+                        .max(adjustment.lower());
+                    adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+                }
             }
         });
     }
@@ -1293,16 +2248,32 @@ impl Gallery {
         else {
             return;
         };
+        let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        let folder_row = folder_mode
+            .then(|| self.folder_row_index_for_photo(photo_id))
+            .flatten();
         let root = self.root.clone();
+        let folder_root = self.folder_root.clone();
         glib::idle_add_local_once(move || {
             let scroll = gtk::ScrollInfo::new();
             scroll.set_enable_horizontal(false);
             scroll.set_enable_vertical(false);
-            root.scroll_to(position as u32, gtk::ListScrollFlags::FOCUS, Some(scroll));
-            if let Some(adjustment) = root.vadjustment() {
-                let upper = (adjustment.upper() - adjustment.page_size())
-                    .max(adjustment.lower());
-                adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+            if folder_mode {
+                if let Some(row) = folder_row {
+                    folder_root.scroll_to(row, gtk::ListScrollFlags::FOCUS, Some(scroll));
+                }
+                if let Some(adjustment) = folder_root.vadjustment() {
+                    let upper = (adjustment.upper() - adjustment.page_size())
+                        .max(adjustment.lower());
+                    adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+                }
+            } else {
+                root.scroll_to(position as u32, gtk::ListScrollFlags::FOCUS, Some(scroll));
+                if let Some(adjustment) = root.vadjustment() {
+                    let upper = (adjustment.upper() - adjustment.page_size())
+                        .max(adjustment.lower());
+                    adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+                }
             }
         });
     }
@@ -1335,6 +2306,7 @@ impl Gallery {
         }
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             let matches = tile
                 .imp()
@@ -1423,6 +2395,59 @@ impl Gallery {
         }
     }
 
+    fn folder_row_index_for_photo(&self, photo_id: i64) -> Option<u32> {
+        for position in 0..self.folder_store.n_items() {
+            let Some(row) = self
+                .folder_store
+                .item(position)
+                .and_downcast::<FolderRowObject>()
+            else {
+                continue;
+            };
+            let data = row.data();
+            if data.photos.iter().any(|photo| photo.id() == photo_id) {
+                return Some(position);
+            }
+        }
+        None
+    }
+
+    fn folder_header_row_for_target(&self, folder_id: i64, folder_path: &str) -> Option<u32> {
+        let target_path = std::path::Path::new(folder_path);
+        let mut descendant = None;
+        for position in 0..self.folder_store.n_items() {
+            let Some(row) = self
+                .folder_store
+                .item(position)
+                .and_downcast::<FolderRowObject>()
+            else {
+                continue;
+            };
+            let data = row.data();
+            if data.kind != FolderRowKind::Header {
+                continue;
+            }
+            if data.folder_id == folder_id {
+                return Some(position);
+            }
+            if descendant.is_none()
+                && !data.folder_path.is_empty()
+                && std::path::Path::new(&data.folder_path).starts_with(target_path)
+            {
+                descendant = Some(position);
+            }
+        }
+        descendant
+    }
+
+    pub fn grab_focus(&self) {
+        if self.group_mode.get() == GroupMode::Folder {
+            self.folder_root.grab_focus();
+        } else {
+            self.root.grab_focus();
+        }
+    }
+
     pub fn select_photo(&self, photo_id: i64) -> bool {
         let Some(model) = self.selection.model() else {
             return false;
@@ -1432,17 +2457,66 @@ impl Gallery {
                 .item(position)
                 .and_downcast::<PhotoObject>()
                 .is_some_and(|photo| photo.id() == photo_id);
-            if matches {
-                self.selection.select_item(position, true);
+            if !matches {
+                continue;
+            }
+            self.selection.select_item(position, true);
+            if self.group_mode.get() == GroupMode::Folder {
+                if let Some(row) = self.folder_row_index_for_photo(photo_id) {
+                    self.folder_root
+                        .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+                    self.folder_root.grab_focus();
+                }
+            } else {
                 self.root.scroll_to(
                     position,
                     gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
                     None,
                 );
-                return true;
             }
+            return true;
         }
         false
+    }
+
+    /// Scroll the continuous Folder stream to the folder's real header row
+    /// without rebuilding the gallery. Imported-root rows may not own photos
+    /// directly, so the first descendant folder header is a valid target.
+    pub fn scroll_to_folder(&self, folder_id: i64, folder_path: &str) -> bool {
+        let target_path = std::path::Path::new(folder_path);
+        let Some(photo_position) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .position(|photo| {
+                if photo.folder_id() == folder_id {
+                    return true;
+                }
+                photo
+                    .folder_path()
+                    .as_deref()
+                    .is_some_and(|path| std::path::Path::new(path).starts_with(target_path))
+            })
+        else {
+            return false;
+        };
+
+        self.selection.select_item(photo_position as u32, true);
+        if self.group_mode.get() == GroupMode::Folder {
+            let Some(row) = self.folder_header_row_for_target(folder_id, folder_path) else {
+                return false;
+            };
+            self.folder_root
+                .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+            self.folder_root.grab_focus();
+        } else {
+            self.root.scroll_to(
+                photo_position as u32,
+                gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                None,
+            );
+        }
+        true
     }
 
     pub fn select_last_photo(&self) {
@@ -1452,11 +2526,24 @@ impl Gallery {
         }
         let position = count - 1;
         self.selection.select_item(position, true);
-        self.root.scroll_to(
-            position,
-            gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
-            None,
-        );
+        if self.group_mode.get() == GroupMode::Folder {
+            if let Some(row) = self.folder_row_index_for_photo(
+                self.store
+                    .item(position)
+                    .and_downcast::<PhotoObject>()
+                    .map(|photo| photo.id())
+                    .unwrap_or_default(),
+            ) {
+                self.folder_root
+                    .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+            }
+        } else {
+            self.root.scroll_to(
+                position,
+                gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                None,
+            );
+        }
     }
 
     pub fn photo_objects(&self) -> Vec<PhotoObject> {
@@ -1477,17 +2564,139 @@ fn rebuild_group_ranges_for(
     if mode != GroupMode::None {
         for (index, photo) in photos.iter().enumerate() {
             let label = group_label(photo, mode, date);
+            let folder_id = if mode == GroupMode::Folder {
+                photo.folder_id()
+            } else {
+                0
+            };
             match ranges.last_mut() {
-                Some(last) if last.label == label => last.end = index + 1,
+                Some(last) if last.label == label && last.folder_id == folder_id => {
+                    last.end = index + 1
+                }
                 _ => ranges.push(GroupRange {
                     start: index,
                     end: index + 1,
                     label,
+                    folder_id,
                 }),
             }
         }
     }
     group_ranges.replace(ranges);
+}
+
+fn build_folder_virtual_objects(
+    ranges: &[GroupRange],
+    photos: &[PhotoObject],
+) -> Vec<FolderRowObject> {
+    let plans = folder_virtual_rows(ranges);
+    let mut rows = Vec::with_capacity(plans.len());
+    let mut range_index = 0usize;
+
+    for plan in plans {
+        while range_index + 1 < ranges.len() && plan.start >= ranges[range_index].end {
+            range_index += 1;
+        }
+        let Some(range) = ranges.get(range_index) else {
+            break;
+        };
+        let folder_path = photos
+            .get(range.start)
+            .and_then(|photo| photo.folder_path())
+            .unwrap_or_default();
+        let row_photos = if plan.kind == FolderRowKind::Photos {
+            photos[plan.start..plan.end].to_vec()
+        } else {
+            Vec::new()
+        };
+        rows.push(FolderRowObject::new(FolderRowData {
+            kind: plan.kind,
+            folder_id: range.folder_id,
+            folder_path,
+            label: range.label.clone(),
+            count: range.end.saturating_sub(range.start),
+            photos: row_photos,
+        }));
+    }
+    rows
+}
+
+fn folder_virtual_row_matches(old: &FolderRowData, new: &FolderRowData) -> bool {
+    old.kind == new.kind
+        && old.folder_id == new.folder_id
+        && old.folder_path == new.folder_path
+        && old.label == new.label
+        && old.count == new.count
+        && old.photos.len() == new.photos.len()
+        && old
+            .photos
+            .iter()
+            .zip(&new.photos)
+            .all(|(left, right)| left.id() == right.id())
+}
+
+fn rebuild_folder_rows_for(
+    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
+    group_ranges: &Rc<RefCell<Vec<GroupRange>>>,
+    current_columns: &Rc<Cell<u32>>,
+    folder_store: &gio::ListStore,
+    folder_selection: &gtk::NoSelection,
+) {
+    let trace = std::env::var_os("PICASA_TRACE").is_some();
+    let started = trace.then(Instant::now);
+    let ranges = group_ranges.borrow();
+    let photos = current_photos.borrow();
+    let old_rows = folder_store.n_items();
+    let new_rows = build_folder_virtual_objects(&ranges, &photos);
+
+    if trace {
+        eprintln!(
+            "UI PERF folder_virtual_plan photos={} folders={} chunk_size={} columns={} model_rows={} old_store_rows={} ms={}",
+            photos.len(),
+            ranges.len(),
+            FOLDER_PHOTO_CHUNK_SIZE,
+            current_columns.get().max(1),
+            new_rows.len(),
+            old_rows,
+            started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
+        );
+    }
+
+    let unchanged = old_rows as usize == new_rows.len()
+        && new_rows.iter().enumerate().all(|(index, new_row)| {
+            folder_store
+                .item(index as u32)
+                .and_downcast::<FolderRowObject>()
+                .is_some_and(|old_row| folder_virtual_row_matches(&old_row.data(), &new_row.data()))
+        });
+    if unchanged {
+        if trace {
+            eprintln!(
+                "UI PERF folder_store_update strategy=unchanged old_rows={} new_rows={} total_ms={}",
+                old_rows,
+                new_rows.len(),
+                started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
+            );
+        }
+        return;
+    }
+
+    let update_started = trace.then(Instant::now);
+    // Detach the model while replacing it so the live ListView does not
+    // react to every insertion/removal during construction. Generated
+    // thumbnail loading remains deferred to viewport-near tiles.
+    folder_selection.set_model(Option::<&gio::ListStore>::None);
+    folder_store.splice(0, old_rows, &new_rows);
+    folder_selection.set_model(Some(folder_store));
+    if trace {
+        eprintln!(
+            "UI PERF folder_store_update strategy=virtual_chunks_detached old_rows={} new_rows={} model_ms={} total_ms={}",
+            old_rows,
+            folder_store.n_items(),
+            update_started.map(|value| value.elapsed().as_millis()).unwrap_or(0),
+            started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
+        );
+    }
 }
 
 fn update_group_header_for_index_for(
@@ -1526,6 +2735,19 @@ fn update_group_header_for_index_for(
 }
 
 fn group_label(photo: &PhotoObject, mode: GroupMode, date: GroupDate) -> String {
+    if mode == GroupMode::Folder {
+        let folder_path = photo.folder_path().unwrap_or_default();
+        if folder_path.is_empty() {
+            return "Unknown Folder".to_string();
+        }
+        return std::path::Path::new(&folder_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(folder_path.as_str())
+            .to_string();
+    }
+
     let value = match date {
         GroupDate::Taken => photo.taken_at().and_then(|value| parse_photo_date(&value)),
         GroupDate::Added => {
@@ -1542,6 +2764,7 @@ fn group_label(photo: &PhotoObject, mode: GroupMode, date: GroupDate) -> String 
 
     match mode {
         GroupMode::None => String::new(),
+        GroupMode::Folder => unreachable!("folder grouping returns before date grouping"),
         GroupMode::Month => value.format("%B %Y").to_string(),
         GroupMode::Day => {
             let date = value.date_naive();
@@ -1582,22 +2805,122 @@ fn format_count(value: usize) -> String {
     result
 }
 
+fn selection_position_for_id(selection: &gtk::MultiSelection, photo_id: i64) -> Option<u32> {
+    (0..selection.n_items()).find(|position| {
+        selection
+            .item(*position)
+            .and_downcast::<PhotoObject>()
+            .is_some_and(|photo| photo.id() == photo_id)
+    })
+}
+
+fn find_named_label(root: &gtk::Widget, name: &str) -> Option<gtk::Label> {
+    if root.widget_name().as_str() == name {
+        if let Ok(label) = root.clone().downcast::<gtk::Label>() {
+            return Some(label);
+        }
+    }
+    let mut child = root.first_child();
+    while let Some(current) = child {
+        if let Some(found) = find_named_label(&current, name) {
+            return Some(found);
+        }
+        child = current.next_sibling();
+    }
+    None
+}
+
+fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiSelection) {
+    let mut tiles = Vec::new();
+    collect_tiles(root.upcast_ref(), &mut tiles);
+    for tile in tiles {
+        let selected = tile
+            .imp()
+            .photo
+            .borrow()
+            .as_ref()
+            .and_then(|photo| selection_position_for_id(selection, photo.id()))
+            .is_some_and(|position| selection.is_selected(position));
+        tile.set_manual_selected(selected);
+    }
+}
+
+fn folder_id_from_named_ancestor(widget: &gtk::Widget) -> Option<i64> {
+    let mut current = Some(widget.clone());
+    while let Some(candidate) = current {
+        let name = candidate.widget_name();
+        if let Some(value) = name.as_str().strip_prefix("picasa-folder-row-") {
+            if let Ok(folder_id) = value.parse::<i64>() {
+                return Some(folder_id);
+            }
+        }
+        current = candidate.parent();
+    }
+    None
+}
+
 fn schedule_scroll_restore(
-    root: &gtk::GridView,
+    adjustment: Option<gtk::Adjustment>,
     scroll_y: f64,
     replace_generation: Rc<Cell<u64>>,
     generation: u64,
 ) {
-    let root = root.clone();
     glib::idle_add_local_once(move || {
         if replace_generation.get() != generation {
             return;
         }
-        if let Some(adjustment) = root.vadjustment() {
+        if let Some(adjustment) = adjustment {
             let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
             adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
         }
     });
+}
+
+fn folder_chunk_height(photo_count: usize, columns: u32, tile_height: i32) -> i32 {
+    let columns = columns.max(1) as usize;
+    let lines = photo_count.max(1).div_ceil(columns);
+    (lines as i32) * (tile_height.max(1) + 12)
+}
+
+fn update_folder_flow_layout(flow: &gtk::FlowBox, columns: u32, tile_height: i32) {
+    flow.set_max_children_per_line(columns.max(1));
+    let visible_photos = flow_box_tiles(flow)
+        .into_iter()
+        .filter(|tile| tile.is_visible() && tile.imp().photo.borrow().is_some())
+        .count();
+    if let Some(row_root) = flow.parent().and_downcast::<gtk::Box>() {
+        row_root.set_height_request(folder_chunk_height(visible_photos, columns, tile_height));
+    }
+}
+
+fn tile_near_folder_viewport(tile: &SquareTile, root: &gtk::ListView) -> bool {
+    if !tile.is_mapped() || root.height() <= 0 {
+        return false;
+    }
+    let Some(bounds) = tile.compute_bounds(root) else {
+        return false;
+    };
+    let viewport = root.height() as f32;
+    // Keep one viewport of prefetch on either side. This preserves smooth
+    // scrolling while avoiding thumbnail work for ListView overscan rows.
+    bounds.y() + bounds.height() >= -viewport && bounds.y() <= viewport * 2.0
+}
+
+fn flow_box_tiles(flow: &gtk::FlowBox) -> Vec<SquareTile> {
+    let mut tiles = Vec::new();
+    let mut child = flow.first_child();
+    while let Some(current) = child {
+        if let Some(tile) = current
+            .first_child()
+            .and_then(|widget| widget.downcast::<SquareTile>().ok())
+        {
+            tiles.push(tile);
+        } else if let Ok(tile) = current.clone().downcast::<SquareTile>() {
+            tiles.push(tile);
+        }
+        child = current.next_sibling();
+    }
+    tiles
 }
 
 fn collect_tiles(widget: &gtk::Widget, tiles: &mut Vec<SquareTile>) {
@@ -1608,5 +2931,84 @@ fn collect_tiles(widget: &gtk::Widget, tiles: &mut Vec<SquareTile>) {
     while let Some(current) = child {
         collect_tiles(&current, tiles);
         child = current.next_sibling();
+    }
+}
+
+fn collect_folder_flows(widget: &gtk::Widget, flows: &mut Vec<gtk::FlowBox>) {
+    if let Some(flow) = widget.downcast_ref::<gtk::FlowBox>() {
+        flows.push(flow.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        collect_folder_flows(&current, flows);
+        child = current.next_sibling();
+    }
+}
+
+#[cfg(test)]
+mod folder_stream_tests {
+    use super::{folder_chunk_height, folder_virtual_rows, FolderRowKind, GroupRange, FOLDER_PHOTO_CHUNK_SIZE};
+
+    fn sample_ranges() -> Vec<GroupRange> {
+        vec![
+            GroupRange {
+                start: 0,
+                end: 5,
+                label: "Pictures".to_string(),
+                folder_id: 10,
+            },
+            GroupRange {
+                start: 5,
+                end: 18,
+                label: "Drone".to_string(),
+                folder_id: 11,
+            },
+        ]
+    }
+
+    #[test]
+    fn folder_virtual_stream_uses_header_plus_fixed_eight_photo_chunks() {
+        let rows = folder_virtual_rows(&sample_ranges());
+        assert_eq!(FOLDER_PHOTO_CHUNK_SIZE, 8);
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].kind, FolderRowKind::Header);
+        assert_eq!((rows[1].start, rows[1].end), (0, 5));
+        assert_eq!(rows[2].kind, FolderRowKind::Header);
+        assert_eq!((rows[3].start, rows[3].end), (5, 13));
+        assert_eq!((rows[4].start, rows[4].end), (13, 18));
+    }
+
+    #[test]
+    fn folder_virtual_stream_shape_is_independent_of_zoom_columns() {
+        let ranges = vec![GroupRange {
+            start: 0,
+            end: 47,
+            label: "Pictures".to_string(),
+            folder_id: 10,
+        }];
+
+        // Zoom columns are intentionally not an input. One header plus six
+        // fixed chunks (8+8+8+8+8+7) remains seven model rows at every zoom.
+        let before_zoom = folder_virtual_rows(&ranges);
+        let after_zoom = folder_virtual_rows(&ranges);
+        assert_eq!(before_zoom.len(), 7);
+        assert_eq!(after_zoom, before_zoom);
+        assert_eq!(before_zoom[0].kind, FolderRowKind::Header);
+        assert_eq!((before_zoom[6].start, before_zoom[6].end), (40, 47));
+    }
+
+    #[test]
+    fn folder_chunk_height_tracks_wrapped_lines_without_changing_model_shape() {
+        assert_eq!(folder_chunk_height(8, 8, 100), 112);
+        assert_eq!(folder_chunk_height(8, 4, 100), 224);
+        assert_eq!(folder_chunk_height(5, 3, 100), 224);
+    }
+
+    #[test]
+    fn folder_virtual_photo_chunks_never_exceed_eight_items() {
+        let rows = folder_virtual_rows(&sample_ranges());
+        for row in rows.into_iter().filter(|row| row.kind == FolderRowKind::Photos) {
+            assert!(row.end - row.start <= FOLDER_PHOTO_CHUNK_SIZE);
+        }
     }
 }

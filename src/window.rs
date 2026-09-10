@@ -27,6 +27,31 @@ const STANDARD_GTK4_CSS: &str = r#"
     .search-field image { color: alpha(@theme_fg_color, 0.70); }
     .search-field entry { color: @theme_fg_color; }
     .photo-grid { background: @view_bg_color; }
+    listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }
+    listview.folder-stream > row {
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        background-image: none;
+        box-shadow: none;
+    }
+    listview.folder-stream > row:hover,
+    listview.folder-stream > row:selected,
+    listview.folder-stream > row:focus,
+    listview.folder-stream > row:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .folder-section-header { background: transparent; }
+    .folder-section-title { color: @theme_fg_color; font-weight: 700; font-size: 14px; text-shadow: none; }
+    .folder-section-count { color: alpha(@theme_fg_color, 0.58); font-size: 12px; }
+    .folder-section-icon { color: alpha(@theme_fg_color, 0.75); }
+    .folder-section-separator { margin-top: 7px; opacity: 0.35; }
+    .folder-photo-row { background: transparent; }
+    .folder-photo-selected { border-color: @accent_bg_color; box-shadow: none; }
+    .folder-photo-selected .selection-badge { opacity: 1; }
     /* GtkGridView uses CSS child nodes for its cells. Keep the old `item`
        selector too so this stays harmless across GTK minor-version styling. */
     gridview.section-grid > child,
@@ -171,6 +196,9 @@ fn group_mode_key(mode: grid::GroupMode) -> &'static str {
         grid::GroupMode::None => "none",
         grid::GroupMode::Day => "day",
         grid::GroupMode::Month => "month",
+        // Folder is an internal presentation mode and is never persisted as
+        // the user's Library grouping preference.
+        grid::GroupMode::Folder => "none",
     }
 }
 
@@ -206,8 +234,15 @@ fn apply_gallery_grouping(
     mode: grid::GroupMode,
 ) {
     gallery.set_favorite_indicators_visible(filter != sidebar::SidebarFilter::Favorites);
-    // Grouping is a Library feature: Photos, Favourites and Recently Added.
-    // Albums and individual folders deliberately keep the ordinary flat grid.
+
+    // Folder browsing is one continuous photo stream. Folder headers are real
+    // rows inside that stream, so they scroll away naturally with the photos.
+    if matches!(filter, sidebar::SidebarFilter::Folder(_)) {
+        gallery.set_grouping(grid::GroupMode::Folder, grid::GroupDate::Taken);
+        return;
+    }
+
+    // User-selectable date grouping remains a Library-only feature.
     if is_library_filter(filter) && mode != grid::GroupMode::None {
         let date = group_date_for_sort(sort).unwrap_or(grid::GroupDate::Taken);
         gallery.set_grouping(mode, date);
