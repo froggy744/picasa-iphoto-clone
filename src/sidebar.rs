@@ -160,7 +160,18 @@ pub fn build(
         });
     }
 
-    // ALBUMS: fixed/static in the sidebar, but its rows can be collapsed.
+    // The Library section stays fixed; Albums and Folders share one scrollable
+    // region below it, so a long album list can never push the folders off
+    // screen and both scroll together as one list.
+    let sections_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    sections_box.set_hexpand(true);
+    let sections_scroll = gtk::ScrolledWindow::new();
+    sections_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    sections_scroll.set_hexpand(true);
+    sections_scroll.set_vexpand(true);
+    sections_scroll.set_child(Some(&sections_box));
+
+    // ALBUMS: collapsible rows inside the shared scroll region.
     let (album_heading, album_indicator) = collapsible_heading(
         "Albums",
         Some(on_create_album.clone()),
@@ -171,7 +182,7 @@ pub fn build(
             Rc::new(move || on_filter(SidebarFilter::Albums))
         }),
     );
-    root.append(&album_heading);
+    sections_box.append(&album_heading);
 
     let album_list = section_list();
     connect_filter_list(&album_list, on_filter.clone(), filter_syncing.clone());
@@ -179,7 +190,7 @@ pub fn build(
     album_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     album_revealer.set_reveal_child(true);
     album_revealer.set_child(Some(&album_list));
-    root.append(&album_revealer);
+    sections_box.append(&album_revealer);
 
     {
         let state = state.clone();
@@ -197,8 +208,32 @@ pub fn build(
         });
     }
 
-    // FOLDERS: the heading is fixed. Only the folder-content scroller below
-    // consumes remaining height and scrolls.
+    // Double-click anywhere on the heading to collapse/expand. Capture phase so
+    // it wins over the title's single-click navigation.
+    {
+        let state = state.clone();
+        let revealer = album_revealer.clone();
+        let indicator = album_indicator.clone();
+        let double_click = gtk::GestureClick::new();
+        double_click.set_button(1);
+        double_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        double_click.connect_pressed(move |gesture, n_press, _, _| {
+            if n_press == 2 {
+                let expanded = !state.borrow().albums_expanded;
+                state.borrow_mut().albums_expanded = expanded;
+                revealer.set_reveal_child(expanded);
+                indicator.set_icon_name(if expanded {
+                    "pan-down-symbolic"
+                } else {
+                    "pan-end-symbolic"
+                });
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+            }
+        });
+        album_heading.add_controller(double_click);
+    }
+
+    // FOLDERS: heading plus the folder tree, all inside the shared scroll.
     let (folder_heading, folder_indicator) = collapsible_heading(
         "Folders",
         Some(on_import_folder.clone()),
@@ -219,24 +254,17 @@ pub fn build(
     // button. It changes presentation only; scanner/database scope is untouched.
     folder_heading.insert_child_after(&folder_mode_toggle, Some(&folder_indicator));
 
-    root.append(&folder_heading);
+    sections_box.append(&folder_heading);
 
     let folder_list = section_list();
     connect_filter_list(&folder_list, on_filter, filter_syncing.clone());
-
-    let folder_scroll = gtk::ScrolledWindow::new();
-    folder_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    folder_scroll.set_hexpand(true);
-    folder_scroll.set_vexpand(true);
-    folder_scroll.set_child(Some(&folder_list));
 
     let folder_revealer = gtk::Revealer::new();
     folder_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     folder_revealer.set_reveal_child(true);
     folder_revealer.set_hexpand(true);
-    folder_revealer.set_vexpand(true);
-    folder_revealer.set_child(Some(&folder_scroll));
-    root.append(&folder_revealer);
+    folder_revealer.set_child(Some(&folder_list));
+    sections_box.append(&folder_revealer);
 
     {
         let state = state.clone();
@@ -253,6 +281,32 @@ pub fn build(
             });
         });
     }
+
+    // Double-click the Folders heading to collapse/expand the whole tree.
+    {
+        let state = state.clone();
+        let revealer = folder_revealer.clone();
+        let indicator = folder_indicator.clone();
+        let double_click = gtk::GestureClick::new();
+        double_click.set_button(1);
+        double_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        double_click.connect_pressed(move |gesture, n_press, _, _| {
+            if n_press == 2 {
+                let expanded = !state.borrow().folders_expanded;
+                state.borrow_mut().folders_expanded = expanded;
+                revealer.set_reveal_child(expanded);
+                indicator.set_icon_name(if expanded {
+                    "pan-down-symbolic"
+                } else {
+                    "pan-end-symbolic"
+                });
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+            }
+        });
+        folder_heading.add_controller(double_click);
+    }
+
+    root.append(&sections_scroll);
 
     {
         let list = folder_list.clone();
@@ -295,7 +349,7 @@ pub fn build(
         outer.set_data(ALBUM_REVEALER_KEY, album_revealer);
         outer.set_data(ALBUM_INDICATOR_KEY, album_indicator);
         outer.set_data(FOLDER_LIST_KEY, folder_list);
-        outer.set_data(FOLDER_SCROLL_KEY, folder_scroll);
+        outer.set_data(FOLDER_SCROLL_KEY, sections_scroll);
         outer.set_data(FOLDER_REVEALER_KEY, folder_revealer);
         outer.set_data(FOLDER_INDICATOR_KEY, folder_indicator);
         outer.set_data(FILTER_SYNCING_KEY, filter_syncing);
@@ -616,6 +670,25 @@ pub fn refresh_library_counts(
     if let Some(filter) = current_filter(scrolled) {
         set_active_filter(scrolled, filter);
     }
+}
+
+/// Rebuild only the folder rows from fresh folder data (for example after a
+/// watched-folder change in Settings) while preserving the scroll position.
+pub fn refresh_folder_rows(
+    scrolled: &gtk::ScrolledWindow,
+    folders: &[Folder],
+    on_unavailable: &Rc<dyn Fn()>,
+) {
+    let Some(state) = sidebar_state(scrolled) else {
+        return;
+    };
+    let Some(folder_list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) else {
+        return;
+    };
+    let folder_scroll_value = folder_scroll_value(scrolled);
+    clear_list(&folder_list);
+    populate_folders(&folder_list, folders, &state, on_unavailable);
+    restore_folder_scroll(scrolled, folder_scroll_value);
 }
 
 /// Add the folder row immediately when an import starts. The normal refresh
@@ -1407,6 +1480,22 @@ fn append_folder_row(
         disclosure_slot.append(&disclosure);
     }
     content.append(&disclosure_slot);
+
+    // Watched folders (set in Settings) show an eye marker to the left of the
+    // folder icon. A fixed-width slot keeps folder icons aligned either way.
+    let watched_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    watched_slot.set_size_request(16, 16);
+    watched_slot.set_width_request(16);
+    if folder.watched {
+        let watched = gtk::Image::from_icon_name("view-reveal-symbolic");
+        watched.set_pixel_size(14);
+        watched.set_halign(gtk::Align::Center);
+        watched.set_valign(gtk::Align::Center);
+        watched.add_css_class("sidebar-watched-folder");
+        watched.set_tooltip_text(Some("Watched for changes"));
+        watched_slot.append(&watched);
+    }
+    content.append(&watched_slot);
 
     let icon = gtk::Image::from_icon_name("folder-symbolic");
     icon.set_pixel_size(18);

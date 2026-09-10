@@ -555,6 +555,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     &gallery,
                 );
                 if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
+                    if let Ok(folders) = db::folders(&connection.borrow()) {
+                        sidebar::refresh_folder_rows(&sidebar, &folders, &on_unavailable);
+                    }
                     if let Ok(counts) = db::sidebar_counts(&connection.borrow()) {
                         sidebar::refresh_library_counts(&sidebar, counts, &on_unavailable);
                     }
