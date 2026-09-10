@@ -1670,12 +1670,22 @@ impl Gallery {
             // Replacing the Folder ListStore here used to invalidate every
             // realized row and cost ~0.8-1.1s for a 4.5k-photo library.
             if folder_mode {
+                // Tile size changed within the same columns: the rows keep
+                // their photos but their heights change, so re-anchor the
+                // viewport to the photo that was at the top.
+                let anchor = self.zoom_anchor.take().or_else(|| {
+                    self.photo_for_scroll_position(self.last_scroll_y.get())
+                        .map(|photo| photo.id())
+                });
                 let mut flows = Vec::new();
                 collect_folder_flows(self.folder_root.upcast_ref(), &mut flows);
                 for flow in flows {
                     update_folder_flow_layout(&flow, columns.max(1), self.tile_height.get());
                 }
                 self.folder_root.queue_resize();
+                if let Some(anchor) = anchor {
+                    self.scroll_folder_to_photo(anchor);
+                }
                 self.refresh_folder_viewport_tiles();
             } else {
                 self.root.queue_resize();
