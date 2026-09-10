@@ -1147,17 +1147,30 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let gallery_for_folder_scroll = gallery.clone();
     let sidebar_for_scroll_location = sidebar_selection_slot.clone();
     let filter_for_scroll_location = filter.clone();
+    let scroll_handler_calls = Rc::new(Cell::new(0u64));
+    let scroll_handler_calls_for_event = scroll_handler_calls.clone();
     folder_scroll
         .vadjustment()
         .connect_value_changed(move |adjustment| {
+            let trace = std::env::var_os("PICASA_TRACE").is_some();
+            let handler_started = trace.then(Instant::now);
+            if trace {
+                scroll_handler_calls_for_event
+                    .set(scroll_handler_calls_for_event.get().wrapping_add(1));
+            }
             let scroll_y = adjustment.value();
             // This stores the active adjustment for view restoration. Folder
             // mode deliberately has no external/sticky group heading.
+            let header_started = trace.then(Instant::now);
             gallery_for_folder_scroll.update_group_header_for_scroll(scroll_y);
+            let header_ms = header_started
+                .map(|started| started.elapsed().as_millis())
+                .unwrap_or(0);
 
             // Sidebar follow is Folder-mode only. It is visual tracking, not
             // navigation: changing the highlighted row must never reload the
             // continuous stream.
+            let mut sidebar_ms = 0u128;
             if matches!(
                 filter_for_scroll_location.get(),
                 sidebar::SidebarFilter::Folder(_)
@@ -1170,11 +1183,50 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     filter_for_scroll_location
                         .set(sidebar::SidebarFilter::Folder(folder_id));
                 }
+                let sidebar_started = trace.then(Instant::now);
                 if let Some(sidebar) = sidebar_for_scroll_location.borrow().as_ref() {
                     sidebar::set_scroll_location(sidebar, folder_id);
                 }
+                sidebar_ms = sidebar_started
+                    .map(|started| started.elapsed().as_millis())
+                    .unwrap_or(0);
+            }
+
+            if trace {
+                let (pick_calls, pick_ns, scan_ns) = crate::grid::take_scroll_probe_stats();
+                eprintln!(
+                    "UI PERF scroll_handler pick_calls={} pick_ms={} scan_ms={} header_ms={} sidebar_ms={} total_ms={} y={}",
+                    pick_calls,
+                    pick_ns / 1_000_000,
+                    scan_ns / 1_000_000,
+                    header_ms,
+                    sidebar_ms,
+                    handler_started
+                        .map(|started| started.elapsed().as_millis())
+                        .unwrap_or(0),
+                    scroll_y
+                );
             }
         });
+
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        let scroll_handler_calls = scroll_handler_calls.clone();
+        glib::timeout_add_local(Duration::from_secs(1), move || {
+            let calls = scroll_handler_calls.replace(0);
+            if calls > 0 {
+                eprintln!("UI PERF scroll_handler_freq calls={calls}");
+            }
+            let (loads, reloads, max_ms, fs_ms, apply_ms) =
+                crate::grid::take_thumb_load_stats();
+            if loads > 0 {
+                eprintln!(
+                    "UI PERF thumb_load_freq loads={} reloads={} max_ms={} fs_ms={} apply_ms={}",
+                    loads, reloads, max_ms, fs_ms, apply_ms
+                );
+            }
+            glib::ControlFlow::Continue
+        });
+    }
 
     let make_zoom_controller = |gallery: Rc<grid::Gallery>| {
         let controller =

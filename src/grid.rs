@@ -30,6 +30,51 @@ thread_local! {
     static RAW_THUMBNAIL_CACHE: RefCell<VecDeque<(String, i32, gtk::gdk::Paintable)>> =
         const { RefCell::new(VecDeque::new()) };
     static SELECTION_POSITION_CALLS: Cell<u64> = const { Cell::new(0) };
+    static SCROLL_PROBE_PICK_CALLS: Cell<u64> = const { Cell::new(0) };
+    static SCROLL_PROBE_PICK_NS: Cell<u128> = const { Cell::new(0) };
+    static SCROLL_PROBE_SCAN_NS: Cell<u128> = const { Cell::new(0) };
+    static THUMB_LOAD_COUNT: Cell<u64> = const { Cell::new(0) };
+    static THUMB_LOAD_RELOADS: Cell<u64> = const { Cell::new(0) };
+    static THUMB_LOAD_MAX_MS: Cell<u128> = const { Cell::new(0) };
+    static THUMB_LOAD_FS_MS: Cell<u128> = const { Cell::new(0) };
+    static THUMB_LOAD_APPLY_MS: Cell<u128> = const { Cell::new(0) };
+    static THUMB_LOAD_SEEN: RefCell<HashSet<i64>> = RefCell::new(HashSet::new());
+}
+
+pub(crate) fn take_scroll_probe_stats() -> (u64, u128, u128) {
+    SCROLL_PROBE_PICK_CALLS.with(|calls| {
+        SCROLL_PROBE_PICK_NS.with(|pick| {
+            SCROLL_PROBE_SCAN_NS.with(|scan| {
+                let stats = (calls.get(), pick.get(), scan.get());
+                calls.set(0);
+                pick.set(0);
+                scan.set(0);
+                stats
+            })
+        })
+    })
+}
+
+fn record_thumb_load(id: i64, total_ms: u128, fs_ms: u128, apply_ms: u128) {
+    THUMB_LOAD_COUNT.with(|count| count.set(count.get().wrapping_add(1)));
+    THUMB_LOAD_MAX_MS.with(|max| max.set(max.get().max(total_ms)));
+    THUMB_LOAD_FS_MS.with(|sum| sum.set(sum.get().wrapping_add(fs_ms)));
+    THUMB_LOAD_APPLY_MS.with(|sum| sum.set(sum.get().wrapping_add(apply_ms)));
+    THUMB_LOAD_SEEN.with(|seen| {
+        if !seen.borrow_mut().insert(id) {
+            THUMB_LOAD_RELOADS.with(|count| count.set(count.get().wrapping_add(1)));
+        }
+    });
+}
+
+pub(crate) fn take_thumb_load_stats() -> (u64, u64, u128, u128, u128) {
+    let loads = THUMB_LOAD_COUNT.with(|cell| cell.replace(0));
+    let reloads = THUMB_LOAD_RELOADS.with(|cell| cell.replace(0));
+    let max_ms = THUMB_LOAD_MAX_MS.with(|cell| cell.replace(0));
+    let fs_ms = THUMB_LOAD_FS_MS.with(|cell| cell.replace(0));
+    let apply_ms = THUMB_LOAD_APPLY_MS.with(|cell| cell.replace(0));
+    THUMB_LOAD_SEEN.with(|seen| seen.borrow_mut().clear());
+    (loads, reloads, max_ms, fs_ms, apply_ms)
 }
 
 mod square_tile {
@@ -163,15 +208,22 @@ impl SquareTile {
         if self.imp().visual_loaded.get() {
             return;
         }
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let load_started = trace.then(Instant::now);
         let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
             return;
         };
+        let fs_started = trace.then(Instant::now);
         photo.set_original_available(crate::source::cached_file_available(&photo.path()));
+        let mut cache_hit = false;
+        let mut request_priority = false;
         if let Some(path) = photo.cached_thumbnail_path() {
             let available = std::path::Path::new(&path).is_file();
             photo.set_thumbnail_available(available);
+            cache_hit = available;
             if !available {
-                if std::env::var_os("PICASA_TRACE").is_some() {
+                request_priority = true;
+                if trace {
                     eprintln!(
                         "THUMB PRIORITY visible_missing thread=main id={} path={} cache={}",
                         photo.id(),
@@ -179,24 +231,64 @@ impl SquareTile {
                         path
                     );
                 }
-                crate::thumbnail::request_priority(
-                    photo.path(),
-                    Some(photo.mtime()),
-                    Some(photo.size_bytes()),
-                );
             }
         }
+        let fs_ms = fs_started.map(|started| started.elapsed().as_millis()).unwrap_or(0);
+        let priority_started = trace.then(Instant::now);
+        if request_priority {
+            crate::thumbnail::request_priority(
+                photo.path(),
+                Some(photo.mtime()),
+                Some(photo.size_bytes()),
+            );
+        }
+        let priority_ms = priority_started
+            .map(|started| started.elapsed().as_millis())
+            .unwrap_or(0);
         crate::diagnostics::visible_thumbnail(photo.thumbnail_available());
+        let apply_started = trace.then(Instant::now);
         self.refresh_thumbnail_with_probe(false);
+        let apply_ms = apply_started
+            .map(|started| started.elapsed().as_millis())
+            .unwrap_or(0);
         self.imp().visual_loaded.set(true);
+        if let Some(started) = load_started {
+            let total_ms = started.elapsed().as_millis();
+            record_thumb_load(photo.id(), total_ms, fs_ms, apply_ms);
+            eprintln!(
+                "UI PERF load_visual id={} fs_ms={} priority_ms={} apply_ms={} total_ms={} cache={}",
+                photo.id(),
+                fs_ms,
+                priority_ms,
+                apply_ms,
+                total_ms,
+                if cache_hit { "hit" } else { "miss" }
+            );
+        }
     }
 
     fn unload_visual(&self) {
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let started = trace.then(Instant::now);
         self.imp().visual_loaded.set(false);
         if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
             if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
                 picture.set_paintable(gtk::gdk::Paintable::NONE);
             }
+        }
+        if let Some(started) = started {
+            let id = self
+                .imp()
+                .photo
+                .borrow()
+                .as_ref()
+                .map(|photo| photo.id())
+                .unwrap_or_default();
+            eprintln!(
+                "UI PERF unload_visual id={} total_ms={}",
+                id,
+                started.elapsed().as_millis()
+            );
         }
     }
 
@@ -1655,39 +1747,73 @@ impl Gallery {
     }
 
     fn refresh_folder_viewport_tiles(&self) {
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let started = trace.then(Instant::now);
         let root = &self.folder_root;
         let mut mapped = self.mapped_folder_tiles.borrow_mut();
         mapped.retain(|tile| tile.is_mapped());
+        let mapped_count = mapped.len();
         let mut near = 0usize;
+        let mut loaded = 0usize;
+        let mut unloaded = 0usize;
         for tile in mapped.iter() {
             if tile_near_folder_viewport(tile, root) {
                 near += 1;
+                if !tile.imp().visual_loaded.get() {
+                    loaded += 1;
+                }
                 tile.load_visual();
             } else {
+                if tile.imp().visual_loaded.get() {
+                    unloaded += 1;
+                }
                 tile.unload_visual();
             }
         }
         let _ = near;
+        if let Some(started) = started {
+            eprintln!(
+                "UI PERF viewport_tiles mapped={} near={} loaded={} unloaded={} ms={}",
+                mapped_count,
+                near,
+                loaded,
+                unloaded,
+                started.elapsed().as_millis()
+            );
+        }
     }
 
     fn photo_for_visible_folder_row(&self) -> Option<PhotoObject> {
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
         let width = self.folder_root.width().max(1) as f64;
         for y in [6.0_f64, 20.0, 40.0, 64.0, 92.0, 120.0] {
-            let Some(picked) = self
+            let pick_started = trace.then(Instant::now);
+            let picked = self
                 .folder_root
-                .pick(width * 0.5, y, gtk::PickFlags::DEFAULT)
-            else {
+                .pick(width * 0.5, y, gtk::PickFlags::DEFAULT);
+            if let Some(started) = pick_started {
+                SCROLL_PROBE_PICK_CALLS.with(|calls| calls.set(calls.get().wrapping_add(1)));
+                SCROLL_PROBE_PICK_NS
+                    .with(|ns| ns.set(ns.get().wrapping_add(started.elapsed().as_nanos())));
+            }
+            let Some(picked) = picked else {
                 continue;
             };
             let Some(folder_id) = folder_id_from_named_ancestor(&picked) else {
                 continue;
             };
-            return self
+            let scan_started = trace.then(Instant::now);
+            let found = self
                 .current_photos
                 .borrow()
                 .iter()
                 .find(|photo| photo.folder_id() == folder_id)
                 .cloned();
+            if let Some(started) = scan_started {
+                SCROLL_PROBE_SCAN_NS
+                    .with(|ns| ns.set(ns.get().wrapping_add(started.elapsed().as_nanos())));
+            }
+            return found;
         }
         // During a resize/rebind there may briefly be no realized row at the
         // probe point. Keep the existing sidebar location instead of falsely
