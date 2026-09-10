@@ -1001,6 +1001,9 @@ pub struct Gallery {
     group_date: Rc<Cell<GroupDate>>,
     group_ranges: Rc<RefCell<Vec<GroupRange>>>,
     last_scroll_y: Rc<Cell<f64>>,
+    // Photo at the viewport top captured before a zoom resizes the tiles, so
+    // the row reshape can restore the same viewport after the relayout.
+    zoom_anchor: Rc<Cell<Option<i64>>>,
     on_zoom_changed: Rc<dyn Fn(i32)>,
 }
 
@@ -1626,6 +1629,7 @@ impl Gallery {
             group_date: Rc::new(Cell::new(GroupDate::Taken)),
             group_ranges: Rc::new(RefCell::new(Vec::new())),
             last_scroll_y: Rc::new(Cell::new(0.0)),
+            zoom_anchor: Rc::new(Cell::new(None)),
             on_zoom_changed,
         };
         gallery.replace(photos);
@@ -1696,9 +1700,10 @@ impl Gallery {
             // The chunk size is a multiple of the column count, so a column
             // change reshapes the rows. Rebuild once (fast now) so every chunk
             // is a whole number of full rows, keeping the photo at the top.
-            let anchor = self
-                .photo_for_scroll_position(self.last_scroll_y.get())
-                .map(|photo| photo.id());
+            let anchor = self.zoom_anchor.take().or_else(|| {
+                self.photo_for_scroll_position(self.last_scroll_y.get())
+                    .map(|photo| photo.id())
+            });
             let before = self
                 .folder_root
                 .vadjustment()
@@ -2060,6 +2065,16 @@ impl Gallery {
             return;
         }
 
+        // Capture the visible photo before the tile resize disturbs the layout.
+        if self.group_mode.get() == GroupMode::Folder {
+            self.zoom_anchor.set(
+                self.photo_for_scroll_position(self.last_scroll_y.get())
+                    .map(|photo| photo.id()),
+            );
+        } else {
+            self.zoom_anchor.set(None);
+        }
+
         let scale = width as f64 / old_width as f64;
         let height = ((old_height as f64) * scale).round().max(1.0) as i32;
         if trace {
@@ -2133,6 +2148,7 @@ impl Gallery {
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
+        self.zoom_anchor.set(None);
         if trace {
             eprintln!(
                 "UI PERF folder_zoom_end root_width={} columns={} folder_rows={} layout_ms={} total_ms={}",
