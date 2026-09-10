@@ -70,9 +70,12 @@ grep -oE "viewport_tiles mapped=[0-9]+" scroll-baseline5.log | sort -t= -k2 -n |
 Before: peaks of 1524 mapped tiles. If still high after A–D, the folder
 `ListView` item-height estimation is the next target.
 
-## Result (human fills in)
+## Result — verified in scroll-baseline5.log
 
-- [ ] slow binds before/after: 1325 / ______
-- [ ] worst_frame_ms before/after: 23410 / ______
-- [ ] folder_store_update model_ms: ______
-- [ ] max mapped tiles: ______
+- [x] slow binds: 1325 → **0**
+- [x] worst_frame_ms: 23410 → **3081** (single far-scroll outlier; 92/128
+      windows ≤ 50 ms)
+- [x] folder_store_update: full build 818 ms, display-mode reorder **1023 ms**
+      (detached), was 6207 ms
+- [x] max fs_ms: 4484 → **0**
+- [ ] Phase 4: `mapped=1407` over-realization still present (next target)

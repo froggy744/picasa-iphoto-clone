@@ -30,6 +30,28 @@ Remaining (Phase 4): `viewport_tiles mapped=1524` peaks show the folder
 `ListView` realizing ~190 rows during jumps. With the per-bind scan gone this
 is now bounded by tile creation, but worth a follow-up trace.
 
+### scroll-baseline5 result — fixed
+
+| metric | before (bl4) | after (bl5) |
+| --- | --- | --- |
+| `folder_virtual_bind_slow` | 1325 @ ~29 ms | **0** |
+| worst `worst_frame_ms` | 23410 | **3081** |
+| `refresh_grid photos=66008` | 14929 ms | **125 ms** |
+| `refresh_first_batch 500` | 8750 ms | **215 ms** |
+| `refresh_finished 66008` | 19617 ms | **1008 ms** |
+| folder store full build | 808 ms | 818 ms |
+| display-mode reorder | 6207 ms | **1023 ms** (detached) |
+| max `fs_ms` | 4484 | **0** |
+
+Frame distribution over 128 one-second windows: **92 ≤ 50 ms, 17 ≤ 100 ms,
+14 ≤ 200 ms, 3 ≤ 500 ms, 1 = 864 ms** (initial stream build), **1 = 3081 ms**
+(fast far scroll with 3-column large tiles). The UI no longer freezes.
+
+The remaining `mapped=1407` spike is GTK `ListView` over-realization during a
+fast far scroll with variable row heights; it is now a single 3 s outlier, not
+a sustained freeze. Next candidate: uniform row heights or a cheaper row tree.
+
+
 ## Session 1
 
 ## Phase 2 — Folder-scroll jank (Rank 1 ListStore rebuild)
