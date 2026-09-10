@@ -422,6 +422,13 @@ fn show_photo_context_menu(
         if let Some(gallery) = favorite_context.gallery.borrow().upgrade() {
             if favorite_context.filter.get() == sidebar::SidebarFilter::Favorites && !target {
                 gallery.remove_photos(&ids);
+                if let Some(lightbox) = favorite_context.lightbox.upgrade() {
+                    if lightbox.root.is_visible() {
+                        for id in &ids {
+                            lightbox.remove_photo(*id);
+                        }
+                    }
+                }
             } else {
                 gallery.update_favorites(&ids, target);
             }

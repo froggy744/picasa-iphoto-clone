@@ -847,6 +847,82 @@ impl Lightbox {
         );
     }
 
+    /// Remove a photo from the lightbox collection while keeping the viewer
+    /// on the nearest remaining photo. This is used when a photo leaves the
+    /// collection currently being browsed (for example, removing a Favourite).
+    pub fn remove_photo(&self, photo_id: i64) {
+        let current = self.index.get();
+        let (removed_position, remaining_len) = {
+            let mut photos = self.photos.borrow_mut();
+            let Some(position) = photos.iter().position(|photo| photo.id() == photo_id) else {
+                return;
+            };
+            photos.remove(position);
+            (position, photos.len())
+        };
+
+        if remaining_len == 0 {
+            self.close();
+            return;
+        }
+
+        // If an item before the displayed photo disappeared, compensate for
+        // the shifted vector index. If the displayed photo itself disappeared,
+        // keep the same slot so the next photo replaces it; for the old final
+        // item this naturally selects the previous photo instead.
+        let next = if removed_position < current {
+            current.saturating_sub(1)
+        } else if removed_position == current {
+            current.min(remaining_len - 1)
+        } else {
+            current.min(remaining_len - 1)
+        };
+        self.index.set(next);
+
+        // Removing a photo after the current one does not change what is on
+        // screen. Only re-present when the displayed photo was removed.
+        if removed_position != current || !self.root.is_visible() {
+            return;
+        }
+
+        self.zoom.set(0.0);
+        self.zoom_before_one_to_one.set(0.0);
+        self.one_to_one_active.set(false);
+        self.picture.set_can_shrink(true);
+        self.picture_viewport.set_cursor_from_name(None);
+        self.native_texture.borrow_mut().take();
+        reset_viewport(&self.picture_viewport);
+
+        let (fit_geometry_fixed, cache_hit) = prepare_navigation_photo(
+            &self.picture,
+            self.photos.borrow().get(next),
+            &self.root,
+            self.zoom.get(),
+            &self.display_texture_cache,
+        );
+
+        notify_photo_changed(&self.photo_changed, &self.photos.borrow(), next);
+
+        let generation = self.load_generation.get().wrapping_add(1);
+        self.load_generation.set(generation);
+        show_photo(
+            &self.picture,
+            &self.photos.borrow(),
+            next,
+            &self.root,
+            self.zoom.clone(),
+            self.load_generation.clone(),
+            generation,
+            self.decode_cancel.clone(),
+            &self.picture_viewport,
+            self.native_texture.clone(),
+            self.display_texture_cache.clone(),
+            fit_geometry_fixed,
+            cache_hit,
+        );
+        self.root.grab_focus();
+    }
+
     pub fn navigate_collection(&self, direction: i32) {
         if !self.root.is_visible() || direction == 0 {
             return;

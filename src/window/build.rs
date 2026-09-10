@@ -1445,6 +1445,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         photo.set_favorite(favorite);
         if filter_for_favorite.get() == sidebar::SidebarFilter::Favorites && !favorite {
             gallery_for_favorite.remove_photos(&[photo.id()]);
+            if lightbox_for_favorite.root.is_visible() {
+                lightbox_for_favorite.remove_photo(photo.id());
+            }
         } else {
             gallery_for_favorite.update_favorites(&[photo.id()], favorite);
             info_favorite.set_photo(Some(&photo));
