@@ -1699,9 +1699,20 @@ impl Gallery {
             let anchor = self
                 .photo_for_scroll_position(self.last_scroll_y.get())
                 .map(|photo| photo.id());
+            let before = self
+                .folder_root
+                .vadjustment()
+                .map(|adjustment| adjustment.value())
+                .unwrap_or(0.0);
             self.rebuild_folder_rows();
             if let Some(anchor) = anchor {
                 self.scroll_folder_to_photo(anchor);
+            }
+            if trace {
+                eprintln!(
+                    "UI PERF folder_zoom_anchor id={:?} before={:.0}",
+                    anchor, before
+                );
             }
             self.refresh_folder_viewport_tiles();
         } else {
@@ -1720,14 +1731,40 @@ impl Gallery {
         }
     }
 
-    /// Scroll the Folder ListView to the row holding `photo_id` without
-    /// changing the selection. Used to keep the viewport stable across the
-    /// row reshape that a zoom/column change triggers.
+    /// Scroll the Folder ListView so the row holding `photo_id` sits at the
+    /// top edge, without changing the selection. Runs on idle so it applies
+    /// after the model swap's layout, and scrolls past the target first so the
+    /// follow-up aligns to the leading edge rather than the nearest edge.
     fn scroll_folder_to_photo(&self, photo_id: i64) {
-        if let Some(row) = self.folder_row_index_for_photo(photo_id) {
-            self.folder_root
-                .scroll_to(row, gtk::ListScrollFlags::NONE, None);
-        }
+        let Some(row) = self.folder_row_index_for_photo(photo_id) else {
+            return;
+        };
+        let root = self.folder_root.clone();
+        let tile_height = self.tile_height.get();
+        let total = self.folder_store.n_items();
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        glib::idle_add_local_once(move || {
+            let page = root
+                .vadjustment()
+                .map(|adjustment| adjustment.page_size())
+                .unwrap_or(0.0);
+            let row_pitch = (tile_height.max(1) + 12) as f64;
+            let overshoot_rows = ((page / row_pitch).ceil() as u32).saturating_add(2);
+            let overshoot = row
+                .saturating_add(overshoot_rows)
+                .min(total.saturating_sub(1));
+            if overshoot > row {
+                root.scroll_to(overshoot, gtk::ListScrollFlags::NONE, None);
+            }
+            root.scroll_to(row, gtk::ListScrollFlags::NONE, None);
+            if trace {
+                let after = root
+                    .vadjustment()
+                    .map(|adjustment| adjustment.value())
+                    .unwrap_or(0.0);
+                eprintln!("UI PERF folder_zoom_anchor row={row} after={after:.0}");
+            }
+        });
     }
 
     pub fn set_grouping(&self, mode: GroupMode, date: GroupDate) {
