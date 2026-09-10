@@ -3022,29 +3022,24 @@ fn rebuild_folder_rows_for(
     let update_started = trace.then(Instant::now);
     let removed = (old_len - prefix - suffix) as u32;
     let inserted = &new_rows[prefix..new_len - suffix];
-    // A large attached splice is far slower than detaching: scroll-baseline4.log
-    // measured 6207 ms for an 8961-row attached splice versus 808 ms for a
-    // detached full build. Only splice in place for genuinely localized edits.
-    const FOLDER_STORE_INCREMENTAL_LIMIT: usize = 512;
-    let changed = removed as usize + inserted.len();
-    if changed > FOLDER_STORE_INCREMENTAL_LIMIT {
-        // Detach while swapping so the live ListView does not process the
-        // change row by row. Generated thumbnail loading stays viewport-deferred.
+    // The old "attached splice is slower" measurement (6207 ms,
+    // scroll-baseline4.log) predates the O(n) selection fix. With per-row binds
+    // now ~1 ms, splicing while attached lets the ListView reuse its realized
+    // pool instead of the detach rebuilding it. Only a from-scratch build
+    // detaches.
+    let strategy = if old_len == 0 {
         folder_selection.set_model(Option::<&gio::ListStore>::None);
-        folder_store.splice(prefix as u32, removed, inserted);
+        folder_store.splice(0, 0, inserted);
         folder_selection.set_model(Some(folder_store));
+        "virtual_chunks_detached"
     } else {
-        // Localized change: splice in place so only the changed rows rebind.
         folder_store.splice(prefix as u32, removed, inserted);
-    }
+        "attached_splice"
+    };
     if trace {
         eprintln!(
             "UI PERF folder_store_update strategy={} old_rows={} new_rows={} prefix={} suffix={} model_ms={} total_ms={}",
-            if changed > FOLDER_STORE_INCREMENTAL_LIMIT {
-                "virtual_chunks_detached"
-            } else {
-                "incremental_splice"
-            },
+            strategy,
             old_rows,
             folder_store.n_items(),
             prefix,
