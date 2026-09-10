@@ -18,9 +18,12 @@ Fix `2420080`: when the incoming photos are the **same id set in a different
 order** (Folder ↔ All Photos, sort/group changes), `Gallery::replace` maps the
 existing objects by id and splices them in the new order instead of
 reconstructing 66 008 of them. Different sets (Favorites, Albums, search,
-imports) still rebuild. The run switched from small views, so this path was not
-exercised yet; a direct All ↔ Folder switch or sort change triggers it
-(`gallery_replace ... same_set_reorder`).
+imports) still rebuild.
+
+Verified in `views-baseline3.log` (All ↔ Folder back and forth, 12 switches):
+`gallery_replace photos=66008 same_set_reorder ms=115..305` and
+`refresh_finished 170..305 ms`, versus `progressive=true` + 658–1363 ms before.
+Worst frame **318 ms**, none over 500 ms.
 
 ## Session 4 — thumbnail decode on folder-store change (scroll-baseline8/9)
 
