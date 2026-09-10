@@ -1394,8 +1394,21 @@ impl Gallery {
 
         let folder_root_for_selection = folder_root.clone();
         let selection_for_folder_style = selection.clone();
+        let styles_refresh_scheduled = Rc::new(Cell::new(false));
         selection.connect_selection_changed(move |_, _, _| {
-            refresh_folder_selection_styles(&folder_root_for_selection, &selection_for_folder_style);
+            // GtkMultiSelection emits selection-changed both when the model
+            // gains items and when select_item runs, so one logical change can
+            // fire this twice. Coalesce the burst into a single idle refresh.
+            if styles_refresh_scheduled.replace(true) {
+                return;
+            }
+            let root = folder_root_for_selection.clone();
+            let selection = selection_for_folder_style.clone();
+            let scheduled = styles_refresh_scheduled.clone();
+            glib::idle_add_local_once(move || {
+                scheduled.set(false);
+                refresh_folder_selection_styles(&root, &selection);
+            });
         });
 
         let gallery = Self {
@@ -2854,10 +2867,24 @@ fn find_named_label(root: &gtk::Widget, name: &str) -> Option<gtk::Label> {
     None
 }
 
+fn selected_photo_id_set(selection: &gtk::MultiSelection) -> HashSet<i64> {
+    let selected = selection.selection();
+    let mut ids = HashSet::new();
+    if let Some((mut iter, first)) = gtk::BitsetIter::init_first(&selected) {
+        for position in std::iter::once(first).chain(&mut iter) {
+            if let Some(photo) = selection.item(position).and_downcast::<PhotoObject>() {
+                ids.insert(photo.id());
+            }
+        }
+    }
+    ids
+}
+
 fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiSelection) {
     let trace = std::env::var_os("PICASA_TRACE").is_some();
     let started = trace.then(Instant::now);
     let calls_before = SELECTION_POSITION_CALLS.with(Cell::get);
+    let selected_ids = selected_photo_id_set(selection);
     let mut tiles = Vec::new();
     collect_tiles(root.upcast_ref(), &mut tiles);
     let count = tiles.len();
@@ -2867,8 +2894,7 @@ fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiS
             .photo
             .borrow()
             .as_ref()
-            .and_then(|photo| selection_position_for_id(selection, photo.id()))
-            .is_some_and(|position| selection.is_selected(position));
+            .is_some_and(|photo| selected_ids.contains(&photo.id()));
         tile.set_manual_selected(selected);
     }
     if let Some(started) = started {
