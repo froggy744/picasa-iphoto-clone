@@ -43,11 +43,41 @@ behaviour is preserved; only the amount of ListView work changes.
 `cargo test --release`: 76 passed, 0 failed. Unit test
 `folder_virtual_row_match_compares_identity_fields` covers the comparator.
 
-### Status: awaiting human GUI measurement
+### Status: fix not yet exercised
 
-See **PENDING_MEASUREMENT.md**. Expected: `model_ms` ~0 when the stream is
-unchanged; worst_frame_ms ≤ 50 / fps ≥ 40. The run will also print the first
-differing row field, closing the root-cause question.
+`scroll-baseline3.log` (library now 66 008 photos / 8976 rows) shows only the
+**initial** build:
+
+```
+folder_store_update strategy=virtual_chunks_detached old_rows=0 new_rows=8976 prefix=0 suffix=0 model_ms=1229
+```
+
+`old_rows=0` is a from-scratch build, so the full-replace path is correct; the
+incremental/unchanged path never ran because no second folder refresh was
+triggered. To exercise it, toggle folder display mode **Tree ↔ Imported Only**
+(or change sort) while in Folder mode and check for
+`strategy=unchanged` / `strategy=incremental_splice prefix=.. suffix=..` and
+`folder_store_first_row`. See **PENDING_MEASUREMENT.md**.
+
+### 2b — Main-thread availability stat (fixed, commit `47106d8`)
+
+`scroll-baseline3.log` exposed a second, larger stall:
+
+```
+load_visual id=41165 fs_ms=4484 ... cache=hit
+folder_virtual_bind_slow row=1351 elapsed_ms=4506
+PROFILE scroll fps=28 worst_frame_ms=7408
+```
+
+`grid.rs::load_visual` called `source::cached_file_available(&photo.path())` —
+a synchronous `Path::is_file()` on the original — on the GTK thread. id 41165
+is on `/mnt/4TBP/...`, a cold spinning disk, so the stat blocked for 4.5 s.
+
+Fix: probe via `gio::File::query_info_async` (worker + main-context callback),
+gated by a new `PhotoObject.original_checked` flag, so each original is stat'ed
+once off-thread and the offline badge updates when it returns.
+`SquareTile::refresh_availability` and `apply_availability` now read the shared
+value instead of re-statting. 2 files, 76 tests pass.
 
 ## Phase 3 — DB / indexing (analysed, no edit)
 
@@ -65,18 +95,19 @@ temp B-tree sort (`SCAN p` + `USE TEMP B-TREE FOR ORDER BY` → index scan) but
 regresses the folder-filtered recursive-CTE path ~3×. The partial
 `WHERE trashed = 0` variant behaves the same.
 
-The main query runs on a worker thread and the measured `refresh_grid ms=25`
-(4515 photos) shows the DB is not on the UI critical path. **No safe,
-UI-relevant win; no edit made.** Revisit only if a fresh trace shows DB time
-inside `refresh_grid`.
+The main query runs on a worker thread and the measured `refresh_grid
+ms=175..201` for the full 66 008-photo library (`scroll-baseline3.log`) shows
+the DB is not on the UI critical path. **No safe, UI-relevant win; no edit
+made.** Revisit only if a fresh trace shows DB time inside `refresh_grid`.
 
-## Phase 4 — UI virtualization (blocked on measurement)
+## Phase 4 — UI virtualization (measured, next target)
 
-`folder_selection_styles tiles=1632` (scroll-baseline2.log) implies ~200
-photo-chunk rows realized at once. The folder `ListView` uses variable-height
-rows (header 58px; chunks via `folder_chunk_height`) and a per-row pool of up
-to 8 tiles. Whether this is over-realization or normal recycling cannot be
-decided without a fresh scroll trace. No edit made.
+`scroll-baseline3.log`: 409 `folder_virtual_bind_slow` (≥12 ms each), binding
+rows from **519 to 6979** — far outside the viewport — during long scroll
+jumps, with `worst_frame_ms` 2220 / 1316. Each newly realized row builds up to
+8 tile widgets synchronously. Most seconds are otherwise smooth (fps 60–120,
+worst 16–25 ms). This is the next concrete jank target, but it needs a fresh
+trace to separate over-realization from normal recycling before editing.
 
 ## Phase 5 — Edit pipeline (blocked on measurement)
 
@@ -97,6 +128,7 @@ PENDING_MEASUREMENT.md). Phase 3 was analysed directly against the real DB.
 - `46ed7f0` docs(phase2): pending GUI measurement
 - `0802ab5` docs(phase2): this status
 - `c5e2466` perf(grid): trace first differing folder row, not just row 0
+- `47106d8` perf(grid): probe original availability off the GTK thread
 
 ## Push
 

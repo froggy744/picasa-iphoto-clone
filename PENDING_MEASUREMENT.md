@@ -59,6 +59,21 @@ failing. Record it here after the run:
 **worst_frame_ms ≤ 50** at 4515 photos. Worst frames previously coincided with
 `folder_store_update model_ms=1036..1467`.
 
+### D. Main-thread availability stat (commit 47106d8)
+
+`load_visual` no longer stats the original on the GTK thread. In the previous
+run one cold external-drive stat blocked for `fs_ms=4484`
+(`worst_frame_ms=7408`). Verify:
+
+```bash
+grep -oE "load_visual id=[0-9]+ fs_ms=[0-9]+" scroll-baseline3.log \
+  | grep -oE "fs_ms=[0-9]+" | sort -t= -k2 -n | uniq -c | tail
+```
+
+Expected: no `fs_ms` above a few ms; the offline "!" badge still appears for
+disconnected drives (now shortly after the tile is shown rather than during the
+bind).
+
 ## Result (human fills in)
 
 - [ ] model_ms before/after: __________
