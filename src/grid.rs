@@ -1840,12 +1840,17 @@ impl Gallery {
                 continue;
             };
             let scan_started = trace.then(Instant::now);
-            let found = self
-                .current_photos
-                .borrow()
-                .iter()
-                .find(|photo| photo.folder_id() == folder_id)
-                .cloned();
+            // group_ranges is one entry per folder in Folder mode; use its
+            // recorded start instead of scanning all 66k photos per scroll tick.
+            let found = {
+                let ranges = self.group_ranges.borrow();
+                let photos = self.current_photos.borrow();
+                ranges
+                    .iter()
+                    .find(|range| range.folder_id == folder_id)
+                    .and_then(|range| photos.get(range.start))
+                    .cloned()
+            };
             if let Some(started) = scan_started {
                 SCROLL_PROBE_SCAN_NS
                     .with(|ns| ns.set(ns.get().wrapping_add(started.elapsed().as_nanos())));
