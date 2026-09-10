@@ -1,10 +1,19 @@
+static CACHE_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
 pub fn cache_dir() -> Result<PathBuf> {
+    // Cache the resolved directory: this is called once per PhotoObject built
+    // (tens of thousands per refresh), and create_dir_all is a syscall each
+    // time. The directory never changes within a session.
+    if let Some(directory) = CACHE_DIR.get() {
+        return Ok(directory.clone());
+    }
     let directory = dirs::cache_dir()
         .context("could not determine the user's cache directory")?
         .join("picasa-rs")
         .join("thumbs");
     fs::create_dir_all(&directory)
         .with_context(|| format!("could not create cache directory {}", directory.display()))?;
+    let _ = CACHE_DIR.set(directory.clone());
     Ok(directory)
 }
 
