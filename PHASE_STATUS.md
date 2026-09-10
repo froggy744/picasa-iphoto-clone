@@ -2,6 +2,26 @@
 
 Date: 2026-09-10 · branch `deepseek` · base `e026510`
 
+## Session 5 — other views (All Photos / Favorites / Albums / search)
+
+`views-baseline.log` / `views-baseline2.log`:
+
+- `refresh_grid` DB+sort is 25–175 ms, off the GTK thread
+  (`filter=All photos=66008 ms=100..125`).
+- `grid_bind_slow` (new trace on the `GridView` bind) only 10×, max 26 ms.
+- Frames: worst **276–318 ms**, no frame over 500 ms.
+- The only cost is switching to a 66 008-photo view: `refresh_finished
+  photos=66008 elapsed_ms=658..1363` rebuilding every `PhotoObject` on the
+  main thread (spread over idle batches, so no single janky frame).
+
+Fix `2420080`: when the incoming photos are the **same id set in a different
+order** (Folder ↔ All Photos, sort/group changes), `Gallery::replace` maps the
+existing objects by id and splices them in the new order instead of
+reconstructing 66 008 of them. Different sets (Favorites, Albums, search,
+imports) still rebuild. The run switched from small views, so this path was not
+exercised yet; a direct All ↔ Folder switch or sort change triggers it
+(`gallery_replace ... same_set_reorder`).
+
 ## Session 4 — thumbnail decode on folder-store change (scroll-baseline8/9)
 
 The last cost was the folder-store model change decoding cached thumbnails for
