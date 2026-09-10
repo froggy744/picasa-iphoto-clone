@@ -7,10 +7,16 @@ Measured on the 66 008-photo / 620-folder library.
 - Startup RSS: **~105 MB** (model not yet expanded; only 50 photos displayed)
 
 ## Peak memory
-- `/usr/bin/time -v` Maximum resident set size: **631 MB**
-- Includes the 66k `PhotoObject` model, GTK's realized tile pool, and the
-  lightbox's 8-entry display-texture cache + 1:1 native texture (both decoded
-  images). Not yet broken down per component.
+- `/usr/bin/time -v` Maximum resident set size: **581–631 MB**
+- Breakdown from `mem2.log`:
+  - startup: 105 MB
+  - after loading the 66 008-photo model: **243 MB** (`refresh_finished rss_mb=`)
+  - opening one photo in the viewer: **581 MB** → the lightbox adds ~338 MB
+- The lightbox decodes display textures at the fit-to-viewport size
+  (`viewer_target_dimensions` caps at 1.0×) and caches up to 8
+  (`DISPLAY_TEXTURE_CACHE_CAPACITY`), plus a native 1:1 texture that is dropped
+  on navigation. The 338 MB is larger than the cache alone, so a per-component
+  trace would be needed before optimising.
 
 ## Folder scroll (66 008 photos / 8976 rows)
 - worst `worst_frame_ms`: **321 ms** (was 23410)
