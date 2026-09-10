@@ -823,6 +823,34 @@ fn scroll_folder_row_into_view(scrolled: &gtk::ScrolledWindow, row: &gtk::ListBo
     });
 }
 
+/// Folder rows currently presented to the user, in sidebar order.
+///
+/// Tree mode returns only the rows that are presently visible in the expanded
+/// tree. Imported-only mode naturally returns just the explicitly imported
+/// roots because those are the only rows built for that mode.
+pub fn visible_folder_ids(scrolled: &gtk::ScrolledWindow) -> Vec<i64> {
+    let Some(list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) else {
+        return Vec::new();
+    };
+
+    let mut ids = Vec::new();
+    let mut child = list.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+            let filter = unsafe {
+                row.data::<SidebarFilter>("picasa-filter")
+                    .map(|filter| *filter.as_ref())
+            };
+            if let Some(SidebarFilter::Folder(folder_id)) = filter {
+                ids.push(folder_id);
+            }
+        }
+        child = next;
+    }
+    ids
+}
+
 pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) {
     unsafe {
         scrolled.set_data(CURRENT_FILTER_KEY, filter);

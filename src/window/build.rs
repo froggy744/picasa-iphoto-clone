@@ -566,11 +566,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         show_photo_context_menu(photo, anchor, action_context_for_lightbox.clone(), x, y);
     });
 
-    // In fullscreen, Left/Right and the mouse wheel stay inside the currently
-    // opened collection. Up/Down moves to the adjacent Folder when browsing a
-    // folder, or to the adjacent Album when browsing an album. The window owns
-    // collection ordering and database access; the lightbox only asks for a
-    // direction.
+    // Folder-mode collection navigation. Left/Right and the mouse wheel stay
+    // inside the current folder; Up/Down switches to the previous/next folder
+    // shown by the sidebar. Other Library/Album/Favourites views do not use
+    // Up/Down for collection switching.
     let connection_for_collection_nav = connection.clone();
     let filter_for_collection_nav = filter.clone();
     let search_for_collection_nav = search_text.clone();
@@ -587,80 +586,37 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
         let step: isize = if direction < 0 { -1 } else { 1 };
         let current_filter = filter_for_collection_nav.get();
+        if !matches!(current_filter, sidebar::SidebarFilter::Folder(_)) {
+            return;
+        }
         let search = search_for_collection_nav.borrow().clone();
 
         match current_filter {
             sidebar::SidebarFilter::Folder(current_folder_id) => {
-                // db::folders() is already path-ordered, which matches the
-                // sidebar's folder-tree traversal closely enough for keyboard
-                // Up/Down navigation. Skip empty/filtered-out folders.
+                // Navigate in the order the user can actually see in the
+                // Folders sidebar. Tree mode therefore follows visible tree
+                // rows, while Imported-only mode contains only imported roots.
                 let folders = db::folders(&connection_for_collection_nav.borrow())
                     .unwrap_or_default();
-                let Some(current_index) = folders
+                let folder_ids = sidebar_selection_for_collection_nav
+                    .borrow()
+                    .as_ref()
+                    .map(sidebar::visible_folder_ids)
+                    .unwrap_or_else(|| folders.iter().map(|folder| folder.id).collect());
+                let Some(current_index) = folder_ids
                     .iter()
-                    .position(|folder| folder.id == current_folder_id)
+                    .position(|folder_id| *folder_id == current_folder_id)
                 else {
                     return;
                 };
 
-                let first_available_folder = folders.iter().position(|folder| {
-                    let mut photos = db::photos(
-                        &connection_for_collection_nav.borrow(),
-                        Some(folder.id),
-                        false,
-                        (!search.is_empty()).then_some(search.as_str()),
-                    )
-                    .unwrap_or_default();
-                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
-                    !photos.is_empty()
-                });
-
-                // Folders are the end of the forward sequence. Reverse
-                // navigation from the first folder returns to the last
-                // available album and selects its last photo.
-                if direction < 0 && Some(current_index) == first_available_folder {
-                    let albums = db::albums(&connection_for_collection_nav.borrow())
-                        .unwrap_or_default();
-                    for album in albums.into_iter().rev() {
-                        let mut photos = db::photos_in_album(
-                            &connection_for_collection_nav.borrow(),
-                            album.id,
-                            (!search.is_empty()).then_some(search.as_str()),
-                        )
-                        .unwrap_or_default();
-                        retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
-                        sort_photos(&mut photos, sort_for_collection_nav.get());
-                        if photos.is_empty() {
-                            continue;
-                        }
-
-                        let new_filter = sidebar::SidebarFilter::Album(album.id);
-                        filter_for_collection_nav.set(new_filter);
-                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
-                            sidebar::set_active_filter(sidebar, new_filter);
-                        }
-                        apply_gallery_grouping(
-                            &gallery_for_collection_nav,
-                            new_filter,
-                            sort_for_collection_nav.get(),
-                            group_mode_for_collection_nav.get(),
-                        );
-                        gallery_for_collection_nav.replace(&photos);
-                        gallery_for_collection_nav.select_last_photo();
-                        let objects = photos
-                            .iter()
-                            .map(crate::photo_object::PhotoObject::from_photo)
-                            .collect::<Vec<_>>();
-                        if lightbox_for_collection_nav.root.is_visible() {
-                            lightbox_for_collection_nav.open(objects, photos.len() - 1);
-                        }
-                        return;
-                    }
-                }
-
                 let mut candidate = current_index as isize + step;
-                while candidate >= 0 && candidate < folders.len() as isize {
-                    let folder = &folders[candidate as usize];
+                while candidate >= 0 && candidate < folder_ids.len() as isize {
+                    let folder_id = folder_ids[candidate as usize];
+                    let Some(folder) = folders.iter().find(|folder| folder.id == folder_id) else {
+                        candidate += step;
+                        continue;
+                    };
                     let mut photos = db::photos(
                         &connection_for_collection_nav.borrow(),
                         Some(folder.id),
@@ -1133,10 +1089,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }
     });
 
-    // Keep ordinary Up/Down navigation inside the thumbnail grid. Ctrl+Up and
-    // Ctrl+Down explicitly change folders, while a plain arrow at the first
-    // or last row crosses to the adjacent non-empty folder automatically.
-    let gallery_for_folder_navigation = gallery.clone();
+    // In Folder mode, Up/Down is reserved for previous/next folder navigation.
+    // In every other view the key event is left untouched for normal GTK/grid
+    // behaviour. Left/Right remains available for thumbnail navigation.
     let collection_navigation_for_thumbnails = collection_navigation.clone();
     let filter_for_thumbnail_navigation = filter.clone();
     let thumbnail_navigation = gtk::EventControllerKey::new();
@@ -1147,33 +1102,23 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             gtk::gdk::Key::Down => 1,
             _ => return glib::Propagation::Proceed,
         };
-        let control = modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK);
-        let has_other_modifier = modifiers.intersects(
+        if !matches!(
+            filter_for_thumbnail_navigation.get(),
+            sidebar::SidebarFilter::Folder(_)
+        ) {
+            return glib::Propagation::Proceed;
+        }
+        if modifiers.intersects(
             gtk::gdk::ModifierType::ALT_MASK
                 | gtk::gdk::ModifierType::SUPER_MASK
                 | gtk::gdk::ModifierType::META_MASK,
-        );
-        if has_other_modifier {
-            return glib::Propagation::Proceed;
-        }
-
-        let has_collection_sequence = matches!(
-            filter_for_thumbnail_navigation.get(),
-            sidebar::SidebarFilter::All
-                | sidebar::SidebarFilter::Favorites
-                | sidebar::SidebarFilter::RecentlyAdded
-                | sidebar::SidebarFilter::Folder(_)
-                | sidebar::SidebarFilter::Album(_)
-        );
-        let crosses_folder = has_collection_sequence
-            && (control || gallery_for_folder_navigation.is_at_vertical_boundary(direction));
-        if !crosses_folder {
+        ) {
             return glib::Propagation::Proceed;
         }
 
         if std::env::var_os("PICASA_TRACE").is_some() {
             eprintln!(
-                "SEARCH TRACE thumbnail_folder_navigation key={key:?} direction={direction} control={control}"
+                "SEARCH TRACE thumbnail_folder_navigation key={key:?} direction={direction}"
             );
         }
         collection_navigation_for_thumbnails(direction);
@@ -1182,7 +1127,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     gallery.root.add_controller(thumbnail_navigation);
 
     collection_navigation_slot.replace(Some(collection_navigation.clone()));
-    lightbox.set_collection_navigation_handler(move |direction| collection_navigation(direction));
+    let collection_navigation_for_lightbox = collection_navigation.clone();
+    lightbox.set_collection_navigation_handler(move |direction| {
+        collection_navigation_for_lightbox(direction)
+    });
 
     gallery.root.add_css_class("photo-grid");
 
@@ -1221,6 +1169,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let grid_zoom_scroll =
         gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     let gallery_for_zoom_scroll = gallery.clone();
+    let grid_scroll_for_folder_wheel = grid_scroll.clone();
+    let filter_for_folder_wheel = filter.clone();
+    let collection_navigation_for_wheel = collection_navigation.clone();
     grid_zoom_scroll.connect_scroll(move |controller, _, dy| {
         if controller
             .current_event_state()
@@ -1233,7 +1184,66 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
             return glib::Propagation::Stop;
         }
-        glib::Propagation::Proceed
+
+        // Folder view should feel like one continuous photo strip. Let GTK
+        // perform ordinary smooth scrolling while there is more of the current
+        // folder to show. Only when the wheel continues past the top/bottom do
+        // we switch to the adjacent folder. Other views keep GTK's normal
+        // scrolling behaviour unchanged.
+        if dy == 0.0
+            || !matches!(
+                filter_for_folder_wheel.get(),
+                sidebar::SidebarFilter::Folder(_)
+            )
+        {
+            return glib::Propagation::Proceed;
+        }
+
+        let adjustment = grid_scroll_for_folder_wheel.vadjustment();
+        let lower = adjustment.lower();
+        let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
+        let value = adjustment.value();
+        // A tiny tolerance avoids requiring a mathematically exact endpoint
+        // with touchpads/high-resolution mouse wheels.
+        const EDGE_EPSILON: f64 = 2.0;
+        let direction = if dy < 0.0 { -1 } else { 1 };
+        let at_edge = if direction < 0 {
+            value <= lower + EDGE_EPSILON
+        } else {
+            value >= upper - EDGE_EPSILON
+        };
+
+        if !at_edge {
+            return glib::Propagation::Proceed;
+        }
+
+        let previous_filter = filter_for_folder_wheel.get();
+        collection_navigation_for_wheel(direction);
+        if filter_for_folder_wheel.get() == previous_filter {
+            // There is no adjacent folder in this direction. Leave the wheel
+            // event to GTK so the normal edge/overscroll behaviour remains.
+            return glib::Propagation::Proceed;
+        }
+
+        let gallery = gallery_for_zoom_scroll.clone();
+        let scrolled = grid_scroll_for_folder_wheel.clone();
+        glib::idle_add_local_once(move || {
+            let adjustment = scrolled.vadjustment();
+            let lower = adjustment.lower();
+            let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
+            if direction < 0 {
+                // Entering the previous folder from its bottom keeps the
+                // wheel direction spatially natural.
+                gallery.select_last_photo();
+                adjustment.set_value(upper);
+            } else {
+                // Entering the next folder starts at its top.
+                adjustment.set_value(lower);
+            }
+            gallery.root.grab_focus();
+        });
+
+        glib::Propagation::Stop
     });
     grid_scroll.add_controller(grid_zoom_scroll);
 
