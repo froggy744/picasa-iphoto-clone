@@ -240,37 +240,63 @@ fn sort_folder_stream(
     sort: PhotoSort,
     display_mode: sidebar::FolderDisplayMode,
 ) {
+    let order = folder_stream_order(folders, display_mode);
+    let rank = order
+        .iter()
+        .enumerate()
+        .map(|(index, folder_id)| (*folder_id, index))
+        .collect::<std::collections::HashMap<_, _>>();
+    photos.sort_by(|left, right| {
+        let left_rank = rank
+            .get(&left.folder_id.unwrap_or_default())
+            .copied()
+            .unwrap_or(usize::MAX);
+        let right_rank = rank
+            .get(&right.folder_id.unwrap_or_default())
+            .copied()
+            .unwrap_or(usize::MAX);
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| photo_ordering(left, right, sort))
+    });
+}
+
+/// Folder ids in the order their sections appear in the Folder stream for the
+/// given display mode. Exposed so the grid can reorder existing photos when the
+/// user only changes the sidebar tree mode (no database query or model rebuild).
+pub(super) fn folder_stream_order(
+    folders: &[db::Folder],
+    display_mode: sidebar::FolderDisplayMode,
+) -> Vec<i64> {
     let order = folder_tree_order(folders);
     let tree_rank = order
         .iter()
         .enumerate()
         .map(|(index, folder_id)| (*folder_id, index))
         .collect::<std::collections::HashMap<_, _>>();
+    if display_mode != sidebar::FolderDisplayMode::ImportedOnly {
+        return order;
+    }
+
     let by_id = folders
         .iter()
         .map(|folder| (folder.id, folder))
         .collect::<std::collections::HashMap<_, _>>();
-
-    let imported_rank = if display_mode == sidebar::FolderDisplayMode::ImportedOnly {
-        let mut roots = folders
-            .iter()
-            .filter(|folder| folder.imported_root)
-            .collect::<Vec<_>>();
-        roots.sort_by(|left, right| {
-            left.name
-                .to_lowercase()
-                .cmp(&right.name.to_lowercase())
-                .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
-        });
-        roots
-            .into_iter()
-            .enumerate()
-            .map(|(index, folder)| (folder.id, index))
-            .collect::<std::collections::HashMap<_, _>>()
-    } else {
-        std::collections::HashMap::new()
-    };
-
+    let mut roots = folders
+        .iter()
+        .filter(|folder| folder.imported_root)
+        .collect::<Vec<_>>();
+    roots.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
+    });
+    let imported_rank = roots
+        .into_iter()
+        .enumerate()
+        .map(|(index, folder)| (folder.id, index))
+        .collect::<std::collections::HashMap<_, _>>();
     let root_rank_by_folder = folders
         .iter()
         .map(|folder| {
@@ -281,30 +307,27 @@ fn sort_folder_stream(
         })
         .collect::<std::collections::HashMap<_, _>>();
 
-    photos.sort_by(|left, right| {
-        let left_id = left.folder_id.unwrap_or_default();
-        let right_id = right.folder_id.unwrap_or_default();
-        let left_tree = tree_rank.get(&left_id).copied().unwrap_or(usize::MAX);
-        let right_tree = tree_rank.get(&right_id).copied().unwrap_or(usize::MAX);
-
-        let section_order = if display_mode == sidebar::FolderDisplayMode::ImportedOnly {
-            root_rank_by_folder
-                .get(&left_id)
-                .copied()
-                .unwrap_or(usize::MAX)
-                .cmp(
-                    &root_rank_by_folder
-                        .get(&right_id)
-                        .copied()
-                        .unwrap_or(usize::MAX),
-                )
-                .then_with(|| left_tree.cmp(&right_tree))
-        } else {
-            left_tree.cmp(&right_tree)
-        };
-
-        section_order.then_with(|| photo_ordering(left, right, sort))
+    let mut ordered = order;
+    ordered.sort_by(|left, right| {
+        root_rank_by_folder
+            .get(left)
+            .copied()
+            .unwrap_or(usize::MAX)
+            .cmp(
+                &root_rank_by_folder
+                    .get(right)
+                    .copied()
+                    .unwrap_or(usize::MAX),
+            )
+            .then_with(|| {
+                tree_rank
+                    .get(left)
+                    .copied()
+                    .unwrap_or(usize::MAX)
+                    .cmp(&tree_rank.get(right).copied().unwrap_or(usize::MAX))
+            })
     });
+    ordered
 }
 
 fn folder_tree_order(folders: &[db::Folder]) -> Vec<i64> {

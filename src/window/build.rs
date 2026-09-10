@@ -1923,38 +1923,24 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                 let current_filter = filter.get();
                 if let sidebar::SidebarFilter::Folder(folder_id) = current_filter {
-                    let folder_path = db::folders(&connection.borrow())
-                        .ok()
-                        .and_then(|folders| {
-                            folders
-                                .into_iter()
-                                .find(|folder| folder.id == folder_id)
-                                .map(|folder| folder.path)
-                        });
+                    let folders = db::folders(&connection.borrow()).unwrap_or_default();
+                    let folder_path = folders
+                        .iter()
+                        .find(|folder| folder.id == folder_id)
+                        .map(|folder| folder.path.clone());
                     apply_gallery_grouping(
                         &gallery,
                         current_filter,
                         sort.get(),
                         group_mode.get(),
                     );
+                    // A sidebar tree-mode change only reorders folder sections.
+                    // Reorder the existing stream instead of a full database
+                    // refresh and 66k PhotoObject rebuild (measured 2565 ms).
+                    let order = folder_stream_order(&folders, mode);
+                    gallery.reorder_folder_stream(&order);
                     if let Some(folder_path) = folder_path {
-                        refresh_grid_to_folder(
-                            &connection,
-                            current_filter,
-                            "",
-                            sort.get(),
-                            &gallery,
-                            folder_id,
-                            folder_path,
-                        );
-                    } else {
-                        refresh_grid(
-                            &connection,
-                            current_filter,
-                            "",
-                            sort.get(),
-                            &gallery,
-                        );
+                        gallery.scroll_to_folder(folder_id, &folder_path);
                     }
                 }
             })

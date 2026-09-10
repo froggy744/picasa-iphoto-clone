@@ -1796,6 +1796,47 @@ impl Gallery {
         );
     }
 
+    /// Reorder the Folder stream to match a new sidebar tree mode without
+    /// re-querying the database or rebuilding every PhotoObject. Photos keep
+    /// their within-folder order; only whole folder blocks move.
+    pub fn reorder_folder_stream(&self, folder_order: &[i64]) {
+        let photos = self.current_photos.borrow().clone();
+        let mut buckets: std::collections::HashMap<i64, Vec<PhotoObject>> =
+            std::collections::HashMap::new();
+        let mut seen: Vec<i64> = Vec::new();
+        for photo in photos.iter() {
+            let folder_id = photo.folder_id();
+            if !buckets.contains_key(&folder_id) {
+                seen.push(folder_id);
+                buckets.insert(folder_id, Vec::new());
+            }
+            if let Some(bucket) = buckets.get_mut(&folder_id) {
+                bucket.push(photo.clone());
+            }
+        }
+
+        let mut reordered = Vec::with_capacity(photos.len());
+        for folder_id in folder_order {
+            if let Some(mut bucket) = buckets.remove(folder_id) {
+                reordered.append(&mut bucket);
+            }
+        }
+        // Folders missing from the computed order (legacy/corrupt links) keep
+        // their previous relative order at the end.
+        for folder_id in seen {
+            if let Some(mut bucket) = buckets.remove(&folder_id) {
+                reordered.append(&mut bucket);
+            }
+        }
+
+        self.current_photos.replace(reordered.clone());
+        self.store.splice(0, self.store.n_items(), &reordered);
+        self.rebuild_group_ranges();
+        if self.group_mode.get() == GroupMode::Folder {
+            self.rebuild_folder_rows();
+        }
+    }
+
     fn refresh_folder_viewport_tiles(&self) {
         let trace = std::env::var_os("PICASA_TRACE").is_some();
         let started = trace.then(Instant::now);
