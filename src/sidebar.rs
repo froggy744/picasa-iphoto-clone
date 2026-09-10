@@ -1437,51 +1437,56 @@ fn append_folder_row(
     content.set_margin_start(4);
     content.set_margin_end(8);
 
-    // Every row gets the same fixed chevron slot. This keeps folder icons and
-    // names aligned even when the hierarchy is deeply nested.
-    let disclosure_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    disclosure_slot.set_size_request(12, 18);
-    disclosure_slot.set_width_request(12);
-    if has_children {
-        let expanded = state.borrow().expanded_folders.contains(&folder.id);
-        let disclosure = gtk::Image::from_icon_name(if expanded {
-            "pan-down-symbolic"
-        } else {
-            "pan-end-symbolic"
-        });
-        disclosure.add_css_class("folder-disclosure");
-        disclosure.set_pixel_size(10);
-        disclosure.set_halign(gtk::Align::Center);
-        disclosure.set_valign(gtk::Align::Center);
-        disclosure_slot.set_tooltip_text(Some(if expanded {
-            "Collapse folder"
-        } else {
-            "Show subfolders"
-        }));
+    // Tree mode reserves a fixed chevron slot so folder icons and names align
+    // at every depth. Imported-only mode is flat (no subfolders), so skip it
+    // and left-align the folder icons with the Library rows.
+    let reserve_disclosure =
+        has_children || state.borrow().folder_display_mode == FolderDisplayMode::Tree;
+    if reserve_disclosure {
+        let disclosure_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        disclosure_slot.set_size_request(12, 18);
+        disclosure_slot.set_width_request(12);
+        if has_children {
+            let expanded = state.borrow().expanded_folders.contains(&folder.id);
+            let disclosure = gtk::Image::from_icon_name(if expanded {
+                "pan-down-symbolic"
+            } else {
+                "pan-end-symbolic"
+            });
+            disclosure.add_css_class("folder-disclosure");
+            disclosure.set_pixel_size(10);
+            disclosure.set_halign(gtk::Align::Center);
+            disclosure.set_valign(gtk::Align::Center);
+            disclosure_slot.set_tooltip_text(Some(if expanded {
+                "Collapse folder"
+            } else {
+                "Show subfolders"
+            }));
 
-        let folder_id = folder.id;
-        let list_for_toggle = list.clone();
-        let state_for_toggle = state.clone();
-        let toggle = gtk::GestureClick::new();
-        toggle.connect_pressed(move |gesture, _, _, _| {
-            {
-                let mut state = state_for_toggle.borrow_mut();
-                if !state.expanded_folders.remove(&folder_id) {
-                    state.expanded_folders.insert(folder_id);
+            let folder_id = folder.id;
+            let list_for_toggle = list.clone();
+            let state_for_toggle = state.clone();
+            let toggle = gtk::GestureClick::new();
+            toggle.connect_pressed(move |gesture, _, _, _| {
+                {
+                    let mut state = state_for_toggle.borrow_mut();
+                    if !state.expanded_folders.remove(&folder_id) {
+                        state.expanded_folders.insert(folder_id);
+                    }
                 }
-            }
-            // Rebuilding just the folder section requires the complete folder
-            // data, which refresh() owns. Mark the row's requested state now;
-            // GTK will show the updated tree on the next sidebar refresh.
-            // To make expansion immediate, store a synthetic toggle marker and
-            // let rebuild_folder_list_from_rows() reconstruct from row data.
-            rebuild_folder_list_from_rows(&list_for_toggle, &state_for_toggle);
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-        });
-        disclosure_slot.add_controller(toggle);
-        disclosure_slot.append(&disclosure);
+                // Rebuilding just the folder section requires the complete folder
+                // data, which refresh() owns. Mark the row's requested state now;
+                // GTK will show the updated tree on the next sidebar refresh.
+                // To make expansion immediate, store a synthetic toggle marker and
+                // let rebuild_folder_list_from_rows() reconstruct from row data.
+                rebuild_folder_list_from_rows(&list_for_toggle, &state_for_toggle);
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+            });
+            disclosure_slot.add_controller(toggle);
+            disclosure_slot.append(&disclosure);
+        }
+        content.append(&disclosure_slot);
     }
-    content.append(&disclosure_slot);
 
     // Watched folders (set in Settings) overlay an eye on the folder icon so
     // the row alignment is unchanged. Pin the overlay to the icon's exact size
