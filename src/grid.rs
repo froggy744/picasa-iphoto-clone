@@ -1422,9 +1422,11 @@ impl Gallery {
 
                     // A recycled ListItem keeps a fixed pool of at most eight
                     // tile widgets. Rebinding changes only the PhotoObject; it
-                    // does not rebuild overlays, gestures, or badges.
+                    // does not rebuild overlays, gestures, or badges. Create
+                    // only as many as this chunk needs so small folders (many
+                    // of the 497) do not build seven unused tiles each.
                     let mut tiles = flow_box_tiles(&flow);
-                    while tiles.len() < FOLDER_PHOTO_CHUNK_SIZE {
+                    while tiles.len() < data.photos.len() {
                         let tile = make_folder_tile(
                             tile_width_for_folder_bind.get(),
                             tile_height_for_folder_bind.get(),
