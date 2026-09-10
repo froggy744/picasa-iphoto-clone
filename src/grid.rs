@@ -1284,6 +1284,8 @@ impl Gallery {
         // saturated the main thread during scroll.
         let folder_selected_ids: Rc<RefCell<HashSet<i64>>> = Rc::new(RefCell::new(HashSet::new()));
 
+        let setup_columns = current_columns.clone();
+        let setup_tile_height = tile_height.clone();
         folder_factory.connect_setup(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
@@ -1293,6 +1295,15 @@ impl Gallery {
             row_root.set_hexpand(true);
             row_root.set_vexpand(false);
             row_root.add_css_class("folder-stream-row");
+            // Give GTK a realistic height before bind. Without it the row
+            // measures ~0 at setup, so a large scrollbar jump made the
+            // ListView realize hundreds of rows (mapped=1407, 3081 ms frame).
+            // connect_bind overrides this for headers and short chunks.
+            row_root.set_height_request(folder_chunk_height(
+                FOLDER_PHOTO_CHUNK_SIZE,
+                setup_columns.get().max(1),
+                setup_tile_height.get(),
+            ));
 
             let header_outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
             header_outer.set_widget_name("picasa-folder-section-header");
