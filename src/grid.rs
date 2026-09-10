@@ -1731,39 +1731,53 @@ impl Gallery {
         }
     }
 
-    /// Scroll the Folder ListView so the row holding `photo_id` sits at the
-    /// top edge, without changing the selection. Runs on idle so it applies
-    /// after the model swap's layout, and scrolls past the target first so the
-    /// follow-up aligns to the leading edge rather than the nearest edge.
+    /// Keep the Folder viewport on `photo_id` after the rows were reshaped by a
+    /// zoom/column change. Realizes the target row, then aligns its tile to the
+    /// top edge using the tile's computed bounds (independent of the variable
+    /// row heights). Runs on idle so it applies after the model swap's layout.
     fn scroll_folder_to_photo(&self, photo_id: i64) {
         let Some(row) = self.folder_row_index_for_photo(photo_id) else {
             return;
         };
         let root = self.folder_root.clone();
-        let tile_height = self.tile_height.get();
-        let total = self.folder_store.n_items();
+        let mapped = self.mapped_folder_tiles.clone();
         let trace = std::env::var_os("PICASA_TRACE").is_some();
         glib::idle_add_local_once(move || {
-            let page = root
-                .vadjustment()
-                .map(|adjustment| adjustment.page_size())
-                .unwrap_or(0.0);
-            let row_pitch = (tile_height.max(1) + 12) as f64;
-            let overshoot_rows = ((page / row_pitch).ceil() as u32).saturating_add(2);
-            let overshoot = row
-                .saturating_add(overshoot_rows)
-                .min(total.saturating_sub(1));
-            if overshoot > row {
-                root.scroll_to(overshoot, gtk::ListScrollFlags::NONE, None);
-            }
             root.scroll_to(row, gtk::ListScrollFlags::NONE, None);
-            if trace {
-                let after = root
-                    .vadjustment()
-                    .map(|adjustment| adjustment.value())
-                    .unwrap_or(0.0);
-                eprintln!("UI PERF folder_zoom_anchor row={row} after={after:.0}");
-            }
+            let root_for_align = root.clone();
+            let mapped_for_align = mapped.clone();
+            glib::idle_add_local_once(move || {
+                let tile = mapped_for_align
+                    .borrow()
+                    .iter()
+                    .find(|tile| {
+                        tile.imp()
+                            .photo
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|photo| photo.id() == photo_id)
+                    })
+                    .cloned();
+                let Some(tile) = tile else {
+                    return;
+                };
+                let Some(bounds) = tile.compute_bounds(&root_for_align) else {
+                    return;
+                };
+                let Some(adjustment) = root_for_align.vadjustment() else {
+                    return;
+                };
+                let target = adjustment.value() + bounds.y() as f64;
+                let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+                adjustment.set_value(target.clamp(adjustment.lower(), upper));
+                if trace {
+                    eprintln!(
+                        "UI PERF folder_zoom_anchor row={row} bounds_y={:.0} after={:.0}",
+                        bounds.y(),
+                        adjustment.value()
+                    );
+                }
+            });
         });
     }
 
