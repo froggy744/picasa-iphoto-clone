@@ -43,8 +43,10 @@ mod imp {
         pub folder_path: RefCell<Option<String>>,
         #[property(get, set)]
         pub original_available: Cell<bool>,
-        #[property(get, set)]
-        pub original_checked: Cell<bool>,
+        // When the original was last probed for availability. Not a GObject
+        // property; used to re-probe on rebind after a TTL so a drive that goes
+        // offline without a mount event still gets its offline badge.
+        pub original_checked_at: Cell<Option<std::time::Instant>>,
         #[property(get, set)]
         pub cached_thumbnail_path: RefCell<Option<String>>,
         #[property(get, set)]
@@ -77,6 +79,15 @@ glib::wrapper! {
 }
 
 impl PhotoObject {
+    /// When the original was last probed, if ever.
+    pub fn original_checked_at(&self) -> Option<std::time::Instant> {
+        self.imp().original_checked_at.get()
+    }
+
+    pub fn set_original_checked_at(&self, value: Option<std::time::Instant>) {
+        self.imp().original_checked_at.set(value);
+    }
+
     pub fn from_photo(photo: &Photo) -> Self {
         let cached_thumbnail_path =
             thumbnail::cache_path(&photo.path, photo.mtime, photo.size_bytes)
@@ -97,11 +108,10 @@ impl PhotoObject {
             .property("favorite", photo.favorite)
             .property("folder-id", photo.folder_id.unwrap_or_default())
             .property("folder-path", photo.folder_path.clone())
-            // Availability is probed asynchronously the first time a tile is
-            // bound. Probing every original while constructing a library-sized
-            // model, or synchronously while scrolling, blocks GTK.
+            // Availability is probed asynchronously when a tile is bound, and
+            // re-probed after a TTL. Probing every original while constructing a
+            // library-sized model, or synchronously while scrolling, blocks GTK.
             .property("original-available", true)
-            .property("original-checked", false)
             .property("cached-thumbnail-path", cached_thumbnail_path.clone())
             // The visible tile performs this inexpensive cache check lazily.
             .property("thumbnail-available", false)

@@ -460,10 +460,17 @@ impl SquareTile {
 /// thread-default main context. The result is stored on the shared
 /// `PhotoObject`, so other tiles bound to the same photo see it immediately.
 fn schedule_availability_probe(tile: &SquareTile, photo: &PhotoObject) {
-    if photo.original_checked() {
-        return;
+    // Re-probe on rebind once the previous result is older than the TTL, so a
+    // drive/file that goes offline without a mount event still updates its
+    // badge. The probe itself stays off the GTK thread.
+    const AVAILABILITY_REPROBE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+    let now = Instant::now();
+    if let Some(checked_at) = photo.original_checked_at() {
+        if now.duration_since(checked_at) < AVAILABILITY_REPROBE_TTL {
+            return;
+        }
     }
-    photo.set_original_checked(true);
+    photo.set_original_checked_at(Some(now));
     let file = crate::source::file(&photo.path());
     let photo = photo.clone();
     let tile = tile.clone();
@@ -1831,6 +1838,9 @@ impl Gallery {
     /// re-querying the database or rebuilding every PhotoObject. Photos keep
     /// their within-folder order; only whole folder blocks move.
     pub fn reorder_folder_stream(&self, folder_order: &[i64]) {
+        // Splicing the whole store clears GtkMultiSelection, so remember which
+        // photos were selected and re-select them at their new positions.
+        let selected_ids = selected_photo_id_set(&self.selection);
         let photos = self.current_photos.borrow().clone();
         let mut buckets: std::collections::HashMap<i64, Vec<PhotoObject>> =
             std::collections::HashMap::new();
@@ -1862,6 +1872,19 @@ impl Gallery {
 
         self.current_photos.replace(reordered.clone());
         self.store.splice(0, self.store.n_items(), &reordered);
+        if !selected_ids.is_empty() {
+            let positions = self
+                .current_photos
+                .borrow()
+                .iter()
+                .enumerate()
+                .filter(|(_, photo)| selected_ids.contains(&photo.id()))
+                .map(|(position, _)| position as u32)
+                .collect::<Vec<_>>();
+            for position in positions {
+                self.selection.select_item(position, false);
+            }
+        }
         self.rebuild_group_ranges();
         if self.group_mode.get() == GroupMode::Folder {
             self.rebuild_folder_rows();
@@ -2216,7 +2239,7 @@ impl Gallery {
                 .find(|photo| photo.id() == *id)
             {
                 photo.set_original_available(*available);
-                photo.set_original_checked(true);
+                photo.set_original_checked_at(Some(Instant::now()));
             }
         }
 
