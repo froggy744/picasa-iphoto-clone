@@ -23,8 +23,28 @@ Fixes:
   path never decodes unallocated pool tiles; a deferred
   `refresh_folder_viewport_tiles_for()` loads the tiles GTK actually allocates.
 
-Pending: one run (`scroll-baseline10.log`) to confirm thumbnails still render
-and the decode burst is gone.
+`scroll-baseline10.log` fixed the frames (max 219 ms, initial build 117 ms) but
+the `height() > 0` guard delayed newly-bound tiles by a frame, so fast scrolling
+showed blanks.
+
+- `ddd5110` — restore eager bind/map loads during normal scrolling; suppress
+  them only while `rebuild_folder_rows_for` swaps the model (via a
+  `folder_rebuild_active` flag), where GTK binds its whole offscreen pool.
+
+### scroll-baseline11 result — fixed
+
+| metric | bl9 | bl11 |
+| --- | --- | --- |
+| initial folder build | 852 ms | **102 ms** |
+| tree-mode reorder | 576 ms | **186 ms** (`attached_splice`) |
+| worst `worst_frame_ms` | 1525 ms | **321 ms** |
+| frames > 500 ms | 2 | **0** |
+| `folder_virtual_bind_slow` | 4 | **0** |
+
+Frame distribution (44 windows): **26 ≤ 50 ms, 3 ≤ 100 ms, 11 ≤ 200 ms,
+4 ≤ 500 ms, 0 over 500 ms**. Thumbnails are eager during scrolling again
+(user-confirmed: "it does feel better").
+
 
 ## Session 3 — sidebar tree-mode change (scroll-baseline6)
 
