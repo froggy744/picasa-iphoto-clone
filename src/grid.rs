@@ -814,16 +814,30 @@ impl Gallery {
             return;
         }
 
+        self.update_group_header_for_index(self.index_for_scroll_position(scroll_y));
+    }
+
+    /// Return the photo at the leading visible grid row for a scroll position.
+    ///
+    /// This uses the same geometry as the sticky group heading, so sidebar
+    /// location tracking follows what the user is actually looking at without
+    /// changing selection or causing navigation.
+    pub fn photo_for_scroll_position(&self, scroll_y: f64) -> Option<PhotoObject> {
+        self.current_photos
+            .borrow()
+            .get(self.index_for_scroll_position(scroll_y))
+            .cloned()
+    }
+
+    fn index_for_scroll_position(&self, scroll_y: f64) -> usize {
         // Grid item padding is 6px on each edge in window.rs. The top grid
-        // margin is 20px. Using the same constants keeps the sticky heading in
-        // sync with the visible row without changing the GridView's geometry.
+        // margin is 20px. Keep this calculation shared with the sticky heading.
         const ITEM_PADDING: f64 = 6.0;
         const GRID_TOP_MARGIN: f64 = 20.0;
         let tile_height = self.tile_height.get().max(1) as f64;
         let row_pitch = tile_height + ITEM_PADDING * 2.0;
         let row = ((scroll_y - GRID_TOP_MARGIN).max(0.0) / row_pitch).floor() as usize;
-        let index = row.saturating_mul(self.current_columns.get().max(1) as usize);
-        self.update_group_header_for_index(index);
+        row.saturating_mul(self.current_columns.get().max(1) as usize)
     }
 
     fn rebuild_group_ranges(&self) {

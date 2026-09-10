@@ -84,6 +84,7 @@ const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
 const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
 const KEYBOARD_GRID_TARGET_KEY: &str = "picasa-sidebar-keyboard-grid-target";
+const SCROLL_LOCATION_FOLDER_KEY: &str = "picasa-sidebar-scroll-location-folder";
 
 pub fn build(
     folders: &[Folder],
@@ -591,6 +592,8 @@ pub fn refresh(
         set_active_filter(scrolled, filter);
     }
     restore_folder_scroll(scrolled, folder_scroll_value);
+    let scrolled_for_location = scrolled.clone();
+    glib::idle_add_local_once(move || apply_scroll_location(&scrolled_for_location));
 }
 
 pub fn refresh_library_counts(
@@ -643,9 +646,192 @@ pub fn append_folder(
     append_folder_row(&list, folder, 0, false, &state, &on_unavailable);
 }
 
+/// Visually track the folder represented by the leading visible photo in the grid.
+///
+/// This is deliberately separate from ListBox selection: the selected sidebar
+/// row continues to describe the active filter (All, Favourites, Album, etc.),
+/// while this marker answers "where is the photo I am looking at?".  Because it
+/// never selects the row, it cannot trigger the sidebar navigation callback.
+pub fn set_scroll_location(scrolled: &gtk::ScrolledWindow, folder_id: Option<i64>) {
+    let folder_id = folder_id.filter(|id| *id > 0).unwrap_or_default();
+    let previous = unsafe {
+        scrolled
+            .data::<i64>(SCROLL_LOCATION_FOLDER_KEY)
+            .map(|value| *value.as_ref())
+            .unwrap_or_default()
+    };
+    if previous == folder_id {
+        return;
+    }
+
+    unsafe {
+        scrolled.set_data(SCROLL_LOCATION_FOLDER_KEY, folder_id);
+    }
+    apply_scroll_location(scrolled);
+}
+
+fn apply_scroll_location(scrolled: &gtk::ScrolledWindow) {
+    let Some(list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) else {
+        return;
+    };
+
+    clear_scroll_location_rows(&list);
+
+    let folder_id = unsafe {
+        scrolled
+            .data::<i64>(SCROLL_LOCATION_FOLDER_KEY)
+            .map(|value| *value.as_ref())
+            .unwrap_or_default()
+    };
+    if folder_id <= 0 {
+        return;
+    }
+
+    let folders = unsafe {
+        list.data::<Vec<Folder>>("picasa-folder-cache")
+            .map(|data| data.as_ref().clone())
+            .unwrap_or_default()
+    };
+    if folders.is_empty() {
+        return;
+    }
+
+    let Some(state) = sidebar_state(scrolled) else {
+        return;
+    };
+    let mode = state.borrow().folder_display_mode;
+    let display_id = match mode {
+        FolderDisplayMode::Tree => folder_id,
+        FolderDisplayMode::ImportedOnly => imported_root_for_folder(&folders, folder_id)
+            .unwrap_or(folder_id),
+    };
+
+    if mode == FolderDisplayMode::Tree {
+        let ancestors = folder_ancestor_ids(&folders, folder_id);
+        let changed = {
+            let mut state = state.borrow_mut();
+            let before = state.expanded_folders.len();
+            state.expanded_folders.extend(ancestors);
+            state.expanded_folders.len() != before
+        };
+        if changed {
+            rebuild_folder_list_from_rows(&list, &state);
+            let scrolled = scrolled.clone();
+            glib::idle_add_local_once(move || apply_scroll_location(&scrolled));
+            return;
+        }
+    }
+
+    let Some(row) = row_for_filter(&list, SidebarFilter::Folder(display_id)) else {
+        return;
+    };
+    row.add_css_class("sidebar-scroll-location");
+    scroll_folder_row_into_view(scrolled, &row);
+}
+
+fn clear_scroll_location_rows(list: &gtk::ListBox) {
+    let mut child = list.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+            row.remove_css_class("sidebar-scroll-location");
+        }
+        child = next;
+    }
+}
+
+fn row_for_filter(list: &gtk::ListBox, filter: SidebarFilter) -> Option<gtk::ListBoxRow> {
+    let mut child = list.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+            let matches = unsafe {
+                row.data::<SidebarFilter>("picasa-filter")
+                    .is_some_and(|value| *value.as_ref() == filter)
+            };
+            if matches {
+                return Some(row);
+            }
+        }
+        child = next;
+    }
+    None
+}
+
+fn imported_root_for_folder(folders: &[Folder], folder_id: i64) -> Option<i64> {
+    let by_id: HashMap<i64, &Folder> = folders.iter().map(|folder| (folder.id, folder)).collect();
+    let mut current = Some(folder_id);
+    let mut visited = HashSet::new();
+    while let Some(id) = current {
+        if !visited.insert(id) {
+            break;
+        }
+        let folder = by_id.get(&id)?;
+        if folder.imported_root {
+            return Some(folder.id);
+        }
+        current = folder.parent_id;
+    }
+    None
+}
+
+fn folder_ancestor_ids(folders: &[Folder], folder_id: i64) -> Vec<i64> {
+    let by_id: HashMap<i64, &Folder> = folders.iter().map(|folder| (folder.id, folder)).collect();
+    let mut result = Vec::new();
+    let mut current = by_id.get(&folder_id).and_then(|folder| folder.parent_id);
+    let mut visited = HashSet::new();
+    while let Some(id) = current {
+        if !visited.insert(id) {
+            break;
+        }
+        result.push(id);
+        current = by_id.get(&id).and_then(|folder| folder.parent_id);
+    }
+    result
+}
+
+fn scroll_folder_row_into_view(scrolled: &gtk::ScrolledWindow, row: &gtk::ListBoxRow) {
+    let Some(folder_scroll) = stored_widget::<gtk::ScrolledWindow>(scrolled, FOLDER_SCROLL_KEY) else {
+        return;
+    };
+    let Some(list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) else {
+        return;
+    };
+    let row = row.clone();
+    glib::idle_add_local_once(move || {
+        let Some(bounds) = row.compute_bounds(&list) else {
+            return;
+        };
+        let adjustment = folder_scroll.vadjustment();
+        let visible_top = adjustment.value();
+        let visible_bottom = visible_top + adjustment.page_size();
+        let row_top = bounds.y() as f64;
+        let row_bottom = row_top + bounds.height() as f64;
+
+        let target = if row_top < visible_top {
+            Some(row_top)
+        } else if row_bottom > visible_bottom {
+            Some(row_bottom - adjustment.page_size())
+        } else {
+            None
+        };
+
+        if let Some(target) = target {
+            let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+            adjustment.set_value(target.clamp(adjustment.lower(), upper));
+        }
+    });
+}
+
 pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) {
     unsafe {
         scrolled.set_data(CURRENT_FILTER_KEY, filter);
+    }
+
+    // The scroll-location marker belongs only to Folder browsing. Clear it as
+    // soon as the user switches to Library, Favourites, Albums, Search, etc.
+    if !matches!(filter, SidebarFilter::Folder(_)) {
+        set_scroll_location(scrolled, None);
     }
 
     let syncing = unsafe {
@@ -1396,6 +1582,8 @@ fn rebuild_folder_list_from_rows(list: &gtk::ListBox, state: &Rc<RefCell<Sidebar
             set_active_filter(&outer, filter);
         }
         restore_folder_scroll(&outer, folder_scroll_value);
+        let outer_for_location = outer.clone();
+        glib::idle_add_local_once(move || apply_scroll_location(&outer_for_location));
     }
 }
 

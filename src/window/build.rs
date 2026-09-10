@@ -1197,10 +1197,25 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     grid_scroll.set_child(Some(&gallery.root));
 
     let gallery_for_group_scroll = gallery.clone();
+    let sidebar_for_scroll_location = sidebar_selection_slot.clone();
+    let filter_for_scroll_location = filter.clone();
     grid_scroll
         .vadjustment()
         .connect_value_changed(move |adjustment| {
-            gallery_for_group_scroll.update_group_header_for_scroll(adjustment.value());
+            let scroll_y = adjustment.value();
+            gallery_for_group_scroll.update_group_header_for_scroll(scroll_y);
+
+            // Sidebar folder tracking is deliberately limited to Folder view.
+            // Library, Favourites, Albums, Search, etc. must not move the folder
+            // sidebar merely because their grids contain photos from folders.
+            if matches!(filter_for_scroll_location.get(), sidebar::SidebarFilter::Folder(_)) {
+                if let Some(sidebar) = sidebar_for_scroll_location.borrow().as_ref() {
+                    let folder_id = gallery_for_group_scroll
+                        .photo_for_scroll_position(scroll_y)
+                        .map(|photo| photo.folder_id());
+                    sidebar::set_scroll_location(sidebar, folder_id);
+                }
+            }
         });
 
     let grid_zoom_scroll =
@@ -1872,6 +1887,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     sidebar_for_unavailable.replace(Some(sidebar.clone()));
     sidebar_selection_slot.replace(Some(sidebar.clone()));
     sidebar::set_active_filter(&sidebar, filter.get());
+    if matches!(filter.get(), sidebar::SidebarFilter::Folder(_)) {
+        sidebar::set_scroll_location(
+            &sidebar,
+            gallery
+                .photo_for_scroll_position(gallery.scroll_position())
+                .map(|photo| photo.folder_id()),
+        );
+    }
 
     // Reconnecting sources also resumes previews for already indexed photos.
     let thumbnail_recovery_requested = Rc::new(Cell::new(true));
@@ -3046,6 +3069,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .group-heading-bar { background: transparent; padding: 0; }\
         .navigation-sidebar row { border-radius: 6px; color: #e8e8e8; }\
         .navigation-sidebar row:hover { background: rgba(255,255,255,0.07); }\
+        .navigation-sidebar row.sidebar-scroll-location { box-shadow: inset 3px 0 #4d9fdb; background: rgba(77,159,219,0.10); }\
         .navigation-sidebar .sidebar-section-heading { margin-top: 8px; padding-top: 0; }\
         .navigation-sidebar .sidebar-section-heading-title { color: #f0f0f0; font-size: inherit; font-weight: 700; }\
         .navigation-sidebar row:selected { background: #4b7d9e; color: white; }\
