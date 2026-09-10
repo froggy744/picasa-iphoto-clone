@@ -2,6 +2,28 @@
 
 Date: 2026-09-10 · branch `deepseek` · base `e026510`
 
+## Session 3 — sidebar tree-mode change (scroll-baseline6)
+
+`scroll-baseline6.log`: toggling the sidebar tree **Tree ↔ Imported Only** took
+`refresh_finished photos=66008 elapsed_ms=2565` (plus `folder_store_update
+model_ms=1302`). It ran a full `refresh_grid_to_folder`: DB query, progressive
+rebuild of all 66k `PhotoObject`s, then the folder-store reorder.
+
+- **Fixed** (`afd0cdd`): a tree-mode change only moves whole folder sections,
+  and photos keep their within-folder order. Extracted `folder_stream_order()`
+  from `sort_folder_stream` and added `Gallery::reorder_folder_stream()`, which
+  buckets the existing `PhotoObject`s by folder and concatenates them in the new
+  order. No DB query, no `PhotoObject` construction. Existing ordering tests
+  pass.
+- **Fixed** (`16f6b1d`): following the Folder scroll position rebuilt the
+  sidebar tree whenever a folder's ancestors expanded — `sidebar_ms` 42–77 ms
+  per folder change (7 spikes in one scroll). Now the latest folder id is stored
+  and `apply_scroll_location` runs once on idle.
+- Still open: `mapped=1424` over-realization on a fast scrollbar jump
+  (`worst_frame_ms=3223`). `886b0bd` (setup height) did not change it, so GTK's
+  item manager is not using the setup height. Next step needs a bounds trace
+  inside `tile_near_folder_viewport`.
+
 ## Session 2 — scroll-baseline4 (UI froze)
 
 `scroll-baseline4.log` (66 008 photos / 8976 folder rows) showed the UI
