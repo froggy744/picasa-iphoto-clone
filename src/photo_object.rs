@@ -44,6 +44,8 @@ mod imp {
         #[property(get, set)]
         pub original_available: Cell<bool>,
         #[property(get, set)]
+        pub original_checked: Cell<bool>,
+        #[property(get, set)]
         pub cached_thumbnail_path: RefCell<Option<String>>,
         #[property(get, set)]
         pub thumbnail_available: Cell<bool>,
@@ -95,9 +97,11 @@ impl PhotoObject {
             .property("favorite", photo.favorite)
             .property("folder-id", photo.folder_id.unwrap_or_default())
             .property("folder-path", photo.folder_path.clone())
-            // Availability is refreshed when a tile is bound. Probing every
-            // original while constructing a library-sized model blocks GTK.
+            // Availability is probed asynchronously the first time a tile is
+            // bound. Probing every original while constructing a library-sized
+            // model, or synchronously while scrolling, blocks GTK.
             .property("original-available", true)
+            .property("original-checked", false)
             .property("cached-thumbnail-path", cached_thumbnail_path.clone())
             // The visible tile performs this inexpensive cache check lazily.
             .property("thumbnail-available", false)

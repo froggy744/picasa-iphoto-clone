@@ -214,7 +214,11 @@ impl SquareTile {
             return;
         };
         let fs_started = trace.then(Instant::now);
-        photo.set_original_available(crate::source::cached_file_available(&photo.path()));
+        // The original may live on a spun-down or disconnected drive. Stat it
+        // off the GTK thread; the offline badge updates when the async probe
+        // completes. Measured: a synchronous stat here froze a scroll frame for
+        // 4484 ms (load_visual fs_ms=4484, scroll-baseline3.log).
+        schedule_availability_probe(self, &photo);
         let mut cache_hit = false;
         let mut request_priority = false;
         if let Some(path) = photo.cached_thumbnail_path() {
@@ -347,8 +351,9 @@ impl SquareTile {
         let Some(photo) = self.imp().photo.borrow().clone() else {
             return;
         };
-        let available = crate::source::cached_file_available(&photo.path());
-        photo.set_original_available(available);
+        // Read the value the async probe or the availability worker already
+        // stored; never stat the original on the GTK thread here.
+        let available = photo.original_available();
 
         if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
             if let Some(badge) = frame.last_child().and_downcast::<gtk::Button>() {
@@ -435,6 +440,31 @@ impl SquareTile {
             picture.add_css_class("missing-thumbnail");
         }
     }
+}
+
+/// Probe an original file's availability without blocking the GTK main thread.
+///
+/// `gio` runs the stat on a worker thread and delivers the callback back to the
+/// thread-default main context. The result is stored on the shared
+/// `PhotoObject`, so other tiles bound to the same photo see it immediately.
+fn schedule_availability_probe(tile: &SquareTile, photo: &PhotoObject) {
+    if photo.original_checked() {
+        return;
+    }
+    photo.set_original_checked(true);
+    let file = crate::source::file(&photo.path());
+    let photo = photo.clone();
+    let tile = tile.clone();
+    file.query_info_async(
+        gio::FILE_ATTRIBUTE_STANDARD_TYPE,
+        gio::FileQueryInfoFlags::NONE,
+        glib::Priority::DEFAULT_IDLE,
+        gio::Cancellable::NONE,
+        move |result| {
+            photo.set_original_available(result.is_ok());
+            tile.refresh_availability();
+        },
+    );
 }
 
 fn overlay_image(frame: &gtk::Overlay, css_class: &str) -> Option<gtk::Image> {
@@ -2122,6 +2152,7 @@ impl Gallery {
                 .find(|photo| photo.id() == *id)
             {
                 photo.set_original_available(*available);
+                photo.set_original_checked(true);
             }
         }
 
