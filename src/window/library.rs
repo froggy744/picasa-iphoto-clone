@@ -60,6 +60,7 @@ fn refresh_grid_inner(
     let started = trace.then(Instant::now);
 
     let generation = REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let filter_label = format!("{filter:?}");
     let search = search.to_owned();
     let (sender, receiver) = std::sync::mpsc::channel();
 
@@ -116,7 +117,7 @@ fn refresh_grid_inner(
             Ok(Some(photos)) => {
                 if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
                     if let Some(started) = started {
-                        eprintln!("UI PERF refresh_grid photos={} ms={}", photos.len(), started.elapsed().as_millis());
+                        eprintln!("UI PERF refresh_grid filter={} photos={} ms={}", filter_label, photos.len(), started.elapsed().as_millis());
                     }
                     gallery.replace(&photos);
                     if let Some((folder_id, folder_path)) = folder_target.clone() {

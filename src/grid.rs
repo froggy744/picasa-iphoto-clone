@@ -297,8 +297,20 @@ impl SquareTile {
     }
 
     fn bind_photo(&self, photo: &PhotoObject) {
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let started = trace.then(Instant::now);
         self.set_photo_deferred(photo);
         self.load_visual();
+        if let Some(started) = started {
+            let elapsed_ms = started.elapsed().as_millis();
+            if elapsed_ms >= 12 {
+                eprintln!(
+                    "UI PERF grid_bind_slow id={} elapsed_ms={}",
+                    photo.id(),
+                    elapsed_ms
+                );
+            }
+        }
     }
 
     fn clear_photo(&self) {
