@@ -86,6 +86,11 @@ const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
 const KEYBOARD_GRID_TARGET_KEY: &str = "picasa-sidebar-keyboard-grid-target";
 const SCROLL_LOCATION_FOLDER_KEY: &str = "picasa-sidebar-scroll-location-folder";
 
+thread_local! {
+    // Guards the coalesced idle pass that follows the Folder scroll position.
+    static SCROLL_LOCATION_SCHEDULED: Cell<bool> = const { Cell::new(false) };
+}
+
 pub fn build(
     folders: &[Folder],
     albums: &[Album],
@@ -667,7 +672,17 @@ pub fn set_scroll_location(scrolled: &gtk::ScrolledWindow, folder_id: Option<i64
     unsafe {
         scrolled.set_data(SCROLL_LOCATION_FOLDER_KEY, folder_id);
     }
-    apply_scroll_location(scrolled);
+    // Coalesce the scroll-follow update into a single idle pass. Rebuilding the
+    // sidebar tree when a folder's ancestors expand measured 42-77 ms per folder
+    // change, which stalled the scroll frame.
+    if SCROLL_LOCATION_SCHEDULED.with(|scheduled| scheduled.replace(true)) {
+        return;
+    }
+    let scrolled = scrolled.clone();
+    glib::idle_add_local_once(move || {
+        SCROLL_LOCATION_SCHEDULED.with(|scheduled| scheduled.set(false));
+        apply_scroll_location(&scrolled);
+    });
 }
 
 fn apply_scroll_location(scrolled: &gtk::ScrolledWindow) {
