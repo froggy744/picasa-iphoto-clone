@@ -27,8 +27,7 @@ saturating the main thread. Root cause found:
   the whole stream, which is legitimate; the cost is what mattered.
 
 Remaining (Phase 4): `viewport_tiles mapped=1524` peaks show the folder
-`ListView` realizing ~190 rows during jumps. With the per-bind scan gone this
-is now bounded by tile creation, but worth a follow-up trace.
+`ListView` realizing ~190 rows during jumps.
 
 ### scroll-baseline5 result — fixed
 
@@ -48,8 +47,11 @@ Frame distribution over 128 one-second windows: **92 ≤ 50 ms, 17 ≤ 100 ms,
 (fast far scroll with 3-column large tiles). The UI no longer freezes.
 
 The remaining `mapped=1407` spike is GTK `ListView` over-realization during a
-fast far scroll with variable row heights; it is now a single 3 s outlier, not
-a sustained freeze. Next candidate: uniform row heights or a cheaper row tree.
+fast scrollbar jump: rows measured ~0 at factory `setup`, so the ListView's
+scroll estimate was near zero and it realized ~176 rows. `886b0bd` sets a
+full-chunk height request in `connect_setup` so the estimate is realistic;
+`connect_bind` still overrides it per row. This is the last known outlier and
+needs one confirming run.
 
 
 ## Session 1
@@ -184,6 +186,7 @@ PENDING_MEASUREMENT.md). Phase 3 was analysed directly against the real DB.
 - `9bb3073` perf(grid): cache selected ids in folder bind + detach large changes
 - `6741fc7` perf(thumbnail): cache resolved cache dir
 - `f4ceb42` perf(grid): index visible-folder lookup by group range
+- `886b0bd` perf(grid): give folder rows a setup height so ListView estimates correctly
 
 ## Push
 
