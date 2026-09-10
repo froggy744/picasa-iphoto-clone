@@ -1443,8 +1443,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             return;
         }
         photo.set_favorite(favorite);
-        gallery_for_favorite.update_favorites(&[photo.id()], favorite);
-        info_favorite.set_photo(Some(&photo));
+        if filter_for_favorite.get() == sidebar::SidebarFilter::Favorites && !favorite {
+            gallery_for_favorite.remove_photos(&[photo.id()]);
+        } else {
+            gallery_for_favorite.update_favorites(&[photo.id()], favorite);
+            info_favorite.set_photo(Some(&photo));
+        }
         if let Some(sidebar) = sidebar_for_favorite.borrow().as_ref().cloned() {
             if let Ok(counts) = db::sidebar_counts(&db_for_favorite.borrow()) {
                 sidebar::refresh_library_counts(

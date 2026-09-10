@@ -664,14 +664,7 @@ impl Gallery {
             if !selection_for_context.is_selected(position) {
                 selection_for_context.select_item(position, true);
             }
-            let scroll = gtk::ScrollInfo::new();
-            scroll.set_enable_horizontal(false);
-            scroll.set_enable_vertical(false);
-            root_for_context.scroll_to(
-                position,
-                gtk::ListScrollFlags::FOCUS,
-                Some(scroll),
-            );
+            root_for_context.grab_focus();
             (context_menu_for_grid)(
                 photo,
                 frame_widget,
@@ -948,6 +941,68 @@ impl Gallery {
             }
         }
         self.refresh_favorite_indicators();
+    }
+
+    /// Remove visible photos from the current grid without rebuilding the model.
+    /// This is used when a photo stops belonging to the active virtual view
+    /// (Favourites or an Album). Preserve the viewport and move selection to
+    /// the nearest remaining thumbnail instead of jumping back to item 0.
+    pub fn remove_photos(&self, ids: &[i64]) {
+        if ids.is_empty() {
+            return;
+        }
+
+        let scroll_y = self.scroll_position();
+        let ids = ids.iter().copied().collect::<HashSet<_>>();
+        let positions = self
+            .current_photos
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter_map(|(position, photo)| ids.contains(&photo.id()).then_some(position))
+            .collect::<Vec<_>>();
+        if positions.is_empty() {
+            return;
+        }
+
+        let next_position = positions.iter().copied().min().unwrap_or(0);
+
+        self.current_photos
+            .borrow_mut()
+            .retain(|photo| !ids.contains(&photo.id()));
+        for position in positions.into_iter().rev() {
+            self.store.remove(position as u32);
+        }
+
+        if self.collage_selection_mode.get() {
+            self.restore_collage_selection();
+        } else {
+            self.selection.unselect_all();
+            let len = self.store.n_items() as usize;
+            if len == 0 {
+                (self.selected)(None);
+            } else {
+                self.selection
+                    .select_item(next_position.min(len - 1) as u32, true);
+            }
+        }
+
+        if self.group_mode.get() != GroupMode::None {
+            self.rebuild_group_ranges();
+            self.update_group_header_for_scroll(scroll_y);
+        }
+
+        // Invalidate any pending progressive replacement before restoring the
+        // old adjustment after GridView has processed the ListStore removals.
+        let generation = self.replace_generation.get().wrapping_add(1);
+        self.replace_generation.set(generation);
+        schedule_scroll_restore(
+            &self.root,
+            scroll_y,
+            self.replace_generation.clone(),
+            generation,
+        );
+        self.root.grab_focus();
     }
 
     pub fn refresh_thumbnails_for_paths(&self, paths: &[std::path::PathBuf]) {
@@ -1511,6 +1566,24 @@ fn format_count(value: usize) -> String {
         result.push(character);
     }
     result
+}
+
+fn schedule_scroll_restore(
+    root: &gtk::GridView,
+    scroll_y: f64,
+    replace_generation: Rc<Cell<u64>>,
+    generation: u64,
+) {
+    let root = root.clone();
+    glib::idle_add_local_once(move || {
+        if replace_generation.get() != generation {
+            return;
+        }
+        if let Some(adjustment) = root.vadjustment() {
+            let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+            adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+        }
+    });
 }
 
 fn collect_tiles(widget: &gtk::Widget, tiles: &mut Vec<SquareTile>) {

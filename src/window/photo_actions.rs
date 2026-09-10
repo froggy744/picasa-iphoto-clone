@@ -420,7 +420,11 @@ fn show_photo_context_menu(
         }
         dismiss_menu_for_favorite();
         if let Some(gallery) = favorite_context.gallery.borrow().upgrade() {
-            gallery.update_favorites(&ids, target);
+            if favorite_context.filter.get() == sidebar::SidebarFilter::Favorites && !target {
+                gallery.remove_photos(&ids);
+            } else {
+                gallery.update_favorites(&ids, target);
+            }
         }
         refresh_favorite_sidebar(&favorite_context);
     });
@@ -432,10 +436,11 @@ fn show_photo_context_menu(
         let dismiss_menu_for_remove = dismiss_menu.clone();
         remove.connect_clicked(move |button| {
             dismiss_menu_for_remove();
+            let ids = remove_selection();
             if let Err(error) = db::remove_photos_from_album(
                 &remove_context.connection.borrow(),
                 album_id,
-                &remove_selection(),
+                &ids,
             ) {
                 show_error(
                     button.upcast_ref(),
@@ -447,7 +452,9 @@ fn show_photo_context_menu(
             if let Some(lightbox) = remove_context.lightbox.upgrade() {
                 lightbox.close();
             }
-            refresh_photo_actions_grid(&remove_context);
+            if let Some(gallery) = remove_context.gallery.borrow().upgrade() {
+                gallery.remove_photos(&ids);
+            }
             refresh_album_ui(&remove_context);
         });
     }
