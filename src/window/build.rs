@@ -138,12 +138,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let startup_photos = Rc::new(photos);
     if std::env::var_os("PICASA_TRACE").is_some() {
         eprintln!(
-            "STARTUP cold_start_ms={} photos={} displayed={} folders={} albums={} scan=disabled",
+            "STARTUP cold_start_ms={} photos={} displayed={} folders={} albums={} scan=disabled rss_mb={}",
             build_started.elapsed().as_millis(),
             sidebar_counts.photos,
             startup_photos.len(),
             folders.len(),
-            albums.len()
+            albums.len(),
+            crate::diagnostics::rss_mb()
         );
     }
 

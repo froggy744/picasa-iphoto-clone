@@ -10,6 +10,20 @@ pub fn enabled() -> bool {
     std::env::var_os("PICASA_PROFILE").is_some()
 }
 
+/// Resident set size in MiB (Linux). Used to profile the 66k-photo model.
+pub fn rss_mb() -> u64 {
+    std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|contents| {
+            contents
+                .split_whitespace()
+                .nth(1)
+                .and_then(|resident| resident.parse::<u64>().ok())
+        })
+        .map(|pages| pages.saturating_mul(4096) / (1024 * 1024))
+        .unwrap_or(0)
+}
+
 pub fn refresh_started(photo_count: usize) -> Option<Instant> {
     enabled().then(|| {
         eprintln!("PROFILE refresh_start photos={photo_count}");
@@ -29,8 +43,9 @@ pub fn refresh_first_batch(started: Option<Instant>, visible_count: usize) {
 pub fn refresh_finished(started: Option<Instant>, photo_count: usize) {
     if let Some(started) = started {
         eprintln!(
-            "PROFILE refresh_finished photos={photo_count} elapsed_ms={}",
-            started.elapsed().as_millis()
+            "PROFILE refresh_finished photos={photo_count} elapsed_ms={} rss_mb={}",
+            started.elapsed().as_millis(),
+            rss_mb()
         );
     }
 }
