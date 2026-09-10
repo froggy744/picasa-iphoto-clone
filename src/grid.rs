@@ -641,6 +641,17 @@ enum FolderRowKind {
 
 const FOLDER_PHOTO_CHUNK_SIZE: usize = 8;
 
+/// Chunk size for a given column count: a multiple of `columns` close to
+/// `FOLDER_PHOTO_CHUNK_SIZE`. Keeping chunks a whole number of rows means no
+/// chunk ends in a partial line, so the Folder grid has no ragged/padded rows.
+fn folder_chunk_size(columns: u32) -> usize {
+    let columns = columns.max(1) as usize;
+    let lines = (FOLDER_PHOTO_CHUNK_SIZE as f64 / columns as f64)
+        .round()
+        .max(1.0) as usize;
+    columns * lines
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct FolderRowData {
     kind: FolderRowKind,
@@ -658,10 +669,12 @@ struct FolderVirtualRow {
     end: usize,
 }
 
-/// Folder mode uses a stable virtualized model: one lightweight header row
-/// plus fixed-size photo chunks. Chunk boundaries never depend on zoom or
-/// viewport width, so changing columns cannot reshape the ListStore.
-fn folder_virtual_rows(ranges: &[GroupRange]) -> Vec<FolderVirtualRow> {
+/// Folder mode uses a virtualized model: one lightweight header row plus photo
+/// chunks sized to a whole number of rows for the current column count. A
+/// column change therefore reshapes the rows (rebuilt cheaply), which keeps
+/// every chunk aligned to full rows.
+fn folder_virtual_rows(ranges: &[GroupRange], chunk_size: usize) -> Vec<FolderVirtualRow> {
+    let chunk_size = chunk_size.max(1);
     let mut rows = Vec::new();
     for range in ranges {
         rows.push(FolderVirtualRow {
@@ -671,7 +684,7 @@ fn folder_virtual_rows(ranges: &[GroupRange]) -> Vec<FolderVirtualRow> {
         });
         let mut start = range.start;
         while start < range.end {
-            let end = (start + FOLDER_PHOTO_CHUNK_SIZE).min(range.end);
+            let end = (start + chunk_size).min(range.end);
             rows.push(FolderVirtualRow {
                 kind: FolderRowKind::Photos,
                 start,
@@ -1332,7 +1345,7 @@ impl Gallery {
             // ListView realize hundreds of rows (mapped=1407, 3081 ms frame).
             // connect_bind overrides this for headers and short chunks.
             row_root.set_height_request(folder_chunk_height(
-                FOLDER_PHOTO_CHUNK_SIZE,
+                folder_chunk_size(setup_columns.get()),
                 setup_columns.get().max(1),
                 setup_tile_height.get(),
             ));
@@ -1680,16 +1693,16 @@ impl Gallery {
         self.root.set_max_columns(columns);
         self.root.queue_resize();
         if folder_mode {
-            // Fixed-chunk Folder mode is deliberately independent of the
-            // column count. Update only realized chunk FlowBoxes; the
-            // ListStore shape is stable and never rebuilt for zoom/width
-            // changes.
-            let mut flows = Vec::new();
-            collect_folder_flows(self.folder_root.upcast_ref(), &mut flows);
-            for flow in flows {
-                update_folder_flow_layout(&flow, columns.max(1), self.tile_height.get());
+            // The chunk size is a multiple of the column count, so a column
+            // change reshapes the rows. Rebuild once (fast now) so every chunk
+            // is a whole number of full rows, keeping the photo at the top.
+            let anchor = self
+                .photo_for_scroll_position(self.last_scroll_y.get())
+                .map(|photo| photo.id());
+            self.rebuild_folder_rows();
+            if let Some(anchor) = anchor {
+                self.scroll_folder_to_photo(anchor);
             }
-            self.folder_root.queue_resize();
             self.refresh_folder_viewport_tiles();
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
@@ -1702,8 +1715,18 @@ impl Gallery {
                 columns,
                 started.map(|value| value.elapsed().as_millis()).unwrap_or(0),
                 self.folder_store.n_items(),
-                if folder_mode { "virtual_chunks_reflow_free" } else { "grid_columns" }
+                if folder_mode { "virtual_chunks_rebuilt" } else { "grid_columns" }
             );
+        }
+    }
+
+    /// Scroll the Folder ListView to the row holding `photo_id` without
+    /// changing the selection. Used to keep the viewport stable across the
+    /// row reshape that a zoom/column change triggers.
+    fn scroll_folder_to_photo(&self, photo_id: i64) {
+        if let Some(row) = self.folder_row_index_for_photo(photo_id) {
+            self.folder_root
+                .scroll_to(row, gtk::ListScrollFlags::NONE, None);
         }
     }
 
@@ -2931,8 +2954,9 @@ fn rebuild_group_ranges_for(
 fn build_folder_virtual_objects(
     ranges: &[GroupRange],
     photos: &[PhotoObject],
+    chunk_size: usize,
 ) -> Vec<FolderRowObject> {
-    let plans = folder_virtual_rows(ranges);
+    let plans = folder_virtual_rows(ranges, chunk_size);
     let mut rows = Vec::with_capacity(plans.len());
     let mut range_index = 0usize;
 
@@ -2993,14 +3017,15 @@ fn rebuild_folder_rows_for(
     let ranges = group_ranges.borrow();
     let photos = current_photos.borrow();
     let old_rows = folder_store.n_items();
-    let new_rows = build_folder_virtual_objects(&ranges, &photos);
+    let chunk_size = folder_chunk_size(current_columns.get());
+    let new_rows = build_folder_virtual_objects(&ranges, &photos, chunk_size);
 
     if trace {
         eprintln!(
             "UI PERF folder_virtual_plan photos={} folders={} chunk_size={} columns={} model_rows={} old_store_rows={} ms={}",
             photos.len(),
             ranges.len(),
-            FOLDER_PHOTO_CHUNK_SIZE,
+            chunk_size,
             current_columns.get().max(1),
             new_rows.len(),
             old_rows,
@@ -3445,8 +3470,8 @@ fn collect_folder_flows(widget: &gtk::Widget, flows: &mut Vec<gtk::FlowBox>) {
 #[cfg(test)]
 mod folder_stream_tests {
     use super::{
-        folder_chunk_height, folder_virtual_row_matches, folder_virtual_rows, FolderRowData,
-        FolderRowKind, GroupRange, FOLDER_PHOTO_CHUNK_SIZE,
+        folder_chunk_height, folder_chunk_size, folder_virtual_row_matches, folder_virtual_rows,
+        FolderRowData, FolderRowKind, GroupRange, FOLDER_PHOTO_CHUNK_SIZE,
     };
 
     fn sample_ranges() -> Vec<GroupRange> {
@@ -3468,7 +3493,7 @@ mod folder_stream_tests {
 
     #[test]
     fn folder_virtual_stream_uses_header_plus_fixed_eight_photo_chunks() {
-        let rows = folder_virtual_rows(&sample_ranges());
+        let rows = folder_virtual_rows(&sample_ranges(), FOLDER_PHOTO_CHUNK_SIZE);
         assert_eq!(FOLDER_PHOTO_CHUNK_SIZE, 8);
         assert_eq!(rows.len(), 5);
         assert_eq!(rows[0].kind, FolderRowKind::Header);
@@ -3479,22 +3504,20 @@ mod folder_stream_tests {
     }
 
     #[test]
-    fn folder_virtual_stream_shape_is_independent_of_zoom_columns() {
-        let ranges = vec![GroupRange {
-            start: 0,
-            end: 47,
-            label: "Pictures".to_string(),
-            folder_id: 10,
-        }];
-
-        // Zoom columns are intentionally not an input. One header plus six
-        // fixed chunks (8+8+8+8+8+7) remains seven model rows at every zoom.
-        let before_zoom = folder_virtual_rows(&ranges);
-        let after_zoom = folder_virtual_rows(&ranges);
-        assert_eq!(before_zoom.len(), 7);
-        assert_eq!(after_zoom, before_zoom);
-        assert_eq!(before_zoom[0].kind, FolderRowKind::Header);
-        assert_eq!((before_zoom[6].start, before_zoom[6].end), (40, 47));
+    fn folder_chunk_size_is_a_whole_number_of_rows() {
+        // Every chunk must be a whole number of rows for the column count so
+        // no chunk ends in a partial line.
+        for columns in 1..=8u32 {
+            let chunk = folder_chunk_size(columns);
+            assert_eq!(
+                chunk % columns as usize,
+                0,
+                "chunk {chunk} not aligned to {columns} columns"
+            );
+        }
+        assert_eq!(folder_chunk_size(3), 9);
+        assert_eq!(folder_chunk_size(5), 10);
+        assert_eq!(folder_chunk_size(8), 8);
     }
 
     #[test]
@@ -3505,8 +3528,8 @@ mod folder_stream_tests {
     }
 
     #[test]
-    fn folder_virtual_photo_chunks_never_exceed_eight_items() {
-        let rows = folder_virtual_rows(&sample_ranges());
+    fn folder_virtual_photo_chunks_never_exceed_chunk_size() {
+        let rows = folder_virtual_rows(&sample_ranges(), FOLDER_PHOTO_CHUNK_SIZE);
         for row in rows.into_iter().filter(|row| row.kind == FolderRowKind::Photos) {
             assert!(row.end - row.start <= FOLDER_PHOTO_CHUNK_SIZE);
         }
