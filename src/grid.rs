@@ -29,6 +29,7 @@ const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 128;
 thread_local! {
     static RAW_THUMBNAIL_CACHE: RefCell<VecDeque<(String, i32, gtk::gdk::Paintable)>> =
         const { RefCell::new(VecDeque::new()) };
+    static SELECTION_POSITION_CALLS: Cell<u64> = const { Cell::new(0) };
 }
 
 mod square_tile {
@@ -172,7 +173,7 @@ impl SquareTile {
             if !available {
                 if std::env::var_os("PICASA_TRACE").is_some() {
                     eprintln!(
-                        "THUMB PRIORITY visible_missing id={} path={} cache={}",
+                        "THUMB PRIORITY visible_missing thread=main id={} path={} cache={}",
                         photo.id(),
                         photo.path(),
                         path
@@ -1808,11 +1809,17 @@ impl Gallery {
     }
 
     pub fn refresh_thumbnails(&self) {
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let started = trace.then(Instant::now);
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        let count = tiles.len();
         for tile in tiles {
             tile.refresh_thumbnail();
+        }
+        if let Some(started) = started {
+            eprintln!("UI PERF refresh_thumbnails tiles={} ms={}", count, started.elapsed().as_millis());
         }
     }
 
@@ -2012,11 +2019,7 @@ impl Gallery {
                 self.rebuild_folder_rows();
             }
             if let Some(started) = replace_started {
-                eprintln!(
-                    "UI PERF gallery_replace photos={} unchanged=true ms={}",
-                    photos.len(),
-                    started.elapsed().as_millis()
-                );
+                eprintln!("UI PERF gallery_replace photos={} unchanged=true ms={}", photos.len(), started.elapsed().as_millis());
             }
             return;
         }
@@ -2027,6 +2030,9 @@ impl Gallery {
         // batches for library-sized replacements.
         const PROGRESSIVE_REPLACE_THRESHOLD: usize = 1_000;
         if photos.len() > PROGRESSIVE_REPLACE_THRESHOLD {
+            if let Some(started) = replace_started {
+                eprintln!("UI PERF gallery_replace photos={} progressive=true ms={}", photos.len(), started.elapsed().as_millis());
+            }
             self.replace_progressive(photos.to_vec(), generation, profile_started);
             return;
         }
@@ -2052,6 +2058,9 @@ impl Gallery {
             } else {
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
             }
+        }
+        if let Some(started) = replace_started {
+            eprintln!("UI PERF gallery_replace photos={} unchanged=false ms={}", objects.len(), started.elapsed().as_millis());
         }
         crate::diagnostics::refresh_finished(profile_started, objects.len());
     }
@@ -2169,6 +2178,8 @@ impl Gallery {
         if photos.is_empty() {
             return;
         }
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let append_started = trace.then(Instant::now);
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
         self.current_photos
             .borrow_mut()
@@ -2181,6 +2192,9 @@ impl Gallery {
             } else {
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
             }
+        }
+        if let Some(started) = append_started {
+            eprintln!("UI PERF gallery_append photos={} total={} ms={}", photos.len(), self.current_photos.borrow().len(), started.elapsed().as_millis());
         }
     }
 
@@ -2815,6 +2829,7 @@ fn format_count(value: usize) -> String {
 }
 
 fn selection_position_for_id(selection: &gtk::MultiSelection, photo_id: i64) -> Option<u32> {
+    SELECTION_POSITION_CALLS.with(|count| count.set(count.get().wrapping_add(1)));
     (0..selection.n_items()).find(|position| {
         selection
             .item(*position)
@@ -2840,8 +2855,12 @@ fn find_named_label(root: &gtk::Widget, name: &str) -> Option<gtk::Label> {
 }
 
 fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiSelection) {
+    let trace = std::env::var_os("PICASA_TRACE").is_some();
+    let started = trace.then(Instant::now);
+    let calls_before = SELECTION_POSITION_CALLS.with(Cell::get);
     let mut tiles = Vec::new();
     collect_tiles(root.upcast_ref(), &mut tiles);
+    let count = tiles.len();
     for tile in tiles {
         let selected = tile
             .imp()
@@ -2851,6 +2870,9 @@ fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiS
             .and_then(|photo| selection_position_for_id(selection, photo.id()))
             .is_some_and(|position| selection.is_selected(position));
         tile.set_manual_selected(selected);
+    }
+    if let Some(started) = started {
+        eprintln!("UI PERF folder_selection_styles tiles={} items={} spfid_calls={} ms={}", count, selection.n_items(), SELECTION_POSITION_CALLS.with(Cell::get).wrapping_sub(calls_before), started.elapsed().as_millis());
     }
 }
 

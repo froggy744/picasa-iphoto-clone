@@ -52,6 +52,7 @@ fn format_folder_bytes(bytes: u64) -> String {
 }
 
 pub fn build(app: &adw::Application, connection: Connection) -> adw::ApplicationWindow {
+    let build_started = Instant::now();
     let window = adw::ApplicationWindow::new(app);
     window.set_title(Some("PIC - Picasa iPhoto Clone"));
     window.set_default_size(1440, 900);
@@ -137,7 +138,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let startup_photos = Rc::new(photos);
     if std::env::var_os("PICASA_TRACE").is_some() {
         eprintln!(
-            "STARTUP library_loaded photos={} displayed={} folders={} albums={} scan=disabled",
+            "STARTUP cold_start_ms={} photos={} displayed={} folders={} albums={} scan=disabled",
+            build_started.elapsed().as_millis(),
             sidebar_counts.photos,
             startup_photos.len(),
             folders.len(),
