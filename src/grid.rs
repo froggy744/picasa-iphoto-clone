@@ -1988,6 +1988,8 @@ impl Gallery {
     }
 
     pub fn replace(&self, photos: &[Photo]) {
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let replace_started = trace.then(Instant::now);
         let profile_started = crate::diagnostics::refresh_started(photos.len());
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
@@ -2008,6 +2010,13 @@ impl Gallery {
             if self.group_mode.get() == GroupMode::Folder && self.folder_store.n_items() == 0 {
                 self.rebuild_group_ranges();
                 self.rebuild_folder_rows();
+            }
+            if let Some(started) = replace_started {
+                eprintln!(
+                    "UI PERF gallery_replace photos={} unchanged=true ms={}",
+                    photos.len(),
+                    started.elapsed().as_millis()
+                );
             }
             return;
         }
