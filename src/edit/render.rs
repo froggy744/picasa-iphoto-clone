@@ -360,4 +360,24 @@ mod tests {
         assert!(output.height() < 80);
         assert!(output.pixels().all(|pixel| pixel[3] == 255));
     }
+
+    #[test]
+    fn black_white_and_sepia_combine() {
+        let source = RgbaImage::from_pixel(2, 2, Rgba([200, 100, 50, 255]));
+        let mut combined_recipe = EditRecipe::default();
+        combined_recipe.black_white = true;
+        combined_recipe.sepia = true;
+        let combined = apply_recipe(source.clone(), &combined_recipe);
+
+        let mut bw_recipe = EditRecipe::default();
+        bw_recipe.black_white = true;
+        let black_white = apply_recipe(source.clone(), &bw_recipe);
+
+        let mut sepia_recipe = EditRecipe::default();
+        sepia_recipe.sepia = true;
+        let sepia = apply_recipe(source, &sepia_recipe);
+
+        assert_ne!(combined.as_raw(), black_white.as_raw());
+        assert_ne!(combined.as_raw(), sepia.as_raw());
+    }
 }

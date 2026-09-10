@@ -712,17 +712,15 @@ impl Lightbox {
                 }
             }
         } else {
-            if self.zoom.get() == -1.0 {
-                self.zoom.set(self.zoom_before_one_to_one.get());
-            }
-
+            // 1:1 off always returns to fit-to-window.
+            self.zoom.set(0.0);
             fit_picture(
                 &self.picture,
                 &self.photos.borrow(),
                 self.index.get(),
                 self.root.width(),
                 self.root.height(),
-                self.zoom.get(),
+                0.0,
             );
             self.picture.queue_resize();
             self.picture_viewport.queue_resize();
