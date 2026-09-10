@@ -313,6 +313,18 @@ mod tests {
     }
 
     #[test]
+    fn session_keeps_bw_and_sepia_independently() {
+        let mut session = EditSession::new(EditRecipe::default());
+        session.mutate(|recipe| recipe.black_white = true);
+        session.mutate(|recipe| recipe.sepia = true);
+        assert!(session.recipe.black_white);
+        assert!(session.recipe.sepia);
+        let decoded = EditRecipe::decode(&session.recipe.encode());
+        assert!(decoded.black_white);
+        assert!(decoded.sepia);
+    }
+
+    #[test]
     fn composed_crop_stays_normalized() {
         let outer = CropRect { left: 0.1, top: 0.1, right: 0.9, bottom: 0.9 };
         let inner = CropRect { left: 0.25, top: 0.25, right: 0.75, bottom: 0.75 };
