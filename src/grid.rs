@@ -1793,6 +1793,8 @@ impl Gallery {
             &self.current_columns,
             &self.folder_store,
             &self.folder_selection,
+            &self.folder_root,
+            &self.mapped_folder_tiles,
         );
     }
 
@@ -1838,66 +1840,7 @@ impl Gallery {
     }
 
     fn refresh_folder_viewport_tiles(&self) {
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let started = trace.then(Instant::now);
-        let root = &self.folder_root;
-        let mut mapped = self.mapped_folder_tiles.borrow_mut();
-        mapped.retain(|tile| tile.is_mapped());
-        let mapped_count = mapped.len();
-        let mut near = 0usize;
-        let mut loaded = 0usize;
-        let mut unloaded = 0usize;
-        for tile in mapped.iter() {
-            // A recycled pool tile that GTK has not allocated reports height 0
-            // and bounds at the origin, so it looked "near" and made us load
-            // thumbnails for hundreds of offscreen rows. Leave it untouched.
-            if tile.height() <= 0 {
-                continue;
-            }
-            if tile_near_folder_viewport(tile, root) {
-                near += 1;
-                if !tile.imp().visual_loaded.get() {
-                    loaded += 1;
-                }
-                tile.load_visual();
-            } else {
-                if tile.imp().visual_loaded.get() {
-                    unloaded += 1;
-                }
-                tile.unload_visual();
-            }
-        }
-        let _ = near;
-        if let Some(started) = started {
-            let page = root
-                .vadjustment()
-                .map(|adjustment| adjustment.page_size())
-                .unwrap_or_default();
-            eprintln!(
-                "UI PERF viewport_tiles mapped={} near={} loaded={} unloaded={} ms={} root_h={} page={}",
-                mapped_count,
-                near,
-                loaded,
-                unloaded,
-                started.elapsed().as_millis(),
-                root.height(),
-                page
-            );
-            if mapped_count > 100 {
-                if let Some(tile) = mapped.first() {
-                    let bounds = tile
-                        .compute_bounds(root)
-                        .map(|bounds| (bounds.y(), bounds.height()))
-                        .unwrap_or((f32::NAN, f32::NAN));
-                    eprintln!(
-                        "UI PERF viewport_probe h={} bounds_y={:.1} bounds_h={:.1}",
-                        tile.height(),
-                        bounds.0,
-                        bounds.1
-                    );
-                }
-            }
-        }
+        refresh_folder_viewport_tiles_for(&self.folder_root, &self.mapped_folder_tiles);
     }
 
     fn photo_for_visible_folder_row(&self) -> Option<PhotoObject> {
@@ -2355,6 +2298,8 @@ impl Gallery {
         let tile_height = self.tile_height.clone();
         let folder_store = self.folder_store.clone();
         let folder_selection = self.folder_selection.clone();
+        let folder_root = self.folder_root.clone();
+        let mapped_folder_tiles = self.mapped_folder_tiles.clone();
         let replace_generation = self.replace_generation.clone();
 
         glib::idle_add_local(move || {
@@ -2391,6 +2336,8 @@ impl Gallery {
                         &current_columns,
                         &folder_store,
                         &folder_selection,
+                        &folder_root,
+                        &mapped_folder_tiles,
                     );
                     group_header.set_visible(false);
                     group_title.set_text("");
@@ -2926,6 +2873,8 @@ fn rebuild_folder_rows_for(
     current_columns: &Rc<Cell<u32>>,
     folder_store: &gio::ListStore,
     folder_selection: &gtk::NoSelection,
+    folder_root: &gtk::ListView,
+    mapped_folder_tiles: &Rc<RefCell<Vec<SquareTile>>>,
 ) {
     let trace = std::env::var_os("PICASA_TRACE").is_some();
     let started = trace.then(Instant::now);
@@ -3048,6 +2997,13 @@ fn rebuild_folder_rows_for(
             started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
         );
     }
+    // The bind path no longer decodes thumbnails for unallocated pool tiles, so
+    // load the tiles GTK actually allocates for the new model on the next idle.
+    let root = folder_root.clone();
+    let mapped = mapped_folder_tiles.clone();
+    glib::idle_add_local_once(move || {
+        refresh_folder_viewport_tiles_for(&root, &mapped);
+    });
 }
 
 fn update_group_header_for_index_for(
@@ -3265,8 +3221,61 @@ fn update_folder_flow_layout(flow: &gtk::FlowBox, columns: u32, tile_height: i32
     }
 }
 
+fn refresh_folder_viewport_tiles_for(
+    root: &gtk::ListView,
+    mapped_tiles: &Rc<RefCell<Vec<SquareTile>>>,
+) {
+    let trace = std::env::var_os("PICASA_TRACE").is_some();
+    let started = trace.then(Instant::now);
+    let mut mapped = mapped_tiles.borrow_mut();
+    mapped.retain(|tile| tile.is_mapped());
+    let mapped_count = mapped.len();
+    let mut near = 0usize;
+    let mut loaded = 0usize;
+    let mut unloaded = 0usize;
+    for tile in mapped.iter() {
+        // A recycled pool tile that GTK has not allocated reports height 0 and
+        // bounds at the origin, so it looked "near" and made us decode
+        // thumbnails for hundreds of offscreen rows. Leave it untouched.
+        if tile.height() <= 0 {
+            continue;
+        }
+        if tile_near_folder_viewport(tile, root) {
+            near += 1;
+            if !tile.imp().visual_loaded.get() {
+                loaded += 1;
+            }
+            tile.load_visual();
+        } else {
+            if tile.imp().visual_loaded.get() {
+                unloaded += 1;
+            }
+            tile.unload_visual();
+        }
+    }
+    let _ = near;
+    if let Some(started) = started {
+        let page = root
+            .vadjustment()
+            .map(|adjustment| adjustment.page_size())
+            .unwrap_or_default();
+        eprintln!(
+            "UI PERF viewport_tiles mapped={} near={} loaded={} unloaded={} ms={} root_h={} page={}",
+            mapped_count,
+            near,
+            loaded,
+            unloaded,
+            started.elapsed().as_millis(),
+            root.height(),
+            page
+        );
+    }
+}
+
 fn tile_near_folder_viewport(tile: &SquareTile, root: &gtk::ListView) -> bool {
-    if !tile.is_mapped() || root.height() <= 0 {
+    // Unallocated pool tiles report height 0 and bounds at the origin; treating
+    // them as near loaded/decoded thumbnails for hundreds of offscreen rows.
+    if !tile.is_mapped() || tile.height() <= 0 || root.height() <= 0 {
         return false;
     }
     let Some(bounds) = tile.compute_bounds(root) else {
