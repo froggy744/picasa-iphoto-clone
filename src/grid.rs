@@ -1921,6 +1921,7 @@ impl Gallery {
     fn photo_for_visible_folder_row(&self) -> Option<PhotoObject> {
         let trace = std::env::var_os("PICASA_TRACE").is_some();
         let width = self.folder_root.width().max(1) as f64;
+        let mut folder_fallback: Option<PhotoObject> = None;
         for y in [6.0_f64, 20.0, 40.0, 64.0, 92.0, 120.0] {
             let pick_started = trace.then(Instant::now);
             let picked = self
@@ -1934,31 +1935,37 @@ impl Gallery {
             let Some(picked) = picked else {
                 continue;
             };
-            let Some(folder_id) = folder_id_from_named_ancestor(&picked) else {
-                continue;
-            };
-            let scan_started = trace.then(Instant::now);
-            // group_ranges is one entry per folder in Folder mode; use its
-            // recorded start instead of scanning all 66k photos per scroll tick.
-            let found = {
-                let ranges = self.group_ranges.borrow();
-                let photos = self.current_photos.borrow();
-                ranges
-                    .iter()
-                    .find(|range| range.folder_id == folder_id)
-                    .and_then(|range| photos.get(range.start))
-                    .cloned()
-            };
-            if let Some(started) = scan_started {
-                SCROLL_PROBE_SCAN_NS
-                    .with(|ns| ns.set(ns.get().wrapping_add(started.elapsed().as_nanos())));
+            // Prefer the photo tile actually under the probe point. Callers
+            // that need the visible photo (zoom anchoring) must not jump to the
+            // folder's first photo.
+            if let Some(tile) = tile_ancestor(&picked) {
+                if let Some(photo) = tile.imp().photo.borrow().clone() {
+                    return Some(photo);
+                }
             }
-            return found;
+            if folder_fallback.is_none() {
+                if let Some(folder_id) = folder_id_from_named_ancestor(&picked) {
+                    let scan_started = trace.then(Instant::now);
+                    folder_fallback = {
+                        let ranges = self.group_ranges.borrow();
+                        let photos = self.current_photos.borrow();
+                        ranges
+                            .iter()
+                            .find(|range| range.folder_id == folder_id)
+                            .and_then(|range| photos.get(range.start))
+                            .cloned()
+                    };
+                    if let Some(started) = scan_started {
+                        SCROLL_PROBE_SCAN_NS
+                            .with(|ns| ns.set(ns.get().wrapping_add(started.elapsed().as_nanos())));
+                    }
+                }
+            }
         }
         // During a resize/rebind there may briefly be no realized row at the
         // probe point. Keep the existing sidebar location instead of falsely
         // jumping it back to the first folder.
-        None
+        folder_fallback
     }
 
     fn update_group_header_for_index(&self, index: usize) {
@@ -3324,6 +3331,18 @@ fn folder_id_from_named_ancestor(widget: &gtk::Widget) -> Option<i64> {
             if let Ok(folder_id) = value.parse::<i64>() {
                 return Some(folder_id);
             }
+        }
+        current = candidate.parent();
+    }
+    None
+}
+
+/// Nearest `SquareTile` ancestor of a picked widget, if any.
+fn tile_ancestor(widget: &gtk::Widget) -> Option<SquareTile> {
+    let mut current = Some(widget.clone());
+    while let Some(candidate) = current {
+        if let Ok(tile) = candidate.clone().downcast::<SquareTile>() {
+            return Some(tile);
         }
         current = candidate.parent();
     }
