@@ -1848,6 +1848,12 @@ impl Gallery {
         let mut loaded = 0usize;
         let mut unloaded = 0usize;
         for tile in mapped.iter() {
+            // A recycled pool tile that GTK has not allocated reports height 0
+            // and bounds at the origin, so it looked "near" and made us load
+            // thumbnails for hundreds of offscreen rows. Leave it untouched.
+            if tile.height() <= 0 {
+                continue;
+            }
             if tile_near_folder_viewport(tile, root) {
                 near += 1;
                 if !tile.imp().visual_loaded.get() {
@@ -1863,14 +1869,34 @@ impl Gallery {
         }
         let _ = near;
         if let Some(started) = started {
+            let page = root
+                .vadjustment()
+                .map(|adjustment| adjustment.page_size())
+                .unwrap_or_default();
             eprintln!(
-                "UI PERF viewport_tiles mapped={} near={} loaded={} unloaded={} ms={}",
+                "UI PERF viewport_tiles mapped={} near={} loaded={} unloaded={} ms={} root_h={} page={}",
                 mapped_count,
                 near,
                 loaded,
                 unloaded,
-                started.elapsed().as_millis()
+                started.elapsed().as_millis(),
+                root.height(),
+                page
             );
+            if mapped_count > 100 {
+                if let Some(tile) = mapped.first() {
+                    let bounds = tile
+                        .compute_bounds(root)
+                        .map(|bounds| (bounds.y(), bounds.height()))
+                        .unwrap_or((f32::NAN, f32::NAN));
+                    eprintln!(
+                        "UI PERF viewport_probe h={} bounds_y={:.1} bounds_h={:.1}",
+                        tile.height(),
+                        bounds.0,
+                        bounds.1
+                    );
+                }
+            }
         }
     }
 
