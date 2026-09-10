@@ -2258,6 +2258,63 @@ impl Gallery {
             return;
         }
 
+        // Same photo set in a different order (for example Folder <-> All
+        // Photos): reorder the existing PhotoObjects instead of reconstructing
+        // tens of thousands of them. Measured 658-1363 ms to rebuild all 66k.
+        let same_set = {
+            let current = self.current_photos.borrow();
+            current.len() == photos.len()
+                && !current.is_empty()
+                && {
+                    let ids = current
+                        .iter()
+                        .map(|object| object.id())
+                        .collect::<std::collections::HashSet<_>>();
+                    photos.iter().all(|photo| ids.contains(&photo.id))
+                }
+        };
+        if same_set {
+            let current = self.current_photos.borrow().clone();
+            let mut by_id = current
+                .into_iter()
+                .map(|object| (object.id(), object))
+                .collect::<std::collections::HashMap<_, _>>();
+            let reordered = photos
+                .iter()
+                .filter_map(|photo| by_id.remove(&photo.id))
+                .collect::<Vec<_>>();
+            if !self.collage_selection_mode.get() {
+                (self.selected)(None);
+            }
+            crate::diagnostics::refresh_first_batch(profile_started, reordered.len());
+            self.current_photos.replace(reordered.clone());
+            self.store.splice(0, self.store.n_items(), &reordered);
+            if self.collage_selection_mode.get() {
+                self.restore_collage_selection();
+            } else if reordered.is_empty() {
+                self.selection.unselect_all();
+            } else {
+                self.selection.select_item(0, true);
+            }
+            if self.group_mode.get() != GroupMode::None {
+                self.rebuild_group_ranges();
+                if self.group_mode.get() == GroupMode::Folder {
+                    self.rebuild_folder_rows();
+                } else {
+                    self.update_group_header_for_scroll(self.last_scroll_y.get());
+                }
+            }
+            if let Some(started) = replace_started {
+                eprintln!(
+                    "UI PERF gallery_replace photos={} same_set_reorder ms={}",
+                    reordered.len(),
+                    started.elapsed().as_millis()
+                );
+            }
+            crate::diagnostics::refresh_finished(profile_started, reordered.len());
+            return;
+        }
+
         // Constructing tens of thousands of GObjects synchronously blocks
         // GTK for several seconds. Keep the existing model semantics for
         // normal refreshes, but let the main loop make progress between small
