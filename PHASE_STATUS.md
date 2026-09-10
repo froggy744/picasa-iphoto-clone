@@ -2,6 +2,30 @@
 
 Date: 2026-09-10 · branch `deepseek` · base `e026510`
 
+## Session 4 — thumbnail decode on folder-store change (scroll-baseline8/9)
+
+The last cost was the folder-store model change decoding cached thumbnails for
+GTK's offscreen pool.
+
+- `scroll-baseline8.log` probe confirmed the pool tiles are **unallocated**:
+  `viewport_probe h=0 bounds_y=0.0`, `root_h=770 page=770`. So
+  `tile_near_folder_viewport` treated ~1370 offscreen tiles as near.
+- `scroll-baseline9.log`: the reorder used `strategy=attached_splice
+  model_ms=576` (the 6207 ms attached number predated the selection fix), but a
+  single frame still hit 1018 ms from **2073 thumbnail decodes** driven by the
+  bind path.
+
+Fixes:
+- `5eac7d2` — skip unallocated tiles in the viewport pass + bounds trace.
+- `f03d017` — splice the folder store while attached for reorders (reuse the
+  realized pool); only a from-scratch build detaches.
+- `9c704b2` — `tile_near_folder_viewport` requires `height() > 0`, so the bind
+  path never decodes unallocated pool tiles; a deferred
+  `refresh_folder_viewport_tiles_for()` loads the tiles GTK actually allocates.
+
+Pending: one run (`scroll-baseline10.log`) to confirm thumbnails still render
+and the decode burst is gone.
+
 ## Session 3 — sidebar tree-mode change (scroll-baseline6)
 
 `scroll-baseline6.log`: toggling the sidebar tree **Tree ↔ Imported Only** took
