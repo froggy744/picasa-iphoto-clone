@@ -2824,19 +2824,71 @@ fn rebuild_folder_rows_for(
         );
     }
 
-    let unchanged = old_rows as usize == new_rows.len()
-        && new_rows.iter().enumerate().all(|(index, new_row)| {
-            folder_store
-                .item(index as u32)
-                .and_downcast::<FolderRowObject>()
-                .is_some_and(|old_row| folder_virtual_row_matches(&old_row.data(), &new_row.data()))
-        });
-    if unchanged {
+    // Find the unchanged head and tail so a mostly-unchanged stream does not
+    // force the live ListView to rebind every visible tile. This subsumes the
+    // old all-or-nothing "unchanged" check, which never fired in any measured
+    // run (scroll-baseline*.log) despite old_rows == new_rows.
+    let old_len = old_rows as usize;
+    let new_len = new_rows.len();
+    let mut prefix = 0usize;
+    while prefix < old_len
+        && prefix < new_len
+        && folder_store
+            .item(prefix as u32)
+            .and_downcast::<FolderRowObject>()
+            .is_some_and(|old_row| {
+                folder_virtual_row_matches(&old_row.data(), &new_rows[prefix].data())
+            })
+    {
+        prefix += 1;
+    }
+    let mut suffix = 0usize;
+    while suffix < old_len - prefix
+        && suffix < new_len - prefix
+        && folder_store
+            .item((old_len - 1 - suffix) as u32)
+            .and_downcast::<FolderRowObject>()
+            .is_some_and(|old_row| {
+                folder_virtual_row_matches(
+                    &old_row.data(),
+                    &new_rows[new_len - 1 - suffix].data(),
+                )
+            })
+    {
+        suffix += 1;
+    }
+
+    if trace && prefix == 0 && old_len > 0 && new_len > 0 {
+        // First-row field breakdown: pinpoints why the stream is considered
+        // changed when old_rows == new_rows (photos, label, folder, count...).
+        if let Some(old_row) = folder_store
+            .item(0)
+            .and_downcast::<FolderRowObject>()
+        {
+            let old_data = old_row.data();
+            let new_data = new_rows[0].data();
+            eprintln!(
+                "UI PERF folder_store_first_row old_kind={:?} new_kind={:?} old_folder_id={} new_folder_id={} old_label={:?} new_label={:?} old_count={} new_count={} old_photos={} new_photos={}",
+                old_data.kind,
+                new_data.kind,
+                old_data.folder_id,
+                new_data.folder_id,
+                old_data.label,
+                new_data.label,
+                old_data.count,
+                new_data.count,
+                old_data.photos.len(),
+                new_data.photos.len(),
+            );
+        }
+    }
+
+    if prefix == old_len && prefix == new_len {
         if trace {
             eprintln!(
                 "UI PERF folder_store_update strategy=unchanged old_rows={} new_rows={} total_ms={}",
                 old_rows,
-                new_rows.len(),
+                new_len,
                 started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
             );
         }
@@ -2844,17 +2896,31 @@ fn rebuild_folder_rows_for(
     }
 
     let update_started = trace.then(Instant::now);
-    // Detach the model while replacing it so the live ListView does not
-    // react to every insertion/removal during construction. Generated
-    // thumbnail loading remains deferred to viewport-near tiles.
-    folder_selection.set_model(Option::<&gio::ListStore>::None);
-    folder_store.splice(0, old_rows, &new_rows);
-    folder_selection.set_model(Some(folder_store));
+    let removed = (old_len - prefix - suffix) as u32;
+    let inserted = &new_rows[prefix..new_len - suffix];
+    if prefix == 0 && suffix == 0 {
+        // Full replacement: detach while swapping so the live ListView does
+        // not react to every insertion/removal during construction. Generated
+        // thumbnail loading remains deferred to viewport-near tiles.
+        folder_selection.set_model(Option::<&gio::ListStore>::None);
+        folder_store.splice(0, old_rows, inserted);
+        folder_selection.set_model(Some(folder_store));
+    } else {
+        // Localized change: splice in place so only the changed rows rebind.
+        folder_store.splice(prefix as u32, removed, inserted);
+    }
     if trace {
         eprintln!(
-            "UI PERF folder_store_update strategy=virtual_chunks_detached old_rows={} new_rows={} model_ms={} total_ms={}",
+            "UI PERF folder_store_update strategy={} old_rows={} new_rows={} prefix={} suffix={} model_ms={} total_ms={}",
+            if prefix == 0 && suffix == 0 {
+                "virtual_chunks_detached"
+            } else {
+                "incremental_splice"
+            },
             old_rows,
             folder_store.n_items(),
+            prefix,
+            suffix,
             update_started.map(|value| value.elapsed().as_millis()).unwrap_or(0),
             started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
         );
@@ -3130,7 +3196,10 @@ fn collect_folder_flows(widget: &gtk::Widget, flows: &mut Vec<gtk::FlowBox>) {
 
 #[cfg(test)]
 mod folder_stream_tests {
-    use super::{folder_chunk_height, folder_virtual_rows, FolderRowKind, GroupRange, FOLDER_PHOTO_CHUNK_SIZE};
+    use super::{
+        folder_chunk_height, folder_virtual_row_matches, folder_virtual_rows, FolderRowData,
+        FolderRowKind, GroupRange, FOLDER_PHOTO_CHUNK_SIZE,
+    };
 
     fn sample_ranges() -> Vec<GroupRange> {
         vec![
@@ -3193,5 +3262,26 @@ mod folder_stream_tests {
         for row in rows.into_iter().filter(|row| row.kind == FolderRowKind::Photos) {
             assert!(row.end - row.start <= FOLDER_PHOTO_CHUNK_SIZE);
         }
+    }
+
+    #[test]
+    fn folder_virtual_row_match_compares_identity_fields() {
+        let base = FolderRowData {
+            kind: FolderRowKind::Header,
+            folder_id: 7,
+            folder_path: "/photos".to_string(),
+            label: "photos".to_string(),
+            count: 3,
+            photos: Vec::new(),
+        };
+        assert!(folder_virtual_row_matches(&base, &base.clone()));
+
+        let mut different_folder = base.clone();
+        different_folder.folder_id = 8;
+        assert!(!folder_virtual_row_matches(&base, &different_folder));
+
+        let mut different_count = base.clone();
+        different_count.count = 4;
+        assert!(!folder_virtual_row_matches(&base, &different_count));
     }
 }
