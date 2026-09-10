@@ -10,6 +10,70 @@ use super::model::{AspectRatio, Background, CollageOrientation, CollageProject, 
 
 const MAX_PREVIEW_CORNER_RADIUS: i32 = 48;
 
+thread_local! {
+    // Bumped on every preview rebuild so late decode results from an older
+    // preview are discarded.
+    static PREVIEW_GENERATION: Cell<u64> = const { Cell::new(0) };
+    // Sharper preview textures keyed by (path, rotation, recipe). Reused across
+    // preview rebuilds so dragging does not re-decode every photo.
+    static PREVIEW_SHARP_CACHE: RefCell<std::collections::HashMap<(String, i32, String), gtk::gdk::Paintable>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// Decode a sharper preview source off the GTK thread. The editor preview
+/// otherwise draws the 320 px cached thumbnail scaled up to the canvas tile.
+fn schedule_preview_sharpen(
+    picture: gtk::Picture,
+    reference: String,
+    rotation: i32,
+    recipe: String,
+    generation: u64,
+) {
+    let key = (reference.clone(), rotation, recipe.clone());
+    if let Some(cached) = PREVIEW_SHARP_CACHE.with(|cache| cache.borrow().get(&key).cloned()) {
+        picture.set_paintable(Some(&cached));
+        return;
+    }
+    const PREVIEW_SHARP_SIZE: u32 = 1024;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = crate::edit::render::render_for_viewer(
+            &reference,
+            rotation,
+            &crate::edit::EditRecipe::decode(&recipe),
+            PREVIEW_SHARP_SIZE,
+            PREVIEW_SHARP_SIZE,
+        );
+        let _ = sender.send(result);
+    });
+    glib::timeout_add_local(Duration::from_millis(25), move || {
+        match receiver.try_recv() {
+            Ok(Ok(image)) => {
+                if PREVIEW_GENERATION.with(Cell::get) == generation {
+                    let (width, height) = image.dimensions();
+                    let bytes = glib::Bytes::from_owned(image.into_raw());
+                    let texture = gtk::gdk::MemoryTexture::new(
+                        width as i32,
+                        height as i32,
+                        gtk::gdk::MemoryFormat::R8g8b8a8,
+                        &bytes,
+                        width as usize * 4,
+                    );
+                    let paintable: gtk::gdk::Paintable = texture.upcast();
+                    picture.set_paintable(Some(&paintable));
+                    PREVIEW_SHARP_CACHE.with(|cache| {
+                        cache.borrow_mut().insert(key.clone(), paintable);
+                    });
+                }
+                glib::ControlFlow::Break
+            }
+            Ok(Err(_)) => glib::ControlFlow::Break,
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+}
+
 fn collage_css() -> String {
     let mut css = String::from(
         ".collage-canvas { border: 1px solid alpha(@theme_fg_color, 0.28); }\
@@ -468,6 +532,11 @@ fn refresh_preview(
     frames: &Rc<RefCell<Vec<PreviewFrame>>>,
     project: &Rc<RefCell<CollageProject>>,
 ) {
+    let generation = PREVIEW_GENERATION.with(|cell| {
+        let value = cell.get().wrapping_add(1);
+        cell.set(value);
+        value
+    });
     while let Some(child) = canvas.first_child() {
         canvas.remove(&child);
     }
@@ -532,6 +601,15 @@ fn refresh_preview(
             picture.set_paintable(gtk::gdk::Paintable::NONE);
             picture.set_tooltip_text(Some("Thumbnail unavailable"));
         }
+        // The cached thumbnail is only 320 px; for the canvas tile decode a
+        // sharper source from the original off-thread and swap it in.
+        schedule_preview_sharpen(
+            picture.clone(),
+            item.photo.path.clone(),
+            item.photo.library_rotation,
+            item.photo.edit_recipe.clone(),
+            generation,
+        );
         let photo_frame = gtk::Frame::new(None);
         photo_frame.add_css_class("collage-contained-photo");
         photo_frame.set_child(Some(&picture));

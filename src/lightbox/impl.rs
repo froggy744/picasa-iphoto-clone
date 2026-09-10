@@ -407,6 +407,9 @@ impl Lightbox {
                 };
                 zoom_for_scroll
                     .set((current * if dy < 0.0 { 1.12 } else { 0.89 }).clamp(0.25, 4.0));
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!("UI TRACE lightbox_ctrl_zoom zoom={}", zoom_for_scroll.get());
+                }
                 fit_picture(
                     &picture_for_scroll,
                     &photos_for_scroll.borrow(),
@@ -654,6 +657,13 @@ impl Lightbox {
     /// A negative zoom is reserved for this temporary 1:1 mode.
     pub fn set_one_to_one(&self, enabled: bool) {
         if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "UI TRACE lightbox_one_to_one enabled={} active={} zoom={} before={}",
+                enabled,
+                self.one_to_one_active.get(),
+                self.zoom.get(),
+                self.zoom_before_one_to_one.get()
+            );
         }
 
         if self.one_to_one_active.get() == enabled {

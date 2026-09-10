@@ -239,11 +239,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     space_toggle_in_progress_for_key.set(true);
                     one_to_one_for_key.set_active(false);
                     if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!("UI TRACE lightbox_space active=false");
                     }
                 } else {
                     space_toggle_in_progress_for_key.set(true);
                     one_to_one_for_key.set_active(true);
                     if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!("UI TRACE lightbox_space active=true");
                     }
                 }
             } else if let Some(open_selected) = space_open_slot_for_key.borrow().as_ref() {
