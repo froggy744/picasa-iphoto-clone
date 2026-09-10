@@ -713,6 +713,7 @@ fn make_folder_tile(
     collage_ids: &Rc<RefCell<HashSet<i64>>>,
     mapped_tiles: &Rc<RefCell<Vec<SquareTile>>>,
     folder_root_holder: &Rc<RefCell<Option<gtk::ListView>>>,
+    folder_rebuild_active: &Rc<Cell<bool>>,
 ) -> SquareTile {
     let frame = gtk::Overlay::new();
     frame.set_overflow(gtk::Overflow::Hidden);
@@ -895,12 +896,18 @@ fn make_folder_tile(
     let tile_for_map = tile.clone();
     let mapped_for_map = mapped_tiles.clone();
     let root_for_map = folder_root_holder.clone();
+    let rebuild_active_for_map = folder_rebuild_active.clone();
     tile.connect_map(move |_| {
         {
             let mut mapped = mapped_for_map.borrow_mut();
             if !mapped.iter().any(|candidate| candidate == &tile_for_map) {
                 mapped.push(tile_for_map.clone());
             }
+        }
+        // During a folder-store swap GTK maps its whole offscreen pool; the
+        // deferred viewport pass loads the visible tiles instead.
+        if rebuild_active_for_map.get() {
+            return;
         }
         if let Some(root) = root_for_map.borrow().as_ref() {
             if tile_near_folder_viewport(&tile_for_map, root) {
@@ -941,6 +948,11 @@ pub struct Gallery {
     folder_store: gio::ListStore,
     folder_selection: gtk::NoSelection,
     mapped_folder_tiles: Rc<RefCell<Vec<SquareTile>>>,
+    // True while rebuild_folder_rows_for is swapping the folder model. The bind
+    // path then skips eager thumbnail decodes (GTK binds its whole offscreen
+    // pool on a model change) and a deferred viewport pass loads the visible
+    // tiles. During normal scrolling this is false so tiles load immediately.
+    folder_rebuild_active: Rc<Cell<bool>>,
     folder_view_changed: Rc<RefCell<Option<Rc<dyn Fn(bool)>>>>,
     selected: Rc<dyn Fn(Option<PhotoObject>)>,
     store: gio::ListStore,
@@ -1277,6 +1289,7 @@ impl Gallery {
         let folder_selection = gtk::NoSelection::new(Some(folder_store.clone()));
         let folder_factory = gtk::SignalListItemFactory::new();
         let mapped_folder_tiles: Rc<RefCell<Vec<SquareTile>>> = Rc::new(RefCell::new(Vec::new()));
+        let folder_rebuild_active: Rc<Cell<bool>> = Rc::new(Cell::new(false));
         let folder_root_holder: Rc<RefCell<Option<gtk::ListView>>> = Rc::new(RefCell::new(None));
         // Cached selected photo ids. The folder bind path used to call
         // selection_position_for_id (an O(n_items) scan of the 66k-photo model)
@@ -1379,6 +1392,7 @@ impl Gallery {
         let mapped_tiles_for_folder_bind = mapped_folder_tiles.clone();
         let root_holder_for_folder_bind = folder_root_holder.clone();
         let selected_ids_for_folder_bind = folder_selected_ids.clone();
+        let rebuild_active_for_folder_bind = folder_rebuild_active.clone();
 
         folder_factory.connect_bind(move |_, object| {
             let trace = std::env::var_os("PICASA_TRACE").is_some();
@@ -1450,6 +1464,7 @@ impl Gallery {
                             &collage_ids_for_folder_bind,
                             &mapped_tiles_for_folder_bind,
                             &root_holder_for_folder_bind,
+                            &rebuild_active_for_folder_bind,
                         );
                         flow.insert(&tile, -1);
                         tiles.push(tile);
@@ -1467,7 +1482,7 @@ impl Gallery {
                                 .borrow()
                                 .contains(&photo.id());
                             tile.set_manual_selected(selected);
-                            if tile.is_mapped() {
+                            if !rebuild_active_for_folder_bind.get() && tile.is_mapped() {
                                 if let Some(root) = root_holder_for_folder_bind.borrow().as_ref() {
                                     if tile_near_folder_viewport(tile, root) {
                                         tile.load_visual();
@@ -1562,6 +1577,7 @@ impl Gallery {
             folder_store,
             folder_selection,
             mapped_folder_tiles,
+            folder_rebuild_active,
             folder_view_changed: Rc::new(RefCell::new(None)),
             selected,
             store,
@@ -1795,6 +1811,7 @@ impl Gallery {
             &self.folder_selection,
             &self.folder_root,
             &self.mapped_folder_tiles,
+            &self.folder_rebuild_active,
         );
     }
 
@@ -2300,6 +2317,7 @@ impl Gallery {
         let folder_selection = self.folder_selection.clone();
         let folder_root = self.folder_root.clone();
         let mapped_folder_tiles = self.mapped_folder_tiles.clone();
+        let folder_rebuild_active = self.folder_rebuild_active.clone();
         let replace_generation = self.replace_generation.clone();
 
         glib::idle_add_local(move || {
@@ -2338,6 +2356,7 @@ impl Gallery {
                         &folder_selection,
                         &folder_root,
                         &mapped_folder_tiles,
+                        &folder_rebuild_active,
                     );
                     group_header.set_visible(false);
                     group_title.set_text("");
@@ -2875,6 +2894,7 @@ fn rebuild_folder_rows_for(
     folder_selection: &gtk::NoSelection,
     folder_root: &gtk::ListView,
     mapped_folder_tiles: &Rc<RefCell<Vec<SquareTile>>>,
+    folder_rebuild_active: &Rc<Cell<bool>>,
 ) {
     let trace = std::env::var_os("PICASA_TRACE").is_some();
     let started = trace.then(Instant::now);
@@ -2971,6 +2991,9 @@ fn rebuild_folder_rows_for(
     let update_started = trace.then(Instant::now);
     let removed = (old_len - prefix - suffix) as u32;
     let inserted = &new_rows[prefix..new_len - suffix];
+    // Suppress eager bind decodes while the model is swapped: GTK binds its
+    // whole offscreen pool here and would otherwise decode ~1400 cached JPEGs.
+    folder_rebuild_active.set(true);
     // The old "attached splice is slower" measurement (6207 ms,
     // scroll-baseline4.log) predates the O(n) selection fix. With per-row binds
     // now ~1 ms, splicing while attached lets the ListView reuse its realized
@@ -2997,12 +3020,15 @@ fn rebuild_folder_rows_for(
             started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
         );
     }
-    // The bind path no longer decodes thumbnails for unallocated pool tiles, so
-    // load the tiles GTK actually allocates for the new model on the next idle.
+    // The bind path skipped decodes while the model swapped, so load the tiles
+    // GTK actually allocates for the new model on the next idle, then re-enable
+    // eager loading.
     let root = folder_root.clone();
     let mapped = mapped_folder_tiles.clone();
+    let rebuild_active = folder_rebuild_active.clone();
     glib::idle_add_local_once(move || {
         refresh_folder_viewport_tiles_for(&root, &mapped);
+        rebuild_active.set(false);
     });
 }
 
@@ -3273,9 +3299,7 @@ fn refresh_folder_viewport_tiles_for(
 }
 
 fn tile_near_folder_viewport(tile: &SquareTile, root: &gtk::ListView) -> bool {
-    // Unallocated pool tiles report height 0 and bounds at the origin; treating
-    // them as near loaded/decoded thumbnails for hundreds of offscreen rows.
-    if !tile.is_mapped() || tile.height() <= 0 || root.height() <= 0 {
+    if !tile.is_mapped() || root.height() <= 0 {
         return false;
     }
     let Some(bounds) = tile.compute_bounds(root) else {
