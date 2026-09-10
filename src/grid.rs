@@ -2858,17 +2858,18 @@ fn rebuild_folder_rows_for(
         suffix += 1;
     }
 
-    if trace && prefix == 0 && old_len > 0 && new_len > 0 {
-        // First-row field breakdown: pinpoints why the stream is considered
-        // changed when old_rows == new_rows (photos, label, folder, count...).
+    if trace && prefix < old_len && prefix < new_len {
+        // First differing row: pinpoints why the stream is considered changed
+        // when old_rows == new_rows (photos, label, folder, count...).
         if let Some(old_row) = folder_store
-            .item(0)
+            .item(prefix as u32)
             .and_downcast::<FolderRowObject>()
         {
             let old_data = old_row.data();
-            let new_data = new_rows[0].data();
+            let new_data = new_rows[prefix].data();
             eprintln!(
-                "UI PERF folder_store_first_row old_kind={:?} new_kind={:?} old_folder_id={} new_folder_id={} old_label={:?} new_label={:?} old_count={} new_count={} old_photos={} new_photos={}",
+                "UI PERF folder_store_first_row index={} old_kind={:?} new_kind={:?} old_folder_id={} new_folder_id={} old_label={:?} new_label={:?} old_count={} new_count={} old_photos={} new_photos={}",
+                prefix,
                 old_data.kind,
                 new_data.kind,
                 old_data.folder_id,
