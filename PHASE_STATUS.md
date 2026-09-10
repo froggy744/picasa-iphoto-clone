@@ -24,6 +24,21 @@ rebuild of all 66k `PhotoObject`s, then the folder-store reorder.
   item manager is not using the setup height. Next step needs a bounds trace
   inside `tile_near_folder_viewport`.
 
+### scroll-baseline7 result — fixed
+
+| metric | bl6 | bl7 |
+| --- | --- | --- |
+| tree-mode change frame | **2565 ms** | **746 ms** (store reorder 594 ms, no DB/rebuild) |
+| `sidebar_ms` peaks | 42–77 ms ×7 | **0** (433 samples) |
+| `folder_virtual_bind_slow` | 4 | **0** |
+| worst `worst_frame_ms` | 3223 | **870** (initial build) |
+| frames > 1000 ms | 1 | **0** |
+| `mapped` over-realization | 1424 ×13 | 1373 ×1 (transient) |
+
+Frame distribution (99 windows): **71 ≤ 50 ms, 10 ≤ 100 ms, 15 ≤ 200 ms,
+1 ≤ 500 ms, 2 ≤ 1000 ms**. No frame over 1 s.
+
+
 ## Session 2 — scroll-baseline4 (UI froze)
 
 `scroll-baseline4.log` (66 008 photos / 8976 folder rows) showed the UI
