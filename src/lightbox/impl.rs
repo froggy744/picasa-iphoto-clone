@@ -55,17 +55,26 @@ impl Lightbox {
         // still close the lightbox while a genuine drag pans the native image.
         let drag_start_h = Rc::new(Cell::new(0.0));
         let drag_start_v = Rc::new(Cell::new(0.0));
+        // True for the duration of a pan so drag_update ignores stale events
+        // after the gesture was denied.
+        let pan_active = Rc::new(Cell::new(false));
         let pan_drag = gtk::GestureDrag::new();
         pan_drag.set_button(1);
         pan_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
         pan_drag.set_exclusive(true);
 
-        let one_to_one_for_drag_begin = one_to_one_active.clone();
+        let pan_active_for_drag_begin = pan_active.clone();
         let viewport_for_drag_begin = picture_viewport.clone();
         let drag_start_h_begin = drag_start_h.clone();
         let drag_start_v_begin = drag_start_v.clone();
         pan_drag.connect_drag_begin(move |gesture, x, y| {
-            if !one_to_one_for_drag_begin.get() {
+            // Pan whenever the image overflows the viewport: zoomed in via
+            // Ctrl+wheel as well as 1:1, not 1:1 only.
+            let hadj = viewport_for_drag_begin.hadjustment();
+            let vadj = viewport_for_drag_begin.vadjustment();
+            let scrollable = hadj.upper() - hadj.page_size() > 1.0
+                || vadj.upper() - vadj.page_size() > 1.0;
+            if !scrollable {
                 gesture.set_state(gtk::EventSequenceState::Denied);
                 return;
             }
@@ -82,8 +91,7 @@ impl Lightbox {
                 return;
             }
 
-            let hadj = viewport_for_drag_begin.hadjustment();
-            let vadj = viewport_for_drag_begin.vadjustment();
+            pan_active_for_drag_begin.set(true);
             drag_start_h_begin.set(hadj.value());
             drag_start_v_begin.set(vadj.value());
             viewport_for_drag_begin.set_cursor_from_name(Some("grabbing"));
@@ -103,12 +111,12 @@ impl Lightbox {
             }
         });
 
-        let one_to_one_for_drag_update = one_to_one_active.clone();
+        let pan_active_for_drag_update = pan_active.clone();
         let viewport_for_drag_update = picture_viewport.clone();
         let drag_start_h_update = drag_start_h.clone();
         let drag_start_v_update = drag_start_v.clone();
         pan_drag.connect_drag_update(move |_, offset_x, offset_y| {
-            if !one_to_one_for_drag_update.get() {
+            if !pan_active_for_drag_update.get() {
                 return;
             }
 
@@ -130,14 +138,11 @@ impl Lightbox {
             }
         });
 
-        let one_to_one_for_drag_end = one_to_one_active.clone();
+        let pan_active_for_drag_end = pan_active.clone();
         let viewport_for_drag_end = picture_viewport.clone();
         pan_drag.connect_drag_end(move |_, _, _| {
-            viewport_for_drag_end.set_cursor_from_name(if one_to_one_for_drag_end.get() {
-                Some("grab")
-            } else {
-                None
-            });
+            pan_active_for_drag_end.set(false);
+            viewport_for_drag_end.set_cursor_from_name(None);
         });
         let photos = Rc::new(RefCell::new(Vec::<PhotoObject>::new()));
         let index = Rc::new(Cell::new(0usize));

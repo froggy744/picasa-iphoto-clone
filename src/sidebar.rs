@@ -882,30 +882,28 @@ fn scroll_folder_row_into_view(scrolled: &gtk::ScrolledWindow, row: &gtk::ListBo
     let Some(folder_scroll) = stored_widget::<gtk::ScrolledWindow>(scrolled, FOLDER_SCROLL_KEY) else {
         return;
     };
-    let Some(list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) else {
-        return;
-    };
     let row = row.clone();
     glib::idle_add_local_once(move || {
-        let Some(bounds) = row.compute_bounds(&list) else {
+        // Bounds relative to the scroller (the folder list now sits below the
+        // album section in the shared scroller, so allocation y is not enough).
+        let Some(bounds) = row.compute_bounds(&folder_scroll) else {
             return;
         };
         let adjustment = folder_scroll.vadjustment();
-        let visible_top = adjustment.value();
-        let visible_bottom = visible_top + adjustment.page_size();
+        let page = adjustment.page_size();
         let row_top = bounds.y() as f64;
         let row_bottom = row_top + bounds.height() as f64;
 
-        let target = if row_top < visible_top {
-            Some(row_top)
-        } else if row_bottom > visible_bottom {
-            Some(row_bottom - adjustment.page_size())
+        let target = if row_top < 0.0 {
+            Some(adjustment.value() + row_top)
+        } else if row_bottom > page {
+            Some(adjustment.value() + row_bottom - page)
         } else {
             None
         };
 
         if let Some(target) = target {
-            let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+            let upper = (adjustment.upper() - page).max(adjustment.lower());
             adjustment.set_value(target.clamp(adjustment.lower(), upper));
         }
     });
@@ -1092,12 +1090,16 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
                     stored_widget::<gtk::ScrolledWindow>(scrolled, FOLDER_SCROLL_KEY)
                 {
                     let adjustment = folder_scroll.vadjustment();
-                    let allocation = row.allocation();
-                    let top = f64::from(allocation.y());
+                    // Row position in the scrolled content: the folder list now
+                    // sits below the album section in the shared scroller, so
+                    // its own allocation y is not the scroll offset.
+                    let top = row
+                        .compute_bounds(&folder_scroll)
+                        .map(|bounds| adjustment.value() + f64::from(bounds.y()))
+                        .unwrap_or_else(|| f64::from(row.allocation().y()));
                     // Keep the selected folder at the top of the folder pane
                     // so repeated navigation has a consistent destination.
-                    let value = top;
-                    adjustment.set_value(value.clamp(
+                    adjustment.set_value(top.clamp(
                         adjustment.lower(),
                         (adjustment.upper() - adjustment.page_size()).max(adjustment.lower()),
                     ));
