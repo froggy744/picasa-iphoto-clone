@@ -1506,6 +1506,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     });
 
     let lightbox_for_one_to_one = lightbox.clone();
+    {
+        // Keep the toolbar 1:1 toggle in sync when the lightbox changes mode
+        // itself (e.g. Ctrl+wheel leaves 1:1 for a manual zoom).
+        let one_to_one_button = info.one_to_one.clone();
+        lightbox.set_one_to_one_sync_handler(move |enabled| {
+            one_to_one_button.set_active(enabled);
+        });
+    }
     let edit_editor_for_one_to_one = edit_editor.clone();
     let main_stack_for_one_to_one = main_stack.clone();
     let space_toggle_in_progress_for_toggle = space_toggle_in_progress.clone();

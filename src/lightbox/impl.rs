@@ -142,7 +142,12 @@ impl Lightbox {
         let viewport_for_drag_end = picture_viewport.clone();
         pan_drag.connect_drag_end(move |_, _, _| {
             pan_active_for_drag_end.set(false);
-            viewport_for_drag_end.set_cursor_from_name(None);
+            let hadj = viewport_for_drag_end.hadjustment();
+            let vadj = viewport_for_drag_end.vadjustment();
+            let scrollable = hadj.upper() - hadj.page_size() > 1.0
+                || vadj.upper() - vadj.page_size() > 1.0;
+            viewport_for_drag_end
+                .set_cursor_from_name(if scrollable { Some("grab") } else { None });
         });
         let photos = Rc::new(RefCell::new(Vec::<PhotoObject>::new()));
         let index = Rc::new(Cell::new(0usize));
@@ -153,6 +158,7 @@ impl Lightbox {
         let load_generation = Rc::new(Cell::new(0u64));
         let decode_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>> = Rc::new(RefCell::new(None));
         let photo_changed: PhotoChangedHandler = Rc::new(RefCell::new(None));
+        let one_to_one_sync: OneToOneSyncHandler = Rc::new(RefCell::new(None));
         let context_menu: ContextMenuHandler = Rc::new(RefCell::new(None));
         let collection_navigation: CollectionNavigationHandler = Rc::new(RefCell::new(None));
 
@@ -176,6 +182,28 @@ impl Lightbox {
         // ScrolledWindow adjustments pan the image.
         picture.add_controller(double_click);
         picture_viewport.add_controller(pan_drag);
+
+        // Keep the pan cursor in sync with viewport overflow: zoomed in via
+        // Ctrl+wheel and 1:1 both show the grab cursor, fit shows none.
+        {
+            let viewport_for_cursor = picture_viewport.clone();
+            let update_cursor: Rc<dyn Fn()> = Rc::new(move || {
+                let hadj = viewport_for_cursor.hadjustment();
+                let vadj = viewport_for_cursor.vadjustment();
+                let scrollable = hadj.upper() - hadj.page_size() > 1.0
+                    || vadj.upper() - vadj.page_size() > 1.0;
+                viewport_for_cursor
+                    .set_cursor_from_name(if scrollable { Some("grab") } else { None });
+            });
+            let update_for_v = update_cursor.clone();
+            picture_viewport
+                .vadjustment()
+                .connect_changed(move |_| update_for_v());
+            let update_for_h = update_cursor.clone();
+            picture_viewport
+                .hadjustment()
+                .connect_changed(move |_| update_for_h());
+        }
 
         // Some close paths intentionally hide the overlay directly (outside
         // click and double-click). Reset the internal presentation state for
@@ -344,6 +372,7 @@ impl Lightbox {
         let native_texture_for_scroll = native_texture.clone();
         let display_cache_for_scroll = display_texture_cache.clone();
         let one_to_one_for_scroll = one_to_one_active.clone();
+        let one_to_one_sync_for_scroll = one_to_one_sync.clone();
 
         scroll.connect_scroll(move |controller, _, dy| {
             if std::env::var_os("PICASA_TRACE").is_some() {
@@ -361,6 +390,16 @@ impl Lightbox {
                 .current_event_state()
                 .contains(gtk::gdk::ModifierType::CONTROL_MASK)
             {
+                // Ctrl+wheel is a manual zoom, so leave 1:1 and sync the
+                // toolbar toggle; otherwise the toggle and pan state desync.
+                if one_to_one_for_scroll.get() {
+                    one_to_one_for_scroll.set(false);
+                    native_texture_for_scroll.borrow_mut().take();
+                    picture_for_scroll.set_can_shrink(true);
+                    if let Some(handler) = one_to_one_sync_for_scroll.borrow().as_ref() {
+                        handler(false);
+                    }
+                }
                 let current = if zoom_for_scroll.get() <= 0.0 {
                     1.0
                 } else {
@@ -586,6 +625,7 @@ impl Lightbox {
             load_generation,
             decode_cancel,
             photo_changed,
+            one_to_one_sync,
             context_menu,
             collection_navigation,
         }
@@ -593,6 +633,10 @@ impl Lightbox {
 
     pub fn set_photo_changed_handler(&self, handler: impl Fn(PhotoObject) + 'static) {
         self.photo_changed.replace(Some(Box::new(handler)));
+    }
+
+    pub fn set_one_to_one_sync_handler(&self, handler: impl Fn(bool) + 'static) {
+        self.one_to_one_sync.replace(Some(Box::new(handler)));
     }
 
     pub fn set_context_menu_handler(
@@ -617,6 +661,9 @@ impl Lightbox {
         }
 
         self.one_to_one_active.set(enabled);
+        if let Some(handler) = self.one_to_one_sync.borrow().as_ref() {
+            handler(enabled);
+        }
         self.picture.set_can_shrink(!enabled);
         self.picture_viewport
             .set_cursor_from_name(if enabled { Some("grab") } else { None });

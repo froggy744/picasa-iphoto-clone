@@ -75,6 +75,7 @@ const VIEWER_PADDING: i32 = 0;
 static VIEWER_DECODE_GATE: OnceLock<DecodeSemaphore> = OnceLock::new();
 
 type PhotoChangedHandler = Rc<RefCell<Option<Box<dyn Fn(PhotoObject)>>>>;
+type OneToOneSyncHandler = Rc<RefCell<Option<Box<dyn Fn(bool)>>>>;
 type ContextMenuHandler = Rc<RefCell<Option<Box<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>>>>;
 type CollectionNavigationHandler = Rc<RefCell<Option<Box<dyn Fn(i32)>>>>;
 
@@ -162,6 +163,9 @@ pub struct Lightbox {
     load_generation: Rc<Cell<u64>>,
     decode_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
     photo_changed: PhotoChangedHandler,
+    // Keeps the toolbar 1:1 toggle in sync when the lightbox changes the mode
+    // itself (for example Ctrl+wheel leaves 1:1 for a manual zoom).
+    one_to_one_sync: OneToOneSyncHandler,
     context_menu: ContextMenuHandler,
     collection_navigation: CollectionNavigationHandler,
 }

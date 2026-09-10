@@ -1483,25 +1483,22 @@ fn append_folder_row(
     }
     content.append(&disclosure_slot);
 
-    // Watched folders (set in Settings) show an eye marker to the left of the
-    // folder icon. A fixed-width slot keeps folder icons aligned either way.
-    let watched_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    watched_slot.set_size_request(16, 16);
-    watched_slot.set_width_request(16);
+    // Watched folders (set in Settings) overlay an eye on the folder icon so
+    // the row alignment is unchanged.
+    let icon_overlay = gtk::Overlay::new();
+    let icon = gtk::Image::from_icon_name("folder-symbolic");
+    icon.set_pixel_size(18);
+    icon_overlay.set_child(Some(&icon));
     if folder.watched {
         let watched = gtk::Image::from_icon_name("view-reveal-symbolic");
-        watched.set_pixel_size(14);
+        watched.set_pixel_size(12);
         watched.set_halign(gtk::Align::Center);
         watched.set_valign(gtk::Align::Center);
         watched.add_css_class("sidebar-watched-folder");
         watched.set_tooltip_text(Some("Watched for changes"));
-        watched_slot.append(&watched);
+        icon_overlay.add_overlay(&watched);
     }
-    content.append(&watched_slot);
-
-    let icon = gtk::Image::from_icon_name("folder-symbolic");
-    icon.set_pixel_size(18);
-    content.append(&icon);
+    content.append(&icon_overlay);
 
     let labels = gtk::Box::new(gtk::Orientation::Vertical, 1);
     labels.set_hexpand(true);
