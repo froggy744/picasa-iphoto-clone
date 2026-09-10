@@ -1,0 +1,1382 @@
+   Compiling pic-rs v1.0.0 (/home/peet/opencode-pic)
+warning: unused import: `CropRect`
+ --> src/edit/mod.rs:6:17
+  |
+6 | pub use model::{CropRect, EditRecipe};
+  |                 ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of deprecated struct `gtk4::MessageDialog`: Since 4.10
+  --> src/main.rs:48:35
+   |
+48 |                 let dialog = gtk::MessageDialog::builder()
+   |                                   ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+   --> src/collage/editor.rs:875:23
+    |
+875 |     let dialog = gtk::FileChooserNative::new(
+    |                       ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+   --> src/edit/editor.rs:749:31
+    |
+749 |             let dialog = gtk::FileChooserNative::new(
+    |                               ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/window/build.rs:1565:27
+     |
+1565 |         let dialog = gtk::FileChooserNative::new(
+     |                           ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/window/build.rs:3329:27
+     |
+3329 |         let dialog = gtk::FileChooserNative::new(
+     |                           ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::MessageDialog`: Since 4.10
+   --> src/window/library.rs:421:23
+    |
+421 |     let dialog = gtk::MessageDialog::builder()
+    |                       ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocated_width`: Since 4.12
+   --> src/albums_view.rs:329:21
+    |
+329 |             if card.allocated_width() <= 0 || card.allocated_height() <= 0 {
+    |                     ^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocated_height`: Since 4.12
+   --> src/albums_view.rs:329:52
+    |
+329 |             if card.allocated_width() <= 0 || card.allocated_height() <= 0 {
+    |                                                    ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocated_width`: Since 4.12
+   --> src/albums_view.rs:335:22
+    |
+335 |                 card.allocated_width(),
+    |                      ^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocated_height`: Since 4.12
+   --> src/albums_view.rs:336:22
+    |
+336 |                 card.allocated_height(),
+    |                      ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocated_width`: Since 4.12
+   --> src/albums_view.rs:337:33
+    |
+337 |                 cover_for_trace.allocated_width(),
+    |                                 ^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocated_height`: Since 4.12
+   --> src/albums_view.rs:338:33
+    |
+338 |                 cover_for_trace.allocated_height(),
+    |                                 ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocated_width`: Since 4.12
+   --> src/albums_view.rs:339:35
+    |
+339 |                 picture_for_trace.allocated_width(),
+    |                                   ^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocated_height`: Since 4.12
+   --> src/albums_view.rs:340:35
+    |
+340 |                 picture_for_trace.allocated_height()
+    |                                   ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/collage/editor.rs:80:9
+   |
+80 |     css.load_from_data(&css_data);
+   |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+   --> src/collage/editor.rs:875:42
+    |
+875 |     let dialog = gtk::FileChooserNative::new(
+    |                                          ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+   --> src/collage/editor.rs:882:12
+    |
+882 |     dialog.set_current_name("collage.jpg");
+    |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+   --> src/collage/editor.rs:888:33
+    |
+888 |         let Some(path) = dialog.file().and_then(|file| file.path()) else {
+    |                                 ^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+   --> src/edit/editor.rs:749:50
+    |
+749 |             let dialog = gtk::FileChooserNative::new(
+    |                                                  ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+   --> src/edit/editor.rs:761:20
+    |
+761 |             dialog.set_current_name(&filename);
+    |                    ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+   --> src/edit/editor.rs:770:55
+    |
+770 |                     if let Some(destination) = dialog.file().and_then(|file| file.path()) {
+    |                                                       ^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
+    --> src/sidebar.rs:1007:42
+     |
+1007 |                     let allocation = row.allocation();
+     |                                          ^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/window/build.rs:1565:46
+     |
+1565 |         let dialog = gtk::FileChooserNative::new(
+     |                                              ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+    --> src/window/build.rs:1578:16
+     |
+1578 |         dialog.set_current_name(&filename);
+     |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/window/build.rs:1582:44
+     |
+1582 |                 if let Some(file) = dialog.file() {
+     |                                            ^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+    --> src/window/build.rs:2664:29
+     |
+2664 |     standard_theme_provider.load_from_data(STANDARD_GTK4_CSS);
+     |                             ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+    --> src/window/build.rs:3071:14
+     |
+3071 |     provider.load_from_data("\
+     |              ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/window/build.rs:3329:46
+     |
+3329 |         let dialog = gtk::FileChooserNative::new(
+     |                                              ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/window/build.rs:3339:44
+     |
+3339 |                 if let Some(file) = dialog.file() {
+     |                                            ^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/window/photo_actions.rs:78:9
+   |
+78 |     css.load_from_data(
+   |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::MessageDialog::builder`: Since 4.10
+   --> src/window/library.rs:421:38
+    |
+421 |     let dialog = gtk::MessageDialog::builder()
+    |                                      ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::transient_for`: Since 4.10
+   --> src/window/library.rs:422:10
+    |
+422 |         .transient_for(parent)
+    |          ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::modal`: Since 4.10
+   --> src/window/library.rs:423:10
+    |
+423 |         .modal(true)
+    |          ^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::message_type`: Since 4.10
+   --> src/window/library.rs:424:10
+    |
+424 |         .message_type(gtk::MessageType::Warning)
+    |          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::buttons`: Since 4.10
+   --> src/window/library.rs:425:10
+    |
+425 |         .buttons(gtk::ButtonsType::Cancel)
+    |          ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::text`: Since 4.10
+   --> src/window/library.rs:426:10
+    |
+426 |         .text(title)
+    |          ^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::secondary_text`: Since 4.10
+   --> src/window/library.rs:427:10
+    |
+427 |         .secondary_text(message)
+    |          ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::build`: Since 4.10
+   --> src/window/library.rs:428:10
+    |
+428 |         .build();
+    |          ^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/window/library.rs:429:12
+    |
+429 |     dialog.add_button("Continue", gtk::ResponseType::Accept);
+    |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+   --> src/window/library.rs:431:12
+    |
+431 |     dialog.connect_response(move |dialog, response| {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::MessageDialog::builder`: Since 4.10
+  --> src/main.rs:48:50
+   |
+48 |                 let dialog = gtk::MessageDialog::builder()
+   |                                                  ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::message_type`: Since 4.10
+  --> src/main.rs:49:22
+   |
+49 |                     .message_type(gtk::MessageType::Error)
+   |                      ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::buttons`: Since 4.10
+  --> src/main.rs:50:22
+   |
+50 |                     .buttons(gtk::ButtonsType::Close)
+   |                      ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::text`: Since 4.10
+  --> src/main.rs:51:22
+   |
+51 |                     .text("Could not open the photo library")
+   |                      ^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::secondary_text`: Since 4.10
+  --> src/main.rs:52:22
+   |
+52 |                     .secondary_text(error.to_string())
+   |                      ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::build`: Since 4.10
+  --> src/main.rs:53:22
+   |
+53 |                     .build();
+   |                      ^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+  --> src/main.rs:54:24
+   |
+54 |                 dialog.connect_response(|dialog, _| dialog.close());
+   |                        ^^^^^^^^^^^^^^^^
+
+warning: unused variable: `reparented`
+   --> src/db/photos.rs:147:9
+    |
+147 |     let reparented = if imported_root {
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reparented`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `existing`
+   --> src/db/photos.rs:181:9
+    |
+181 |     let existing: Option<(i64, Option<i64>, bool)> = connection
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_existing`
+
+warning: unused variable: `group_day`
+    --> src/window/build.rs:2866:13
+     |
+2866 |         let group_day = group_day.clone();
+     |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_group_day`
+
+warning: unused variable: `group_month`
+    --> src/window/build.rs:2867:13
+     |
+2867 |         let group_month = group_month.clone();
+     |             ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_group_month`
+
+warning: method `add_photos` is never used
+  --> src/collage/editor.rs:57:12
+   |
+47 | impl CollageEditor {
+   | ------------------ method in this implementation
+...
+57 |     pub fn add_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
+   |            ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `add_photos` is never used
+   --> src/collage/model.rs:157:12
+    |
+ 95 | impl CollageProject {
+    | ------------------- method in this implementation
+...
+157 |     pub fn add_photos(&mut self, photos: Vec<PhotoObject>) {
+    |            ^^^^^^^^^^
+
+warning: field `photo_id` is never read
+  --> src/edit/editor.rs:14:5
+   |
+12 | pub struct EditEditor {
+   |            ---------- field in this struct
+13 |     pub root: gtk::Box,
+14 |     photo_id: i64,
+   |     ^^^^^^^^
+
+warning: method `photo_id` is never used
+  --> src/edit/editor.rs:22:12
+   |
+21 | impl EditEditor {
+   | --------------- method in this implementation
+22 |     pub fn photo_id(&self) -> i64 {
+   |            ^^^^^^^^
+
+warning: function `apply_recipe_without_crop` is never used
+  --> src/edit/render.rs:25:8
+   |
+25 | pub fn apply_recipe_without_crop(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `refresh_availability`, `selected_position`, and `is_at_vertical_boundary` are never used
+    --> src/grid.rs:1967:12
+     |
+ 841 | impl Gallery {
+     | ------------ methods in this implementation
+...
+1967 |     pub fn refresh_availability(&self) {
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+2217 |     pub fn selected_position(&self) -> Option<usize> {
+     |            ^^^^^^^^^^^^^^^^^
+...
+2317 |     pub fn is_at_vertical_boundary(&self, direction: i32) -> bool {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `grid_zoom_menu` is never read
+  --> src/infobar.rs:24:9
+   |
+10 | pub struct InfoBar {
+   |            ------- field in this struct
+...
+24 |     pub grid_zoom_menu: gtk::MenuButton,
+   |         ^^^^^^^^^^^^^^
+
+warning: function `rotated_thumbnail` is never used
+  --> src/photo_texture.rs:47:8
+   |
+47 | pub fn rotated_thumbnail(path: &str, rotation: i32) -> Option<gtk::gdk::Paintable> {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: field `id` is never read
+  --> src/scanner.rs:36:9
+   |
+34 |     PhotoIndexed {
+   |     ------------ field in this variant
+35 |         path: PathBuf,
+36 |         id: i64,
+   |         ^^
+   |
+   = note: `ScanEvent` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `scan` is never used
+  --> src/scanner.rs:88:8
+   |
+88 | pub fn scan(root: &str, events: Option<&Sender<ScanEvent>>) -> Result<usize> {
+   |        ^^^^
+
+warning: function `wait_for_priority_requests` is never used
+   --> src/thumbnail.rs:217:8
+    |
+217 | pub fn wait_for_priority_requests() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_many` is never used
+ --> src/thumbnail/batch.rs:1:8
+  |
+1 | pub fn create_many(
+  |        ^^^^^^^^^^^
+
+warning: `pic-rs` (bin "pic-rs") generated 64 warnings (run `cargo fix --bin "pic-rs" -p pic-rs` to apply 5 suggestions)
+    Finished `release` profile [optimized] target(s) in 1m 50s
+     Running `target/release/pic-rs`
+STARTUP cold_start_ms=17 photos=4515 displayed=20 folders=282 albums=5 scan=disabled
+PROFILE refresh_start photos=0
+UI PERF gallery_replace photos=0 unchanged=true ms=0
+ALBUM VIEW TRACE albums=5 cover_size=100x67
+ALBUM TRACE id=1 name=Elves photos=34 cover=Some("/home/peet/.cache/picasa-rs/thumbs/7a52c7f3a23f24f33d0e17a936e4166d845015f91aec2f067ccab4b502db455f.jpg")
+ALBUM TRACE id=2 name=Heritage 2024 photos=6 cover=Some("/home/peet/.cache/picasa-rs/thumbs/450ff53aed334c00745e08233c5935c34689653cae706212afd839e282d152df.jpg")
+ALBUM TRACE id=5 name=jamjar photos=1 cover=Some("/home/peet/.cache/picasa-rs/thumbs/bb2e2c9438c5598e335d3ed1138e40877f04c8f0f9abc89c85061d9522318034.jpg")
+ALBUM TRACE id=3 name=Meerkat photos=29 cover=Some("/home/peet/.cache/picasa-rs/thumbs/00896b008b446eddc2ddf162962744c11689102e57963aaacedddaa3bfeb452b.jpg")
+ALBUM TRACE id=4 name=Welders photos=2 cover=Some("/home/peet/.cache/picasa-rs/thumbs/44898ce7ef80d86ac893b6d9fb7f42da58600f754688161b89d392a89aa26687.jpg")
+THUMB RECOVERY ready=0 offline=0
+PROFILE refresh_start photos=20
+PROFILE refresh_first_batch photos=20 elapsed_ms=0
+UI PERF gallery_replace photos=20 unchanged=false ms=14
+PROFILE refresh_finished photos=20 elapsed_ms=14
+UI PERF folder_selection_styles tiles=0 items=20 spfid_calls=0 ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=0 tile=100x67 old_columns=5 new_columns=8 photos=20 folder_ranges=2 folder_rows=0
+UI PERF update_width_end mode=Month width=1124 columns=8 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+SEARCH TRACE sidebar shown=false collapsed=true split_width=1084 header_width=881 area_width=331 entry_width=311 text_chars=0
+UI PERF update_width_begin mode=Month width=879 old_layout_width=1124 tile=100x67 old_columns=8 new_columns=6 photos=20 folder_ranges=2 folder_rows=0
+UI PERF update_width_end mode=Month width=879 columns=6 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+
+(pic-rs:343211): Adwaita-WARNING **: 15:53:06.327: AdwToastOverlay 0x55f82dcb1450 exceeds AdwApplicationWindow height: requested 649 px, 510 px available
+UI PERF update_width_begin mode=Month width=935 old_layout_width=879 tile=100x67 old_columns=6 new_columns=6 photos=20 folder_ranges=2 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=935 columns=6 reason=columns_unchanged
+
+(pic-rs:343211): Adwaita-WARNING **: 15:53:06.348: AdwToastOverlay 0x55f82dcb1450 exceeds AdwApplicationWindow height: requested 649 px, 510 px available
+THUMB RECOVERY deferred_offline=0
+===== SCAN COMPLETE: imported=0 failed=0 | progressive gallery updates complete =====
+UI PERF event_tick events=2 elapsed_ms=0
+PROFILE scroll fps=59 worst_frame_ms=75 thumbnail_hits=20 thumbnail_misses=0
+SEARCH TRACE focus event=leave widget=Some("GtkText") in_entry=true cursor=0 selection=None chars=0 width=367 popup_visible=false popup_mapped=false popup_modal=false
+SEARCH TRACE sidebar shown=true collapsed=false split_width=1440 header_width=1442 area_width=892 entry_width=872 text_chars=0
+UI PERF update_width_begin mode=Month width=1440 old_layout_width=935 tile=100x67 old_columns=6 new_columns=8 photos=20 folder_ranges=2 folder_rows=0
+UI PERF update_width_end mode=Month width=1440 columns=8 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1440 tile=100x67 old_columns=8 new_columns=8 photos=20 folder_ranges=2 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=8 reason=columns_unchanged
+PROFILE scroll fps=64 worst_frame_ms=18 thumbnail_hits=0 thumbnail_misses=0
+PROFILE scroll fps=65 worst_frame_ms=17 thumbnail_hits=0 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=0 items=20 spfid_calls=0 ms=0
+UI TRACE lightbox_open photos=20 index=17 root_targetable=true viewport_targetable=true picture_targetable=true
+UI PERF lightbox_preview_ms=0 path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/VID_3060.jpg
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=1 path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/VID_3060.jpg
+UI PERF fit_ms=0 zoom=0 size=527x794
+UI PERF fit_ms=0 zoom=0 size=527x794
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=7 rotation=0 output=527x794
+VIEW PERF lightbox_worker_total_ms=27 output=527x794
+UI PERF fit_ms=0 zoom=0 size=527x794
+UI PERF lightbox_texture_creation_ms=0 size=527x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=27 size=527x794
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=17
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/VID_3062.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x746
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=2 path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/VID_3062.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=15 rotation=0 output=1124x746
+VIEW PERF lightbox_worker_total_ms=59 output=1124x746
+UI PERF lightbox_texture_creation_ms=0 size=1124x746
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=59 size=1124x746
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=16
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/VID_3065.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=527x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=3 path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/VID_3065.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=7 rotation=0 output=527x794
+VIEW PERF lightbox_worker_total_ms=24 output=527x794
+UI PERF lightbox_texture_creation_ms=0 size=527x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=25 size=527x794
+PROFILE scroll fps=70 worst_frame_ms=18 thumbnail_hits=0 thumbnail_misses=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=15
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-All/Work - 2013/hyman_bee 2013-2.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=593x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=4 path=/run/media/peet/Data-500GB/Work-All/Work - 2013/hyman_bee 2013-2.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=11 rotation=0 output=593x794
+VIEW PERF lightbox_worker_total_ms=19 output=593x794
+UI PERF lightbox_texture_creation_ms=0 size=593x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=19 size=593x794
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=14
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-All/Work - 2013/hyman_bee 2013.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=601x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=5 path=/run/media/peet/Data-500GB/Work-All/Work - 2013/hyman_bee 2013.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=8 rotation=0 output=601x794
+VIEW PERF lightbox_worker_total_ms=33 output=601x794
+UI PERF lightbox_texture_creation_ms=0 size=601x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=33 size=601x794
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=13
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-All/Work - 2013/Toilets/20130604_115111.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=6 path=/run/media/peet/Data-500GB/Work-All/Work - 2013/Toilets/20130604_115111.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=14 rotation=0 output=1059x794
+VIEW PERF lightbox_worker_total_ms=52 output=1059x794
+UI PERF lightbox_texture_creation_ms=0 size=1059x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=52 size=1059x794
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=12
+UI PERF lightbox_display_cache_hit path=/run/media/peet/Data-500GB/Work-All/Work - 2013/hyman_bee 2013.jpg target=1124x794
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=13
+UI PERF lightbox_display_cache_hit path=/run/media/peet/Data-500GB/Work-All/Work - 2013/hyman_bee 2013-2.jpg target=1124x794
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=14
+UI PERF lightbox_display_cache_hit path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/VID_3065.jpg target=1124x794
+PROFILE scroll fps=68 worst_frame_ms=32 thumbnail_hits=0 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=0 items=20 spfid_calls=0 ms=0
+UI PERF refresh_grid photos=50 ms=25
+PROFILE refresh_start photos=50
+PROFILE refresh_first_batch photos=50 elapsed_ms=1
+THUMB PRIORITY visible_missing thread=main id=1277 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9084.jpg cache=/home/peet/.cache/picasa-rs/thumbs/8f1d90dba07eda2041d22f6a7ea6e51e01ded088ea177b69fcdec2d44129149d.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9084.jpg cache=/home/peet/.cache/picasa-rs/thumbs/8f1d90dba07eda2041d22f6a7ea6e51e01ded088ea177b69fcdec2d44129149d.jpg
+THUMB PRIORITY visible_missing thread=main id=1276 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9083.jpg cache=/home/peet/.cache/picasa-rs/thumbs/a485458381a6813631fc074fc1676722cc3ba5bfe13a33ec26419e7dbae39fe5.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9083.jpg cache=/home/peet/.cache/picasa-rs/thumbs/a485458381a6813631fc074fc1676722cc3ba5bfe13a33ec26419e7dbae39fe5.jpg
+THUMB PRIORITY visible_missing thread=main id=1275 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9082.jpg cache=/home/peet/.cache/picasa-rs/thumbs/4d6e85fb2ca9c63e3d077dc042148437ebeaaf6439ed001ebe0ec99434f83198.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9082.jpg cache=/home/peet/.cache/picasa-rs/thumbs/4d6e85fb2ca9c63e3d077dc042148437ebeaaf6439ed001ebe0ec99434f83198.jpg
+UI PERF gallery_replace photos=50 unchanged=false ms=54
+PROFILE refresh_finished photos=50 elapsed_ms=54
+UI PERF folder_selection_styles tiles=0 items=50 spfid_calls=0 ms=0
+PROFILE scroll fps=64 worst_frame_ms=74 thumbnail_hits=47 thumbnail_misses=3
+UI TRACE lightbox_open photos=50 index=0 root_targetable=true viewport_targetable=true picture_targetable=true
+UI PERF lightbox_preview_ms=0 path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/VID_3041.jpg
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=11 path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/VID_3041.jpg
+UI PERF fit_ms=0 zoom=0 size=527x794
+UI PERF fit_ms=0 zoom=0 size=527x794
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=7 rotation=0 output=527x794
+VIEW PERF lightbox_worker_total_ms=28 output=527x794
+UI PERF fit_ms=0 zoom=0 size=527x794
+UI PERF lightbox_texture_creation_ms=0 size=527x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=28 size=527x794
+PROFILE scroll fps=71 worst_frame_ms=30 thumbnail_hits=0 thumbnail_misses=0
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=0
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/IONX0011.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x719
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=12 path=/run/media/peet/Data-500GB/Work-All/Work - 2017/jamjar/IONX0011.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=14 rotation=0 output=1124x719
+VIEW PERF lightbox_worker_total_ms=51 output=1124x719
+UI PERF lightbox_texture_creation_ms=0 size=1124x719
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=52 size=1124x719
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=1
+UI PERF lightbox_display_cache_miss path=/home/peet/Pictures/Screenshots/Screenshot From 2026-09-09 13-54-33.png target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x710
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=13 path=/home/peet/Pictures/Screenshots/Screenshot From 2026-09-09 13-54-33.png
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=13 rotation=0 output=1124x710
+VIEW PERF lightbox_worker_total_ms=32 output=1124x710
+UI PERF lightbox_texture_creation_ms=0 size=1124x710
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=33 size=1124x710
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=2
+UI PERF lightbox_display_cache_miss path=/home/peet/Pictures/Screenshots/Screenshot From 2026-09-09 13-54-10.png target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x710
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=14 path=/home/peet/Pictures/Screenshots/Screenshot From 2026-09-09 13-54-10.png
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=14 rotation=0 output=1124x710
+VIEW PERF lightbox_worker_total_ms=23 output=1124x710
+UI PERF lightbox_texture_creation_ms=0 size=1124x710
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=23 size=1124x710
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=3
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-nmv/Seesa pics/20250916_145959.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=596x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=15 path=/run/media/peet/Data-nmv/Seesa pics/20250916_145959.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=8 rotation=0 output=596x794
+VIEW PERF lightbox_worker_total_ms=45 output=596x794
+UI PERF lightbox_texture_creation_ms=0 size=596x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=45 size=596x794
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=4
+UI PERF lightbox_display_cache_miss path=/home/peet/Pictures/collage-t.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=1 source=thumbnail geometry=794x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=16 path=/home/peet/Pictures/collage-t.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=11 rotation=0 output=794x794
+VIEW PERF lightbox_worker_total_ms=45 output=794x794
+UI PERF lightbox_texture_creation_ms=0 size=794x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=45 size=794x794
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=5
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-KZN Farm Gates/5de4e7b9-f504-4b48-bc9c-566e8ad7a3e8.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=17 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-KZN Farm Gates/5de4e7b9-f504-4b48-bc9c-566e8ad7a3e8.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=6
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2025-Bitou Municipal/20250515_082206.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=18 path=/run/media/peet/Data-500GB/Work-FB/FB-2025-Bitou Municipal/20250515_082206.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=17 rotation=0 output=1059x794
+VIEW PERF lightbox_worker_total_ms=56 output=1059x794
+VIEW PERF user_orientation_ms=16 rotation=0 output=1059x794
+VIEW PERF lightbox_worker_total_ms=104 output=1059x794
+UI PERF lightbox_texture_creation_ms=0 size=1059x794
+UI PERF lightbox_main_thread_delivery_ms=2 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=2
+UI PERF lightbox_full_texture_visible_ms=107 size=1059x794
+PROFILE scroll fps=68 worst_frame_ms=25 thumbnail_hits=0 thumbnail_misses=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=7
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-KZN Farm Gates/5de4e7b9-f504-4b48-bc9c-566e8ad7a3e8.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=19 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-KZN Farm Gates/5de4e7b9-f504-4b48-bc9c-566e8ad7a3e8.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=6
+UI PERF lightbox_display_cache_hit path=/home/peet/Pictures/collage-t.jpg target=1124x794
+UI PERF folder_selection_styles tiles=0 items=50 spfid_calls=0 ms=0
+PROFILE scroll fps=62 worst_frame_ms=23 thumbnail_hits=0 thumbnail_misses=0
+UI PERF folder_zoom_begin mode=Month old_tile=100x67 new_tile=124x83 photos=50 folders=12 columns=8 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=124x83 old_columns=8 new_columns=6 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=6 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=6 folder_rows=0 layout_ms=0 total_ms=1
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=124x83 old_columns=6 new_columns=6 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=6 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=124x83 new_tile=148x99 photos=50 folders=12 columns=6 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=148x99 old_columns=6 new_columns=5 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=5 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=148x99 old_columns=5 new_columns=6 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1124 columns=6 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_begin mode=Month old_tile=148x99 new_tile=172x115 photos=50 folders=12 columns=6 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=172x115 old_columns=6 new_columns=5 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=5 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=172x115 old_columns=5 new_columns=5 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=5 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=172x115 new_tile=196x131 photos=50 folders=12 columns=5 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=196x131 old_columns=5 new_columns=4 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=4 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=196x131 old_columns=4 new_columns=4 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=196x131 new_tile=220x147 photos=50 folders=12 columns=4 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=220x147 old_columns=4 new_columns=4 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1084 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=220x147 old_columns=4 new_columns=4 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=220x147 new_tile=244x163 photos=50 folders=12 columns=4 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=244x163 old_columns=4 new_columns=3 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=3 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=3 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=244x163 old_columns=3 new_columns=3 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=244x163 new_tile=268x179 photos=50 folders=12 columns=3 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=268x179 old_columns=3 new_columns=3 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1084 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=3 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=268x179 old_columns=3 new_columns=3 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=3 reason=columns_unchanged
+PROFILE scroll fps=63 worst_frame_ms=18 thumbnail_hits=0 thumbnail_misses=0
+UI PERF folder_zoom_begin mode=Month old_tile=268x179 new_tile=244x163 photos=50 folders=12 columns=3 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=244x163 old_columns=3 new_columns=3 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1084 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=3 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=244x163 old_columns=3 new_columns=3 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=244x163 new_tile=220x147 photos=50 folders=12 columns=3 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=220x147 old_columns=3 new_columns=4 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=4 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=220x147 old_columns=4 new_columns=4 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=220x147 new_tile=196x131 photos=50 folders=12 columns=4 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=196x131 old_columns=4 new_columns=4 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1084 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=196x131 old_columns=4 new_columns=4 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=196x131 new_tile=172x115 photos=50 folders=12 columns=4 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=172x115 old_columns=4 new_columns=5 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=5 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=172x115 old_columns=5 new_columns=5 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=5 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=172x115 new_tile=148x99 photos=50 folders=12 columns=5 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=148x99 old_columns=5 new_columns=5 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1084 columns=5 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=148x99 old_columns=5 new_columns=6 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1124 columns=6 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_begin mode=Month old_tile=148x99 new_tile=124x83 photos=50 folders=12 columns=6 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=124x83 old_columns=6 new_columns=6 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1084 columns=6 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=6 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=124x83 old_columns=6 new_columns=6 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=6 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=124x83 new_tile=100x67 photos=50 folders=12 columns=6 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=50 folder=0 total=50 ms=0
+UI PERF folder_zoom_resize_tiles count=50 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=100x67 old_columns=6 new_columns=7 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=7 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=7 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=100x67 old_columns=7 new_columns=8 photos=50 folder_ranges=12 folder_rows=0
+UI PERF update_width_end mode=Month width=1124 columns=8 rebuild_ms=0 total_ms=0 folder_rows=0 strategy=grid_columns
+PROFILE scroll fps=63 worst_frame_ms=28 thumbnail_hits=0 thumbnail_misses=0
+UI PERF refresh_grid photos=4515 ms=25
+PROFILE refresh_start photos=4515
+UI PERF gallery_replace photos=4515 progressive=true ms=0
+PROFILE refresh_first_batch photos=500 elapsed_ms=248
+PROFILE refresh_finished photos=4515 elapsed_ms=346
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=50 worst_frame_ms=265 thumbnail_hits=257 thumbnail_misses=0
+PROFILE scroll fps=67 worst_frame_ms=20 thumbnail_hits=42 thumbnail_misses=0
+UI PERF folder_zoom_begin mode=Month old_tile=100x67 new_tile=124x83 photos=4515 folders=409 columns=8 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=257 folder=0 total=257 ms=0
+UI PERF folder_zoom_resize_tiles count=257 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=124x83 old_columns=8 new_columns=6 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=6 rebuild_ms=0 total_ms=4 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=6 folder_rows=0 layout_ms=4 total_ms=5
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=124x83 old_columns=6 new_columns=6 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=6 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=124x83 new_tile=148x99 photos=4515 folders=409 columns=6 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=193 folder=0 total=193 ms=0
+UI PERF folder_zoom_resize_tiles count=193 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=148x99 old_columns=6 new_columns=5 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=5 rebuild_ms=0 total_ms=1 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=0 layout_ms=2 total_ms=3
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=148x99 old_columns=5 new_columns=6 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1124 columns=6 rebuild_ms=0 total_ms=20 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_begin mode=Month old_tile=148x99 new_tile=172x115 photos=4515 folders=409 columns=6 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=193 folder=0 total=193 ms=0
+UI PERF folder_zoom_resize_tiles count=193 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=172x115 old_columns=6 new_columns=5 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=5 rebuild_ms=0 total_ms=1 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=0 layout_ms=1 total_ms=2
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=172x115 old_columns=5 new_columns=5 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=5 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=172x115 new_tile=196x131 photos=4515 folders=409 columns=5 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=162 folder=0 total=162 ms=0
+UI PERF folder_zoom_resize_tiles count=162 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=196x131 old_columns=5 new_columns=4 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=4 rebuild_ms=0 total_ms=2 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=0 layout_ms=2 total_ms=3
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=196x131 old_columns=4 new_columns=4 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=196x131 new_tile=220x147 photos=4515 folders=409 columns=4 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=130 folder=0 total=130 ms=0
+UI PERF folder_zoom_resize_tiles count=130 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=220x147 old_columns=4 new_columns=4 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1084 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=0 layout_ms=0 total_ms=1
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=220x147 old_columns=4 new_columns=4 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=4 reason=columns_unchanged
+PROFILE scroll fps=63 worst_frame_ms=32 thumbnail_hits=31 thumbnail_misses=0
+UI PERF folder_zoom_begin mode=Month old_tile=220x147 new_tile=244x163 photos=4515 folders=409 columns=4 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=130 folder=0 total=130 ms=0
+UI PERF folder_zoom_resize_tiles count=130 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=244x163 old_columns=4 new_columns=3 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=3 rebuild_ms=0 total_ms=2 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=3 folder_rows=0 layout_ms=2 total_ms=3
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=244x163 old_columns=3 new_columns=3 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=244x163 new_tile=220x147 photos=4515 folders=409 columns=3 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=98 folder=0 total=98 ms=0
+UI PERF folder_zoom_resize_tiles count=98 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=220x147 old_columns=3 new_columns=4 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=4 rebuild_ms=0 total_ms=26 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=0 layout_ms=26 total_ms=27
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=220x147 old_columns=4 new_columns=4 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=220x147 new_tile=196x131 photos=4515 folders=409 columns=4 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=130 folder=0 total=130 ms=0
+UI PERF folder_zoom_resize_tiles count=130 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=196x131 old_columns=4 new_columns=4 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1084 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=196x131 old_columns=4 new_columns=4 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=196x131 new_tile=172x115 photos=4515 folders=409 columns=4 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=130 folder=0 total=130 ms=0
+UI PERF folder_zoom_resize_tiles count=130 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=172x115 old_columns=4 new_columns=5 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=5 rebuild_ms=0 total_ms=20 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=0 layout_ms=20 total_ms=21
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=172x115 old_columns=5 new_columns=5 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=5 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=172x115 new_tile=148x99 photos=4515 folders=409 columns=5 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=162 folder=0 total=162 ms=0
+UI PERF folder_zoom_resize_tiles count=162 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=148x99 old_columns=5 new_columns=5 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1084 columns=5 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=148x99 old_columns=5 new_columns=6 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1124 columns=6 rebuild_ms=0 total_ms=19 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_begin mode=Month old_tile=148x99 new_tile=124x83 photos=4515 folders=409 columns=6 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=193 folder=0 total=193 ms=0
+UI PERF folder_zoom_resize_tiles count=193 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=124x83 old_columns=6 new_columns=6 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1084 columns=6 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=6 folder_rows=0 layout_ms=0 total_ms=0
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=124x83 old_columns=6 new_columns=6 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_skip_reflow mode=Month width=1124 columns=6 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Month old_tile=124x83 new_tile=100x67 photos=4515 folders=409 columns=6 folder_rows=0
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=193 folder=0 total=193 ms=0
+UI PERF folder_zoom_resize_tiles count=193 ms=0
+UI PERF update_width_begin mode=Month width=1084 old_layout_width=0 tile=100x67 old_columns=6 new_columns=7 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1084 columns=7 rebuild_ms=0 total_ms=21 folder_rows=0 strategy=grid_columns
+UI PERF folder_zoom_end root_width=1084 columns=7 folder_rows=0 layout_ms=21 total_ms=22
+UI PERF update_width_begin mode=Month width=1124 old_layout_width=1084 tile=100x67 old_columns=7 new_columns=8 photos=4515 folder_ranges=409 folder_rows=0
+UI PERF update_width_end mode=Month width=1124 columns=8 rebuild_ms=0 total_ms=21 folder_rows=0 strategy=grid_columns
+PROFILE scroll fps=57 worst_frame_ms=39 thumbnail_hits=159 thumbnail_misses=0
+PROFILE scroll fps=64 worst_frame_ms=29 thumbnail_hits=161 thumbnail_misses=0
+PROFILE scroll fps=67 worst_frame_ms=28 thumbnail_hits=0 thumbnail_misses=0
+PROFILE scroll fps=38 worst_frame_ms=168 thumbnail_hits=839 thumbnail_misses=0
+THUMB PRIORITY visible_missing thread=main id=1279 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9088.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd06ee04e5c8753526cd451179aa13046bb66e7808a6d0a7d1bc34836dd1f751.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9088.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd06ee04e5c8753526cd451179aa13046bb66e7808a6d0a7d1bc34836dd1f751.jpg
+THUMB PRIORITY visible_missing thread=main id=1278 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9086.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd633a68de88c649bb16c65f10bdbead3709320e0164e6bc854e4f0ae3a2b3a8.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9086.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd633a68de88c649bb16c65f10bdbead3709320e0164e6bc854e4f0ae3a2b3a8.jpg
+THUMB PRIORITY visible_missing thread=main id=1277 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9084.jpg cache=/home/peet/.cache/picasa-rs/thumbs/8f1d90dba07eda2041d22f6a7ea6e51e01ded088ea177b69fcdec2d44129149d.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9084.jpg cache=/home/peet/.cache/picasa-rs/thumbs/8f1d90dba07eda2041d22f6a7ea6e51e01ded088ea177b69fcdec2d44129149d.jpg
+THUMB PRIORITY visible_missing thread=main id=1276 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9083.jpg cache=/home/peet/.cache/picasa-rs/thumbs/a485458381a6813631fc074fc1676722cc3ba5bfe13a33ec26419e7dbae39fe5.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9083.jpg cache=/home/peet/.cache/picasa-rs/thumbs/a485458381a6813631fc074fc1676722cc3ba5bfe13a33ec26419e7dbae39fe5.jpg
+THUMB PRIORITY visible_missing thread=main id=1275 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9082.jpg cache=/home/peet/.cache/picasa-rs/thumbs/4d6e85fb2ca9c63e3d077dc042148437ebeaaf6439ed001ebe0ec99434f83198.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9082.jpg cache=/home/peet/.cache/picasa-rs/thumbs/4d6e85fb2ca9c63e3d077dc042148437ebeaaf6439ed001ebe0ec99434f83198.jpg
+THUMB PRIORITY visible_missing thread=main id=1274 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9078.jpg cache=/home/peet/.cache/picasa-rs/thumbs/b6f780700d27398a163bff3fd8e517681ea11bf2e2df85667c63ac60d7f8b43a.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9078.jpg cache=/home/peet/.cache/picasa-rs/thumbs/b6f780700d27398a163bff3fd8e517681ea11bf2e2df85667c63ac60d7f8b43a.jpg
+THUMB PRIORITY visible_missing thread=main id=1273 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9075.jpg cache=/home/peet/.cache/picasa-rs/thumbs/5978e27d11cfbd0285efac832878df42607de08899a02f2e5b18794fc3ca49e2.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9075.jpg cache=/home/peet/.cache/picasa-rs/thumbs/5978e27d11cfbd0285efac832878df42607de08899a02f2e5b18794fc3ca49e2.jpg
+PROFILE scroll fps=6 worst_frame_ms=210 thumbnail_hits=1504 thumbnail_misses=7
+THUMB PRIORITY visible_missing thread=main id=3 path=/home/peet/Pictures/collage2.jpg cache=/home/peet/.cache/picasa-rs/thumbs/40161236ea1fbb0f5daf94c6c4eae010bdfb4cd69b20b896635ec134dbec5834.jpg
+THUMB PRIORITY skip_known_bad path=/home/peet/Pictures/collage2.jpg cache=/home/peet/.cache/picasa-rs/thumbs/40161236ea1fbb0f5daf94c6c4eae010bdfb4cd69b20b896635ec134dbec5834.jpg
+PROFILE scroll fps=24 worst_frame_ms=218 thumbnail_hits=1079 thumbnail_misses=1
+PROFILE scroll fps=7 worst_frame_ms=215 thumbnail_hits=1516 thumbnail_misses=0
+PROFILE scroll fps=47 worst_frame_ms=36 thumbnail_hits=394 thumbnail_misses=0
+PROFILE scroll fps=61 worst_frame_ms=42 thumbnail_hits=311 thumbnail_misses=0
+THUMB PRIORITY visible_missing thread=main id=1279 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9088.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd06ee04e5c8753526cd451179aa13046bb66e7808a6d0a7d1bc34836dd1f751.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9088.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd06ee04e5c8753526cd451179aa13046bb66e7808a6d0a7d1bc34836dd1f751.jpg
+THUMB PRIORITY visible_missing thread=main id=1278 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9086.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd633a68de88c649bb16c65f10bdbead3709320e0164e6bc854e4f0ae3a2b3a8.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9086.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd633a68de88c649bb16c65f10bdbead3709320e0164e6bc854e4f0ae3a2b3a8.jpg
+THUMB PRIORITY visible_missing thread=main id=1277 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9084.jpg cache=/home/peet/.cache/picasa-rs/thumbs/8f1d90dba07eda2041d22f6a7ea6e51e01ded088ea177b69fcdec2d44129149d.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9084.jpg cache=/home/peet/.cache/picasa-rs/thumbs/8f1d90dba07eda2041d22f6a7ea6e51e01ded088ea177b69fcdec2d44129149d.jpg
+THUMB PRIORITY visible_missing thread=main id=1276 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9083.jpg cache=/home/peet/.cache/picasa-rs/thumbs/a485458381a6813631fc074fc1676722cc3ba5bfe13a33ec26419e7dbae39fe5.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9083.jpg cache=/home/peet/.cache/picasa-rs/thumbs/a485458381a6813631fc074fc1676722cc3ba5bfe13a33ec26419e7dbae39fe5.jpg
+THUMB PRIORITY visible_missing thread=main id=1275 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9082.jpg cache=/home/peet/.cache/picasa-rs/thumbs/4d6e85fb2ca9c63e3d077dc042148437ebeaaf6439ed001ebe0ec99434f83198.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9082.jpg cache=/home/peet/.cache/picasa-rs/thumbs/4d6e85fb2ca9c63e3d077dc042148437ebeaaf6439ed001ebe0ec99434f83198.jpg
+THUMB PRIORITY visible_missing thread=main id=1274 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9078.jpg cache=/home/peet/.cache/picasa-rs/thumbs/b6f780700d27398a163bff3fd8e517681ea11bf2e2df85667c63ac60d7f8b43a.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9078.jpg cache=/home/peet/.cache/picasa-rs/thumbs/b6f780700d27398a163bff3fd8e517681ea11bf2e2df85667c63ac60d7f8b43a.jpg
+THUMB PRIORITY visible_missing thread=main id=1273 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9075.jpg cache=/home/peet/.cache/picasa-rs/thumbs/5978e27d11cfbd0285efac832878df42607de08899a02f2e5b18794fc3ca49e2.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9075.jpg cache=/home/peet/.cache/picasa-rs/thumbs/5978e27d11cfbd0285efac832878df42607de08899a02f2e5b18794fc3ca49e2.jpg
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=59 worst_frame_ms=53 thumbnail_hits=134 thumbnail_misses=7
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=58 worst_frame_ms=50 thumbnail_hits=94 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=50 worst_frame_ms=69 thumbnail_hits=128 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=14 worst_frame_ms=740 thumbnail_hits=1024 thumbnail_misses=0
+PROFILE scroll fps=62 worst_frame_ms=30 thumbnail_hits=0 thumbnail_misses=0
+PROFILE scroll fps=65 worst_frame_ms=17 thumbnail_hits=0 thumbnail_misses=0
+THUMB PRIORITY visible_missing thread=main id=3 path=/home/peet/Pictures/collage2.jpg cache=/home/peet/.cache/picasa-rs/thumbs/40161236ea1fbb0f5daf94c6c4eae010bdfb4cd69b20b896635ec134dbec5834.jpg
+THUMB PRIORITY skip_known_bad path=/home/peet/Pictures/collage2.jpg cache=/home/peet/.cache/picasa-rs/thumbs/40161236ea1fbb0f5daf94c6c4eae010bdfb4cd69b20b896635ec134dbec5834.jpg
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=59 worst_frame_ms=28 thumbnail_hits=24 thumbnail_misses=1
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=63 worst_frame_ms=21 thumbnail_hits=0 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=60 worst_frame_ms=29 thumbnail_hits=0 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=66 worst_frame_ms=34 thumbnail_hits=0 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=49 worst_frame_ms=83 thumbnail_hits=131 thumbnail_misses=0
+THUMB PRIORITY visible_missing thread=main id=1276 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9083.jpg cache=/home/peet/.cache/picasa-rs/thumbs/a485458381a6813631fc074fc1676722cc3ba5bfe13a33ec26419e7dbae39fe5.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9083.jpg cache=/home/peet/.cache/picasa-rs/thumbs/a485458381a6813631fc074fc1676722cc3ba5bfe13a33ec26419e7dbae39fe5.jpg
+THUMB PRIORITY visible_missing thread=main id=1279 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9088.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd06ee04e5c8753526cd451179aa13046bb66e7808a6d0a7d1bc34836dd1f751.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9088.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd06ee04e5c8753526cd451179aa13046bb66e7808a6d0a7d1bc34836dd1f751.jpg
+THUMB PRIORITY visible_missing thread=main id=1278 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9086.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd633a68de88c649bb16c65f10bdbead3709320e0164e6bc854e4f0ae3a2b3a8.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9086.jpg cache=/home/peet/.cache/picasa-rs/thumbs/bd633a68de88c649bb16c65f10bdbead3709320e0164e6bc854e4f0ae3a2b3a8.jpg
+THUMB PRIORITY visible_missing thread=main id=1277 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9084.jpg cache=/home/peet/.cache/picasa-rs/thumbs/8f1d90dba07eda2041d22f6a7ea6e51e01ded088ea177b69fcdec2d44129149d.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9084.jpg cache=/home/peet/.cache/picasa-rs/thumbs/8f1d90dba07eda2041d22f6a7ea6e51e01ded088ea177b69fcdec2d44129149d.jpg
+THUMB PRIORITY visible_missing thread=main id=1275 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9082.jpg cache=/home/peet/.cache/picasa-rs/thumbs/4d6e85fb2ca9c63e3d077dc042148437ebeaaf6439ed001ebe0ec99434f83198.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9082.jpg cache=/home/peet/.cache/picasa-rs/thumbs/4d6e85fb2ca9c63e3d077dc042148437ebeaaf6439ed001ebe0ec99434f83198.jpg
+THUMB PRIORITY visible_missing thread=main id=1274 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9078.jpg cache=/home/peet/.cache/picasa-rs/thumbs/b6f780700d27398a163bff3fd8e517681ea11bf2e2df85667c63ac60d7f8b43a.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9078.jpg cache=/home/peet/.cache/picasa-rs/thumbs/b6f780700d27398a163bff3fd8e517681ea11bf2e2df85667c63ac60d7f8b43a.jpg
+THUMB PRIORITY visible_missing thread=main id=1273 path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9075.jpg cache=/home/peet/.cache/picasa-rs/thumbs/5978e27d11cfbd0285efac832878df42607de08899a02f2e5b18794fc3ca49e2.jpg
+THUMB PRIORITY skip_known_bad path=/run/media/peet/Data-500GB/Work-FB/FB-Staff-Heritage Day 2022/DSC_9075.jpg cache=/home/peet/.cache/picasa-rs/thumbs/5978e27d11cfbd0285efac832878df42607de08899a02f2e5b18794fc3ca49e2.jpg
+PROFILE scroll fps=8 worst_frame_ms=1405 thumbnail_hits=1465 thumbnail_misses=7
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=52 worst_frame_ms=100 thumbnail_hits=64 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+UI PERF folder_selection_styles tiles=0 items=4515 spfid_calls=0 ms=0
+PROFILE scroll fps=45 worst_frame_ms=107 thumbnail_hits=338 thumbnail_misses=0
+PROFILE scroll fps=62 worst_frame_ms=17 thumbnail_hits=0 thumbnail_misses=0
+PROFILE scroll fps=52 worst_frame_ms=73 thumbnail_hits=446 thumbnail_misses=0
+PROFILE scroll fps=22 worst_frame_ms=123 thumbnail_hits=1023 thumbnail_misses=0
+PROFILE scroll fps=9 worst_frame_ms=173 thumbnail_hits=1344 thumbnail_misses=0
+PROFILE scroll fps=77 worst_frame_ms=19 thumbnail_hits=0 thumbnail_misses=0
+UI PERF refresh_grid photos=4515 ms=25
+PROFILE refresh_start photos=4515
+UI PERF gallery_replace photos=4515 progressive=true ms=0
+THUMB PRIORITY visible_missing thread=main id=3 path=/home/peet/Pictures/collage2.jpg cache=/home/peet/.cache/picasa-rs/thumbs/40161236ea1fbb0f5daf94c6c4eae010bdfb4cd69b20b896635ec134dbec5834.jpg
+THUMB PRIORITY skip_known_bad path=/home/peet/Pictures/collage2.jpg cache=/home/peet/.cache/picasa-rs/thumbs/40161236ea1fbb0f5daf94c6c4eae010bdfb4cd69b20b896635ec134dbec5834.jpg
+PROFILE refresh_first_batch photos=500 elapsed_ms=222
+UI PERF folder_selection_styles tiles=0 items=2000 spfid_calls=0 ms=0
+UI PERF folder_virtual_plan photos=4515 folders=271 chunk_size=8 columns=8 model_rows=949 old_store_rows=0 ms=0
+THUMB PRIORITY visible_missing thread=main id=3 path=/home/peet/Pictures/collage2.jpg cache=/home/peet/.cache/picasa-rs/thumbs/40161236ea1fbb0f5daf94c6c4eae010bdfb4cd69b20b896635ec134dbec5834.jpg
+THUMB PRIORITY skip_known_bad path=/home/peet/Pictures/collage2.jpg cache=/home/peet/.cache/picasa-rs/thumbs/40161236ea1fbb0f5daf94c6c4eae010bdfb4cd69b20b896635ec134dbec5834.jpg
+UI PERF folder_store_update strategy=virtual_chunks_detached old_rows=0 new_rows=949 model_ms=995 total_ms=996
+PROFILE refresh_finished photos=4515 elapsed_ms=1293
+PROFILE scroll fps=11 worst_frame_ms=1017 thumbnail_hits=1443 thumbnail_misses=2
+UI PERF folder_selection_styles tiles=1304 items=4515 spfid_calls=0 ms=3
+PROFILE scroll fps=53 worst_frame_ms=36 thumbnail_hits=48 thumbnail_misses=0
+PROFILE scroll fps=56 worst_frame_ms=43 thumbnail_hits=100 thumbnail_misses=0
+PROFILE scroll fps=68 worst_frame_ms=19 thumbnail_hits=0 thumbnail_misses=0
+PROFILE scroll fps=18 worst_frame_ms=177 thumbnail_hits=612 thumbnail_misses=0
+PROFILE scroll fps=20 worst_frame_ms=85 thumbnail_hits=539 thumbnail_misses=0
+PROFILE scroll fps=9 worst_frame_ms=204 thumbnail_hits=448 thumbnail_misses=0
+PROFILE scroll fps=18 worst_frame_ms=330 thumbnail_hits=316 thumbnail_misses=0
+PROFILE scroll fps=30 worst_frame_ms=234 thumbnail_hits=68 thumbnail_misses=0
+PROFILE scroll fps=59 worst_frame_ms=421 thumbnail_hits=0 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=1640 items=4515 spfid_calls=0 ms=4
+UI TRACE lightbox_open photos=4515 index=3240 root_targetable=true viewport_targetable=true picture_targetable=true
+UI PERF lightbox_preview_ms=0 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122613.jpg
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=24 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122613.jpg
+UI PERF fit_ms=0 zoom=0 size=1059x794
+UI PERF fit_ms=0 zoom=0 size=1059x794
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=16 rotation=0 output=1059x794
+VIEW PERF lightbox_worker_total_ms=80 output=1059x794
+UI PERF fit_ms=0 zoom=0 size=1059x794
+UI PERF lightbox_texture_creation_ms=0 size=1059x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=81 size=1059x794
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=3240
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122610.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x707
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=25 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122610.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=3241
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Silver Fence/20241022_170702.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=1 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=26 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Silver Fence/20241022_170702.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=3242
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Silver Fence/20241022_170643.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=1 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=27 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Silver Fence/20241022_170643.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=3243
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Silver Fence/20241022_170635.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=28 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Silver Fence/20241022_170635.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+PROFILE scroll fps=63 worst_frame_ms=28 thumbnail_hits=0 thumbnail_misses=0
+VIEW PERF user_orientation_ms=14 rotation=0 output=1059x794
+VIEW PERF lightbox_worker_total_ms=74 output=1059x794
+UI PERF lightbox_texture_creation_ms=0 size=1059x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=74 size=1059x794
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=3244
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Silver Fence/20241022_170643.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=29 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Silver Fence/20241022_170643.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=3243
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Silver Fence/20241022_170702.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=30 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Silver Fence/20241022_170702.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=3242
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122610.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x707
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=31 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122610.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=3241
+UI PERF lightbox_display_cache_hit path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122613.jpg target=1124x794
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=3240
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122620.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x738
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=33 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122620.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=3239
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122629.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=34 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-ShowClearVU-AlgoaGolf/20240301_122629.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=3238
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Roland/20231211_152936.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=35 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Roland/20231211_152936.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=3237
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Roland/20231211_152942.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=36 path=/run/media/peet/Data-500GB/Work-FB/FB-2024-Roland/20231211_152942.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=14 rotation=0 output=1059x794
+VIEW PERF lightbox_worker_total_ms=71 output=1059x794
+UI PERF lightbox_texture_creation_ms=0 size=1059x794
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=71 size=1059x794
+UI PERF folder_selection_styles tiles=1640 items=4515 spfid_calls=0 ms=3
+PROFILE scroll fps=53 worst_frame_ms=168 thumbnail_hits=0 thumbnail_misses=0
+PROFILE scroll fps=47 worst_frame_ms=320 thumbnail_hits=19 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=1632 items=4515 spfid_calls=0 ms=4
+UI PERF folder_selection_styles tiles=1632 items=4515 spfid_calls=0 ms=3
+PROFILE scroll fps=43 worst_frame_ms=194 thumbnail_hits=76 thumbnail_misses=0
+PROFILE scroll fps=60 worst_frame_ms=17 thumbnail_hits=0 thumbnail_misses=0
+PROFILE scroll fps=61 worst_frame_ms=25 thumbnail_hits=0 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=1624 items=4515 spfid_calls=0 ms=4
+PROFILE scroll fps=63 worst_frame_ms=21 thumbnail_hits=0 thumbnail_misses=0
+PROFILE scroll fps=57 worst_frame_ms=55 thumbnail_hits=45 thumbnail_misses=0
+UI PERF folder_selection_styles tiles=1640 items=4515 spfid_calls=0 ms=3
+UI TRACE lightbox_open photos=4515 index=576 root_targetable=true viewport_targetable=true picture_targetable=true
+UI PERF lightbox_preview_ms=0 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2537.jpg
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=41 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2537.jpg
+UI PERF fit_ms=0 zoom=0 size=1124x746
+UI PERF fit_ms=0 zoom=0 size=1124x746
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=14 rotation=0 output=1124x746
+VIEW PERF lightbox_worker_total_ms=78 output=1124x746
+UI PERF fit_ms=0 zoom=0 size=1124x746
+UI PERF lightbox_texture_creation_ms=0 size=1124x746
+UI PERF lightbox_main_thread_delivery_ms=0 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=0
+UI PERF lightbox_full_texture_visible_ms=78 size=1124x746
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=576
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2532.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=1 source=thumbnail geometry=527x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=42 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2532.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=577
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2526.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x746
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=43 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2526.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=578
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2519.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=527x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=44 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2519.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=579
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2512.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x746
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=45 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2512.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+PROFILE scroll fps=64 worst_frame_ms=32 thumbnail_hits=0 thumbnail_misses=0
+VIEW PERF user_orientation_ms=7 rotation=0 output=527x794
+VIEW PERF lightbox_worker_total_ms=24 output=527x794
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=580
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/IONX0385.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=46 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/IONX0385.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=581
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/IONX0381.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=47 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/IONX0381.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=1 visible=true focus=true index=582
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/IONX0374.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=48 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/IONX0374.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+VIEW PERF user_orientation_ms=15 rotation=0 output=1059x794
+VIEW PERF lightbox_worker_total_ms=65 output=1059x794
+UI PERF lightbox_texture_creation_ms=0 size=1059x794
+UI PERF lightbox_main_thread_delivery_ms=2 worker_finished_to_gtk_ms=0 channel_wait_ms=0 gtk_update_ms=2
+UI PERF lightbox_full_texture_visible_ms=68 size=1059x794
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=583
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/IONX0381.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=49 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/IONX0381.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=582
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/IONX0385.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1059x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=50 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/IONX0385.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=581
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2512.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x746
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=51 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2512.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=580
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2519.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=527x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=52 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2519.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=579
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2526.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=0 source=thumbnail geometry=1124x746
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=53 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2526.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=578
+UI PERF lightbox_display_cache_miss path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2532.jpg target=1124x794 request_ms=0
+UI PERF lightbox_preview_visible_ms=1 source=thumbnail geometry=527x794
+UI PERF lightbox_target_calculation_ms=0 allocation=1124x794 logical_viewport=1124x794 scale_factor=1 decode_target=1124x794 user_rotation=0 fallback=false
+UI PERF lightbox_decode_queued_ms=0 generation=54 path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2532.jpg
+UI PERF lightbox_decode_gate_wait_ms=0
+UI TRACE lightbox_scroll dy=-1 visible=true focus=true index=577
+UI PERF lightbox_display_cache_hit path=/run/media/peet/Data-500GB/Work-FB/FB-2015-Advice Centre/VID_2537.jpg target=1124x794
+VIEW PERF user_orientation_ms=7 rotation=0 output=527x794
+VIEW PERF lightbox_worker_total_ms=20 output=527x794
+PROFILE scroll fps=70 worst_frame_ms=20 thumbnail_hits=0 thumbnail_misses=0
+PROFILE scroll fps=53 worst_frame_ms=47 thumbnail_hits=76 thumbnail_misses=0
+PROFILE scroll fps=61 worst_frame_ms=21 thumbnail_hits=22 thumbnail_misses=0
+UI PERF folder_zoom_begin mode=Folder old_tile=100x67 new_tile=124x83 photos=4515 folders=271 columns=8 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=258 folder=58 total=316 ms=0
+UI PERF folder_zoom_resize_tiles count=316 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=124x83 old_columns=8 new_columns=6 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1084 columns=6 rebuild_ms=0 total_ms=9 folder_rows=949 strategy=virtual_chunks_reflow_free
+UI PERF folder_zoom_end root_width=1084 columns=6 folder_rows=949 layout_ms=9 total_ms=10
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=124x83 old_columns=6 new_columns=6 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=6 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=124x83 new_tile=148x99 photos=4515 folders=271 columns=6 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=194 folder=36 total=230 ms=0
+UI PERF folder_zoom_resize_tiles count=230 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=148x99 old_columns=6 new_columns=5 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1084 columns=5 rebuild_ms=0 total_ms=6 folder_rows=949 strategy=virtual_chunks_reflow_free
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=949 layout_ms=6 total_ms=8
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=148x99 old_columns=5 new_columns=6 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1124 columns=6 rebuild_ms=0 total_ms=32 folder_rows=949 strategy=virtual_chunks_reflow_free
+PROFILE scroll fps=61 worst_frame_ms=39 thumbnail_hits=32 thumbnail_misses=0
+PROFILE scroll fps=53 worst_frame_ms=125 thumbnail_hits=24 thumbnail_misses=0
+UI PERF folder_zoom_begin mode=Folder old_tile=148x99 new_tile=172x115 photos=4515 folders=271 columns=6 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=194 folder=38 total=232 ms=0
+UI PERF folder_zoom_resize_tiles count=232 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=172x115 old_columns=6 new_columns=5 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1084 columns=5 rebuild_ms=0 total_ms=7 folder_rows=949 strategy=virtual_chunks_reflow_free
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=949 layout_ms=7 total_ms=8
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=172x115 old_columns=5 new_columns=5 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=5 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=172x115 new_tile=196x131 photos=4515 folders=271 columns=5 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=162 folder=30 total=192 ms=0
+UI PERF folder_zoom_resize_tiles count=192 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=196x131 old_columns=5 new_columns=4 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1084 columns=4 rebuild_ms=0 total_ms=6 folder_rows=949 strategy=virtual_chunks_reflow_free
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=949 layout_ms=6 total_ms=7
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=196x131 old_columns=4 new_columns=4 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=196x131 new_tile=220x147 photos=4515 folders=271 columns=4 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=130 folder=30 total=160 ms=0
+UI PERF folder_zoom_resize_tiles count=160 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=220x147 old_columns=4 new_columns=4 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1084 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=949 layout_ms=3 total_ms=5
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=220x147 old_columns=4 new_columns=4 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=4 reason=columns_unchanged
+PROFILE scroll fps=52 worst_frame_ms=89 thumbnail_hits=46 thumbnail_misses=0
+UI PERF folder_zoom_begin mode=Folder old_tile=220x147 new_tile=244x163 photos=4515 folders=271 columns=4 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=130 folder=22 total=152 ms=0
+UI PERF folder_zoom_resize_tiles count=152 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=244x163 old_columns=4 new_columns=3 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1084 columns=3 rebuild_ms=0 total_ms=6 folder_rows=949 strategy=virtual_chunks_reflow_free
+UI PERF folder_zoom_end root_width=1084 columns=3 folder_rows=949 layout_ms=6 total_ms=7
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=244x163 old_columns=3 new_columns=3 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=244x163 new_tile=268x179 photos=4515 folders=271 columns=3 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=98 folder=22 total=120 ms=0
+UI PERF folder_zoom_resize_tiles count=120 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=268x179 old_columns=3 new_columns=3 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1084 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=3 folder_rows=949 layout_ms=4 total_ms=5
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=268x179 old_columns=3 new_columns=3 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=268x179 new_tile=292x195 photos=4515 folders=271 columns=3 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=98 folder=14 total=112 ms=0
+UI PERF folder_zoom_resize_tiles count=112 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=292x195 old_columns=3 new_columns=3 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1084 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=3 folder_rows=949 layout_ms=3 total_ms=4
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=292x195 old_columns=3 new_columns=3 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=3 reason=columns_unchanged
+PROFILE scroll fps=58 worst_frame_ms=38 thumbnail_hits=12 thumbnail_misses=0
+PROFILE scroll fps=49 worst_frame_ms=62 thumbnail_hits=33 thumbnail_misses=0
+UI PERF folder_zoom_begin mode=Folder old_tile=292x195 new_tile=268x179 photos=4515 folders=271 columns=3 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=98 folder=14 total=112 ms=0
+UI PERF folder_zoom_resize_tiles count=112 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=268x179 old_columns=3 new_columns=3 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1084 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=3 folder_rows=949 layout_ms=4 total_ms=5
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=268x179 old_columns=3 new_columns=3 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=268x179 new_tile=244x163 photos=4515 folders=271 columns=3 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=98 folder=14 total=112 ms=0
+UI PERF folder_zoom_resize_tiles count=112 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=244x163 old_columns=3 new_columns=3 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1084 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=3 folder_rows=949 layout_ms=4 total_ms=5
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=244x163 old_columns=3 new_columns=3 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=3 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=244x163 new_tile=220x147 photos=4515 folders=271 columns=3 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=98 folder=14 total=112 ms=0
+UI PERF folder_zoom_resize_tiles count=112 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=220x147 old_columns=3 new_columns=4 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1084 columns=4 rebuild_ms=0 total_ms=33 folder_rows=949 strategy=virtual_chunks_reflow_free
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=949 layout_ms=33 total_ms=34
+PROFILE scroll fps=59 worst_frame_ms=46 thumbnail_hits=40 thumbnail_misses=0
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=220x147 old_columns=4 new_columns=4 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=220x147 new_tile=196x131 photos=4515 folders=271 columns=4 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=130 folder=22 total=152 ms=0
+UI PERF folder_zoom_resize_tiles count=152 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=196x131 old_columns=4 new_columns=4 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1084 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=4 folder_rows=949 layout_ms=4 total_ms=5
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=196x131 old_columns=4 new_columns=4 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=4 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=196x131 new_tile=172x115 photos=4515 folders=271 columns=4 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=130 folder=22 total=152 ms=0
+UI PERF folder_zoom_resize_tiles count=152 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=172x115 old_columns=4 new_columns=5 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1084 columns=5 rebuild_ms=0 total_ms=34 folder_rows=949 strategy=virtual_chunks_reflow_free
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=949 layout_ms=34 total_ms=35
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=172x115 old_columns=5 new_columns=5 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=5 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=172x115 new_tile=148x99 photos=4515 folders=271 columns=5 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=162 folder=22 total=184 ms=0
+UI PERF folder_zoom_resize_tiles count=184 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=148x99 old_columns=5 new_columns=5 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1084 columns=5 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=5 folder_rows=949 layout_ms=2 total_ms=3
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=148x99 old_columns=5 new_columns=6 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1124 columns=6 rebuild_ms=0 total_ms=32 folder_rows=949 strategy=virtual_chunks_reflow_free
+UI PERF folder_zoom_begin mode=Folder old_tile=148x99 new_tile=124x83 photos=4515 folders=271 columns=6 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=194 folder=30 total=224 ms=0
+UI PERF folder_zoom_resize_tiles count=224 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=124x83 old_columns=6 new_columns=6 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1084 columns=6 reason=columns_unchanged
+UI PERF folder_zoom_end root_width=1084 columns=6 folder_rows=949 layout_ms=4 total_ms=5
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=124x83 old_columns=6 new_columns=6 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_skip_reflow mode=Folder width=1124 columns=6 reason=columns_unchanged
+UI PERF folder_zoom_begin mode=Folder old_tile=124x83 new_tile=100x67 photos=4515 folders=271 columns=6 folder_rows=949
+UI PERF folder_zoom_setting_callback ms=0
+UI PERF folder_zoom_collect_tiles grid=194 folder=38 total=232 ms=0
+UI PERF folder_zoom_resize_tiles count=232 ms=0
+UI PERF update_width_begin mode=Folder width=1084 old_layout_width=0 tile=100x67 old_columns=6 new_columns=7 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1084 columns=7 rebuild_ms=0 total_ms=28 folder_rows=949 strategy=virtual_chunks_reflow_free
+UI PERF folder_zoom_end root_width=1084 columns=7 folder_rows=949 layout_ms=28 total_ms=29
+UI PERF update_width_begin mode=Folder width=1124 old_layout_width=1084 tile=100x67 old_columns=7 new_columns=8 photos=4515 folder_ranges=271 folder_rows=949
+UI PERF update_width_end mode=Folder width=1124 columns=8 rebuild_ms=0 total_ms=19 folder_rows=949 strategy=virtual_chunks_reflow_free
+PROFILE scroll fps=53 worst_frame_ms=71 thumbnail_hits=176 thumbnail_misses=0
+PROFILE scroll fps=44 worst_frame_ms=97 thumbnail_hits=98 thumbnail_misses=0
+PROFILE scroll fps=59 worst_frame_ms=30 thumbnail_hits=28 thumbnail_misses=0
+PROFILE scroll fps=61 worst_frame_ms=35 thumbnail_hits=0 thumbnail_misses=0
