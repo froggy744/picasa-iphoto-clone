@@ -24,7 +24,8 @@ attach, which makes the live `ListView` rebind every visible tile
 log lines).
 
 The exact differing field could not be named from the existing logs. The new
-`UI PERF folder_store_first_row ...` trace (below) prints it on the next run.
+`UI PERF folder_store_first_row index=N old_...= new_...=` trace prints the
+first differing row and field on the next run.
 
 ### Fix (commit `3efd6ff`)
 
@@ -93,8 +94,9 @@ PENDING_MEASUREMENT.md). Phase 3 was analysed directly against the real DB.
 ## Commits this session
 
 - `3efd6ff` perf(grid): incremental folder-store splice + mismatch trace
-- `??` docs(phase2): pending GUI measurement
-- `??` docs(phase2): this status
+- `46ed7f0` docs(phase2): pending GUI measurement
+- `0802ab5` docs(phase2): this status
+- `c5e2466` perf(grid): trace first differing folder row, not just row 0
 
 ## Push
 

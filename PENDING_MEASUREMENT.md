@@ -38,15 +38,17 @@ Look for `folder_store_update strategy=...`:
 
 ### B. Why did it rebuild? (`folder_store_first_row`)
 
-When `prefix=0`, this line names the first differing field:
+When `prefix` is less than both row counts, this line names the first
+differing row index and its fields:
 
 ```
-UI PERF folder_store_first_row old_kind=.. new_kind=.. old_folder_id=.. new_folder_id=.. old_label=.. new_label=.. old_count=.. new_count=.. old_photos=.. new_photos=..
+UI PERF folder_store_first_row index=.. old_kind=.. new_kind=.. old_folder_id=.. new_folder_id=.. old_label=.. new_label=.. old_count=.. new_count=.. old_photos=.. new_photos=..
 ```
 
 Whichever pair differs is the root cause of the old all-or-nothing check
 failing. Record it here after the run:
 
+- first differing index: __________
 - differing field: __________
 - expected if sort / folder-display-mode changed: `label` / `folder_id` / `photos`
 - suspicious if only `folder_path` differs: real bug in row construction
