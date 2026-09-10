@@ -1278,6 +1278,11 @@ impl Gallery {
         let folder_factory = gtk::SignalListItemFactory::new();
         let mapped_folder_tiles: Rc<RefCell<Vec<SquareTile>>> = Rc::new(RefCell::new(Vec::new()));
         let folder_root_holder: Rc<RefCell<Option<gtk::ListView>>> = Rc::new(RefCell::new(None));
+        // Cached selected photo ids. The folder bind path used to call
+        // selection_position_for_id (an O(n_items) scan of the 66k-photo model)
+        // eight times per bound chunk, which made each row bind ~29 ms and
+        // saturated the main thread during scroll.
+        let folder_selected_ids: Rc<RefCell<HashSet<i64>>> = Rc::new(RefCell::new(HashSet::new()));
 
         folder_factory.connect_setup(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -1362,6 +1367,7 @@ impl Gallery {
         let collage_ids_for_folder_bind = collage_selected_ids.clone();
         let mapped_tiles_for_folder_bind = mapped_folder_tiles.clone();
         let root_holder_for_folder_bind = folder_root_holder.clone();
+        let selected_ids_for_folder_bind = folder_selected_ids.clone();
 
         folder_factory.connect_bind(move |_, object| {
             let trace = std::env::var_os("PICASA_TRACE").is_some();
@@ -1444,11 +1450,9 @@ impl Gallery {
                                 tile_height_for_folder_bind.get(),
                             );
                             tile.set_photo_deferred(photo);
-                            let selected = selection_position_for_id(
-                                &selection_for_folder_bind,
-                                photo.id(),
-                            )
-                            .is_some_and(|position| selection_for_folder_bind.is_selected(position));
+                            let selected = selected_ids_for_folder_bind
+                                .borrow()
+                                .contains(&photo.id());
                             tile.set_manual_selected(selected);
                             if tile.is_mapped() {
                                 if let Some(root) = root_holder_for_folder_bind.borrow().as_ref() {
@@ -1516,11 +1520,14 @@ impl Gallery {
 
         let folder_root_for_selection = folder_root.clone();
         let selection_for_folder_style = selection.clone();
+        let selected_ids_for_selection = folder_selected_ids.clone();
         let styles_refresh_scheduled = Rc::new(Cell::new(false));
-        selection.connect_selection_changed(move |_, _, _| {
-            // GtkMultiSelection emits selection-changed both when the model
-            // gains items and when select_item runs, so one logical change can
-            // fire this twice. Coalesce the burst into a single idle refresh.
+        selection.connect_selection_changed(move |selection, _, _| {
+            // Keep the bind-path cache current. GtkMultiSelection emits
+            // selection-changed both when the model gains items and when
+            // select_item runs, so one logical change can fire this twice.
+            selected_ids_for_selection.replace(selected_photo_id_set(selection));
+            // Coalesce the burst into a single idle refresh.
             if styles_refresh_scheduled.replace(true) {
                 return;
             }
@@ -2930,12 +2937,16 @@ fn rebuild_folder_rows_for(
     let update_started = trace.then(Instant::now);
     let removed = (old_len - prefix - suffix) as u32;
     let inserted = &new_rows[prefix..new_len - suffix];
-    if prefix == 0 && suffix == 0 {
-        // Full replacement: detach while swapping so the live ListView does
-        // not react to every insertion/removal during construction. Generated
-        // thumbnail loading remains deferred to viewport-near tiles.
+    // A large attached splice is far slower than detaching: scroll-baseline4.log
+    // measured 6207 ms for an 8961-row attached splice versus 808 ms for a
+    // detached full build. Only splice in place for genuinely localized edits.
+    const FOLDER_STORE_INCREMENTAL_LIMIT: usize = 512;
+    let changed = removed as usize + inserted.len();
+    if changed > FOLDER_STORE_INCREMENTAL_LIMIT {
+        // Detach while swapping so the live ListView does not process the
+        // change row by row. Generated thumbnail loading stays viewport-deferred.
         folder_selection.set_model(Option::<&gio::ListStore>::None);
-        folder_store.splice(0, old_rows, inserted);
+        folder_store.splice(prefix as u32, removed, inserted);
         folder_selection.set_model(Some(folder_store));
     } else {
         // Localized change: splice in place so only the changed rows rebind.
@@ -2944,7 +2955,7 @@ fn rebuild_folder_rows_for(
     if trace {
         eprintln!(
             "UI PERF folder_store_update strategy={} old_rows={} new_rows={} prefix={} suffix={} model_ms={} total_ms={}",
-            if prefix == 0 && suffix == 0 {
+            if changed > FOLDER_STORE_INCREMENTAL_LIMIT {
                 "virtual_chunks_detached"
             } else {
                 "incremental_splice"
