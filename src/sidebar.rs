@@ -1484,8 +1484,13 @@ fn append_folder_row(
     content.append(&disclosure_slot);
 
     // Watched folders (set in Settings) overlay an eye on the folder icon so
-    // the row alignment is unchanged.
+    // the row alignment is unchanged. Pin the overlay to the icon's exact size
+    // and alignment; otherwise it can claim extra width and shift the row.
     let icon_overlay = gtk::Overlay::new();
+    icon_overlay.set_size_request(18, 18);
+    icon_overlay.set_halign(gtk::Align::Center);
+    icon_overlay.set_valign(gtk::Align::Center);
+    icon_overlay.set_hexpand(false);
     let icon = gtk::Image::from_icon_name("folder-symbolic");
     icon.set_pixel_size(18);
     icon_overlay.set_child(Some(&icon));
