@@ -17,12 +17,37 @@ pub enum SidebarFilter {
     Album(i64),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderDisplayMode {
+    Tree,
+    ImportedOnly,
+}
+
+impl FolderDisplayMode {
+    pub fn from_setting(value: Option<&str>) -> Self {
+        match value {
+            Some("imported-only") => Self::ImportedOnly,
+            _ => Self::Tree,
+        }
+    }
+
+    pub fn setting_value(self) -> &'static str {
+        match self {
+            Self::Tree => "tree",
+            Self::ImportedOnly => "imported-only",
+        }
+    }
+}
+
+pub const FOLDER_DISPLAY_MODE_SETTING_KEY: &str = "folder-display-mode";
+
 #[derive(Debug)]
 struct SidebarState {
     library_expanded: bool,
     albums_expanded: bool,
     folders_expanded: bool,
     expanded_folders: HashSet<i64>,
+    folder_display_mode: FolderDisplayMode,
     pinned: Cell<bool>,
     hover_open: Cell<bool>,
 }
@@ -34,6 +59,7 @@ impl Default for SidebarState {
             albums_expanded: true,
             folders_expanded: true,
             expanded_folders: HashSet::new(),
+            folder_display_mode: FolderDisplayMode::Tree,
             pinned: Cell::new(true),
             hover_open: Cell::new(false),
         }
@@ -72,9 +98,13 @@ pub fn build(
     on_folder_statistics: Rc<dyn Fn(Folder)>,
     on_remove_folder: Rc<dyn Fn(Folder)>,
     on_folder_favorite: Rc<dyn Fn(Folder, bool)>,
+    folder_display_mode: FolderDisplayMode,
+    on_folder_display_mode_changed: Rc<dyn Fn(FolderDisplayMode)>,
 ) -> gtk::ScrolledWindow {
     let on_filter: Rc<dyn Fn(SidebarFilter)> = Rc::new(on_filter);
-    let state = Rc::new(RefCell::new(SidebarState::default()));
+    let mut initial_state = SidebarState::default();
+    initial_state.folder_display_mode = folder_display_mode;
+    let state = Rc::new(RefCell::new(initial_state));
     let filter_syncing = Rc::new(Cell::new(false));
 
     // Keep the public return type exactly as before because window/build.rs,
@@ -170,6 +200,19 @@ pub fn build(
         true,
         None,
     );
+
+    let folder_mode_toggle = gtk::Button::from_icon_name(match folder_display_mode {
+        FolderDisplayMode::Tree => "folder-symbolic",
+        FolderDisplayMode::ImportedOnly => "view-list-symbolic",
+    });
+    folder_mode_toggle.add_css_class("flat");
+    folder_mode_toggle.set_focusable(false);
+    folder_mode_toggle.set_size_request(24, 24);
+    set_folder_mode_toggle_presentation(&folder_mode_toggle, folder_display_mode);
+    // Place the display-mode toggle between the collapse control and the +
+    // button. It changes presentation only; scanner/database scope is untouched.
+    folder_heading.insert_child_after(&folder_mode_toggle, Some(&folder_indicator));
+
     root.append(&folder_heading);
 
     let folder_list = section_list();
@@ -202,6 +245,26 @@ pub fn build(
             } else {
                 "pan-end-symbolic"
             });
+        });
+    }
+
+    {
+        let list = folder_list.clone();
+        let state = state.clone();
+        let toggle = folder_mode_toggle.clone();
+        let on_folder_display_mode_changed = on_folder_display_mode_changed.clone();
+        folder_mode_toggle.connect_clicked(move |_| {
+            let new_mode = {
+                let mut state = state.borrow_mut();
+                state.folder_display_mode = match state.folder_display_mode {
+                    FolderDisplayMode::Tree => FolderDisplayMode::ImportedOnly,
+                    FolderDisplayMode::ImportedOnly => FolderDisplayMode::Tree,
+                };
+                state.folder_display_mode
+            };
+            set_folder_mode_toggle_presentation(&toggle, new_mode);
+            rebuild_folder_list_from_rows(&list, &state);
+            on_folder_display_mode_changed(new_mode);
         });
     }
 
@@ -674,7 +737,10 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
             .unwrap_or_default()
     };
     let by_id: HashMap<i64, &Folder> = folders.iter().map(|folder| (folder.id, folder)).collect();
-    let mut parent = by_id.get(&folder_id).and_then(|folder| folder.parent_id);
+    let tree_mode = state.borrow().folder_display_mode == FolderDisplayMode::Tree;
+    let mut parent = tree_mode
+        .then(|| by_id.get(&folder_id).and_then(|folder| folder.parent_id))
+        .flatten();
     let mut expanded = false;
     while let Some(parent_id) = parent {
         expanded |= state.borrow_mut().expanded_folders.insert(parent_id);
@@ -939,6 +1005,26 @@ fn populate_folders(
     }
 
     if folders.is_empty() {
+        return;
+    }
+
+    if state.borrow().folder_display_mode == FolderDisplayMode::ImportedOnly {
+        let mut imported = folders
+            .iter()
+            .filter(|folder| folder.imported_root)
+            .collect::<Vec<_>>();
+        imported.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
+        });
+        for folder in imported {
+            // Flat/Picasa-style mode deliberately shows only the folder the
+            // user explicitly imported. The row title is the basename (for
+            // example "Pictures"), while the full path remains a tooltip.
+            append_folder_row(list, folder, 0, false, state, on_unavailable);
+        }
         return;
     }
 
@@ -1306,6 +1392,9 @@ fn rebuild_folder_list_from_rows(list: &gtk::ListBox, state: &Rc<RefCell<Sidebar
     clear_list(list);
     populate_folders(list, &folders, state, &callback);
     if let Some(outer) = outer {
+        if let Some(filter) = current_filter(&outer) {
+            set_active_filter(&outer, filter);
+        }
         restore_folder_scroll(&outer, folder_scroll_value);
     }
 }
@@ -1410,6 +1499,19 @@ fn append_album_filter(list: &gtk::ListBox, album: &Album, on_delete: &Rc<dyn Fn
         gesture.set_state(gtk::EventSequenceState::Claimed);
     });
     row.add_controller(right_click);
+}
+
+fn set_folder_mode_toggle_presentation(button: &gtk::Button, mode: FolderDisplayMode) {
+    match mode {
+        FolderDisplayMode::Tree => {
+            button.set_icon_name("folder-symbolic");
+            button.set_tooltip_text(Some("Show imported folders only"));
+        }
+        FolderDisplayMode::ImportedOnly => {
+            button.set_icon_name("view-list-symbolic");
+            button.set_tooltip_text(Some("Show folder tree"));
+        }
+    }
 }
 
 fn collapsible_heading(

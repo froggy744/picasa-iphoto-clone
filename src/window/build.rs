@@ -1773,6 +1773,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     sidebar_resize_preview.add_css_class("sidebar-resize-preview");
     main_surface.add_overlay(&sidebar_resize_preview);
 
+    let folder_display_mode = sidebar::FolderDisplayMode::from_setting(
+        db::setting(
+            &connection.borrow(),
+            sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY,
+        )
+        .ok()
+        .flatten()
+        .as_deref(),
+    );
+
     let sidebar = sidebar::build(
         &folders,
         &albums,
@@ -1838,6 +1848,19 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             &error.to_string(),
                         );
                     }
+                }
+            })
+        },
+        folder_display_mode,
+        {
+            let connection = connection.clone();
+            Rc::new(move |mode| {
+                if let Err(error) = db::set_setting(
+                    &connection.borrow(),
+                    sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY,
+                    mode.setting_value(),
+                ) {
+                    eprintln!("Could not save folder display mode: {error}");
                 }
             })
         },
