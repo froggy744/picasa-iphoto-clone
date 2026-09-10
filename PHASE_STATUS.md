@@ -2,6 +2,36 @@
 
 Date: 2026-09-10 · branch `deepseek` · base `e026510`
 
+## Session 2 — scroll-baseline4 (UI froze)
+
+`scroll-baseline4.log` (66 008 photos / 8976 folder rows) showed the UI
+saturating the main thread. Root cause found:
+
+- **Every bound photo chunk took `folder_virtual_bind_slow ~29 ms`** (1325 slow
+  binds, `worst_frame_ms` up to **23410**). `connect_bind` called
+  `selection_position_for_id` for each of its 8 tiles, which scans all 66 008
+  items in the `MultiSelection` — ~528k GObject calls per row.
+  Fixed: cache the selected ids in a `HashSet<i64>` updated on
+  selection-changed (`9bb3073`). Bind should drop to ~1 ms.
+- `photo_for_visible_folder_row` scanned all 66 008 photos on every scroll tick
+  to find the first photo of the picked folder. Now indexed by `group_ranges`
+  (`f4ceb42`).
+- `cache_dir()` ran `fs::create_dir_all` once per `PhotoObject` built; now
+  cached in a `OnceLock` (`6741fc7`).
+- The attached `incremental_splice` regressed to **6207 ms** for a near-full
+  reorder (`prefix=0 suffix=15`), worse than the detached 808 ms build. Now only
+  small changes (≤512 rows) splice in place (`9bb3073`).
+- The `folder_store_first_row` trace confirmed the reorder cause:
+  `old_folder_id=676 old_label="Pictures" new_folder_id=160
+  new_label="Angry Birds Party"` — a folder display-mode/sort change reorders
+  the whole stream, which is legitimate; the cost is what mattered.
+
+Remaining (Phase 4): `viewport_tiles mapped=1524` peaks show the folder
+`ListView` realizing ~190 rows during jumps. With the per-bind scan gone this
+is now bounded by tile creation, but worth a follow-up trace.
+
+## Session 1
+
 ## Phase 2 — Folder-scroll jank (Rank 1 ListStore rebuild)
 
 ### Root cause
@@ -129,6 +159,9 @@ PENDING_MEASUREMENT.md). Phase 3 was analysed directly against the real DB.
 - `0802ab5` docs(phase2): this status
 - `c5e2466` perf(grid): trace first differing folder row, not just row 0
 - `47106d8` perf(grid): probe original availability off the GTK thread
+- `9bb3073` perf(grid): cache selected ids in folder bind + detach large changes
+- `6741fc7` perf(thumbnail): cache resolved cache dir
+- `f4ceb42` perf(grid): index visible-folder lookup by group range
 
 ## Push
 
