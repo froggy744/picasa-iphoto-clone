@@ -1,0 +1,66 @@
+mod albums_view;
+mod collage;
+mod db;
+mod diagnostics;
+mod edit;
+mod folder_watcher;
+mod grid;
+mod image_format;
+mod infobar;
+mod lightbox;
+mod photo_object;
+mod photo_texture;
+mod scanner;
+mod settings;
+mod sidebar;
+mod source;
+mod thumbnail;
+mod window;
+
+fn main() {
+    use gio::prelude::*;
+    use gtk::prelude::*;
+    use gtk4 as gtk;
+    use libadwaita as adw;
+
+    init_trace_log();
+
+    std::panic::set_hook(Box::new(|panic| {
+        eprintln!("PICASA PANIC: {panic}");
+        eprintln!(
+            "PICASA PANIC BACKTRACE:\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+    }));
+
+    adw::init().expect("libadwaita initialization failed");
+    let application = adw::Application::new(
+        Some("io.github.you.PicasaRs"),
+        gio::ApplicationFlags::default(),
+    );
+    application.connect_activate(|application| {
+        // Startup loads indexed rows and recovers missing cached previews.
+        // Folder discovery runs through import/refresh actions and folder watches.
+        match db::open_default() {
+            Ok(connection) => window::build(application, connection).present(),
+            Err(error) => {
+                eprintln!("Could not open photo library: {error:#}");
+                let dialog = gtk::MessageDialog::builder()
+                    .message_type(gtk::MessageType::Error)
+                    .buttons(gtk::ButtonsType::Close)
+                    .text("Could not open the photo library")
+                    .secondary_text(error.to_string())
+                    .build();
+                dialog.connect_response(|dialog, _| dialog.close());
+                dialog.present();
+            }
+        }
+    });
+    application.run();
+}
+
+#[cfg(unix)]
+fn init_trace_log() {}
+
+#[cfg(not(unix))]
+fn init_trace_log() {}

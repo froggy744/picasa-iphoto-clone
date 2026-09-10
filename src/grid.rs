@@ -1,0 +1,1612 @@
+use std::cell::{Cell, RefCell};
+use std::collections::{HashSet, VecDeque};
+use std::rc::Rc;
+use std::time::Instant;
+
+use chrono::{Local, TimeZone};
+
+use gio::prelude::*;
+use glib::subclass::prelude::*;
+use gtk::prelude::*;
+use gtk4 as gtk;
+
+use crate::db::Photo;
+use crate::photo_object::PhotoObject;
+
+// EDIT THESE TWO VALUES to set your default thumbnail width and height.
+// They are independent. Example: 180 x 120, 200 x 140, 220 x 160.
+const DEFAULT_TILE_WIDTH: i32 = 180;
+const DEFAULT_TILE_HEIGHT: i32 = 120;
+
+// Existing +/- zoom remains enabled. Width changes by this step and height
+// scales by the same factor, preserving the custom shape above.
+const MIN_TILE_WIDTH: i32 = 100;
+const MAX_TILE_WIDTH: i32 = 300;
+const ZOOM_STEP_WIDTH: i32 = 24;
+
+const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 128;
+
+thread_local! {
+    static RAW_THUMBNAIL_CACHE: RefCell<VecDeque<(String, i32, gtk::gdk::Paintable)>> =
+        const { RefCell::new(VecDeque::new()) };
+}
+
+mod square_tile {
+    use std::cell::{Cell, RefCell};
+
+    use glib::subclass::prelude::*;
+    use gtk::prelude::*;
+    use gtk::subclass::prelude::*;
+    use gtk4 as gtk;
+
+    use crate::photo_object::PhotoObject;
+
+    #[derive(Default)]
+    pub struct SquareTile {
+        pub width: Cell<i32>,
+        pub height: Cell<i32>,
+        pub favorite_indicators_visible: Cell<bool>,
+        pub photo: RefCell<Option<PhotoObject>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for SquareTile {
+        const NAME: &'static str = "PicasaSquareTile";
+        type Type = super::SquareTile;
+        type ParentType = gtk::Widget;
+    }
+
+    impl ObjectImpl for SquareTile {
+        fn dispose(&self) {
+            self.photo.take();
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
+        }
+    }
+
+    impl WidgetImpl for SquareTile {
+        fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
+            let requested = match orientation {
+                gtk::Orientation::Horizontal => self.width.get().max(1),
+                gtk::Orientation::Vertical => self.height.get().max(1),
+                _ => self.width.get().max(1),
+            };
+
+            (requested, requested, -1, -1)
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            let child_width = self.width.get().min(width).max(1);
+            let child_height = self.height.get().min(height).max(1);
+
+            if let Some(child) = self.obj().first_child() {
+                let x = ((width - child_width) / 2).max(0) as f32;
+                let y = ((height - child_height) / 2).max(0) as f32;
+
+                let transform =
+                    gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x, y));
+
+                child.allocate(child_width, child_height, baseline, Some(transform));
+            }
+        }
+
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            if let Some(child) = self.obj().first_child() {
+                self.obj().snapshot_child(&child, snapshot);
+            }
+        }
+    }
+}
+
+glib::wrapper! {
+    pub struct SquareTile(ObjectSubclass<square_tile::SquareTile>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl SquareTile {
+    pub(crate) fn new(width: i32, height: i32, child: &impl IsA<gtk::Widget>) -> Self {
+        let tile: Self = glib::Object::new();
+        tile.imp().width.set(width.max(1));
+        tile.imp().height.set(height.max(1));
+        tile.imp().favorite_indicators_visible.set(true);
+        child.as_ref().set_parent(&tile);
+        tile
+    }
+
+    fn set_tile_size(&self, width: i32, height: i32) {
+        let width = width.max(1);
+        let height = height.max(1);
+        if self.imp().width.get() == width && self.imp().height.get() == height {
+            return;
+        }
+        self.imp().width.set(width);
+        self.imp().height.set(height);
+        self.queue_resize();
+    }
+
+    fn set_favorite_indicator_visible(&self, visible: bool) {
+        self.imp().favorite_indicators_visible.set(visible);
+        self.refresh_favorite_indicator();
+    }
+
+    fn refresh_favorite_indicator(&self) {
+        let Some(photo) = self.imp().photo.borrow().clone() else {
+            return;
+        };
+        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+        if let Some(badge) = overlay_image(&frame, "favorite-badge") {
+            badge.set_visible(self.imp().favorite_indicators_visible.get() && photo.favorite());
+        }
+    }
+
+    fn bind_photo(&self, photo: &PhotoObject) {
+        if self
+            .imp()
+            .photo
+            .borrow()
+            .as_ref()
+            .is_some_and(|current| current.id() == photo.id())
+        {
+            return;
+        }
+        self.imp().photo.replace(Some(photo.clone()));
+        photo.set_original_available(crate::source::cached_file_available(&photo.path()));
+        if let Some(path) = photo.cached_thumbnail_path() {
+            let available = std::path::Path::new(&path).is_file();
+            photo.set_thumbnail_available(available);
+            if !available {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "THUMB PRIORITY visible_missing id={} path={} cache={}",
+                        photo.id(),
+                        photo.path(),
+                        path
+                    );
+                }
+                crate::thumbnail::request_priority(
+                    photo.path(),
+                    Some(photo.mtime()),
+                    Some(photo.size_bytes()),
+                );
+            }
+        }
+        crate::diagnostics::visible_thumbnail(photo.thumbnail_available());
+        self.refresh_thumbnail_with_probe(false);
+    }
+
+    fn refresh_thumbnail(&self) {
+        self.refresh_thumbnail_with_probe(true);
+    }
+
+    fn refresh_availability(&self) {
+        let Some(photo) = self.imp().photo.borrow().clone() else {
+            return;
+        };
+        let available = crate::source::cached_file_available(&photo.path());
+        photo.set_original_available(available);
+
+        if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
+            if let Some(badge) = frame.last_child().and_downcast::<gtk::Button>() {
+                badge.set_visible(!available);
+            }
+        }
+    }
+
+    fn refresh_thumbnail_with_probe(&self, probe_thumbnail: bool) {
+        let Some(photo) = self.imp().photo.borrow().clone() else {
+            return;
+        };
+        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+        let Some(picture) = frame.child().and_downcast::<gtk::Picture>() else {
+            return;
+        };
+        let placeholder = picture.next_sibling().and_downcast::<gtk::Image>();
+        let favorite_badge = overlay_image(&frame, "favorite-badge");
+        let edited_badge = overlay_image(&frame, "edited-badge");
+        let unavailable_badge = frame.last_child().and_downcast::<gtk::Button>();
+        let cached = photo.cached_thumbnail_path();
+        let thumbnail_available = if probe_thumbnail {
+            // This is an explicit refresh (for example after thumbnail
+            // generation or clearing the cache), not a per-bind probe.
+            let available = cached
+                .as_deref()
+                .map(|path| std::path::Path::new(path).is_file())
+                .unwrap_or(false);
+            photo.set_thumbnail_available(available);
+            available
+        } else {
+            photo.thumbnail_available()
+        };
+        let existing = cached.as_deref().filter(|_| thumbnail_available);
+
+        if let Some(path) = existing {
+            // RAW correction requires decoding and cropping pixels. Do not do
+            // that synchronously while GtkGridView binds a tile; the cached
+            // file is already a usable thumbnail and keeps startup/scrolling
+            // responsive.
+            if crate::image_format::uses(&photo.path(), crate::image_format::DecoderKind::Raw)
+                && photo.rotation().rem_euclid(360) == 0
+                && crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default()
+            {
+                picture.set_filename(Some(path));
+            } else if let Some(cropped) = raw_cached_thumbnail(&photo, path) {
+                picture.set_paintable(Some(&cropped));
+            } else if let Some(rotated) =
+                crate::photo_texture::edited_thumbnail(path, photo.rotation(), &photo.edit_recipe())
+            {
+                picture.set_paintable(Some(&rotated));
+            } else {
+                picture.set_filename(Some(path));
+            }
+        } else {
+            picture.set_paintable(gtk::gdk::Paintable::NONE);
+        }
+        picture.set_tooltip_text(Some(&photo.filename()));
+        if let Some(badge) = unavailable_badge {
+            let unavailable = !photo.original_available();
+            badge.set_visible(unavailable);
+            badge.set_tooltip_text(if unavailable {
+                Some("Original photo unavailable")
+            } else {
+                None
+            });
+        }
+        if let Some(badge) = favorite_badge {
+            badge.set_visible(self.imp().favorite_indicators_visible.get() && photo.favorite());
+        }
+        if let Some(badge) = edited_badge {
+            let edited = !crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default();
+            badge.set_visible(edited);
+            badge.set_tooltip_text(if edited { Some("Edited") } else { None });
+        }
+        if let Some(placeholder) = placeholder {
+            placeholder.set_visible(existing.is_none());
+        }
+        if existing.is_some() {
+            picture.remove_css_class("missing-thumbnail");
+        } else {
+            picture.add_css_class("missing-thumbnail");
+        }
+    }
+}
+
+fn overlay_image(frame: &gtk::Overlay, css_class: &str) -> Option<gtk::Image> {
+    let mut child = frame.first_child();
+    while let Some(current) = child {
+        if let Some(image) = current.downcast_ref::<gtk::Image>() {
+            if image.has_css_class(css_class) {
+                return Some(image.clone());
+            }
+        }
+        child = current.next_sibling();
+    }
+    None
+}
+
+/// Nikon RAW thumbnails can contain a letterboxed embedded preview whose
+/// pixel aspect ratio does not match the camera image dimensions. GTK cannot
+/// crop bars that are already part of the cached pixels, so crop the small
+/// cached image before handing it to the normal Cover-rendered Picture.
+pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gtk::gdk::Paintable> {
+    let source_path = photo.path();
+    if !crate::image_format::uses(&source_path, crate::image_format::DecoderKind::Raw) {
+        return None;
+    }
+
+    let source_width = photo.width();
+    let source_height = photo.height();
+    if source_width <= 0 || source_height <= 0 {
+        return None;
+    }
+
+    let rotation = photo.rotation().rem_euclid(360);
+    let recipe = crate::edit::EditRecipe::decode(&photo.edit_recipe());
+    if recipe.is_default() {
+        if let Some(paintable) = raw_thumbnail_cache_get(&source_path, rotation) {
+            return Some(paintable);
+        }
+    }
+
+    let mut image = image::open(path).ok()?.to_rgba8();
+    let image_width = image.width();
+    let image_height = image.height();
+    if image_width == 0 || image_height == 0 {
+        return None;
+    }
+
+    // Cached thumbnails have already had EXIF orientation applied during
+    // generation. Raw dimensions are reported in sensor orientation, so
+    // orientations 5-8 require the target axes to be swapped as well.
+    let orientation = crate::thumbnail::exif_orientation(&source_path);
+    let (display_width, display_height) = if matches!(orientation, 5..=8) {
+        (source_height, source_width)
+    } else {
+        (source_width, source_height)
+    };
+    let target_ratio = display_width as f64 / display_height as f64;
+    let image_ratio = image_width as f64 / image_height as f64;
+    if image_ratio > target_ratio {
+        let crop_width =
+            ((image_height as f64 * target_ratio).round() as u32).clamp(1, image_width);
+        let left = (image_width - crop_width) / 2;
+        image = image::imageops::crop_imm(&image, left, 0, crop_width, image_height).to_image();
+    } else if image_ratio < target_ratio {
+        let crop_height =
+            ((image_width as f64 / target_ratio).round() as u32).clamp(1, image_height);
+        let top = (image_height - crop_height) / 2;
+        image = image::imageops::crop_imm(&image, 0, top, image_width, crop_height).to_image();
+    }
+
+    image = match rotation {
+        90 => image::imageops::rotate90(&image),
+        180 => image::imageops::rotate180(&image),
+        270 => image::imageops::rotate270(&image),
+        _ => image,
+    };
+    if !recipe.is_default() {
+        image = crate::edit::render::apply_recipe(image, &recipe);
+    }
+
+    let width = image.width() as i32;
+    let height = image.height() as i32;
+    let bytes = glib::Bytes::from_owned(image.into_raw());
+    let texture = gtk::gdk::MemoryTexture::new(
+        width,
+        height,
+        gtk::gdk::MemoryFormat::R8g8b8a8,
+        &bytes,
+        width as usize * 4,
+    );
+    let paintable: gtk::gdk::Paintable = texture.upcast();
+    if recipe.is_default() {
+        raw_thumbnail_cache_insert(source_path, rotation, paintable.clone());
+    }
+    Some(paintable)
+}
+
+fn raw_thumbnail_cache_get(path: &str, rotation: i32) -> Option<gtk::gdk::Paintable> {
+    RAW_THUMBNAIL_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let index = cache.iter().position(|(cached_path, cached_rotation, _)| {
+            cached_path == path && *cached_rotation == rotation
+        })?;
+        let entry = cache.remove(index)?;
+        let paintable = entry.2.clone();
+        cache.push_back(entry);
+        Some(paintable)
+    })
+}
+
+fn raw_thumbnail_cache_insert(path: String, rotation: i32, paintable: gtk::gdk::Paintable) {
+    RAW_THUMBNAIL_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|(cached_path, cached_rotation, _)| {
+            cached_path != &path || *cached_rotation != rotation
+        });
+        cache.push_back((path, rotation, paintable));
+        while cache.len() > RAW_THUMBNAIL_CACHE_CAPACITY {
+            cache.pop_front();
+        }
+    });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupMode {
+    None,
+    Day,
+    Month,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupDate {
+    Taken,
+    Added,
+}
+
+#[derive(Debug, Clone)]
+struct GroupRange {
+    start: usize,
+    end: usize,
+    label: String,
+}
+
+pub struct Gallery {
+    // GtkGridView must remain the direct GtkScrolledWindow child. GTK's list
+    // widgets are GtkScrollable and rely on that relationship for correct
+    // visible-item allocation and virtualization. Do not wrap this GridView
+    // in a Box/Viewport to implement grouping.
+    pub root: gtk::GridView,
+    pub group_header: gtk::Box,
+    group_title: gtk::Label,
+    group_count: gtk::Label,
+    selected: Rc<dyn Fn(Option<PhotoObject>)>,
+    store: gio::ListStore,
+    selection: gtk::MultiSelection,
+    collage_selection_mode: Rc<Cell<bool>>,
+    collage_selected_ids: Rc<RefCell<HashSet<i64>>>,
+    current_columns: Rc<Cell<u32>>,
+    last_layout_width: Rc<Cell<i32>>,
+    tile_width: Rc<Cell<i32>>,
+    tile_height: Rc<Cell<i32>>,
+    current_photos: Rc<RefCell<Vec<PhotoObject>>>,
+    replace_generation: Rc<Cell<u64>>,
+    group_mode: Rc<Cell<GroupMode>>,
+    group_date: Rc<Cell<GroupDate>>,
+    group_ranges: Rc<RefCell<Vec<GroupRange>>>,
+    last_scroll_y: Rc<Cell<f64>>,
+    on_zoom_changed: Rc<dyn Fn(i32)>,
+}
+
+impl Gallery {
+    pub fn new(
+        photos: &[Photo],
+        initial_tile_width: i32,
+        selected: impl Fn(Option<PhotoObject>) + 'static,
+        activate: impl Fn(Vec<PhotoObject>, usize) + 'static,
+        context_menu: impl Fn(PhotoObject, gtk::Widget, f64, f64) + 'static,
+        unavailable: impl Fn(PhotoObject, gtk::Widget) + 'static,
+        on_zoom_changed: impl Fn(i32) + 'static,
+    ) -> Self {
+        let selected: Rc<dyn Fn(Option<PhotoObject>)> = Rc::new(selected);
+        let activate: Rc<dyn Fn(Vec<PhotoObject>, usize)> = Rc::new(activate);
+        let context_menu: Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)> = Rc::new(context_menu);
+        let unavailable: Rc<dyn Fn(PhotoObject, gtk::Widget)> = Rc::new(unavailable);
+        let on_zoom_changed: Rc<dyn Fn(i32)> = Rc::new(on_zoom_changed);
+        let store = gio::ListStore::new::<PhotoObject>();
+        let selection = gtk::MultiSelection::new(Some(store.clone()));
+        let collage_selection_mode = Rc::new(Cell::new(false));
+        let collage_selected_ids = Rc::new(RefCell::new(HashSet::new()));
+        // Independent thumbnail width/height. Change DEFAULT_TILE_WIDTH and
+        // DEFAULT_TILE_HEIGHT above to choose your preferred starting size.
+        let tile_width = Rc::new(Cell::new(
+            initial_tile_width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH),
+        ));
+        let tile_height = Rc::new(Cell::new(
+            ((DEFAULT_TILE_HEIGHT as f64) * tile_width.get() as f64 / DEFAULT_TILE_WIDTH as f64)
+                .round()
+                .max(1.0) as i32,
+        ));
+
+        // Grouping is presented as a sticky heading outside the scrolled
+        // GridView. This deliberately avoids nesting multiple GtkGridViews in
+        // a GtkViewport, which broke row allocation and virtualization.
+        let group_header = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+        group_header.set_hexpand(true);
+        group_header.set_visible(false);
+        group_header.set_margin_start(20);
+        group_header.set_margin_end(20);
+        group_header.set_margin_top(10);
+        group_header.set_margin_bottom(4);
+        group_header.add_css_class("group-heading-bar");
+
+        let group_title = gtk::Label::new(None);
+        group_title.set_xalign(0.0);
+        group_title.add_css_class("section-heading");
+        group_header.append(&group_title);
+
+        let group_count = gtk::Label::new(None);
+        group_count.set_xalign(0.0);
+        group_count.add_css_class("dim-label");
+        group_count.add_css_class("section-count");
+        group_header.append(&group_count);
+
+        let factory = gtk::SignalListItemFactory::new();
+        let tile_width_for_setup = tile_width.clone();
+        let tile_height_for_setup = tile_height.clone();
+        let unavailable_for_setup = unavailable.clone();
+        factory.connect_setup(move |_, object| {
+            let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+
+            let frame = gtk::Overlay::new();
+            frame.set_overflow(gtk::Overflow::Hidden);
+            frame.add_css_class("photo-frame");
+            frame.add_css_class("photo-tile");
+
+            let picture = gtk::Picture::new();
+            picture.set_content_fit(gtk::ContentFit::Cover);
+            picture.set_can_shrink(true);
+            picture.set_size_request(1, 1);
+            picture.set_hexpand(true);
+            picture.set_vexpand(true);
+            picture.set_halign(gtk::Align::Fill);
+            picture.set_valign(gtk::Align::Fill);
+            picture.add_css_class("thumbnail");
+            frame.set_child(Some(&picture));
+
+            let placeholder = gtk::Image::from_icon_name("image-x-generic-symbolic");
+            placeholder.set_pixel_size(32);
+            placeholder.add_css_class("dim-label");
+            placeholder.set_visible(false);
+            frame.add_overlay(&placeholder);
+
+            let checkmark = gtk::Image::from_icon_name("object-select-symbolic");
+            checkmark.set_pixel_size(18);
+            checkmark.set_halign(gtk::Align::End);
+            checkmark.set_valign(gtk::Align::Start);
+            checkmark.set_margin_top(8);
+            checkmark.set_margin_end(8);
+            checkmark.add_css_class("selection-badge");
+            frame.add_overlay(&checkmark);
+
+            let favorite_badge = gtk::Image::from_icon_name("emote-love-symbolic");
+            favorite_badge.set_pixel_size(18);
+            favorite_badge.set_halign(gtk::Align::End);
+            favorite_badge.set_valign(gtk::Align::End);
+            favorite_badge.set_margin_bottom(8);
+            favorite_badge.set_margin_end(8);
+            favorite_badge.add_css_class("favorite-badge");
+            favorite_badge.set_visible(false);
+            frame.add_overlay(&favorite_badge);
+
+            let edited_badge = gtk::Image::from_icon_name("document-edit-symbolic");
+            edited_badge.set_pixel_size(18);
+            edited_badge.set_halign(gtk::Align::Start);
+            edited_badge.set_valign(gtk::Align::End);
+            edited_badge.set_margin_bottom(8);
+            edited_badge.set_margin_start(8);
+            edited_badge.add_css_class("edited-badge");
+            edited_badge.set_tooltip_text(Some("Edited"));
+            edited_badge.set_visible(false);
+            frame.add_overlay(&edited_badge);
+
+            let unavailable_badge = gtk::Button::with_label("!");
+            unavailable_badge.set_halign(gtk::Align::Start);
+            unavailable_badge.set_valign(gtk::Align::Start);
+            unavailable_badge.set_margin_top(8);
+            unavailable_badge.set_margin_start(8);
+            unavailable_badge.add_css_class("offline-badge");
+            unavailable_badge.set_tooltip_text(Some("Original photo unavailable"));
+            unavailable_badge.set_visible(false);
+            frame.add_overlay(&unavailable_badge);
+
+            let list_item_for_unavailable = list_item.clone();
+            let unavailable_for_click = unavailable_for_setup.clone();
+            let badge_for_click = unavailable_badge.clone();
+            unavailable_badge.connect_clicked(move |_| {
+                if let Some(photo) = list_item_for_unavailable
+                    .item()
+                    .and_downcast::<PhotoObject>()
+                {
+                    (unavailable_for_click)(photo, badge_for_click.clone().upcast());
+                }
+            });
+
+            let tile = SquareTile::new(
+                tile_width_for_setup.get(),
+                tile_height_for_setup.get(),
+                &frame,
+            );
+            tile.set_hexpand(true);
+            tile.set_vexpand(false);
+            tile.set_valign(gtk::Align::Start);
+            list_item.set_child(Some(&tile));
+
+        });
+
+        factory.connect_bind(|_, object| {
+            let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let Some(photo) = list_item.item().and_downcast::<PhotoObject>() else {
+                return;
+            };
+            let Some(tile) = list_item.child().and_downcast::<SquareTile>() else {
+                return;
+            };
+            tile.bind_photo(&photo);
+        });
+
+        let root = gtk::GridView::new(Some(selection.clone()), Some(factory));
+        root.set_min_columns(5);
+        root.set_max_columns(5);
+        root.set_single_click_activate(false);
+        root.set_enable_rubberband(true);
+        root.set_hexpand(true);
+        root.set_vexpand(true);
+        root.set_halign(gtk::Align::Fill);
+        root.set_valign(gtk::Align::Fill);
+        root.add_css_class("section-grid");
+
+        // GridView children are recycled and the pointer may land on any
+        // descendant of a tile. Use one stable controller on GridView, pick
+        // the tile under the pointer, and only claim the event after a bound
+        // photo has been identified. Select an unselected clicked photo so
+        // context-menu actions and focus restoration target that thumbnail.
+        // Right-clicking within an existing multi-selection preserves it.
+        let right_click = gtk::GestureClick::new();
+        right_click.set_button(3);
+        right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let context_menu_for_grid = context_menu.clone();
+        let root_for_context = root.clone();
+        let selection_for_context = selection.clone();
+        right_click.connect_pressed(move |gesture, _, x, y| {
+            let Some(picked) = root_for_context.pick(x, y, gtk::PickFlags::DEFAULT) else {
+                return;
+            };
+            let Some(tile) = picked
+                .ancestor(SquareTile::static_type())
+                .and_downcast::<SquareTile>()
+            else {
+                return;
+            };
+            let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+                return;
+            };
+            let Some(position) = (0..selection_for_context.n_items()).find(|position| {
+                selection_for_context
+                    .item(*position)
+                    .and_downcast::<PhotoObject>()
+                    .is_some_and(|item| item.id() == photo.id())
+            }) else {
+                return;
+            };
+            let Some(frame) = tile.first_child().and_downcast::<gtk::Overlay>() else {
+                return;
+            };
+
+            let frame_widget = frame.clone().upcast::<gtk::Widget>();
+            let local = root_for_context
+                .compute_point(
+                    &frame_widget,
+                    &gtk::graphene::Point::new(x as f32, y as f32),
+                )
+                .unwrap_or_else(|| gtk::graphene::Point::new(0.0, 0.0));
+
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            if !selection_for_context.is_selected(position) {
+                selection_for_context.select_item(position, true);
+            }
+            root_for_context.grab_focus();
+            (context_menu_for_grid)(
+                photo,
+                frame_widget,
+                local.x() as f64,
+                local.y() as f64,
+            );
+        });
+        root.add_controller(right_click);
+
+        // Handle Add Photos clicks on the GridView itself, before the
+        // built-in GridView selection controller sees them. This makes the
+        // mode behave like a checklist: each click toggles one item and does
+        // not collapse the other selected photos.
+        let collage_click = gtk::GestureClick::new();
+        collage_click.set_button(1);
+        collage_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let mode = collage_selection_mode.clone();
+        let selection_for_click = selection.clone();
+        let collage_selected_ids_for_click = collage_selected_ids.clone();
+        let root_for_click = root.clone();
+        collage_click.connect_pressed(move |gesture, _, x, y| {
+            if !mode.get() {
+                return;
+            }
+            let Some(picked) = root_for_click.pick(x, y, gtk::PickFlags::DEFAULT) else {
+                return;
+            };
+            let Some(tile) = picked
+                .ancestor(SquareTile::static_type())
+                .and_downcast::<SquareTile>()
+            else {
+                return;
+            };
+            let Some(photo_id) = tile.imp().photo.borrow().as_ref().map(|photo| photo.id()) else {
+                return;
+            };
+            let Some(position) = (0..selection_for_click.n_items()).find(|position| {
+                selection_for_click
+                    .item(*position)
+                    .and_downcast::<PhotoObject>()
+                    .is_some_and(|photo| photo.id() == photo_id)
+            }) else {
+                return;
+            };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            let mut selected_ids = collage_selected_ids_for_click.borrow_mut();
+            if selected_ids.remove(&photo_id) {
+                selection_for_click.unselect_item(position);
+            } else {
+                selected_ids.insert(photo_id);
+                selection_for_click.select_item(position, false);
+            }
+        });
+        root.add_controller(collage_click);
+
+        let selected_for_signal = selected.clone();
+        selection.connect_selection_changed(move |selection, _, _| {
+            let selected = selection.selection();
+            let photo = gtk::BitsetIter::init_first(&selected)
+                .and_then(|(_, position)| selection.item(position))
+                .and_downcast::<PhotoObject>();
+            (selected_for_signal)(photo);
+        });
+
+        let current_photos = Rc::new(RefCell::new(Vec::<PhotoObject>::new()));
+        let current_photos_for_activate = current_photos.clone();
+        let selection_for_activate = selection.clone();
+        root.connect_activate(move |_, position| {
+            let Some(activated) = selection_for_activate
+                .model()
+                .and_then(|model| model.item(position))
+                .and_downcast::<PhotoObject>()
+            else {
+                return;
+            };
+            let photos = current_photos_for_activate.borrow().clone();
+            let index = photos
+                .iter()
+                .position(|photo| photo.id() == activated.id())
+                .unwrap_or(position as usize);
+            (activate)(photos, index);
+        });
+
+        let gallery = Self {
+            root,
+            group_header,
+            group_title,
+            group_count,
+            selected,
+            store,
+            selection,
+            collage_selection_mode,
+            collage_selected_ids,
+            current_columns: Rc::new(Cell::new(5)),
+            last_layout_width: Rc::new(Cell::new(0)),
+            tile_width,
+            tile_height,
+            current_photos,
+            replace_generation: Rc::new(Cell::new(0)),
+            group_mode: Rc::new(Cell::new(GroupMode::None)),
+            group_date: Rc::new(Cell::new(GroupDate::Taken)),
+            group_ranges: Rc::new(RefCell::new(Vec::new())),
+            last_scroll_y: Rc::new(Cell::new(0.0)),
+            on_zoom_changed,
+        };
+        gallery.replace(photos);
+        gallery
+    }
+
+    pub fn update_width(&self, width: i32) {
+        let available = (width - 48).max(200);
+        let columns = ((available as f64) / (self.tile_width.get() as f64 + 30.0))
+            .floor()
+            .clamp(1.0, 8.0) as u32;
+        if width == self.last_layout_width.get() && columns == self.current_columns.get() {
+            return;
+        }
+        self.last_layout_width.set(width);
+        self.current_columns.set(columns);
+        self.root.set_min_columns(columns);
+        self.root.set_max_columns(columns);
+        self.root.queue_resize();
+        self.update_group_header_for_scroll(self.last_scroll_y.get());
+    }
+
+    pub fn set_grouping(&self, mode: GroupMode, date: GroupDate) {
+        let old_mode = self.group_mode.replace(mode);
+        let old_date = self.group_date.replace(date);
+        let changed = old_mode != mode || old_date != date;
+        if changed || mode != GroupMode::None {
+            self.rebuild_group_ranges();
+        }
+
+        let visible = mode != GroupMode::None && !self.group_ranges.borrow().is_empty();
+        self.group_header.set_visible(visible);
+        if visible {
+            self.update_group_header_for_scroll(self.last_scroll_y.get());
+        } else {
+            self.group_title.set_text("");
+            self.group_count.set_text("");
+        }
+    }
+
+    pub fn update_group_header_for_scroll(&self, scroll_y: f64) {
+        self.last_scroll_y.set(scroll_y.max(0.0));
+        if self.group_mode.get() == GroupMode::None {
+            return;
+        }
+
+        self.update_group_header_for_index(self.index_for_scroll_position(scroll_y));
+    }
+
+    /// Return the photo at the leading visible grid row for a scroll position.
+    ///
+    /// This uses the same geometry as the sticky group heading, so sidebar
+    /// location tracking follows what the user is actually looking at without
+    /// changing selection or causing navigation.
+    pub fn photo_for_scroll_position(&self, scroll_y: f64) -> Option<PhotoObject> {
+        self.current_photos
+            .borrow()
+            .get(self.index_for_scroll_position(scroll_y))
+            .cloned()
+    }
+
+    fn index_for_scroll_position(&self, scroll_y: f64) -> usize {
+        // Grid item padding is 6px on each edge in window.rs. The top grid
+        // margin is 20px. Keep this calculation shared with the sticky heading.
+        const ITEM_PADDING: f64 = 6.0;
+        const GRID_TOP_MARGIN: f64 = 20.0;
+        let tile_height = self.tile_height.get().max(1) as f64;
+        let row_pitch = tile_height + ITEM_PADDING * 2.0;
+        let row = ((scroll_y - GRID_TOP_MARGIN).max(0.0) / row_pitch).floor() as usize;
+        row.saturating_mul(self.current_columns.get().max(1) as usize)
+    }
+
+    fn rebuild_group_ranges(&self) {
+        let mode = self.group_mode.get();
+        let date = self.group_date.get();
+        let photos = self.current_photos.borrow();
+
+        let mut ranges = Vec::<GroupRange>::new();
+        if mode != GroupMode::None {
+            for (index, photo) in photos.iter().enumerate() {
+                let label = group_label(photo, mode, date);
+                match ranges.last_mut() {
+                    Some(last) if last.label == label => last.end = index + 1,
+                    _ => ranges.push(GroupRange {
+                        start: index,
+                        end: index + 1,
+                        label,
+                    }),
+                }
+            }
+        }
+        self.group_ranges.replace(ranges);
+    }
+
+    fn update_group_header_for_index(&self, index: usize) {
+        let ranges = self.group_ranges.borrow();
+        let Some(range) = ranges
+            .iter()
+            .find(|range| index >= range.start && index < range.end)
+            .or_else(|| ranges.last())
+        else {
+            self.group_header.set_visible(false);
+            return;
+        };
+
+        self.group_header.set_visible(true);
+        self.group_title.set_text(&range.label);
+        let count = range.end.saturating_sub(range.start);
+        self.group_count.set_text(&format!(
+            "•  {} {}",
+            format_count(count),
+            if count == 1 { "photo" } else { "photos" }
+        ));
+    }
+
+    pub fn zoom_in(&self) {
+        self.set_zoom(self.tile_width.get() + ZOOM_STEP_WIDTH);
+    }
+
+    pub fn zoom_out(&self) {
+        self.set_zoom(self.tile_width.get() - ZOOM_STEP_WIDTH);
+    }
+
+    /// Zoom is driven by width. Height scales by the same factor, preserving
+    /// the custom width/height shape configured above.
+    pub fn set_zoom(&self, width: i32) {
+        let old_width = self.tile_width.get().max(1);
+        let old_height = self.tile_height.get().max(1);
+        let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+        if width == old_width {
+            return;
+        }
+
+        let scale = width as f64 / old_width as f64;
+        let height = ((old_height as f64) * scale).round().max(1.0) as i32;
+
+        self.tile_width.set(width);
+        self.tile_height.set(height);
+        (self.on_zoom_changed)(width);
+
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            tile.set_tile_size(width, height);
+        }
+
+        let root_width = self.root.width();
+        self.last_layout_width.set(0);
+        if root_width > 100 {
+            self.update_width(root_width);
+        } else {
+            self.update_group_header_for_scroll(self.last_scroll_y.get());
+        }
+    }
+
+    pub fn refresh_thumbnails(&self) {
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            tile.refresh_thumbnail();
+        }
+    }
+
+    pub fn set_favorite_indicators_visible(&self, visible: bool) {
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            tile.set_favorite_indicator_visible(visible);
+        }
+    }
+
+    pub fn refresh_favorite_indicators(&self) {
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            tile.refresh_favorite_indicator();
+        }
+    }
+
+    pub fn update_favorites(&self, ids: &[i64], favorite: bool) {
+        let ids = ids.iter().copied().collect::<HashSet<_>>();
+        for photo in self.current_photos.borrow().iter() {
+            if ids.contains(&photo.id()) {
+                photo.set_favorite(favorite);
+            }
+        }
+        self.refresh_favorite_indicators();
+    }
+
+    /// Remove visible photos from the current grid without rebuilding the model.
+    /// This is used when a photo stops belonging to the active virtual view
+    /// (Favourites or an Album). Preserve the viewport and move selection to
+    /// the nearest remaining thumbnail instead of jumping back to item 0.
+    pub fn remove_photos(&self, ids: &[i64]) {
+        if ids.is_empty() {
+            return;
+        }
+
+        let scroll_y = self.scroll_position();
+        let ids = ids.iter().copied().collect::<HashSet<_>>();
+        let positions = self
+            .current_photos
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter_map(|(position, photo)| ids.contains(&photo.id()).then_some(position))
+            .collect::<Vec<_>>();
+        if positions.is_empty() {
+            return;
+        }
+
+        let next_position = positions.iter().copied().min().unwrap_or(0);
+
+        self.current_photos
+            .borrow_mut()
+            .retain(|photo| !ids.contains(&photo.id()));
+        for position in positions.into_iter().rev() {
+            self.store.remove(position as u32);
+        }
+
+        if self.collage_selection_mode.get() {
+            self.restore_collage_selection();
+        } else {
+            self.selection.unselect_all();
+            let len = self.store.n_items() as usize;
+            if len == 0 {
+                (self.selected)(None);
+            } else {
+                self.selection
+                    .select_item(next_position.min(len - 1) as u32, true);
+            }
+        }
+
+        if self.group_mode.get() != GroupMode::None {
+            self.rebuild_group_ranges();
+            self.update_group_header_for_scroll(scroll_y);
+        }
+
+        // Invalidate any pending progressive replacement before restoring the
+        // old adjustment after GridView has processed the ListStore removals.
+        let generation = self.replace_generation.get().wrapping_add(1);
+        self.replace_generation.set(generation);
+        schedule_scroll_restore(
+            &self.root,
+            scroll_y,
+            self.replace_generation.clone(),
+            generation,
+        );
+        self.root.grab_focus();
+    }
+
+    pub fn refresh_thumbnails_for_paths(&self, paths: &[std::path::PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        let paths = paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<HashSet<_>>();
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            let matches = tile
+                .imp()
+                .photo
+                .borrow()
+                .as_ref()
+                .is_some_and(|photo| paths.contains(&photo.path()));
+            if matches {
+                tile.refresh_thumbnail();
+            }
+        }
+    }
+
+    pub fn refresh_availability(&self) {
+        let updates = self
+            .current_photos
+            .borrow()
+            .iter()
+            .map(|photo| {
+                (
+                    photo.id(),
+                    crate::source::cached_file_available(&photo.path()),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.apply_availability(&updates);
+    }
+
+    pub fn availability_snapshot(&self) -> Vec<(i64, String)> {
+        self.current_photos
+            .borrow()
+            .iter()
+            .map(|photo| (photo.id(), photo.path()))
+            .collect()
+    }
+
+    pub fn apply_availability(&self, updates: &[(i64, bool)]) {
+        for (id, available) in updates {
+            if let Some(photo) = self
+                .current_photos
+                .borrow()
+                .iter()
+                .find(|photo| photo.id() == *id)
+            {
+                photo.set_original_available(*available);
+            }
+        }
+
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            tile.refresh_availability();
+        }
+    }
+
+    pub fn replace(&self, photos: &[Photo]) {
+        let profile_started = crate::diagnostics::refresh_started(photos.len());
+        let generation = self.replace_generation.get().wrapping_add(1);
+        self.replace_generation.set(generation);
+        let unchanged = {
+            let current = self.current_photos.borrow();
+            current.len() == photos.len()
+                && current
+                    .iter()
+                    .zip(photos)
+                    .all(|(object, photo)| object.id() == photo.id)
+        };
+        if unchanged {
+            return;
+        }
+
+        // Constructing tens of thousands of GObjects synchronously blocks
+        // GTK for several seconds. Keep the existing model semantics for
+        // normal refreshes, but let the main loop make progress between small
+        // batches for library-sized replacements.
+        const PROGRESSIVE_REPLACE_THRESHOLD: usize = 1_000;
+        if photos.len() > PROGRESSIVE_REPLACE_THRESHOLD {
+            self.replace_progressive(photos.to_vec(), generation, profile_started);
+            return;
+        }
+
+        if !self.collage_selection_mode.get() {
+            (self.selected)(None);
+        }
+        let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
+        crate::diagnostics::refresh_first_batch(profile_started, objects.len());
+        self.current_photos.replace(objects.clone());
+        self.store.splice(0, self.store.n_items(), &objects);
+        if self.collage_selection_mode.get() {
+            self.restore_collage_selection();
+        } else if objects.is_empty() {
+            self.selection.unselect_all();
+        } else {
+            self.selection.select_item(0, true);
+        }
+        if self.group_mode.get() != GroupMode::None {
+            self.rebuild_group_ranges();
+            self.update_group_header_for_scroll(self.last_scroll_y.get());
+        }
+        crate::diagnostics::refresh_finished(profile_started, objects.len());
+    }
+
+    fn replace_progressive(
+        &self,
+        photos: Vec<Photo>,
+        generation: u64,
+        profile_started: Option<Instant>,
+    ) {
+        const BATCH_SIZE: usize = 500;
+
+        let photos = Rc::new(photos);
+        let offset = Rc::new(Cell::new(0usize));
+        let initialized = Rc::new(Cell::new(false));
+        let store = self.store.clone();
+        let selected = self.selected.clone();
+        let current_photos = self.current_photos.clone();
+        let selection = self.selection.clone();
+        let collage_selection_mode = self.collage_selection_mode.clone();
+        let collage_selected_ids = self.collage_selected_ids.clone();
+        let group_mode = self.group_mode.clone();
+        let group_date = self.group_date.clone();
+        let group_ranges = self.group_ranges.clone();
+        let group_header = self.group_header.clone();
+        let group_title = self.group_title.clone();
+        let group_count = self.group_count.clone();
+        let last_scroll_y = self.last_scroll_y.clone();
+        let current_columns = self.current_columns.clone();
+        let tile_height = self.tile_height.clone();
+        let replace_generation = self.replace_generation.clone();
+
+        glib::idle_add_local(move || {
+            if replace_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+
+            let start = offset.get();
+            let end = (start + BATCH_SIZE).min(photos.len());
+            let objects: Vec<PhotoObject> = photos[start..end]
+                .iter()
+                .map(PhotoObject::from_photo)
+                .collect();
+            offset.set(end);
+
+            if !initialized.replace(true) {
+                if !collage_selection_mode.get() {
+                    selected(None);
+                }
+                current_photos.replace(objects.clone());
+                store.splice(0, store.n_items(), &objects);
+                crate::diagnostics::refresh_first_batch(profile_started, objects.len());
+            } else {
+                current_photos.borrow_mut().extend(objects.iter().cloned());
+                store.splice(store.n_items(), 0, &objects);
+            }
+
+            if end >= photos.len() {
+                rebuild_group_ranges_for(&current_photos, &group_mode, &group_date, &group_ranges);
+                update_group_header_for_index_for(
+                    &group_mode,
+                    &group_ranges,
+                    &group_header,
+                    &group_title,
+                    &group_count,
+                    (((last_scroll_y.get() - 20.0).max(0.0)
+                        / (tile_height.get().max(1) as f64 + 12.0))
+                        .floor() as usize)
+                        * current_columns.get().max(1) as usize,
+                );
+            }
+            if end >= photos.len() && collage_selection_mode.get() {
+                selection.unselect_all();
+                let wanted = collage_selected_ids.borrow().clone();
+                for position in 0..store.n_items() {
+                    if store
+                        .item(position)
+                        .and_downcast::<PhotoObject>()
+                        .is_some_and(|photo| wanted.contains(&photo.id()))
+                    {
+                        selection.select_item(position, false);
+                    }
+                }
+            } else if end >= photos.len() && !objects.is_empty() {
+                selection.select_item(0, true);
+            }
+            if end < photos.len() {
+                glib::ControlFlow::Continue
+            } else {
+                crate::diagnostics::refresh_finished(
+                    profile_started,
+                    current_photos.borrow().len(),
+                );
+                glib::ControlFlow::Break
+            }
+        });
+    }
+
+    pub fn append_photos(&self, photos: &[Photo]) {
+        if photos.is_empty() {
+            return;
+        }
+        let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
+        self.current_photos
+            .borrow_mut()
+            .extend(objects.iter().cloned());
+        self.store.splice(self.store.n_items(), 0, &objects);
+        if self.group_mode.get() != GroupMode::None {
+            self.rebuild_group_ranges();
+            self.update_group_header_for_scroll(self.last_scroll_y.get());
+        }
+    }
+
+    /// Returns the currently selected thumbnail position when the grid has a
+    /// single active selection. Keyboard navigation uses this to decide when
+    /// Up/Down should cross into the adjacent folder.
+    pub fn selected_position(&self) -> Option<usize> {
+        let selected = self.selection.selection();
+        gtk::BitsetIter::init_first(&selected).map(|(_, position)| position as usize)
+    }
+
+    pub fn scroll_position(&self) -> f64 {
+        self.root
+            .vadjustment()
+            .map(|adjustment| adjustment.value())
+            .unwrap_or_else(|| self.last_scroll_y.get())
+    }
+
+    pub fn restore_view(&self, photo_id: i64, scroll_y: f64) {
+        let Some(position) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .position(|photo| photo.id() == photo_id)
+        else {
+            return;
+        };
+        let root = self.root.clone();
+        let selection = self.selection.clone();
+        glib::idle_add_local_once(move || {
+            selection.select_item(position as u32, true);
+            let scroll = gtk::ScrollInfo::new();
+            scroll.set_enable_horizontal(false);
+            scroll.set_enable_vertical(false);
+            root.scroll_to(
+                position as u32,
+                gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                Some(scroll),
+            );
+            if let Some(adjustment) = root.vadjustment() {
+                let upper = (adjustment.upper() - adjustment.page_size())
+                    .max(adjustment.lower());
+                adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+            }
+        });
+    }
+
+    pub fn restore_context_view(&self, photo_id: i64, scroll_y: f64) {
+        let Some(position) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .position(|photo| photo.id() == photo_id)
+        else {
+            return;
+        };
+        let root = self.root.clone();
+        glib::idle_add_local_once(move || {
+            let scroll = gtk::ScrollInfo::new();
+            scroll.set_enable_horizontal(false);
+            scroll.set_enable_vertical(false);
+            root.scroll_to(position as u32, gtk::ListScrollFlags::FOCUS, Some(scroll));
+            if let Some(adjustment) = root.vadjustment() {
+                let upper = (adjustment.upper() - adjustment.page_size())
+                    .max(adjustment.lower());
+                adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+            }
+        });
+    }
+
+    pub fn is_at_vertical_boundary(&self, direction: i32) -> bool {
+        let Some(position) = self.selected_position() else {
+            return false;
+        };
+        let item_count = self.store.n_items() as usize;
+        let columns = self.current_columns.get().max(1) as usize;
+        if item_count == 0 {
+            return false;
+        }
+
+        if direction < 0 {
+            position < columns
+        } else {
+            position.saturating_add(columns) >= item_count
+        }
+    }
+
+    pub fn update_edit_recipe(&self, id: i64, recipe: &str) {
+        if let Some(photo) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .find(|photo| photo.id() == id)
+        {
+            photo.set_edit_recipe(recipe.to_string());
+        }
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            let matches = tile
+                .imp()
+                .photo
+                .borrow()
+                .as_ref()
+                .is_some_and(|photo| photo.id() == id);
+            if matches {
+                tile.refresh_thumbnail();
+            }
+        }
+    }
+
+    pub fn update_dimensions(&self, id: i64, width: Option<i64>, height: Option<i64>) {
+        if let Some(photo) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .find(|photo| photo.id() == id)
+        {
+            photo.set_width(width.unwrap_or_default());
+            photo.set_height(height.unwrap_or_default());
+        }
+    }
+
+    pub fn selected_photo_ids(&self, fallback_id: Option<i64>) -> Vec<i64> {
+        if self.collage_selection_mode.get() {
+            return self.collage_selected_ids.borrow().iter().copied().collect();
+        }
+        let selected = self.selection.selection();
+        let mut ids = Vec::new();
+        if let Some((mut iter, first)) = gtk::BitsetIter::init_first(&selected) {
+            ids.extend(
+                std::iter::once(first)
+                    .chain(&mut iter)
+                    .filter_map(|position| {
+                        self.current_photos.borrow().get(position as usize).cloned()
+                    })
+                    .map(|photo| photo.id()),
+            );
+        }
+        match fallback_id {
+            Some(fallback) if !ids.contains(&fallback) => vec![fallback],
+            _ => ids,
+        }
+    }
+
+    pub fn set_collage_selection_mode(&self, active: bool) {
+        self.collage_selection_mode.set(active);
+        if !active {
+            self.collage_selected_ids.borrow_mut().clear();
+        }
+    }
+
+    pub fn set_selected_photo_ids(&self, ids: &[i64]) {
+        self.collage_selected_ids
+            .borrow_mut()
+            .extend(ids.iter().copied());
+        self.collage_selected_ids
+            .borrow_mut()
+            .retain(|id| ids.contains(id));
+        self.selection.unselect_all();
+        let wanted = ids.iter().copied().collect::<HashSet<_>>();
+        for position in 0..self.store.n_items() {
+            let Some(photo) = self.store.item(position).and_downcast::<PhotoObject>() else {
+                continue;
+            };
+            if wanted.contains(&photo.id()) {
+                self.selection.select_item(position, false);
+            }
+        }
+    }
+
+    fn restore_collage_selection(&self) {
+        self.selection.unselect_all();
+        let wanted = self.collage_selected_ids.borrow().clone();
+        for position in 0..self.store.n_items() {
+            if self
+                .store
+                .item(position)
+                .and_downcast::<PhotoObject>()
+                .is_some_and(|photo| wanted.contains(&photo.id()))
+            {
+                self.selection.select_item(position, false);
+            }
+        }
+    }
+
+    pub fn select_photo(&self, photo_id: i64) -> bool {
+        let Some(model) = self.selection.model() else {
+            return false;
+        };
+        for position in 0..model.n_items() {
+            let matches = model
+                .item(position)
+                .and_downcast::<PhotoObject>()
+                .is_some_and(|photo| photo.id() == photo_id);
+            if matches {
+                self.selection.select_item(position, true);
+                self.root.scroll_to(
+                    position,
+                    gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                    None,
+                );
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn select_last_photo(&self) {
+        let count = self.store.n_items();
+        if count == 0 {
+            return;
+        }
+        let position = count - 1;
+        self.selection.select_item(position, true);
+        self.root.scroll_to(
+            position,
+            gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+            None,
+        );
+    }
+
+    pub fn photo_objects(&self) -> Vec<PhotoObject> {
+        self.current_photos.borrow().clone()
+    }
+}
+
+fn rebuild_group_ranges_for(
+    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
+    group_mode: &Rc<Cell<GroupMode>>,
+    group_date: &Rc<Cell<GroupDate>>,
+    group_ranges: &Rc<RefCell<Vec<GroupRange>>>,
+) {
+    let mode = group_mode.get();
+    let date = group_date.get();
+    let photos = current_photos.borrow();
+    let mut ranges: Vec<GroupRange> = Vec::new();
+    if mode != GroupMode::None {
+        for (index, photo) in photos.iter().enumerate() {
+            let label = group_label(photo, mode, date);
+            match ranges.last_mut() {
+                Some(last) if last.label == label => last.end = index + 1,
+                _ => ranges.push(GroupRange {
+                    start: index,
+                    end: index + 1,
+                    label,
+                }),
+            }
+        }
+    }
+    group_ranges.replace(ranges);
+}
+
+fn update_group_header_for_index_for(
+    group_mode: &Rc<Cell<GroupMode>>,
+    group_ranges: &Rc<RefCell<Vec<GroupRange>>>,
+    group_header: &gtk::Box,
+    group_title: &gtk::Label,
+    group_count: &gtk::Label,
+    index: usize,
+) {
+    if group_mode.get() == GroupMode::None {
+        group_header.set_visible(false);
+        group_title.set_text("");
+        group_count.set_text("");
+        return;
+    }
+
+    let ranges = group_ranges.borrow();
+    let Some(range) = ranges
+        .iter()
+        .find(|range| index >= range.start && index < range.end)
+        .or_else(|| ranges.last())
+    else {
+        group_header.set_visible(false);
+        return;
+    };
+
+    group_header.set_visible(true);
+    group_title.set_text(&range.label);
+    let count = range.end.saturating_sub(range.start);
+    group_count.set_text(&format!(
+        "•  {} {}",
+        format_count(count),
+        if count == 1 { "photo" } else { "photos" }
+    ));
+}
+
+fn group_label(photo: &PhotoObject, mode: GroupMode, date: GroupDate) -> String {
+    let value = match date {
+        GroupDate::Taken => photo.taken_at().and_then(|value| parse_photo_date(&value)),
+        GroupDate::Added => {
+            let mtime = photo.mtime();
+            (mtime > 0)
+                .then(|| Local.timestamp_opt(mtime, 0).single())
+                .flatten()
+        }
+    };
+
+    let Some(value) = value else {
+        return "Unknown Date".to_string();
+    };
+
+    match mode {
+        GroupMode::None => String::new(),
+        GroupMode::Month => value.format("%B %Y").to_string(),
+        GroupMode::Day => {
+            let date = value.date_naive();
+            let today = Local::now().date_naive();
+            if date == today {
+                "Today".to_string()
+            } else if date == today.pred_opt().unwrap_or(today) {
+                "Yesterday".to_string()
+            } else {
+                value.format("%-d %B %Y").to_string()
+            }
+        }
+    }
+}
+
+fn parse_photo_date(value: &str) -> Option<chrono::DateTime<Local>> {
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Some(parsed.with_timezone(&Local));
+    }
+    if let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+        return Local.from_local_datetime(&parsed).single();
+    }
+    if let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H-%M-%S") {
+        return Local.from_local_datetime(&parsed).single();
+    }
+    None
+}
+
+fn format_count(value: usize) -> String {
+    let digits = value.to_string();
+    let mut result = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, character) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(character);
+    }
+    result
+}
+
+fn schedule_scroll_restore(
+    root: &gtk::GridView,
+    scroll_y: f64,
+    replace_generation: Rc<Cell<u64>>,
+    generation: u64,
+) {
+    let root = root.clone();
+    glib::idle_add_local_once(move || {
+        if replace_generation.get() != generation {
+            return;
+        }
+        if let Some(adjustment) = root.vadjustment() {
+            let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+            adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+        }
+    });
+}
+
+fn collect_tiles(widget: &gtk::Widget, tiles: &mut Vec<SquareTile>) {
+    if let Some(tile) = widget.downcast_ref::<SquareTile>() {
+        tiles.push(tile.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        collect_tiles(&current, tiles);
+        child = current.next_sibling();
+    }
+}
