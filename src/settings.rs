@@ -18,6 +18,7 @@ impl SettingsWindow {
         connection: Rc<RefCell<Connection>>,
         formats_changed: Rc<dyn Fn()>,
         folder_watch_changed: Rc<dyn Fn(i64, bool)>,
+        theme_changed: Rc<dyn Fn()>,
     ) {
         if let Some(window) = self.window.borrow().upgrade() {
             window.present();
@@ -47,7 +48,7 @@ impl SettingsWindow {
             "File Formats",
         );
         stack.add_titled(
-            &placeholder_page("Theme settings coming soon."),
+            &themes_page(connection.clone(), theme_changed),
             Some("themes"),
             "Themes",
         );
@@ -436,8 +437,107 @@ pub fn refresh_library_availability_stats(connection: Rc<RefCell<Connection>>) {
     });
 }
 
-fn placeholder_page(message: &str) -> gtk::ScrolledWindow {
-    let content = page_content("Themes", message);
+// Keep the original key so existing bookshelf preferences survive the theme expansion.
+pub(crate) const BOOKSHELF_SETTING_KEY: &str = "iphone-bookshelf-albums";
+pub(crate) const ALBUM_VIEW_STYLE_SETTING_KEY: &str = "albums-home-style";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum AlbumViewStyle {
+    #[default]
+    Default,
+    Bookshelf,
+    AlbumCovers,
+}
+
+impl AlbumViewStyle {
+    fn setting_value(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Bookshelf => "bookshelf",
+            Self::AlbumCovers => "album-covers",
+        }
+    }
+}
+
+pub(crate) fn album_view_style(connection: &Connection) -> AlbumViewStyle {
+    match crate::db::setting(connection, ALBUM_VIEW_STYLE_SETTING_KEY)
+        .ok()
+        .flatten()
+        .as_deref()
+    {
+        Some("bookshelf") => AlbumViewStyle::Bookshelf,
+        Some("album-covers") => AlbumViewStyle::AlbumCovers,
+        Some("default") => AlbumViewStyle::Default,
+        _ if crate::db::setting(connection, BOOKSHELF_SETTING_KEY)
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true") =>
+        {
+            AlbumViewStyle::Bookshelf
+        }
+        _ => AlbumViewStyle::Default,
+    }
+}
+
+fn set_album_view_style(connection: &Connection, style: AlbumViewStyle) -> anyhow::Result<()> {
+    crate::db::set_setting(
+        connection,
+        ALBUM_VIEW_STYLE_SETTING_KEY,
+        style.setting_value(),
+    )
+}
+
+fn themes_page(
+    connection: Rc<RefCell<Connection>>,
+    theme_changed: Rc<dyn Fn()>,
+) -> gtk::ScrolledWindow {
+    let content = page_content("Themes", "Customize theme options.");
+    let heading = gtk::Label::new(Some("Albums"));
+    heading.set_halign(gtk::Align::Start);
+    heading.add_css_class("heading");
+    content.append(&heading);
+
+    let list = settings_list();
+    let default = gtk::CheckButton::with_label("Default");
+    let bookshelf = gtk::CheckButton::with_label("Bookshelf");
+    bookshelf.set_group(Some(&default));
+    let album_covers = gtk::CheckButton::with_label("Album Covers");
+    album_covers.set_group(Some(&default));
+    default.set_tooltip_text(Some("Use the standard Albums Home thumbnails"));
+    bookshelf.set_tooltip_text(Some("Show album skins on the wooden bookshelf"));
+    album_covers.set_tooltip_text(Some("Show album-cover.png on a plain background"));
+
+    match album_view_style(&connection.borrow()) {
+        AlbumViewStyle::Default => default.set_active(true),
+        AlbumViewStyle::Bookshelf => bookshelf.set_active(true),
+        AlbumViewStyle::AlbumCovers => album_covers.set_active(true),
+    }
+
+    for (choice, style) in [
+        (&default, AlbumViewStyle::Default),
+        (&bookshelf, AlbumViewStyle::Bookshelf),
+        (&album_covers, AlbumViewStyle::AlbumCovers),
+    ] {
+        choice.set_margin_top(10);
+        choice.set_margin_bottom(10);
+        choice.set_margin_start(12);
+        choice.set_margin_end(12);
+        let connection = connection.clone();
+        let theme_changed = theme_changed.clone();
+        choice.connect_toggled(move |choice| {
+            if !choice.is_active() {
+                return;
+            }
+            if let Err(error) = set_album_view_style(&connection.borrow(), style) {
+                eprintln!("Could not save album view style: {error}");
+                return;
+            }
+            theme_changed();
+        });
+        list.append(choice);
+    }
+    content.append(&list);
     scroll_page(content)
 }
 
@@ -540,5 +640,94 @@ mod tests {
     fn byte_sizes_are_human_readable() {
         assert_eq!(format_bytes(0), "0 B");
         assert_eq!(format_bytes(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn album_view_style_defaults_and_migrates_the_bookshelf_toggle() {
+        use super::*;
+
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            .unwrap();
+        assert_eq!(album_view_style(&connection), AlbumViewStyle::Default);
+
+        crate::db::set_setting(&connection, BOOKSHELF_SETTING_KEY, "true").unwrap();
+        assert_eq!(album_view_style(&connection), AlbumViewStyle::Bookshelf);
+
+        set_album_view_style(&connection, AlbumViewStyle::AlbumCovers).unwrap();
+        assert_eq!(album_view_style(&connection), AlbumViewStyle::AlbumCovers);
+        assert_eq!(
+            crate::db::setting(&connection, ALBUM_VIEW_STYLE_SETTING_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("album-covers"),
+        );
+
+        set_album_view_style(&connection, AlbumViewStyle::Default).unwrap();
+        assert_eq!(album_view_style(&connection), AlbumViewStyle::Default);
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn album_view_choices_persist_and_notify() {
+        use super::*;
+
+        fn find_choices(widget: &gtk::Widget, choices: &mut Vec<gtk::CheckButton>) {
+            if let Some(choice) = widget.downcast_ref::<gtk::CheckButton>() {
+                choices.push(choice.clone());
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                find_choices(&widget, choices);
+                child = widget.next_sibling();
+            }
+        }
+
+        gtk::init().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "pic-bookshelf-setting-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(Connection::open(&path).unwrap()));
+        connection
+            .borrow()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            )
+            .unwrap();
+        let notified = Rc::new(Cell::new(0));
+        let notified_for_callback = notified.clone();
+        let page = themes_page(
+            connection.clone(),
+            Rc::new(move || notified_for_callback.set(notified_for_callback.get() + 1)),
+        );
+        let mut choices = Vec::new();
+        find_choices(page.upcast_ref(), &mut choices);
+        assert_eq!(
+            choices
+                .iter()
+                .filter_map(|choice| choice.label())
+                .collect::<Vec<_>>(),
+            ["Default", "Bookshelf", "Album Covers"],
+        );
+        assert!(choices[0].is_active());
+        choices[2].set_active(true);
+        assert_eq!(notified.get(), 1);
+        assert_eq!(
+            album_view_style(&connection.borrow()),
+            AlbumViewStyle::AlbumCovers
+        );
+        drop(page);
+        drop(connection);
+
+        let reopened = Connection::open(&path).unwrap();
+        assert_eq!(album_view_style(&reopened), AlbumViewStyle::AlbumCovers);
+        drop(reopened);
+        std::fs::remove_file(path).unwrap();
     }
 }

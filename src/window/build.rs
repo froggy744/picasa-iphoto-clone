@@ -534,6 +534,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         }) as Rc<dyn Fn(i64, bool)>
     };
+    let settings_albums_refresh = albums_home_refresh_slot.clone();
     info.more.connect_clicked(move |_| {
         let connection = settings_connection.clone();
         let gallery = settings_gallery.clone();
@@ -544,6 +545,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let sidebar = settings_sidebar.clone();
         let on_unavailable = settings_on_unavailable.clone();
         let folder_watch_changed = settings_folder_watch_changed.clone();
+        let theme_connection = settings_connection.clone();
+        let theme_albums_refresh = settings_albums_refresh.clone();
         settings_window.present(
             &settings_parent,
             settings_connection.clone(),
@@ -566,6 +569,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
             }),
             folder_watch_changed,
+            Rc::new(move || {
+                let albums = db::albums(&theme_connection.borrow()).unwrap_or_default();
+                if let Some(refresh) = theme_albums_refresh.borrow().as_ref() {
+                    refresh(&albums);
+                }
+            }),
         );
     });
 
@@ -2756,6 +2765,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let connection_for_standard = connection.clone();
     let lightbox_for_standard = lightbox.clone();
     let style_manager_for_standard = style_manager.clone();
+    let albums_for_standard = albums_home_refresh_slot.clone();
     standard_theme.connect_toggled(move |button| {
         if button.is_active() {
             gtk::style_context_add_provider_for_display(
@@ -2771,6 +2781,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             ) {
                 eprintln!("Could not save appearance theme: {error}");
             }
+            let albums = db::albums(&connection_for_standard.borrow()).unwrap_or_default();
+            if let Some(refresh) = albums_for_standard.borrow().as_ref() {
+                refresh(&albums);
+            }
         }
     });
 
@@ -2778,6 +2792,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let provider_for_iphone = standard_theme_provider.clone();
     let connection_for_iphone = connection.clone();
     let lightbox_for_iphone = lightbox.clone();
+    let albums_for_iphone = albums_home_refresh_slot.clone();
     iphone_theme.connect_toggled(move |button| {
         if button.is_active() {
             gtk::style_context_remove_provider_for_display(
@@ -2789,6 +2804,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 db::set_setting(&connection_for_iphone.borrow(), THEME_SETTING_KEY, "iphone")
             {
                 eprintln!("Could not save appearance theme: {error}");
+            }
+            let albums = db::albums(&connection_for_iphone.borrow()).unwrap_or_default();
+            if let Some(refresh) = albums_for_iphone.borrow().as_ref() {
+                refresh(&albums);
             }
         }
     });
