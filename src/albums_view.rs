@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
 
-use gtk::prelude::*;
 use gtk4 as gtk;
+use libadwaita as adw;
+use libadwaita::prelude::*;
 use rusqlite::Connection;
 
 use crate::db::{self, Album};
@@ -26,6 +27,21 @@ const BOOKSHELF_MIN_CARD_WIDTH: i32 = 220;
 const BOOKSHELF_MAX_CARD_WIDTH: i32 = 280;
 const BOOKSHELF_CARD_FILL_RATIO: f64 = 0.78;
 const BOOKSHELF_RUNTIME_KEY: &str = "picasa-bookshelf-runtime";
+const ALBUM_SIZE_KEY: &str = "albums-index-size";
+const ALBUM_SORT_KEY: &str = "albums-index-sort";
+const FRAME_OPENING_KEY: &str = "picasa-album-frame-opening";
+const STANDARD_CSS: &str = "
+    .albums-index-title { font-size: 24px; font-weight: 700; text-shadow: none; }
+    .albums-standard .album-cover { border-radius: 8px; border: 1px solid alpha(@theme_fg_color, 0.14); background: alpha(@theme_fg_color, 0.045); box-shadow: none; }
+    .albums-standard .thumbnail { border-radius: 7px; }
+    .albums-standard > flowboxchild { padding: 0; margin: 0; min-height: 0; background: transparent; box-shadow: none; }
+    .albums-standard button.album-card { color: inherit; min-width: 0; padding: 0; margin: 0; border: none; border-radius: 8px; background: transparent; background-image: none; box-shadow: none; }
+    .albums-standard button.album-card:hover .album-cover { border-color: alpha(@accent_bg_color, 0.65); }
+    .albums-standard button.album-card:hover { background: alpha(@theme_fg_color, 0.035); }
+    .albums-standard button.album-card:focus-visible { outline: 2px solid @accent_bg_color; outline-offset: 3px; }
+    .albums-standard .album-name { font-weight: 600; font-size: 14px; }
+    .albums-standard .album-photo-count { font-size: 12px; }
+";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BookshelfThemeKind {
@@ -50,6 +66,8 @@ struct BookshelfRuntime {
     last_columns: Rc<Cell<usize>>,
     last_card_width: Rc<Cell<i32>>,
     selected_theme: Rc<RefCell<Option<BookshelfTheme>>>,
+    standard_width: Rc<Cell<i32>>,
+    last_standard_width: Rc<Cell<i32>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -398,8 +416,8 @@ fn bookshelf_columns_for_width(width: i32, _card_width: i32) -> usize {
 
     let usable_width = (width - BOOKSHELF_SIDE_PADDING * 2).max(BOOKSHELF_MIN_CARD_WIDTH);
     let per_card = BOOKSHELF_MIN_CARD_WIDTH + BOOKSHELF_COLUMN_GAP;
-    ((usable_width + BOOKSHELF_COLUMN_GAP) / per_card)
-        .clamp(1, BOOKSHELF_MAX_COLUMNS as i32) as usize
+    ((usable_width + BOOKSHELF_COLUMN_GAP) / per_card).clamp(1, BOOKSHELF_MAX_COLUMNS as i32)
+        as usize
 }
 
 fn bookshelf_target_card_width(width: i32, columns: usize) -> i32 {
@@ -643,21 +661,61 @@ pub fn build(
         .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
-    content.set_margin_start(28);
-    content.set_margin_end(28);
-    content.set_margin_top(24);
-    content.set_margin_bottom(28);
+    content.set_margin_start(32);
+    content.set_margin_end(32);
+    content.set_margin_top(28);
+    content.set_margin_bottom(32);
+
+    let style = gtk::CssProvider::new();
+    style.load_from_string(STANDARD_CSS);
+    gtk::style_context_add_provider_for_display(
+        &scrolled.display(),
+        &style,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 3,
+    );
+
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let heading = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    heading.set_hexpand(true);
 
     let title = gtk::Label::new(Some("Albums"));
     title.set_xalign(0.0);
-    title.add_css_class("section-heading");
-    content.append(&title);
+    title.add_css_class("albums-index-title");
+    heading.append(&title);
 
     let count = gtk::Label::new(None);
     count.set_xalign(0.0);
     count.add_css_class("dim-label");
     count.add_css_class("albums-home-count");
-    content.append(&count);
+    heading.append(&count);
+    header.append(&heading);
+
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let sort =
+        gtk::DropDown::from_strings(&["Name A–Z", "Name Z–A", "Newest first", "Most photos"]);
+    sort.add_css_class("albums-sort");
+    sort.set_tooltip_text(Some("Sort albums"));
+    sort.set_selected(index_setting(&connection.borrow(), ALBUM_SORT_KEY, 0, 3));
+    let sort_label = gtk::Label::new(Some("Sort"));
+    sort_label.set_mnemonic_widget(Some(&sort));
+    controls.append(&sort_label);
+    controls.append(&sort);
+    let size = gtk::DropDown::from_strings(&["Compact", "Comfortable", "Large"]);
+    size.add_css_class("albums-size");
+    size.set_tooltip_text(Some("Album cover size"));
+    size.set_selected(index_setting(&connection.borrow(), ALBUM_SIZE_KEY, 1, 2));
+    let size_label = gtk::Label::new(Some("Cover size"));
+    size_label.add_css_class("albums-size-label");
+    size_label.set_mnemonic_widget(Some(&size));
+    controls.append(&size_label);
+    controls.append(&size);
+    header.append(&controls);
+
+    let create = gtk::Button::with_label("New Album");
+    create.add_css_class("suggested-action");
+    create.add_css_class("albums-create");
+    header.append(&create);
+    content.append(&header);
 
     let cards = gtk::FlowBox::new();
     cards.set_selection_mode(gtk::SelectionMode::None);
@@ -686,6 +744,8 @@ pub fn build(
         last_columns: Rc::new(Cell::new(0)),
         last_card_width: Rc::new(Cell::new(0)),
         selected_theme: Rc::new(RefCell::new(None)),
+        standard_width: Rc::new(Cell::new(0)),
+        last_standard_width: Rc::new(Cell::new(0)),
     };
     unsafe {
         scrolled.set_data(BOOKSHELF_RUNTIME_KEY, bookshelf_runtime.clone());
@@ -694,6 +754,31 @@ pub fn build(
     content.append(&cards);
     content.append(&bookshelf_rows);
     scrolled.set_child(Some(&content));
+    for (control, key) in [(sort, ALBUM_SORT_KEY), (size, ALBUM_SIZE_KEY)] {
+        let weak_view = scrolled.downgrade();
+        let connection = connection.clone();
+        let on_album = on_album.clone();
+        let changed = on_appearance_changed.clone();
+        control.connect_selected_notify(move |control| {
+            if let Err(error) =
+                db::set_setting(&connection.borrow(), key, &control.selected().to_string())
+            {
+                eprintln!("Could not save album presentation: {error}");
+                return;
+            }
+            if let Some(view) = weak_view.upgrade() {
+                let albums = db::albums(&connection.borrow()).unwrap_or_default();
+                refresh(
+                    &view,
+                    &albums,
+                    connection.clone(),
+                    thumbnail_width,
+                    on_album.clone(),
+                    changed.clone(),
+                );
+            }
+        });
+    }
     refresh_presentation(&scrolled, &connection.borrow());
 
     populate(
@@ -708,7 +793,16 @@ pub fn build(
     );
 
     let runtime_for_resize = bookshelf_runtime.clone();
-    scrolled.add_tick_callback(move |scrolled, _| {
+    let standard_cards = cards.clone();
+    scrolled.add_tick_callback(move |_, _| {
+        let preferred = runtime_for_resize.standard_width.get();
+        if preferred > 0 && standard_cards.width() > 0 {
+            let width = standard_cards.width();
+            if width != runtime_for_resize.last_standard_width.get() {
+                resize_standard_cards(&standard_cards, width, preferred);
+                runtime_for_resize.last_standard_width.set(width);
+            }
+        }
         if !runtime_for_resize.rows.is_visible() {
             return glib::ControlFlow::Continue;
         }
@@ -749,6 +843,49 @@ pub fn build(
     );
 
     scrolled
+}
+
+pub fn connect_create_album(scrolled: &gtk::ScrolledWindow, create_album: Rc<dyn Fn()>) {
+    if let Some(button) = find_descendant_with_css_class(scrolled.upcast_ref(), "albums-create")
+        .and_then(|widget| widget.downcast::<gtk::Button>().ok())
+    {
+        button.connect_clicked(move |_| create_album());
+    }
+}
+
+fn index_setting(connection: &Connection, key: &str, default: u32, max: u32) -> u32 {
+    db::setting(connection, key)
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value <= max)
+        .unwrap_or(default)
+}
+
+fn resize_standard_cards(grid: &gtk::FlowBox, available: i32, preferred: i32) {
+    let columns = ((available + 24) / (preferred + 24)).max(1);
+    let width = ((available - (columns - 1) * 24) / columns)
+        .min(preferred + 24)
+        .max(1);
+    grid.set_max_children_per_line(columns as u32);
+    let mut cards = Vec::new();
+    collect_bookshelf_cards(grid.upcast_ref(), &mut cards);
+    for card in cards {
+        card.set_width_request(width);
+        if let Some(content) = card.child() {
+            content.set_width_request(width);
+        }
+        if let Some(cover) = find_descendant_with_css_class(card.upcast_ref(), "album-cover") {
+            cover.set_size_request(width, width * 2 / 3);
+        }
+        // The overlay and FlowBox wrapper must shrink along with the cover.
+        if let Some(tile) = card.parent() {
+            tile.set_width_request(width);
+            if let Some(slot) = tile.parent() {
+                slot.set_width_request(width);
+            }
+        }
+    }
 }
 
 fn install_context_menu(
@@ -831,6 +968,27 @@ fn show_album_context_menu(
     heading.add_css_class("heading");
     menu.append(&heading);
 
+    let rename = gtk::Button::with_label("Rename Album…");
+    rename.set_halign(gtk::Align::Fill);
+    rename.add_css_class("flat");
+    rename.add_css_class("rename-album-action");
+    let popover_for_rename = popover.clone();
+    let rename_connection = connection.clone();
+    let rename_album = album.clone();
+    let rename_changed = on_appearance_changed.clone();
+    let rename_anchor = anchor.clone();
+    rename.connect_clicked(move |_| {
+        popover_for_rename.popdown();
+        show_rename_album_dialog(
+            &rename_anchor,
+            rename_connection.clone(),
+            rename_album.clone(),
+            rename_changed.clone(),
+        );
+    });
+    menu.append(&rename);
+    menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
     let next_frame = gtk::Button::with_label("Next Album Cover");
     next_frame.set_halign(gtk::Align::Fill);
     next_frame.set_sensitive(!frames.is_empty());
@@ -892,6 +1050,52 @@ fn show_album_context_menu(
     popover.set_parent(anchor);
     popover.connect_closed(|popover| popover.unparent());
     popover.popup();
+}
+
+fn show_rename_album_dialog(
+    parent: &gtk::Button,
+    connection: Rc<RefCell<Connection>>,
+    album: Album,
+    on_changed: Rc<dyn Fn()>,
+) {
+    let entry = gtk::Entry::new();
+    entry.set_text(&album.name);
+    entry.set_activates_default(true);
+    entry.select_region(0, -1);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.append(&gtk::Label::new(Some("Enter a new album name:")));
+    content.append(&entry);
+    let dialog = adw::AlertDialog::builder()
+        .heading("Rename Album")
+        .extra_child(&content)
+        .close_response("cancel")
+        .default_response("rename")
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("rename", "Rename");
+    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+    let parent_for_response = parent.clone();
+    let entry_for_response = entry.clone();
+    dialog.connect_response(Some("rename"), move |dialog, _| {
+        if let Err(error) = db::rename_album(
+            &connection.borrow(),
+            album.id,
+            entry_for_response.text().as_str(),
+        ) {
+            let error_dialog = adw::AlertDialog::builder()
+                .heading("Could not rename album")
+                .body(error.to_string())
+                .close_response("close")
+                .build();
+            error_dialog.add_response("close", "Close");
+            error_dialog.present(Some(&parent_for_response));
+            return;
+        }
+        dialog.close();
+        on_changed();
+    });
+    dialog.present(Some(parent));
+    entry.grab_focus();
 }
 
 fn show_context_menu(
@@ -1048,6 +1252,11 @@ pub fn refresh(
 
 pub fn refresh_presentation(scrolled: &gtk::ScrolledWindow, connection: &Connection) {
     let appearance = settings::album_appearance(connection);
+    for class in ["albums-size", "albums-size-label"] {
+        if let Some(widget) = find_descendant_with_css_class(scrolled.upcast_ref(), class) {
+            widget.set_visible(!appearance.bookshelf_enabled && !appearance.covers_enabled);
+        }
+    }
     remove_bookshelf_background_classes(scrolled.upcast_ref());
     if let Some(cards) = find_descendant_with_css_class(scrolled.upcast_ref(), "albums-home-grid") {
         remove_bookshelf_background_classes(&cards);
@@ -1134,6 +1343,36 @@ fn populate(
         .filter(|theme| theme.kind == BookshelfThemeKind::Row)
         .cloned();
     let responsive_bookshelf = row_theme.is_some();
+    let standard = !appearance.bookshelf_enabled && !appearance.covers_enabled;
+    let preferred_width =
+        [220, 240, 280][index_setting(&connection.borrow(), ALBUM_SIZE_KEY, 1, 2) as usize];
+    bookshelf_runtime
+        .standard_width
+        .set(if standard { preferred_width } else { 0 });
+    bookshelf_runtime.last_standard_width.set(0);
+    cards.set_homogeneous(standard);
+    cards.set_max_children_per_line(if standard { 20 } else { 6 });
+    if standard {
+        cards.add_css_class("albums-standard");
+    } else {
+        cards.remove_css_class("albums-standard");
+    }
+    let mut albums = albums.to_vec();
+    let sort = index_setting(&connection.borrow(), ALBUM_SORT_KEY, 0, 3);
+    albums.sort_by(|a, b| {
+        let names = || {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then(a.id.cmp(&b.id))
+        };
+        match sort {
+            1 => names().reverse(),
+            2 => b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)),
+            3 => b.photo_count.cmp(&a.photo_count).then_with(names),
+            _ => names(),
+        }
+    });
 
     cards.set_visible(!responsive_bookshelf);
     cards.set_vexpand(false);
@@ -1156,12 +1395,18 @@ fn populate(
             })
             .collect();
     let framed = !frames.is_empty();
-    cards.set_row_spacing(if framed { 28 } else { 20 });
-    cards.set_column_spacing(if framed { 24 } else { 20 });
+    cards.set_row_spacing(if standard {
+        32
+    } else if framed {
+        28
+    } else {
+        20
+    });
+    cards.set_column_spacing(if standard || framed { 24 } else { 20 });
 
     if albums.is_empty() {
         let empty = gtk::Label::new(Some(
-            "No albums yet\nCreate an album with the + button in the sidebar.",
+            "Your albums start here\nChoose New Album to organise your photos into a collection.",
         ));
         empty.set_xalign(0.0);
         empty.add_css_class("dim-label");
@@ -1179,7 +1424,9 @@ fn populate(
         return;
     }
 
-    let thumbnail_width = if framed {
+    let thumbnail_width = if standard {
+        preferred_width
+    } else if framed {
         thumbnail_width.clamp(220, 300)
     } else {
         thumbnail_width
@@ -1196,7 +1443,7 @@ fn populate(
     let frame_paths: Vec<_> = frames.iter().map(|frame| frame.path.clone()).collect();
     let mut bookshelf_cards = Vec::with_capacity(albums.len());
 
-    for album in albums {
+    for album in &albums {
         let frame = selected_frame_index(
             album,
             Path::new(ALBUM_COVER_THEME_DIRECTORY),
@@ -1230,6 +1477,13 @@ fn populate(
             ));
             card.set_halign(gtk::Align::Center);
             bookshelf_cards.push(card);
+        } else if standard {
+            if let Some(cover) = find_descendant_with_css_class(card.upcast_ref(), "album-cover") {
+                cover.set_height_request(thumbnail_width * 2 / 3);
+            }
+            let tile = gtk::Overlay::new();
+            tile.set_child(Some(&card));
+            insert_child(cards, &tile, Some(card_width), None);
         } else {
             insert_child(cards, &card, Some(card_width), None);
         }
@@ -1356,23 +1610,22 @@ fn resize_bookshelf_cards(rows: &gtk::Box, target_width: i32, theme: &BookshelfT
         }
 
         let scale_x = target_width as f64 / current_width as f64;
-        let target_height = ((current_height as f64 * scale_x).round() as i32)
-            .clamp(1, theme.surface_y.max(1));
+        let target_height =
+            ((current_height as f64 * scale_x).round() as i32).clamp(1, theme.surface_y.max(1));
 
         if let Some(picture) = find_descendant_with_css_class(cover.upcast_ref(), "thumbnail") {
-            let scale_y = target_height as f64 / current_height as f64;
-            picture.set_margin_start(
-                ((picture.margin_start() as f64 * scale_x).round() as i32).max(0),
-            );
-            picture.set_margin_end(
-                ((picture.margin_end() as f64 * scale_x).round() as i32).max(0),
-            );
-            picture.set_margin_top(
-                ((picture.margin_top() as f64 * scale_y).round() as i32).max(0),
-            );
-            picture.set_margin_bottom(
-                ((picture.margin_bottom() as f64 * scale_y).round() as i32).max(0),
-            );
+            // Recompute from the original opening instead of rescaling rounded
+            // margins, which can drift by a pixel after each resize.
+            if let Some(opening) = unsafe { cover.data::<PhotoOpening>(FRAME_OPENING_KEY) }
+                .map(|opening| unsafe { *opening.as_ref() })
+            {
+                let (left, top, right, bottom) =
+                    photo_margins(opening, target_width, target_height);
+                picture.set_margin_start(left);
+                picture.set_margin_top(top);
+                picture.set_margin_end(right);
+                picture.set_margin_bottom(bottom);
+            }
         }
 
         cover.set_width_request(target_width);
@@ -1619,8 +1872,24 @@ fn album_card(
     placeholder.set_visible(cover_photo.is_none());
     cover.add_overlay(&placeholder);
 
+    if frame.is_none() && !responsive_bookshelf && cover_photo.is_none() {
+        let empty_label = gtk::Label::new(Some(if photos.is_empty() {
+            "No photos yet"
+        } else {
+            "Preview unavailable"
+        }));
+        empty_label.add_css_class("dim-label");
+        empty_label.set_halign(gtk::Align::Center);
+        empty_label.set_valign(gtk::Align::Center);
+        empty_label.set_margin_top(80);
+        cover.add_overlay(&empty_label);
+    }
+
     if let Some(frame) = frame {
         // The cached photo stays below the transparent opening; the PNG is the top layer.
+        unsafe {
+            cover.set_data(FRAME_OPENING_KEY, frame.opening);
+        }
         let (left, top, right, bottom) = photo_margins(frame.opening, width, height);
         for widget in [
             picture.upcast_ref::<gtk::Widget>(),
@@ -1652,6 +1921,7 @@ fn album_card(
 
     // Album name below cover.
     let name = gtk::Label::new(Some(&album.name));
+    name.add_css_class("album-name");
     name.set_xalign(0.0);
     name.set_width_chars(1);
     name.set_max_width_chars(24);
@@ -1670,6 +1940,7 @@ fn album_card(
     };
 
     let photo_count = gtk::Label::new(Some(&count_text));
+    photo_count.add_css_class("album-photo-count");
     photo_count.set_xalign(0.0);
     photo_count.add_css_class("dim-label");
     if responsive_bookshelf {
@@ -1765,6 +2036,199 @@ mod tests {
             }
         }
         alpha
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn standard_index_controls_preserve_size_and_sort_after_refresh() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-index-controls-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        db::create_album(&connection.borrow(), "Zebra").unwrap();
+        db::create_album(&connection.borrow(), "Alps").unwrap();
+        for name in [
+            "Family",
+            "Garden",
+            "Summer holiday with a long album title",
+            "Weekend",
+        ] {
+            db::create_album(&connection.borrow(), name).unwrap();
+        }
+        let albums = db::albums(&connection.borrow()).unwrap();
+        let view = build(
+            &albums,
+            connection.clone(),
+            100,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+        );
+        let cover_before = find_descendant_with_css_class(view.upcast_ref(), "album-cover")
+            .unwrap()
+            .width_request();
+        assert!(
+            cover_before >= 220,
+            "album covers should have their own larger default size"
+        );
+        refresh(
+            &view,
+            &albums,
+            connection.clone(),
+            300,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+        );
+        assert_eq!(
+            find_descendant_with_css_class(view.upcast_ref(), "album-cover")
+                .unwrap()
+                .width_request(),
+            cover_before
+        );
+        let sort = find_descendant_with_css_class(view.upcast_ref(), "albums-sort")
+            .unwrap()
+            .downcast::<gtk::DropDown>()
+            .unwrap();
+        sort.set_selected(1);
+        let first = find_descendant_with_css_class(view.upcast_ref(), "album-name")
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap();
+        assert_eq!(first.text(), "Zebra");
+        refresh(
+            &view,
+            &albums,
+            connection.clone(),
+            136,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+        );
+        assert_eq!(
+            find_descendant_with_css_class(view.upcast_ref(), "album-name")
+                .unwrap()
+                .downcast::<gtk::Label>()
+                .unwrap()
+                .text(),
+            "Zebra"
+        );
+        let size = find_descendant_with_css_class(view.upcast_ref(), "albums-size")
+            .unwrap()
+            .downcast::<gtk::DropDown>()
+            .unwrap();
+        size.set_selected(2);
+        assert!(
+            find_descendant_with_css_class(view.upcast_ref(), "album-cover")
+                .unwrap()
+                .width_request()
+                > cover_before
+        );
+        let created = Rc::new(Cell::new(false));
+        let created_callback = created.clone();
+        connect_create_album(&view, Rc::new(move || created_callback.set(true)));
+        find_descendant_with_css_class(view.upcast_ref(), "albums-create")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap()
+            .emit_clicked();
+        assert!(created.get());
+
+        let window = gtk::Window::builder()
+            .default_width(1000)
+            .default_height(760)
+            .child(&view)
+            .build();
+        window.present();
+        settle_gtk_layout();
+        settle_gtk_layout();
+        let sort_bounds = find_descendant_with_css_class(view.upcast_ref(), "albums-sort")
+            .unwrap()
+            .compute_bounds(&view)
+            .unwrap();
+        let size_bounds = find_descendant_with_css_class(view.upcast_ref(), "albums-size")
+            .unwrap()
+            .compute_bounds(&view)
+            .unwrap();
+        let create_bounds = find_descendant_with_css_class(view.upcast_ref(), "albums-create")
+            .unwrap()
+            .compute_bounds(&view)
+            .unwrap();
+        assert_eq!(sort_bounds.y(), create_bounds.y());
+        assert_eq!(size_bounds.y(), create_bounds.y());
+        assert!(sort_bounds.x() < size_bounds.x() && size_bounds.x() < create_bounds.x());
+        let grid = find_descendant_with_css_class(view.upcast_ref(), "albums-home-grid")
+            .unwrap()
+            .downcast::<gtk::FlowBox>()
+            .unwrap();
+        let wide_columns = grid.max_children_per_line();
+        assert!(wide_columns >= 3);
+        let mut cards = Vec::new();
+        collect_bookshelf_cards(grid.upcast_ref(), &mut cards);
+        assert_eq!(cards.len(), 6);
+        assert_eq!(
+            cards[0].compute_bounds(&view).unwrap().y(),
+            cards[2].compute_bounds(&view).unwrap().y(),
+            "three covers should fit in the first row at this width"
+        );
+        for card in &cards {
+            let cover = find_descendant_with_css_class(card.upcast_ref(), "album-cover").unwrap();
+            assert_eq!(cover.width_request(), cards[0].width_request());
+            assert_eq!(cover.height_request(), cover.width_request() * 2 / 3);
+        }
+        assert!(find_descendant_with_css_class(view.upcast_ref(), "album-cover-action").is_none());
+        show_album_context_menu(
+            &cards[0],
+            12.0,
+            12.0,
+            connection.clone(),
+            albums[0].clone(),
+            Rc::new(|| {}),
+        );
+        settle_gtk_layout();
+        assert!(
+            find_descendant_with_css_class(cards[0].upcast_ref(), "rename-album-action").is_some()
+        );
+        if let Some(popover) = cards[0].last_child().and_downcast::<gtk::Popover>() {
+            popover.popdown();
+        }
+        settle_gtk_layout();
+        if let Some(path) = std::env::var_os("PICASA_ALBUM_SCREENSHOT") {
+            let snapshot = gtk::Snapshot::new();
+            gtk::WidgetPaintable::new(Some(&window)).snapshot(
+                &snapshot,
+                window.width() as f64,
+                window.height() as f64,
+            );
+            let node = snapshot.to_node().unwrap();
+            window
+                .renderer()
+                .unwrap()
+                .render_texture(&node, None)
+                .save_to_png(path)
+                .unwrap();
+        }
+        window.set_default_size(520, 760);
+        settle_gtk_layout();
+        settle_gtk_layout();
+        assert!(
+            grid.max_children_per_line() < wide_columns,
+            "grid should reflow on narrower windows"
+        );
+        assert!(
+            view.hadjustment().upper() <= view.hadjustment().page_size() + 1.0,
+            "album page must not overflow horizontally"
+        );
+        window.close();
+        drop(view);
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -2818,9 +3282,7 @@ mod tests {
                 .unwrap();
             let flow_child = cards
                 .first_child()
-                .unwrap()
-                .downcast::<gtk::FlowBoxChild>()
-                .unwrap();
+                .and_then(|child| child.downcast::<gtk::FlowBoxChild>().ok());
             assert_eq!(db::albums(&connection.borrow()).unwrap(), albums);
             let button = find_descendant_with_css_class(view.upcast_ref(), "album-card")
                 .unwrap()
@@ -2829,17 +3291,12 @@ mod tests {
             if background {
                 let cover =
                     find_descendant_with_css_class(button.upcast_ref(), "album-cover").unwrap();
-                assert_eq!(cards.row_spacing(), 0);
-                assert!(cards.vexpands());
-                assert_eq!(cards.valign(), gtk::Align::Fill);
-                assert!(
-                    cards.allocated_height() > BOOKSHELF_ROW_HEIGHT,
-                    "cards={} parent={} view={}",
-                    cards.allocated_height(),
-                    cards.parent().unwrap().allocated_height(),
-                    view.allocated_height()
-                );
-                assert!(cards.has_css_class("albums-bookshelf-0"));
+                let rows =
+                    find_descendant_with_css_class(view.upcast_ref(), "albums-bookshelf-rows")
+                        .unwrap();
+                assert!(!cards.is_visible());
+                assert!(rows.is_visible());
+                assert!(rows.height() >= BOOKSHELF_ROW_HEIGHT);
                 let photo_count = find_descendant_with_css_class(
                     button.upcast_ref(),
                     "albums-bookshelf-photo-count",
@@ -2851,17 +3308,20 @@ mod tests {
                 assert!((count_color.red() - 58.0 / 255.0).abs() < 0.01);
                 assert!((count_color.green() - 33.0 / 255.0).abs() < 0.01);
                 assert!((count_color.blue() - 15.0 / 255.0).abs() < 0.01);
-                assert_eq!(flow_child.height_request(), BOOKSHELF_ROW_HEIGHT);
+                let theme = bookshelf_theme_for_appearance(settings::album_appearance(
+                    &connection.borrow(),
+                ))
+                .unwrap();
                 assert_eq!(
                     button.margin_top() + cover.height_request(),
-                    BOOKSHELF_SURFACE_Y
+                    theme.surface_y
                 );
             } else if style == "default" {
-                assert_eq!(cards.row_spacing(), 20);
+                assert_eq!(cards.row_spacing(), 32);
                 assert!(!cards.vexpands());
                 assert_eq!(cards.valign(), gtk::Align::Start);
                 assert!(!cards.has_css_class("albums-bookshelf-0"));
-                assert_eq!(flow_child.height_request(), -1);
+                assert_eq!(flow_child.unwrap().height_request(), -1);
                 assert_eq!(button.margin_top(), 0);
             }
             if skin {
@@ -2877,17 +3337,15 @@ mod tests {
                     photo_margins(opening, cover.width_request(), cover.height_request());
                 let picture =
                     find_descendant_with_css_class(cover.upcast_ref(), "thumbnail").unwrap();
-                assert_eq!(
-                    (
-                        picture.margin_start(),
-                        picture.margin_top(),
-                        picture.margin_end(),
-                        picture.margin_bottom(),
-                    ),
-                    (left, top, right, bottom),
-                    "{}",
-                    frame_paths[index].display(),
-                );
+                let actual = [
+                    picture.margin_start(),
+                    picture.margin_top(),
+                    picture.margin_end(),
+                    picture.margin_bottom(),
+                ];
+                for (actual, expected) in actual.into_iter().zip([left, top, right, bottom]) {
+                    assert_eq!(actual, expected, "{}", frame_paths[index].display());
+                }
             }
             opened.set(None);
             button.emit_clicked();
@@ -2915,8 +3373,12 @@ mod tests {
             .unwrap()
             .downcast::<gtk::FlowBox>()
             .unwrap();
-        assert!(unframed_cards.vexpands());
-        assert_eq!(unframed_cards.valign(), gtk::Align::Fill);
+        assert!(!unframed_cards.is_visible());
+        assert!(
+            find_descendant_with_css_class(view.upcast_ref(), "albums-bookshelf-rows")
+                .unwrap()
+                .is_visible()
+        );
         assert!(find_descendant_with_css_class(view.upcast_ref(), "album-skin").is_none());
 
         refresh(
@@ -2932,16 +3394,21 @@ mod tests {
             .unwrap()
             .downcast::<gtk::FlowBox>()
             .unwrap();
-        assert!(empty_cards.vexpands());
-        assert_eq!(empty_cards.valign(), gtk::Align::Fill);
-        assert!(empty_cards.allocated_height() > BOOKSHELF_ROW_HEIGHT);
-        assert_eq!(empty_cards.row_spacing(), 0);
-        assert!(empty_cards.has_css_class("albums-bookshelf-0"));
+        assert!(!empty_cards.is_visible());
+        assert!(
+            find_descendant_with_css_class(view.upcast_ref(), "albums-bookshelf-rows")
+                .unwrap()
+                .is_visible()
+        );
 
+        let legacy_index = bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY))
+            .iter()
+            .position(|theme| theme.kind == BookshelfThemeKind::Legacy)
+            .unwrap();
         db::set_setting(
             &connection.borrow(),
             crate::settings::ALBUM_BOOKSHELF_BACKGROUND_SETTING_KEY,
-            "1",
+            &legacy_index.to_string(),
         )
         .unwrap();
         refresh(
@@ -2955,8 +3422,8 @@ mod tests {
         settle_gtk_layout();
         assert!(!empty_cards.vexpands());
         assert_eq!(empty_cards.valign(), gtk::Align::Start);
-        assert!(!empty_cards.has_css_class("albums-bookshelf-0"));
-        assert!(view.has_css_class("albums-bookshelf-1"));
+        assert!(empty_cards.is_visible());
+        assert!(view.has_css_class(&format!("albums-bookshelf-{legacy_index}")));
 
         settings::disable_all_album_themes(&connection.borrow()).unwrap();
         refresh(
@@ -2970,7 +3437,7 @@ mod tests {
         settle_gtk_layout();
         assert!(!empty_cards.vexpands());
         assert_eq!(empty_cards.valign(), gtk::Align::Start);
-        assert_eq!(empty_cards.row_spacing(), 20);
+        assert_eq!(empty_cards.row_spacing(), 32);
         assert!(!view.has_css_class("albums-bookshelf"));
 
         window.close();

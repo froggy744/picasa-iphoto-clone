@@ -126,6 +126,27 @@ mod tests {
     }
 
     #[test]
+    fn renaming_an_album_trims_its_name_and_preserves_uniqueness() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let holiday = create_album(&connection, "Holiday").unwrap();
+        create_album(&connection, "Work").unwrap();
+
+        rename_album(&connection, holiday.id, "  Summer  ").unwrap();
+        assert_eq!(
+            albums(&connection)
+                .unwrap()
+                .into_iter()
+                .find(|album| album.id == holiday.id)
+                .unwrap()
+                .name,
+            "Summer"
+        );
+        assert!(rename_album(&connection, holiday.id, "work").is_err());
+        assert!(rename_album(&connection, holiday.id, " ").is_err());
+    }
+
+    #[test]
     fn album_membership_survives_reopening_database() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -195,7 +216,11 @@ mod tests {
         assert_eq!(clear_all_album_cover_frames(&connection).unwrap(), 2);
 
         for album in albums(&connection).unwrap() {
-            assert_eq!(album.cover_frame, None, "album {} kept its cover", album.name);
+            assert_eq!(
+                album.cover_frame, None,
+                "album {} kept its cover",
+                album.name
+            );
         }
         assert_eq!(clear_all_album_cover_frames(&connection).unwrap(), 0);
     }
@@ -286,11 +311,9 @@ mod tests {
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
         assert!(album_columns.iter().any(|column| column == "cover_frame"));
-        assert!(
-            album_columns
-                .iter()
-                .any(|column| column == "cover_photo_id")
-        );
+        assert!(album_columns
+            .iter()
+            .any(|column| column == "cover_photo_id"));
         connection
             .execute("DELETE FROM albums WHERE id = 1", [])
             .unwrap();
@@ -310,14 +333,13 @@ mod tests {
         connection.execute_batch(SCHEMA).unwrap();
 
         let root = mark_import_root(&connection, "/mnt/steam/Wickus").unwrap();
-        assert_eq!(mark_import_root(&connection, "/mnt/steam/Wickus").unwrap(), root);
+        assert_eq!(
+            mark_import_root(&connection, "/mnt/steam/Wickus").unwrap(),
+            root
+        );
         let dcim = insert_discovered_folder(&connection, "/mnt/steam/Wickus/DCIM", root).unwrap();
-        let leaf = insert_discovered_folder(
-            &connection,
-            "/mnt/steam/Wickus/DCIM/104NCZ_5",
-            dcim,
-        )
-        .unwrap();
+        let leaf =
+            insert_discovered_folder(&connection, "/mnt/steam/Wickus/DCIM/104NCZ_5", dcim).unwrap();
 
         let folders_by_path = folders(&connection)
             .unwrap()
@@ -327,8 +349,14 @@ mod tests {
         assert_eq!(folders_by_path.len(), 4);
         assert!(!folders_by_path["/mnt/steam"].imported_root);
         assert!(folders_by_path["/mnt/steam/Wickus"].imported_root);
-        assert_eq!(folders_by_path["/mnt/steam/Wickus/DCIM"].parent_id, Some(root));
-        assert_eq!(folders_by_path["/mnt/steam/Wickus/DCIM/104NCZ_5"].parent_id, Some(dcim));
+        assert_eq!(
+            folders_by_path["/mnt/steam/Wickus/DCIM"].parent_id,
+            Some(root)
+        );
+        assert_eq!(
+            folders_by_path["/mnt/steam/Wickus/DCIM/104NCZ_5"].parent_id,
+            Some(dcim)
+        );
         assert!(!folders_by_path["/mnt/steam/Wickus/DCIM/104NCZ_5"].imported_root);
         assert_eq!(leaf, folders_by_path["/mnt/steam/Wickus/DCIM/104NCZ_5"].id);
     }
@@ -382,14 +410,13 @@ mod tests {
 
         let root = insert_folder(&connection, "/mnt/steam/Wickus").unwrap();
         let dcim = insert_discovered_folder(&connection, "/mnt/steam/Wickus/DCIM", root).unwrap();
-        let leaf = insert_discovered_folder(
-            &connection,
-            "/mnt/steam/Wickus/DCIM/104NCZ_5",
-            dcim,
-        )
-        .unwrap();
+        let leaf =
+            insert_discovered_folder(&connection, "/mnt/steam/Wickus/DCIM/104NCZ_5", dcim).unwrap();
 
-        assert_eq!(insert_folder(&connection, "/mnt/steam/Wickus/DCIM/104NCZ_5").unwrap(), leaf);
+        assert_eq!(
+            insert_folder(&connection, "/mnt/steam/Wickus/DCIM/104NCZ_5").unwrap(),
+            leaf
+        );
         let refreshed = folders(&connection)
             .unwrap()
             .into_iter()
@@ -445,17 +472,11 @@ mod tests {
         connection.execute_batch(SCHEMA).unwrap();
 
         let root = insert_folder(&connection, "/mnt/steam/Tatiana Pics/Camera").unwrap();
-        let year = insert_discovered_folder(
-            &connection,
-            "/mnt/steam/Tatiana Pics/Camera/2026",
-            root,
-        )
-        .unwrap();
-        let empty = insert_folder(
-            &connection,
-            "/mnt/steam/Tatiana Pics/Camera/2026/2026-Test",
-        )
-        .unwrap();
+        let year =
+            insert_discovered_folder(&connection, "/mnt/steam/Tatiana Pics/Camera/2026", root)
+                .unwrap();
+        let empty =
+            insert_folder(&connection, "/mnt/steam/Tatiana Pics/Camera/2026/2026-Test").unwrap();
 
         let folder = folders(&connection)
             .unwrap()
@@ -472,15 +493,29 @@ mod tests {
         connection.execute_batch(SCHEMA).unwrap();
         let root = insert_folder(&connection, "/photos/root").unwrap();
         let child = insert_discovered_folder(&connection, "/photos/root/child", root).unwrap();
-        let grandchild = insert_discovered_folder(
+        let grandchild =
+            insert_discovered_folder(&connection, "/photos/root/child/grandchild", child).unwrap();
+        upsert_photo(
             &connection,
-            "/photos/root/child/grandchild",
-            child,
+            Path::new("/photos/root/a.jpg"),
+            Some(root),
+            &PhotoMetadata::default(),
         )
         .unwrap();
-        upsert_photo(&connection, Path::new("/photos/root/a.jpg"), Some(root), &PhotoMetadata::default()).unwrap();
-        upsert_photo(&connection, Path::new("/photos/root/child/b.jpg"), Some(child), &PhotoMetadata::default()).unwrap();
-        upsert_photo(&connection, Path::new("/photos/root/child/grandchild/c.jpg"), Some(grandchild), &PhotoMetadata::default()).unwrap();
+        upsert_photo(
+            &connection,
+            Path::new("/photos/root/child/b.jpg"),
+            Some(child),
+            &PhotoMetadata::default(),
+        )
+        .unwrap();
+        upsert_photo(
+            &connection,
+            Path::new("/photos/root/child/grandchild/c.jpg"),
+            Some(grandchild),
+            &PhotoMetadata::default(),
+        )
+        .unwrap();
 
         let folders_by_id = folders(&connection)
             .unwrap()
@@ -490,8 +525,19 @@ mod tests {
         assert_eq!(folders_by_id[&root].photo_count, 3);
         assert_eq!(folders_by_id[&child].photo_count, 2);
         assert_eq!(folders_by_id[&grandchild].photo_count, 1);
-        assert_eq!(photos(&connection, Some(root), false, None).unwrap().len(), 3);
-        assert_eq!(photos(&connection, Some(child), false, None).unwrap().len(), 2);
-        assert_eq!(photos(&connection, Some(grandchild), false, None).unwrap().len(), 1);
+        assert_eq!(
+            photos(&connection, Some(root), false, None).unwrap().len(),
+            3
+        );
+        assert_eq!(
+            photos(&connection, Some(child), false, None).unwrap().len(),
+            2
+        );
+        assert_eq!(
+            photos(&connection, Some(grandchild), false, None)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

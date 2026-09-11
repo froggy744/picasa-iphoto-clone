@@ -55,6 +55,22 @@ pub fn create_album(connection: &Connection, name: &str) -> Result<Album> {
     })
 }
 
+/// Rename an album while retaining the same validation as album creation.
+pub fn rename_album(connection: &Connection, album_id: i64, name: &str) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("album name cannot be blank");
+    }
+    let updated = connection.execute(
+        "UPDATE albums SET name = ?1 WHERE id = ?2",
+        params![name, album_id],
+    )?;
+    if updated == 0 {
+        anyhow::bail!("album no longer exists");
+    }
+    Ok(())
+}
+
 pub fn set_album_cover_frame(
     connection: &Connection,
     album_id: i64,

@@ -1358,6 +1358,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             Rc::new(move || present_settings(Some("themes")))
         },
     );
+    albums_view::connect_create_album(&albums_home, create_album.clone());
     let main_stack = gtk::Stack::new();
     main_stack.set_hexpand(true);
     main_stack.set_vexpand(true);
