@@ -352,6 +352,12 @@ impl SquareTile {
         let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
             return;
         };
+        // `clear_photo` hides the selection badge when a tile is recycled.
+        // Opacity is the real on/off switch via CSS, so make the badge visible
+        // again here or recycled tiles lose their indicator.
+        if let Some(badge) = overlay_image(&frame, "selection-badge") {
+            badge.set_visible(true);
+        }
         if selected {
             frame.add_css_class("folder-photo-selected");
         } else {
@@ -3433,6 +3439,7 @@ struct FolderDragState {
     start: Option<(f64, f64)>,
     base_ids: HashSet<i64>,
     id_positions: HashMap<i64, u32>,
+    positions_ready: bool,
     control: bool,
     active: bool,
     last: Vec<u32>,
@@ -3443,6 +3450,7 @@ impl FolderDragState {
         self.start = None;
         self.base_ids.clear();
         self.id_positions.clear();
+        self.positions_ready = false;
         self.control = false;
         self.active = false;
         self.last.clear();
@@ -3493,18 +3501,9 @@ fn install_folder_root_input(
         if trace {
             eprintln!("FOLDER INPUT press x={x:.0} y={y:.0} n={n_press}");
         }
-        let Some(picked) = root_for_left.pick(x, y, gtk::PickFlags::DEFAULT) else {
+        let Some(tile) = resolve_folder_tile(&root_for_left, x, y) else {
             if trace {
-                eprintln!("FOLDER INPUT resolved=false pick=none");
-            }
-            return;
-        };
-        if picked_offline_badge(&picked) {
-            return;
-        }
-        let Some(tile) = folder_tile_from_pick(&picked) else {
-            if trace {
-                eprintln!("FOLDER INPUT resolved=false pick={} no-tile", picked.type_().name());
+                eprintln!("FOLDER INPUT resolved=false no-tile");
             }
             return;
         };
@@ -3562,10 +3561,7 @@ fn install_folder_root_input(
     let selection_for_context = selection.clone();
     let context_menu_for_root = context_menu.clone();
     right_click.connect_pressed(move |gesture, _, x, y| {
-        let Some(picked) = root_for_context.pick(x, y, gtk::PickFlags::DEFAULT) else {
-            return;
-        };
-        let Some(tile) = folder_tile_from_pick(&picked) else {
+        let Some(tile) = resolve_folder_tile(&root_for_context, x, y) else {
             return;
         };
         let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
@@ -3601,7 +3597,6 @@ fn install_folder_root_input(
 
     let root_for_begin = folder_root.clone();
     let selection_for_begin = selection.clone();
-    let current_photos_for_begin = current_photos.clone();
     let collage_mode_for_begin = collage_mode.clone();
     let state_for_begin = drag_state.clone();
     drag.connect_drag_begin(move |gesture, x, y| {
@@ -3610,25 +3605,12 @@ fn install_folder_root_input(
             gesture.set_state(gtk::EventSequenceState::Denied);
             return;
         }
-        let Some(picked) = root_for_begin.pick(x, y, gtk::PickFlags::DEFAULT) else {
-            gesture.set_state(gtk::EventSequenceState::Denied);
-            return;
-        };
-        if picked_offline_badge(&picked) {
-            gesture.set_state(gtk::EventSequenceState::Denied);
-            return;
-        }
-        let Some(tile) = folder_tile_from_pick(&picked) else {
-            gesture.set_state(gtk::EventSequenceState::Denied);
-            return;
-        };
-        let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
-            gesture.set_state(gtk::EventSequenceState::Denied);
-            return;
-        };
-        if selection_position_for_id(&selection_for_begin, photo.id()).is_none() {
-            gesture.set_state(gtk::EventSequenceState::Denied);
-            return;
+        // Rubber-band from anywhere in the folder stream, exactly like the
+        // Library GridView: a press on a tile focuses it, while a press in the
+        // row/FlowBox padding or the empty tail of a row starts an empty
+        // rectangle instead of being rejected.
+        if let Some(tile) = resolve_folder_tile(&root_for_begin, x, y) {
+            tile.grab_focus();
         }
         let modifiers = gesture.current_event_state();
         let mut state = state_for_begin.borrow_mut();
@@ -3640,27 +3622,19 @@ fn install_folder_root_input(
         } else {
             HashSet::new()
         };
-        state.id_positions = current_photos_for_begin
-            .borrow()
-            .iter()
-            .enumerate()
-            .map(|(index, photo)| (photo.id(), index as u32))
-            .collect();
         state.last.clear();
         drop(state);
         if trace {
-            eprintln!(
-                "FOLDER INPUT drag_begin photo_id={} position_resolved=true",
-                photo.id()
-            );
+            eprintln!("FOLDER INPUT drag_begin x={x:.0} y={y:.0}");
         }
-        tile.grab_focus();
+        root_for_begin.set_cursor_from_name(Some("crosshair"));
     });
 
     let root_for_update = folder_root.clone();
     let selection_for_update = selection.clone();
     let mapped_for_update = mapped_tiles.clone();
     let rebuild_for_update = folder_rebuild_active.clone();
+    let current_photos_for_update = current_photos.clone();
     let state_for_update = drag_state.clone();
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
         if rebuild_for_update.get() {
@@ -3675,6 +3649,20 @@ fn install_folder_root_input(
             return;
         }
         gesture.set_state(gtk::EventSequenceState::Claimed);
+        {
+            // Build the id -> model-position map only once a real drag starts,
+            // so ordinary clicks never pay for a 66k-entry hash map.
+            let mut state = state_for_update.borrow_mut();
+            if state.active && !state.positions_ready {
+                state.id_positions = current_photos_for_update
+                    .borrow()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, photo)| (photo.id(), index as u32))
+                    .collect();
+                state.positions_ready = true;
+            }
+        }
         let hit = {
             let state = state_for_update.borrow();
             if !state.active {
@@ -3740,10 +3728,12 @@ fn install_folder_root_input(
     });
 
     let state_for_end = drag_state.clone();
+    let root_for_end = folder_root.clone();
     drag.connect_drag_end(move |_, _, _| {
         if trace {
             eprintln!("FOLDER INPUT drag_end");
         }
+        root_for_end.set_cursor_from_name(None);
         state_for_end.borrow_mut().clear();
     });
 
@@ -3802,17 +3792,53 @@ fn tile_ancestor(widget: &gtk::Widget) -> Option<SquareTile> {
     None
 }
 
-/// Resolve a picked folder widget to its tile. The clickable cell includes the
-/// FlowBox child's padding, which picks as the `GtkFlowBoxChild` itself; in
-/// that case the tile is a child, not an ancestor.
-fn folder_tile_from_pick(picked: &gtk::Widget) -> Option<SquareTile> {
-    if let Some(tile) = tile_ancestor(picked) {
-        return Some(tile);
+/// Resolve a point inside the folder `ListView` to the photo tile under it.
+///
+/// `pick` often returns the `GtkFlowBox`, its `GtkFlowBoxChild`, or the row
+/// `GtkBox` rather than the tile: the FlowBox child padding is part of the
+/// clickable cell, and recycled pool tiles sit hidden behind it. Ask the
+/// owning `GtkFlowBox` for the child at the point instead, and never return a
+/// tile that has no bound photo.
+fn resolve_folder_tile(root: &gtk::ListView, x: f64, y: f64) -> Option<SquareTile> {
+    let picked = root.pick(x, y, gtk::PickFlags::DEFAULT)?;
+    if picked_offline_badge(&picked) {
+        return None;
     }
-    let mut child = picked.first_child();
-    while let Some(current) = child {
-        if let Some(tile) = tile_ancestor(&current) {
+    if let Some(tile) = tile_ancestor(&picked) {
+        if tile.imp().photo.borrow().is_some() {
             return Some(tile);
+        }
+    }
+    let flow = flow_ancestor(&picked).or_else(|| flow_descendant(&picked))?;
+    let point = root.compute_point(&flow, &gtk::graphene::Point::new(x as f32, y as f32))?;
+    let child = flow.child_at_pos(point.x().round() as i32, point.y().round() as i32)?;
+    let tile = child.first_child().and_downcast::<SquareTile>()?;
+    if tile.imp().photo.borrow().is_some() {
+        Some(tile)
+    } else {
+        None
+    }
+}
+
+fn flow_ancestor(widget: &gtk::Widget) -> Option<gtk::FlowBox> {
+    let mut current = Some(widget.clone());
+    while let Some(candidate) = current {
+        if let Ok(flow) = candidate.clone().downcast::<gtk::FlowBox>() {
+            return Some(flow);
+        }
+        current = candidate.parent();
+    }
+    None
+}
+
+fn flow_descendant(widget: &gtk::Widget) -> Option<gtk::FlowBox> {
+    if let Ok(flow) = widget.clone().downcast::<gtk::FlowBox>() {
+        return Some(flow);
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if let Some(flow) = flow_descendant(&current) {
+            return Some(flow);
         }
         child = current.next_sibling();
     }
