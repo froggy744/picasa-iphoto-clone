@@ -33,6 +33,20 @@ fn uses_bookshelf_background(style: AlbumViewStyle) -> bool {
     style == AlbumViewStyle::Bookshelf
 }
 
+fn bookshelf_background_path() -> PathBuf {
+    bookshelf_background_path_in(Path::new("images"))
+}
+
+fn bookshelf_background_path_in(directory: &Path) -> PathBuf {
+    for name in ["bookshelf.jpg", "bookshelf.jpeg", "bookshelf.png"] {
+        let path = directory.join(name);
+        if path.is_file() {
+            return path;
+        }
+    }
+    directory.join("bookshelf.png")
+}
+
 fn album_frame_paths_in(directory: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
@@ -77,7 +91,7 @@ pub fn build(
     scrolled.set_vexpand(true);
 
     let background = gtk::CssProvider::new();
-    let uri = gio::File::for_path("images/bookshelf.png").uri();
+    let uri = gio::File::for_path(bookshelf_background_path()).uri();
     background.load_from_string(&format!(
         ".albums-bookshelf {{ background-image: url(\"{uri}\"); \
          background-size: 100% auto; background-repeat: repeat-y; \
@@ -568,6 +582,45 @@ mod tests {
         expected.push(directory.join("green-album.png"));
         expected.sort();
         assert_eq!(album_frame_paths_in(&directory), expected);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn bookshelf_background_prefers_jpg_and_falls_back_to_png() {
+        let directory = std::env::temp_dir().join(format!(
+            "pic-bookshelf-background-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        assert_eq!(
+            bookshelf_background_path_in(&directory),
+            directory.join("bookshelf.png")
+        );
+
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("bookshelf.png"), []).unwrap();
+        assert_eq!(
+            bookshelf_background_path_in(&directory),
+            directory.join("bookshelf.png")
+        );
+
+        std::fs::write(directory.join("bookshelf.jpg"), []).unwrap();
+        assert_eq!(
+            bookshelf_background_path_in(&directory),
+            directory.join("bookshelf.jpg")
+        );
+
+        std::fs::remove_file(directory.join("bookshelf.jpg")).unwrap();
+        std::fs::write(directory.join("bookshelf.jpeg"), []).unwrap();
+        assert_eq!(
+            bookshelf_background_path_in(&directory),
+            directory.join("bookshelf.jpeg")
+        );
+
         std::fs::remove_dir_all(directory).unwrap();
     }
 
