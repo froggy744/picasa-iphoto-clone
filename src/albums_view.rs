@@ -21,11 +21,15 @@ fn album_frame_paths() -> Vec<PathBuf> {
     album_frame_paths_in(Path::new("images"))
 }
 
+fn album_cover_paths() -> Vec<PathBuf> {
+    album_cover_paths_in(Path::new("images"))
+}
+
 fn album_frame_paths_for_style(style: AlbumViewStyle) -> Vec<PathBuf> {
     match style {
         AlbumViewStyle::Default => Vec::new(),
         AlbumViewStyle::Bookshelf => album_frame_paths(),
-        AlbumViewStyle::AlbumCovers => vec![PathBuf::from("images/album-cover.png")],
+        AlbumViewStyle::AlbumCovers => album_cover_paths(),
     }
 }
 
@@ -48,6 +52,19 @@ fn bookshelf_background_path_in(directory: &Path) -> PathBuf {
 }
 
 fn album_frame_paths_in(directory: &Path) -> Vec<PathBuf> {
+    png_paths_matching(directory, |name| name.ends_with("-album.png"))
+}
+
+fn album_cover_paths_in(directory: &Path) -> Vec<PathBuf> {
+    png_paths_matching(directory, |name| {
+        name == "album-cover.png"
+            || name
+                .strip_prefix("album-cover")
+                .is_some_and(|suffix| suffix.ends_with(".png"))
+    })
+}
+
+fn png_paths_matching(directory: &Path, matches: impl Fn(&str) -> bool) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
     };
@@ -59,7 +76,7 @@ fn album_frame_paths_in(directory: &Path) -> Vec<PathBuf> {
                 && path
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.ends_with("-album.png"))
+                    .is_some_and(&matches)
         })
         .collect();
     paths.sort();
@@ -586,6 +603,50 @@ mod tests {
     }
 
     #[test]
+    fn discovers_album_cover_png_files_sorted_and_picks_up_new_covers() {
+        let directory = std::env::temp_dir().join(format!(
+            "pic-album-covers-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(album_cover_paths_in(&directory).is_empty());
+        std::fs::create_dir(&directory).unwrap();
+        assert!(album_cover_paths_in(&directory).is_empty());
+        for name in [
+            "album-cover.png",
+            "album-cover-blue.png",
+            "album-cover-Big.png",
+            "album-cover-green.png",
+            "pink-album.png",
+            "cover.png",
+            "album-cover.jpg",
+            "album-cover.png.bak",
+        ] {
+            std::fs::write(directory.join(name), []).unwrap();
+        }
+        std::fs::create_dir(directory.join("album-cover-folder.png")).unwrap();
+        let expected: Vec<_> = [
+            "album-cover-Big.png",
+            "album-cover-blue.png",
+            "album-cover-green.png",
+            "album-cover.png",
+        ]
+        .map(|name| directory.join(name))
+        .into();
+        assert_eq!(album_cover_paths_in(&directory), expected);
+
+        std::fs::write(directory.join("album-cover-pink.png"), []).unwrap();
+        let mut expected = expected;
+        expected.push(directory.join("album-cover-pink.png"));
+        expected.sort();
+        assert_eq!(album_cover_paths_in(&directory), expected);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn bookshelf_background_prefers_jpg_and_falls_back_to_png() {
         let directory = std::env::temp_dir().join(format!(
             "pic-bookshelf-background-{}-{}",
@@ -639,10 +700,11 @@ mod tests {
         assert!(bookshelf_paths.contains(&PathBuf::from("images/pink-album.png")));
         assert!(bookshelf_paths.contains(&PathBuf::from("images/white-album.png")));
         assert!(!bookshelf_paths.contains(&PathBuf::from("images/album-cover.png")));
-        assert_eq!(
-            album_frame_paths_for_style(AlbumViewStyle::AlbumCovers),
-            [PathBuf::from("images/album-cover.png")],
-        );
+        let album_cover_paths = album_frame_paths_for_style(AlbumViewStyle::AlbumCovers);
+        assert!(album_cover_paths.windows(2).all(|paths| paths[0] <= paths[1]));
+        assert!(album_cover_paths.contains(&PathBuf::from("images/album-cover.png")));
+        assert!(album_cover_paths.contains(&PathBuf::from("images/album-cover-blue.png")));
+        assert!(!album_cover_paths.contains(&PathBuf::from("images/pink-album.png")));
         assert!(!uses_bookshelf_background(AlbumViewStyle::Default));
         assert!(uses_bookshelf_background(AlbumViewStyle::Bookshelf));
         assert!(!uses_bookshelf_background(AlbumViewStyle::AlbumCovers));
