@@ -65,6 +65,24 @@ pub fn set_album_cover_frame(
     Ok(())
 }
 
+/// Drop an album's own frame so it follows the page's automatic assignment
+/// again.
+pub fn clear_album_cover_frame(connection: &Connection, album_id: i64) -> Result<()> {
+    connection.execute(
+        "UPDATE albums SET cover_frame = NULL WHERE id = ?1",
+        [album_id],
+    )?;
+    Ok(())
+}
+
+/// Drop every album's own frame, returning the number that had one.
+pub fn clear_all_album_cover_frames(connection: &Connection) -> Result<usize> {
+    Ok(connection.execute(
+        "UPDATE albums SET cover_frame = NULL WHERE cover_frame IS NOT NULL",
+        [],
+    )?)
+}
+
 pub fn delete_album(connection: &Connection, album_id: i64) -> Result<()> {
     connection.execute("DELETE FROM albums WHERE id = ?1", [album_id])?;
     Ok(())

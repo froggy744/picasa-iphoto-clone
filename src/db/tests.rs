@@ -175,6 +175,29 @@ mod tests {
 
         let album = albums(&connection).unwrap().remove(0);
         assert_eq!(album.cover_frame.as_deref(), Some("vintage/blue-frame.png"));
+
+        clear_album_cover_frame(&connection, album.id).unwrap();
+
+        let album = albums(&connection).unwrap().remove(0);
+        assert_eq!(album.cover_frame, None);
+    }
+
+    #[test]
+    fn every_album_cover_frame_can_be_cleared_at_once() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let first = create_album(&connection, "First").unwrap();
+        let second = create_album(&connection, "Second").unwrap();
+        let _ = create_album(&connection, "Untouched").unwrap();
+        set_album_cover_frame(&connection, first.id, "vintage/blue-frame.png").unwrap();
+        set_album_cover_frame(&connection, second.id, "pink/pink-frame.png").unwrap();
+
+        assert_eq!(clear_all_album_cover_frames(&connection).unwrap(), 2);
+
+        for album in albums(&connection).unwrap() {
+            assert_eq!(album.cover_frame, None, "album {} kept its cover", album.name);
+        }
+        assert_eq!(clear_all_album_cover_frames(&connection).unwrap(), 0);
     }
 
     #[test]

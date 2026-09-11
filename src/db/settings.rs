@@ -31,6 +31,12 @@ pub fn set_setting(connection: &Connection, key: &str, value: &str) -> Result<()
     Ok(())
 }
 
+/// Remove a stored preference so it falls back to its default.
+pub fn delete_setting(connection: &Connection, key: &str) -> Result<()> {
+    connection.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+    Ok(())
+}
+
 pub fn library_counts(connection: &Connection) -> Result<LibraryCounts> {
     Ok(LibraryCounts {
         photos: connection.query_row(
