@@ -863,8 +863,9 @@ fn index_setting(connection: &Connection, key: &str, default: u32, max: u32) -> 
 }
 
 fn resize_standard_cards(grid: &gtk::FlowBox, available: i32, preferred: i32) {
-    let columns = ((available + 24) / (preferred + 24)).max(1);
-    let width = ((available - (columns - 1) * 24) / columns)
+    let gap = if preferred == 180 { 8 } else { 24 };
+    let columns = ((available + gap) / (preferred + gap)).max(1);
+    let width = ((available - (columns - 1) * gap) / columns)
         .min(preferred + 24)
         .max(1);
     grid.set_max_children_per_line(columns as u32);
@@ -1345,7 +1346,7 @@ fn populate(
     let responsive_bookshelf = row_theme.is_some();
     let standard = !appearance.bookshelf_enabled && !appearance.covers_enabled;
     let preferred_width =
-        [160, 240, 280][index_setting(&connection.borrow(), ALBUM_SIZE_KEY, 1, 2) as usize];
+        [180, 240, 280][index_setting(&connection.borrow(), ALBUM_SIZE_KEY, 1, 2) as usize];
     bookshelf_runtime
         .standard_width
         .set(if standard { preferred_width } else { 0 });
@@ -1402,7 +1403,17 @@ fn populate(
     } else {
         20
     });
-    cards.set_column_spacing(if standard || framed { 24 } else { 20 });
+    cards.set_column_spacing(if standard {
+        if preferred_width == 180 {
+            8
+        } else {
+            24
+        }
+    } else if framed {
+        24
+    } else {
+        20
+    });
 
     if albums.is_empty() {
         let empty = gtk::Label::new(Some(
@@ -2174,7 +2185,7 @@ mod tests {
             .downcast::<gtk::FlowBox>()
             .unwrap();
         assert!(
-            compact_grid.max_children_per_line() >= 4,
+            compact_grid.max_children_per_line() >= 5,
             "compact layout should reveal another column"
         );
         let compact_columns = compact_grid.max_children_per_line();
