@@ -790,8 +790,9 @@ fn apply_scroll_location(scrolled: &gtk::ScrolledWindow) {
     let mode = state.borrow().folder_display_mode;
     let display_id = match mode {
         FolderDisplayMode::Tree => folder_id,
-        FolderDisplayMode::ImportedOnly => imported_root_for_folder(&folders, folder_id)
-            .unwrap_or(folder_id),
+        FolderDisplayMode::ImportedOnly => {
+            imported_root_for_folder(&folders, folder_id).unwrap_or(folder_id)
+        }
     };
 
     if mode == FolderDisplayMode::Tree {
@@ -879,7 +880,8 @@ fn folder_ancestor_ids(folders: &[Folder], folder_id: i64) -> Vec<i64> {
 }
 
 fn scroll_folder_row_into_view(scrolled: &gtk::ScrolledWindow, row: &gtk::ListBoxRow) {
-    let Some(folder_scroll) = stored_widget::<gtk::ScrolledWindow>(scrolled, FOLDER_SCROLL_KEY) else {
+    let Some(folder_scroll) = stored_widget::<gtk::ScrolledWindow>(scrolled, FOLDER_SCROLL_KEY)
+    else {
         return;
     };
     let row = row.clone();

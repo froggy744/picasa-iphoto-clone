@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -18,6 +18,39 @@ const BOOKSHELF_SURFACE_Y: i32 = 235;
 const BOOKSHELF_COUNT_CSS: &str = ".albums-bookshelf-photo-count { color: #3a210f; }";
 const ALBUM_COVER_THEME_DIRECTORY: &str = "images/theme/album-covers";
 const BOOKSHELF_THEME_DIRECTORY: &str = "images/theme/bookshelf";
+const BOOKSHELF_MAX_COLUMNS: usize = 5;
+const BOOKSHELF_MIN_ROWS: usize = 3;
+const BOOKSHELF_COLUMN_GAP: i32 = 28;
+const BOOKSHELF_SIDE_PADDING: i32 = 28;
+const BOOKSHELF_MIN_CARD_WIDTH: i32 = 220;
+const BOOKSHELF_MAX_CARD_WIDTH: i32 = 280;
+const BOOKSHELF_CARD_FILL_RATIO: f64 = 0.78;
+const BOOKSHELF_RUNTIME_KEY: &str = "picasa-bookshelf-runtime";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BookshelfThemeKind {
+    /// A folder-backed theme containing one image that represents exactly one shelf row.
+    Row,
+    /// Compatibility mode for the older page-sized *-bookshelf.png/jpg assets.
+    Legacy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BookshelfTheme {
+    id: String,
+    image_path: PathBuf,
+    kind: BookshelfThemeKind,
+    row_height: i32,
+    surface_y: i32,
+}
+
+#[derive(Clone)]
+struct BookshelfRuntime {
+    rows: gtk::Box,
+    last_columns: Rc<Cell<usize>>,
+    last_card_width: Rc<Cell<i32>>,
+    selected_theme: Rc<RefCell<Option<BookshelfTheme>>>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AlbumAppearanceAction {
@@ -217,46 +250,167 @@ fn album_frame_paths_for_appearance(directory: &Path, appearance: AlbumAppearanc
     }
 }
 
+fn bookshelf_theme_image_in(directory: &Path) -> Option<PathBuf> {
+    let preferred = [
+        "row.png",
+        "row.jpg",
+        "bookshelf.png",
+        "bookshelf.jpg",
+        "single-row-bookshelf.png",
+        "single-row-bookshelf.jpg",
+    ];
+    for name in preferred {
+        let path = directory.join(name);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let mut images = png_or_jpg_paths_matching(directory, |_| true);
+    images.sort();
+    images.into_iter().next()
+}
+
+fn bookshelf_theme_geometry(directory: &Path) -> (i32, i32) {
+    let config = directory.join("theme.conf");
+    let Ok(text) = std::fs::read_to_string(config) else {
+        return (BOOKSHELF_ROW_HEIGHT, BOOKSHELF_SURFACE_Y);
+    };
+    let mut row_height = BOOKSHELF_ROW_HEIGHT;
+    let mut surface_y = BOOKSHELF_SURFACE_Y;
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Ok(value) = value.trim().parse::<i32>() else {
+            continue;
+        };
+        match key.trim() {
+            "row_height" if value > 0 => row_height = value,
+            "surface_y" if value >= 0 => surface_y = value,
+            _ => {}
+        }
+    }
+    surface_y = surface_y.clamp(0, row_height);
+    (row_height, surface_y)
+}
+
+fn bookshelf_themes_in(directory: &Path) -> Vec<BookshelfTheme> {
+    let mut themes = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(directory) {
+        for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
+            if path.is_dir() {
+                if let Some(image_path) = bookshelf_theme_image_in(&path) {
+                    let id = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("bookshelf")
+                        .to_string();
+                    let (row_height, surface_y) = bookshelf_theme_geometry(&path);
+                    themes.push(BookshelfTheme {
+                        id,
+                        image_path,
+                        kind: BookshelfThemeKind::Row,
+                        row_height,
+                        surface_y,
+                    });
+                }
+            } else if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.ends_with("-bookshelf.png") || name.ends_with("-bookshelf.jpg")
+                })
+            {
+                let id = path
+                    .file_stem()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("bookshelf")
+                    .to_string();
+                themes.push(BookshelfTheme {
+                    id,
+                    image_path: path,
+                    kind: BookshelfThemeKind::Legacy,
+                    row_height: BOOKSHELF_ROW_HEIGHT,
+                    surface_y: BOOKSHELF_SURFACE_Y,
+                });
+            }
+        }
+    }
+
+    themes.sort_by_key(|theme| {
+        (
+            theme.kind != BookshelfThemeKind::Row,
+            theme.id != "single",
+            theme.id.to_ascii_lowercase(),
+        )
+    });
+    themes
+}
+
+fn bookshelf_theme_for_appearance(appearance: AlbumAppearance) -> Option<BookshelfTheme> {
+    if !appearance.bookshelf_enabled {
+        return None;
+    }
+    let themes = bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY));
+    (!themes.is_empty()).then(|| themes[appearance.background_index % themes.len()].clone())
+}
+
 fn bookshelf_background_path(directory: &Path, index: usize) -> Option<PathBuf> {
-    let backgrounds = bookshelf_background_paths_in(directory);
-    (!backgrounds.is_empty()).then(|| backgrounds[index % backgrounds.len()].clone())
+    let themes = bookshelf_themes_in(directory);
+    (!themes.is_empty()).then(|| themes[index % themes.len()].image_path.clone())
 }
 
-fn bookshelf_card_margin_top(cover_height: i32) -> i32 {
-    (BOOKSHELF_SURFACE_Y - cover_height).max(0)
-}
-
-fn uses_responsive_bookshelf(appearance: AlbumAppearance) -> bool {
-    appearance.bookshelf_enabled && appearance.background_index == 0
+fn bookshelf_card_margin_top(surface_y: i32, cover_height: i32) -> i32 {
+    (surface_y - cover_height).max(0)
 }
 
 fn bookshelf_background_rules(directory: &Path) -> String {
-    bookshelf_background_paths_in(directory)
+    bookshelf_themes_in(directory)
         .into_iter()
         .enumerate()
-        .map(|(index, path)| {
-            let uri = gio::File::for_path(path).uri();
-            if index == 0 {
-                format!(
-                    ".albums-bookshelf-{index} {{ \
-                     background-image: url(\"{uri}\"); background-size: 100% {BOOKSHELF_ROW_HEIGHT}px; \
-                     background-repeat: repeat-y; background-position: center top; }}"
-                )
-            } else {
+        .filter_map(|(index, theme)| {
+            (theme.kind == BookshelfThemeKind::Legacy).then(|| {
+                let uri = gio::File::for_path(theme.image_path).uri();
                 format!(
                     ".albums-bookshelf-{index} {{ background-image: url(\"{uri}\"); \
                      background-size: 100% auto; background-repeat: repeat-y; \
                      background-position: center top; }}"
                 )
-            }
+            })
         })
         .collect()
 }
 
 fn bookshelf_background_css_class(appearance: AlbumAppearance) -> Option<String> {
-    let count = bookshelf_background_count();
-    (appearance.bookshelf_enabled && count > 0)
-        .then(|| format!("albums-bookshelf-{}", appearance.background_index % count))
+    let themes = bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY));
+    if !appearance.bookshelf_enabled || themes.is_empty() {
+        return None;
+    }
+    let index = appearance.background_index % themes.len();
+    (themes[index].kind == BookshelfThemeKind::Legacy).then(|| format!("albums-bookshelf-{index}"))
+}
+
+fn bookshelf_columns_for_width(width: i32, _card_width: i32) -> usize {
+    if width <= 0 {
+        return BOOKSHELF_MAX_COLUMNS;
+    }
+
+    let usable_width = (width - BOOKSHELF_SIDE_PADDING * 2).max(BOOKSHELF_MIN_CARD_WIDTH);
+    let per_card = BOOKSHELF_MIN_CARD_WIDTH + BOOKSHELF_COLUMN_GAP;
+    ((usable_width + BOOKSHELF_COLUMN_GAP) / per_card)
+        .clamp(1, BOOKSHELF_MAX_COLUMNS as i32) as usize
+}
+
+fn bookshelf_target_card_width(width: i32, columns: usize) -> i32 {
+    if width <= 0 || columns == 0 {
+        return BOOKSHELF_MIN_CARD_WIDTH;
+    }
+
+    let usable_width = (width - BOOKSHELF_SIDE_PADDING * 2).max(BOOKSHELF_MIN_CARD_WIDTH);
+    let slot_width = usable_width / columns as i32;
+    ((slot_width as f64 * BOOKSHELF_CARD_FILL_RATIO).round() as i32)
+        .clamp(BOOKSHELF_MIN_CARD_WIDTH, BOOKSHELF_MAX_CARD_WIDTH)
 }
 
 fn album_frame_paths_in(directory: &Path) -> Vec<PathBuf> {
@@ -299,21 +453,8 @@ fn collect_matching_files(
     }
 }
 
-fn bookshelf_background_paths_in(directory: &Path) -> Vec<PathBuf> {
-    let mut paths = png_or_jpg_paths_matching(directory, |name| {
-        name.ends_with("-bookshelf.png") || name.ends_with("-bookshelf.jpg")
-    });
-    paths.sort_by_key(|path| {
-        (
-            path.file_name().and_then(|name| name.to_str()) != Some("single-row-bookshelf.png"),
-            path.clone(),
-        )
-    });
-    paths
-}
-
 pub(crate) fn bookshelf_background_count() -> usize {
-    bookshelf_background_paths_in(Path::new(BOOKSHELF_THEME_DIRECTORY)).len()
+    bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY)).len()
 }
 
 fn png_or_jpg_paths_matching(directory: &Path, matches: impl Fn(&str) -> bool) -> Vec<PathBuf> {
@@ -533,12 +674,31 @@ pub fn build(
         .style_context()
         .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
 
+    let bookshelf_rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    bookshelf_rows.set_hexpand(true);
+    bookshelf_rows.set_vexpand(false);
+    bookshelf_rows.set_valign(gtk::Align::Start);
+    bookshelf_rows.set_visible(false);
+    bookshelf_rows.add_css_class("albums-bookshelf-rows");
+
+    let bookshelf_runtime = BookshelfRuntime {
+        rows: bookshelf_rows.clone(),
+        last_columns: Rc::new(Cell::new(0)),
+        last_card_width: Rc::new(Cell::new(0)),
+        selected_theme: Rc::new(RefCell::new(None)),
+    };
+    unsafe {
+        scrolled.set_data(BOOKSHELF_RUNTIME_KEY, bookshelf_runtime.clone());
+    }
+
     content.append(&cards);
+    content.append(&bookshelf_rows);
     scrolled.set_child(Some(&content));
     refresh_presentation(&scrolled, &connection.borrow());
 
     populate(
         &cards,
+        &bookshelf_runtime,
         &count,
         albums,
         connection.clone(),
@@ -546,6 +706,40 @@ pub fn build(
         on_album.clone(),
         on_appearance_changed.clone(),
     );
+
+    let runtime_for_resize = bookshelf_runtime.clone();
+    scrolled.add_tick_callback(move |scrolled, _| {
+        if !runtime_for_resize.rows.is_visible() {
+            return glib::ControlFlow::Continue;
+        }
+        let Some(theme) = runtime_for_resize.selected_theme.borrow().clone() else {
+            return glib::ControlFlow::Continue;
+        };
+        let width = runtime_for_resize.rows.width();
+        if width <= 0 {
+            return glib::ControlFlow::Continue;
+        }
+
+        let columns = bookshelf_columns_for_width(width, BOOKSHELF_MIN_CARD_WIDTH);
+        if columns != runtime_for_resize.last_columns.get() {
+            reflow_bookshelf_rows(&runtime_for_resize, columns, &theme);
+        }
+
+        let target_card_width = bookshelf_target_card_width(width, columns);
+        if target_card_width != runtime_for_resize.last_card_width.get() {
+            resize_bookshelf_cards(&runtime_for_resize.rows, target_card_width, &theme);
+            runtime_for_resize.last_card_width.set(target_card_width);
+
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "ALBUM SHELF SIZE TRACE theme={} width={} columns={} card_width={}",
+                    theme.id, width, columns, target_card_width
+                );
+            }
+        }
+
+        glib::ControlFlow::Continue
+    });
 
     install_context_menu(
         &scrolled,
@@ -834,9 +1028,15 @@ pub fn refresh(
     else {
         return;
     };
+    let Some(runtime) = (unsafe { scrolled.data::<BookshelfRuntime>(BOOKSHELF_RUNTIME_KEY) })
+        .map(|runtime| unsafe { runtime.as_ref() }.clone())
+    else {
+        return;
+    };
 
     populate(
         &cards,
+        &runtime,
         &count,
         albums,
         connection,
@@ -848,22 +1048,22 @@ pub fn refresh(
 
 pub fn refresh_presentation(scrolled: &gtk::ScrolledWindow, connection: &Connection) {
     let appearance = settings::album_appearance(connection);
-    let cards = find_descendant_with_css_class(scrolled.upcast_ref(), "albums-home-grid");
     remove_bookshelf_background_classes(scrolled.upcast_ref());
-    if let Some(cards) = cards.as_ref() {
-        remove_bookshelf_background_classes(cards);
+    if let Some(cards) = find_descendant_with_css_class(scrolled.upcast_ref(), "albums-home-grid") {
+        remove_bookshelf_background_classes(&cards);
     }
-    if let Some(background_class) = bookshelf_background_css_class(appearance) {
+
+    let has_theme = appearance.bookshelf_enabled && bookshelf_background_count() > 0;
+    if has_theme {
         scrolled.add_css_class("albums-bookshelf");
-        if uses_responsive_bookshelf(appearance) {
-            if let Some(cards) = cards {
-                cards.add_css_class(&background_class);
-            }
-        } else {
-            scrolled.add_css_class(&background_class);
-        }
     } else {
         scrolled.remove_css_class("albums-bookshelf");
+    }
+
+    // Folder-backed row themes are rendered by real ShelfRow widgets. Only
+    // older root-level bookshelf images remain page-sized CSS backgrounds.
+    if let Some(background_class) = bookshelf_background_css_class(appearance) {
+        scrolled.add_css_class(&background_class);
     }
 }
 
@@ -896,6 +1096,7 @@ fn find_descendant_with_css_class(root: &gtk::Widget, class_name: &str) -> Optio
 
 fn populate(
     cards: &gtk::FlowBox,
+    bookshelf_runtime: &BookshelfRuntime,
     count: &gtk::Label,
     albums: &[Album],
     connection: Rc<RefCell<Connection>>,
@@ -906,6 +1107,10 @@ fn populate(
     while let Some(child) = cards.first_child() {
         cards.remove(&child);
     }
+    clear_box(&bookshelf_runtime.rows);
+    bookshelf_runtime.last_columns.set(0);
+    bookshelf_runtime.last_card_width.set(0);
+    bookshelf_runtime.selected_theme.replace(None);
 
     count.set_text(&format!(
         "{} album{}",
@@ -923,13 +1128,19 @@ fn populate(
     }
 
     let appearance = settings::album_appearance(&connection.borrow());
-    let responsive_bookshelf = uses_responsive_bookshelf(appearance);
-    cards.set_vexpand(responsive_bookshelf);
-    cards.set_valign(if responsive_bookshelf {
-        gtk::Align::Fill
-    } else {
-        gtk::Align::Start
-    });
+    let bookshelf_theme = bookshelf_theme_for_appearance(appearance);
+    let row_theme = bookshelf_theme
+        .as_ref()
+        .filter(|theme| theme.kind == BookshelfThemeKind::Row)
+        .cloned();
+    let responsive_bookshelf = row_theme.is_some();
+
+    cards.set_visible(!responsive_bookshelf);
+    cards.set_vexpand(false);
+    cards.set_valign(gtk::Align::Start);
+    bookshelf_runtime.rows.set_visible(responsive_bookshelf);
+    bookshelf_runtime.selected_theme.replace(row_theme.clone());
+
     let frames: Vec<FrameAsset> =
         album_frame_paths_for_appearance(Path::new(ALBUM_COVER_THEME_DIRECTORY), appearance)
             .into_iter()
@@ -945,13 +1156,7 @@ fn populate(
             })
             .collect();
     let framed = !frames.is_empty();
-    cards.set_row_spacing(if responsive_bookshelf {
-        0
-    } else if framed {
-        28
-    } else {
-        20
-    });
+    cards.set_row_spacing(if framed { 28 } else { 20 });
     cards.set_column_spacing(if framed { 24 } else { 20 });
 
     if albums.is_empty() {
@@ -960,7 +1165,17 @@ fn populate(
         ));
         empty.set_xalign(0.0);
         empty.add_css_class("dim-label");
-        insert_child(cards, &empty, None, None);
+        if let Some(theme) = row_theme {
+            let row = bookshelf_row(&theme);
+            let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            holder.set_margin_top(24);
+            holder.set_margin_start(24);
+            holder.append(&empty);
+            row.add_overlay(&holder);
+            bookshelf_runtime.rows.append(&row);
+        } else {
+            insert_child(cards, &empty, None, None);
+        }
         return;
     }
 
@@ -979,6 +1194,8 @@ fn populate(
         .max()
         .unwrap_or_else(|| cover_width(thumbnail_width));
     let frame_paths: Vec<_> = frames.iter().map(|frame| frame.path.clone()).collect();
+    let mut bookshelf_cards = Vec::with_capacity(albums.len());
+
     for album in albums {
         let frame = selected_frame_index(
             album,
@@ -1005,14 +1222,197 @@ fn populate(
         if framed {
             card.set_width_request(card_width);
         }
-        if responsive_bookshelf {
-            card.set_margin_top(bookshelf_card_margin_top(actual_cover_height));
+
+        if let Some(theme) = row_theme.as_ref() {
+            card.set_margin_top(bookshelf_card_margin_top(
+                theme.surface_y,
+                actual_cover_height,
+            ));
+            card.set_halign(gtk::Align::Center);
+            bookshelf_cards.push(card);
+        } else {
+            insert_child(cards, &card, Some(card_width), None);
         }
-        insert_child(
-            cards,
-            &card,
-            Some(card_width),
-            responsive_bookshelf.then_some(BOOKSHELF_ROW_HEIGHT),
+    }
+
+    if let Some(theme) = row_theme {
+        let width = bookshelf_runtime.rows.width();
+        let columns = bookshelf_columns_for_width(width, card_width);
+        build_bookshelf_rows(&bookshelf_runtime.rows, &bookshelf_cards, columns, &theme);
+        bookshelf_runtime.last_columns.set(columns);
+
+        if width > 0 {
+            let target_card_width = bookshelf_target_card_width(width, columns);
+            resize_bookshelf_cards(&bookshelf_runtime.rows, target_card_width, &theme);
+            bookshelf_runtime.last_card_width.set(target_card_width);
+        }
+    }
+}
+
+fn clear_box(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
+}
+
+fn bookshelf_row(theme: &BookshelfTheme) -> gtk::Overlay {
+    let row = gtk::Overlay::new();
+    row.set_hexpand(true);
+    row.set_vexpand(false);
+    row.set_height_request(theme.row_height);
+    row.set_size_request(-1, theme.row_height);
+    row.set_overflow(gtk::Overflow::Hidden);
+    row.add_css_class("albums-bookshelf-row");
+
+    let background = gtk::Picture::new();
+    background.set_filename(Some(&theme.image_path));
+    background.set_content_fit(gtk::ContentFit::Fill);
+    background.set_can_shrink(true);
+    background.set_hexpand(true);
+    background.set_vexpand(true);
+    background.set_halign(gtk::Align::Fill);
+    background.set_valign(gtk::Align::Fill);
+    background.set_can_target(false);
+    row.set_child(Some(&background));
+    row
+}
+
+fn bookshelf_row_count(card_count: usize, columns: usize) -> usize {
+    let columns = columns.max(1);
+    let required = card_count.div_ceil(columns);
+    required.max(BOOKSHELF_MIN_ROWS)
+}
+
+fn build_bookshelf_rows(
+    rows: &gtk::Box,
+    cards: &[gtk::Button],
+    columns: usize,
+    theme: &BookshelfTheme,
+) {
+    clear_box(rows);
+    let columns = columns.clamp(1, BOOKSHELF_MAX_COLUMNS);
+    let row_count = bookshelf_row_count(cards.len(), columns);
+
+    for row_index in 0..row_count {
+        let start = (row_index * columns).min(cards.len());
+        let end = (start + columns).min(cards.len());
+        let chunk = &cards[start..end];
+
+        let row = bookshelf_row(theme);
+        let slots = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        slots.set_homogeneous(true);
+        slots.set_hexpand(true);
+        slots.set_vexpand(false);
+        slots.set_halign(gtk::Align::Fill);
+        slots.set_valign(gtk::Align::Start);
+        slots.set_height_request(theme.row_height);
+
+        for index in 0..columns {
+            let slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            slot.set_hexpand(true);
+            slot.set_vexpand(false);
+            slot.set_halign(gtk::Align::Fill);
+            slot.set_valign(gtk::Align::Start);
+            if let Some(card) = chunk.get(index) {
+                slot.append(card);
+            }
+            slots.append(&slot);
+        }
+
+        row.add_overlay(&slots);
+        rows.append(&row);
+    }
+}
+
+fn collect_bookshelf_cards(root: &gtk::Widget, cards: &mut Vec<gtk::Button>) {
+    if let Some(button) = root.downcast_ref::<gtk::Button>() {
+        if button.has_css_class("album-card") {
+            cards.push(button.clone());
+            return;
+        }
+    }
+    let mut child = root.first_child();
+    while let Some(current) = child {
+        collect_bookshelf_cards(&current, cards);
+        child = current.next_sibling();
+    }
+}
+
+fn resize_bookshelf_cards(rows: &gtk::Box, target_width: i32, theme: &BookshelfTheme) {
+    let mut cards = Vec::new();
+    collect_bookshelf_cards(rows.upcast_ref(), &mut cards);
+
+    for card in cards {
+        let Some(cover) = find_descendant_with_css_class(card.upcast_ref(), "album-cover")
+            .and_then(|widget| widget.downcast::<gtk::Overlay>().ok())
+        else {
+            continue;
+        };
+
+        let current_width = cover.width_request();
+        let current_height = cover.height_request();
+        if current_width <= 0 || current_height <= 0 || current_width == target_width {
+            continue;
+        }
+
+        let scale_x = target_width as f64 / current_width as f64;
+        let target_height = ((current_height as f64 * scale_x).round() as i32)
+            .clamp(1, theme.surface_y.max(1));
+
+        if let Some(picture) = find_descendant_with_css_class(cover.upcast_ref(), "thumbnail") {
+            let scale_y = target_height as f64 / current_height as f64;
+            picture.set_margin_start(
+                ((picture.margin_start() as f64 * scale_x).round() as i32).max(0),
+            );
+            picture.set_margin_end(
+                ((picture.margin_end() as f64 * scale_x).round() as i32).max(0),
+            );
+            picture.set_margin_top(
+                ((picture.margin_top() as f64 * scale_y).round() as i32).max(0),
+            );
+            picture.set_margin_bottom(
+                ((picture.margin_bottom() as f64 * scale_y).round() as i32).max(0),
+            );
+        }
+
+        cover.set_width_request(target_width);
+        cover.set_height_request(target_height);
+        cover.set_size_request(target_width, target_height);
+
+        card.set_width_request(target_width);
+        card.set_margin_top(bookshelf_card_margin_top(theme.surface_y, target_height));
+
+        if let Some(content) = card.child() {
+            content.set_width_request(target_width);
+            content.set_size_request(target_width, -1);
+        }
+    }
+}
+
+fn reflow_bookshelf_rows(runtime: &BookshelfRuntime, columns: usize, theme: &BookshelfTheme) {
+    let mut cards = Vec::new();
+    collect_bookshelf_cards(runtime.rows.upcast_ref(), &mut cards);
+    if cards.is_empty() {
+        runtime.last_columns.set(columns);
+        return;
+    }
+
+    // Keep strong references while detaching cards from their old slot boxes.
+    for card in &cards {
+        if let Some(parent) = card.parent().and_downcast::<gtk::Box>() {
+            parent.remove(card);
+        }
+    }
+    build_bookshelf_rows(&runtime.rows, &cards, columns, theme);
+    runtime.last_columns.set(columns);
+
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "ALBUM SHELF TRACE theme={} columns={} rows={} cards={}",
+            theme.id,
+            columns,
+            (cards.len() + columns - 1) / columns,
+            cards.len()
         );
     }
 }
@@ -1245,15 +1645,10 @@ fn album_card(
         cover.add_overlay(&skin);
     }
 
-    // GtkPicture's natural size must not determine the album card height.
-    // SquareTile manually allocates the cover to the same fixed rectangle as
-    // the normal photo grid, even when the cached image is portrait.
-    let cover_tile = crate::grid::SquareTile::new(width, height, &cover);
-    cover_tile.set_hexpand(false);
-    cover_tile.set_vexpand(false);
-    cover_tile.set_halign(gtk::Align::Start);
-    cover_tile.set_valign(gtk::Align::Start);
-    content.append(&cover_tile);
+    // Album covers are rectangular and need to grow with the bookshelf.
+    // Keep the cover itself in normal GTK layout instead of wrapping it in the
+    // photo-grid tile widget, whose fixed allocation prevents responsive growth.
+    content.append(&cover);
 
     // Album name below cover.
     let name = gtk::Label::new(Some(&album.name));
@@ -1416,7 +1811,7 @@ mod tests {
     }
 
     #[test]
-    fn discovers_only_named_bookshelf_png_and_jpg_files() {
+    fn discovers_folder_backed_row_themes_before_legacy_backgrounds() {
         let directory = std::env::temp_dir().join(format!(
             "pic-bookshelf-backgrounds-{}-{}",
             std::process::id(),
@@ -1426,25 +1821,50 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir(&directory).unwrap();
-        for name in [
-            "oak-bookshelf.png",
-            "three-panel-bookshelf.jpg",
-            "bookshelf.png",
-            "oak-bookshelf.jpeg",
-            "oak-frame.png",
-            "oak-bookshelf.png.bak",
-        ] {
-            std::fs::write(directory.join(name), []).unwrap();
-        }
-        std::fs::create_dir(directory.join("nested-bookshelf.png")).unwrap();
+        let single = directory.join("single");
+        let walnut = directory.join("walnut");
+        std::fs::create_dir(&single).unwrap();
+        std::fs::create_dir(&walnut).unwrap();
+        std::fs::write(single.join("single-row-bookshelf.png"), []).unwrap();
+        std::fs::write(walnut.join("row.jpg"), []).unwrap();
+        std::fs::write(directory.join("three-panel-bookshelf.jpg"), []).unwrap();
+        std::fs::write(directory.join("bookshelf.png"), []).unwrap();
 
+        let themes = bookshelf_themes_in(&directory);
+        assert_eq!(themes.len(), 3);
+        assert_eq!(themes[0].id, "single");
+        assert_eq!(themes[0].kind, BookshelfThemeKind::Row);
         assert_eq!(
-            bookshelf_background_paths_in(&directory),
-            vec![
-                directory.join("oak-bookshelf.png"),
-                directory.join("three-panel-bookshelf.jpg"),
-            ]
+            themes[0].image_path,
+            single.join("single-row-bookshelf.png")
         );
+        assert_eq!(themes[1].id, "walnut");
+        assert_eq!(themes[1].kind, BookshelfThemeKind::Row);
+        assert_eq!(themes[2].kind, BookshelfThemeKind::Legacy);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn row_theme_geometry_defaults_and_can_be_overridden() {
+        let directory = std::env::temp_dir().join(format!(
+            "pic-bookshelf-geometry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        assert_eq!(
+            bookshelf_theme_geometry(&directory),
+            (BOOKSHELF_ROW_HEIGHT, BOOKSHELF_SURFACE_Y)
+        );
+        std::fs::write(
+            directory.join("theme.conf"),
+            "row_height=300\nsurface_y=246\n",
+        )
+        .unwrap();
+        assert_eq!(bookshelf_theme_geometry(&directory), (300, 246));
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1772,36 +2192,47 @@ mod tests {
     #[test]
     fn responsive_bookshelf_geometry_keeps_cover_bottoms_on_the_surface() {
         for (cover_height, expected_top) in [(91, 144), (137, 98), (186, 49)] {
-            let top = bookshelf_card_margin_top(cover_height);
+            let top = bookshelf_card_margin_top(235, cover_height);
             assert_eq!(top, expected_top);
             assert_eq!(top + cover_height, 235);
         }
 
         assert_eq!(BOOKSHELF_ROW_HEIGHT, 288);
         assert!(BOOKSHELF_SURFACE_Y < BOOKSHELF_ROW_HEIGHT);
-
-        assert!(uses_responsive_bookshelf(AlbumAppearance {
-            bookshelf_enabled: true,
-            covers_enabled: false,
-            background_index: 0,
-            cover_index: 0,
-        }));
-        assert!(!uses_responsive_bookshelf(AlbumAppearance {
-            bookshelf_enabled: true,
-            covers_enabled: false,
-            background_index: 1,
-            cover_index: 0,
-        }));
-        assert!(!uses_responsive_bookshelf(AlbumAppearance {
-            bookshelf_enabled: false,
-            covers_enabled: true,
-            background_index: 0,
-            cover_index: 0,
-        }));
     }
 
     #[test]
-    fn bookshelf_background_rules_use_fixed_row_height() {
+    fn bookshelf_keeps_at_least_three_visible_rows() {
+        assert_eq!(bookshelf_row_count(0, 5), 3);
+        assert_eq!(bookshelf_row_count(1, 5), 3);
+        assert_eq!(bookshelf_row_count(10, 5), 3);
+        assert_eq!(bookshelf_row_count(10, 4), 3);
+        assert_eq!(bookshelf_row_count(10, 3), 4);
+        assert_eq!(bookshelf_row_count(20, 5), 4);
+    }
+
+    #[test]
+    fn responsive_bookshelf_columns_follow_available_width() {
+        assert_eq!(bookshelf_columns_for_width(2000, 220), 5);
+        assert_eq!(bookshelf_columns_for_width(1400, 220), 5);
+        assert_eq!(bookshelf_columns_for_width(1120, 220), 4);
+        assert_eq!(bookshelf_columns_for_width(850, 220), 3);
+        assert_eq!(bookshelf_columns_for_width(300, 220), 1);
+        assert_eq!(bookshelf_columns_for_width(0, 220), 5);
+    }
+
+    #[test]
+    fn responsive_bookshelf_cards_grow_on_wide_windows() {
+        assert_eq!(bookshelf_target_card_width(850, 3), 220);
+        assert_eq!(bookshelf_target_card_width(1120, 4), 220);
+        assert_eq!(bookshelf_target_card_width(1400, 5), 220);
+        assert!(bookshelf_target_card_width(1760, 5) > 240);
+        assert!(bookshelf_target_card_width(1760, 5) > 196);
+        assert_eq!(bookshelf_target_card_width(2200, 5), 280);
+    }
+
+    #[test]
+    fn folder_row_themes_do_not_become_page_backgrounds() {
         let directory = std::env::temp_dir().join(format!(
             "pic-bookshelf-css-{}-{}",
             std::process::id(),
@@ -1811,24 +2242,20 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir(&directory).unwrap();
-        for name in [
-            "single-row-bookshelf.png",
-            "three-panel-bookshelf.jpg",
-            "four-panel-bookshelf.png",
-        ] {
-            std::fs::write(directory.join(name), []).unwrap();
-        }
+        let single = directory.join("single");
+        std::fs::create_dir(&single).unwrap();
+        std::fs::write(single.join("row.png"), []).unwrap();
+        std::fs::write(directory.join("three-panel-bookshelf.jpg"), []).unwrap();
+
         assert_eq!(
             bookshelf_background_path(&directory, 0),
-            Some(directory.join("single-row-bookshelf.png"))
+            Some(single.join("row.png"))
         );
-
         let rules = bookshelf_background_rules(&directory);
-        assert!(rules.contains(".albums-bookshelf-0 {"));
-        assert_eq!(rules.matches("background-size: 100% 288px").count(), 1);
-        assert_eq!(rules.matches("background-size: 100% auto").count(), 2);
+        assert!(!rules.contains(".albums-bookshelf-0 {"));
+        assert!(rules.contains(".albums-bookshelf-1 {"));
+        assert!(rules.contains("background-size: 100% auto"));
         assert!(BOOKSHELF_COUNT_CSS.contains(".albums-bookshelf-photo-count"));
-        assert!(BOOKSHELF_COUNT_CSS.contains("color: #3a210f"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 

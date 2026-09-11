@@ -590,9 +590,11 @@ fn refresh_preview(
             .as_deref()
             .filter(|path| std::path::Path::new(path).is_file())
         {
-            if let Some(rotated) =
-                crate::photo_texture::edited_thumbnail(path, item.photo.library_rotation, &item.photo.edit_recipe)
-            {
+            if let Some(rotated) = crate::photo_texture::edited_thumbnail(
+                path,
+                item.photo.library_rotation,
+                &item.photo.edit_recipe,
+            ) {
                 picture.set_paintable(Some(&rotated));
             } else {
                 picture.set_filename(Some(path));

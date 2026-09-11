@@ -379,8 +379,16 @@ pub fn build(
                 let rotation = photo.rotation();
                 let native = native_one_to_one.get();
                 let (target_width, target_height) = if native {
-                    let mut width = if photo.width() > 0 { photo.width() as u32 } else { u32::MAX };
-                    let mut height = if photo.height() > 0 { photo.height() as u32 } else { u32::MAX };
+                    let mut width = if photo.width() > 0 {
+                        photo.width() as u32
+                    } else {
+                        u32::MAX
+                    };
+                    let mut height = if photo.height() > 0 {
+                        photo.height() as u32
+                    } else {
+                        u32::MAX
+                    };
                     if matches!(rotation.rem_euclid(360), 90 | 270) {
                         std::mem::swap(&mut width, &mut height);
                     }
@@ -471,21 +479,101 @@ pub fn build(
 
     connect_scale(
         &controls.straighten,
-        session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(),
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
         |recipe, value| recipe.straighten = value,
     );
-    connect_scale(&controls.exposure, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.exposure = v);
-    connect_scale(&controls.fill_light, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.fill_light = v);
-    connect_scale(&controls.highlights, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.highlights = v);
-    connect_scale(&controls.shadows, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.shadows = v);
-    connect_scale(&controls.temperature, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.temperature = v);
-    connect_scale(&controls.saturation, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.saturation = v);
-    connect_scale(&controls.sharpen, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.sharpen = v);
+    connect_scale(
+        &controls.exposure,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.exposure = v,
+    );
+    connect_scale(
+        &controls.fill_light,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.fill_light = v,
+    );
+    connect_scale(
+        &controls.highlights,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.highlights = v,
+    );
+    connect_scale(
+        &controls.shadows,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.shadows = v,
+    );
+    connect_scale(
+        &controls.temperature,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.temperature = v,
+    );
+    connect_scale(
+        &controls.saturation,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.saturation = v,
+    );
+    connect_scale(
+        &controls.sharpen,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.sharpen = v,
+    );
 
-    connect_toggle(&controls.auto_contrast, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.auto_contrast = v);
-    connect_toggle(&controls.auto_color, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.auto_color = v);
-    connect_toggle(&controls.black_white, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.black_white = v);
-    connect_toggle(&controls.sepia, session.clone(), syncing.clone(), queue_preview.clone(), update_history_buttons.clone(), |r, v| r.sepia = v);
+    connect_toggle(
+        &controls.auto_contrast,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.auto_contrast = v,
+    );
+    connect_toggle(
+        &controls.auto_color,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.auto_color = v,
+    );
+    connect_toggle(
+        &controls.black_white,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.black_white = v,
+    );
+    connect_toggle(
+        &controls.sepia,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.sepia = v,
+    );
 
     let sync_controls: Rc<dyn Fn()> = {
         let controls = controls.clone();
@@ -547,12 +635,7 @@ pub fn build(
             // Return to Fit and clear any native 1:1 / panned viewport state.
             native_one_to_one.set(false);
             canvas_zoom.set(0.0);
-            apply_canvas_zoom(
-                &picture,
-                &picture_scroll,
-                preview_dimensions.get(),
-                0.0,
-            );
+            apply_canvas_zoom(&picture, &picture_scroll, preview_dimensions.get(), 0.0);
             let hadj = picture_scroll.hadjustment();
             let vadj = picture_scroll.vadjustment();
             hadj.set_value(hadj.lower());
@@ -689,7 +772,9 @@ pub fn build(
                 return;
             }
             let child = *pending_crop.borrow();
-            session.borrow_mut().mutate(|recipe| recipe.crop = recipe.crop.compose(child));
+            session
+                .borrow_mut()
+                .mutate(|recipe| recipe.crop = recipe.crop.compose(child));
             pending_crop.replace(CropRect::default());
             crop_overlay.set_visible(false);
             crop_actions.set_visible(false);
@@ -726,7 +811,9 @@ pub fn build(
         let queue_preview = queue_preview.clone();
         let update_history_buttons = update_history_buttons.clone();
         crop_reset.connect_clicked(move |_| {
-            session.borrow_mut().mutate(|recipe| recipe.crop = CropRect::default());
+            session
+                .borrow_mut()
+                .mutate(|recipe| recipe.crop = CropRect::default());
             pending_crop.replace(CropRect::default());
             crop_overlay.set_visible(false);
             crop_actions.set_visible(false);
@@ -735,7 +822,11 @@ pub fn build(
         });
     }
 
-    configure_crop_overlay(&crop_overlay, pending_crop.clone(), preview_dimensions.clone());
+    configure_crop_overlay(
+        &crop_overlay,
+        pending_crop.clone(),
+        preview_dimensions.clone(),
+    );
 
     {
         let on_close = on_close.clone();
@@ -800,7 +891,9 @@ pub fn build(
         let parent = parent.clone();
         done.connect_clicked(move |_| {
             let encoded = session.borrow().recipe.encode();
-            if let Err(error) = crate::db::set_edit_recipe(&connection.borrow(), photo.id(), &encoded) {
+            if let Err(error) =
+                crate::db::set_edit_recipe(&connection.borrow(), photo.id(), &encoded)
+            {
                 let dialog = libadwaita::AlertDialog::builder()
                     .heading("Could not save edits")
                     .body(error.to_string())
@@ -959,7 +1052,9 @@ fn connect_scale(
         }
         let value = scale.value() as f32;
         if dragging.get() {
-            session.borrow_mut().mutate_active(|recipe| assign(recipe, value));
+            session
+                .borrow_mut()
+                .mutate_active(|recipe| assign(recipe, value));
         } else {
             // Keyboard steps and deliberate wheel steps remain normal single
             // undoable actions; only a continuous mouse drag is coalesced.
@@ -1002,8 +1097,7 @@ fn configure_scale_scroll(scale: &gtk::Scale, tools_scroll: &gtk::ScrolledWindow
             let max = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
             let step = adjustment.step_increment().max(24.0);
             adjustment.set_value(
-                (adjustment.value() + dy.signum() * step * 2.0)
-                    .clamp(adjustment.lower(), max),
+                (adjustment.value() + dy.signum() * step * 2.0).clamp(adjustment.lower(), max),
             );
         }
         glib::Propagation::Stop
@@ -1039,7 +1133,12 @@ fn configure_crop_overlay(
     let preview_for_draw = preview_dimensions.clone();
     overlay.set_draw_func(move |_, context, width, height| {
         let (image_width, image_height) = preview_for_draw.get();
-        let (x, y, w, h) = contained_rect(width as f64, height as f64, image_width as f64, image_height as f64);
+        let (x, y, w, h) = contained_rect(
+            width as f64,
+            height as f64,
+            image_width as f64,
+            image_height as f64,
+        );
         let crop = pending_for_draw.borrow().normalized();
         let sx = x + crop.left as f64 * w;
         let sy = y + crop.top as f64 * h;
@@ -1086,12 +1185,15 @@ fn configure_crop_overlay(
             let (Some((sx, sy)), Some((cx, cy))) = (start, current) else {
                 return;
             };
-            pending.replace(CropRect {
-                left: sx.min(cx) as f32,
-                top: sy.min(cy) as f32,
-                right: sx.max(cx) as f32,
-                bottom: sy.max(cy) as f32,
-            }.normalized());
+            pending.replace(
+                CropRect {
+                    left: sx.min(cx) as f32,
+                    top: sy.min(cy) as f32,
+                    right: sx.max(cx) as f32,
+                    bottom: sy.max(cy) as f32,
+                }
+                .normalized(),
+            );
             overlay.queue_draw();
         });
     }
@@ -1113,15 +1215,28 @@ fn point_to_normalized(
     if width <= 0.0 || height <= 0.0 {
         return None;
     }
-    Some((((px - x) / width).clamp(0.0, 1.0), ((py - y) / height).clamp(0.0, 1.0)))
+    Some((
+        ((px - x) / width).clamp(0.0, 1.0),
+        ((py - y) / height).clamp(0.0, 1.0),
+    ))
 }
 
-fn contained_rect(container_w: f64, container_h: f64, image_w: f64, image_h: f64) -> (f64, f64, f64, f64) {
+fn contained_rect(
+    container_w: f64,
+    container_h: f64,
+    image_w: f64,
+    image_h: f64,
+) -> (f64, f64, f64, f64) {
     if container_w <= 0.0 || container_h <= 0.0 || image_w <= 0.0 || image_h <= 0.0 {
         return (0.0, 0.0, container_w.max(0.0), container_h.max(0.0));
     }
     let scale = (container_w / image_w).min(container_h / image_h);
     let width = image_w * scale;
     let height = image_h * scale;
-    ((container_w - width) * 0.5, (container_h - height) * 0.5, width, height)
+    (
+        (container_w - width) * 0.5,
+        (container_h - height) * 0.5,
+        width,
+        height,
+    )
 }

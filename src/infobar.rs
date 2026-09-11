@@ -260,9 +260,11 @@ impl InfoBar {
         let cached = photo.cached_thumbnail_path();
         let existing = cached.as_deref().filter(|path| Path::new(path).is_file());
         if let Some(thumb_path) = existing {
-            if let Some(rotated) =
-                crate::photo_texture::edited_thumbnail(thumb_path, photo.rotation(), &photo.edit_recipe())
-            {
+            if let Some(rotated) = crate::photo_texture::edited_thumbnail(
+                thumb_path,
+                photo.rotation(),
+                &photo.edit_recipe(),
+            ) {
                 self.preview.set_paintable(Some(&rotated));
             } else {
                 self.preview.set_from_file(Some(thumb_path));

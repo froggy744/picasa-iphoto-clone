@@ -39,7 +39,10 @@ pub fn estimated_output_dimensions(width: u32, height: u32, recipe: &EditRecipe)
     let crop = recipe.crop.normalized();
     width *= (crop.right - crop.left).max(0.01);
     height *= (crop.bottom - crop.top).max(0.01);
-    (width.round().max(1.0) as u32, height.round().max(1.0) as u32)
+    (
+        width.round().max(1.0) as u32,
+        height.round().max(1.0) as u32,
+    )
 }
 
 pub fn render_thumbnail(path: &str, rotation: i32, recipe: &EditRecipe) -> Result<RgbaImage> {
@@ -233,7 +236,8 @@ fn apply_auto_contrast(image: &mut RgbaImage) {
     for pixel in image.pixels_mut() {
         for channel in 0..3 {
             let range = high[channel].saturating_sub(low[channel]).max(1) as f32;
-            pixel[channel] = (((pixel[channel].saturating_sub(low[channel])) as f32 / range) * 255.0)
+            pixel[channel] = (((pixel[channel].saturating_sub(low[channel])) as f32 / range)
+                * 255.0)
                 .clamp(0.0, 255.0)
                 .round() as u8;
         }
@@ -244,11 +248,8 @@ fn rotate_autocrop(source: &RgbaImage, angle: f32) -> RgbaImage {
     if angle.abs() < 0.0001 || source.width() < 2 || source.height() < 2 {
         return source.clone();
     }
-    let (output_width, output_height) = largest_rotated_rect(
-        source.width() as f32,
-        source.height() as f32,
-        angle,
-    );
+    let (output_width, output_height) =
+        largest_rotated_rect(source.width() as f32, source.height() as f32, angle);
     let output_width = output_width.floor().max(1.0) as u32;
     let output_height = output_height.floor().max(1.0) as u32;
     let mut output = RgbaImage::new(output_width, output_height);
@@ -345,7 +346,12 @@ mod tests {
     fn crop_reduces_dimensions() {
         let image = RgbaImage::new(100, 80);
         let mut recipe = EditRecipe::default();
-        recipe.crop = CropRect { left: 0.25, top: 0.25, right: 0.75, bottom: 0.75 };
+        recipe.crop = CropRect {
+            left: 0.25,
+            top: 0.25,
+            right: 0.75,
+            bottom: 0.75,
+        };
         let output = apply_recipe(image, &recipe);
         assert_eq!(output.dimensions(), (50, 40));
     }

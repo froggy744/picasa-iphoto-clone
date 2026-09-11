@@ -299,7 +299,12 @@ mod tests {
     #[test]
     fn recipe_round_trip() {
         let mut recipe = EditRecipe::default();
-        recipe.crop = CropRect { left: 0.1, top: 0.2, right: 0.8, bottom: 0.9 };
+        recipe.crop = CropRect {
+            left: 0.1,
+            top: 0.2,
+            right: 0.8,
+            bottom: 0.9,
+        };
         recipe.exposure = 0.7;
         recipe.auto_color = true;
         recipe.sepia = true;
@@ -326,8 +331,18 @@ mod tests {
 
     #[test]
     fn composed_crop_stays_normalized() {
-        let outer = CropRect { left: 0.1, top: 0.1, right: 0.9, bottom: 0.9 };
-        let inner = CropRect { left: 0.25, top: 0.25, right: 0.75, bottom: 0.75 };
+        let outer = CropRect {
+            left: 0.1,
+            top: 0.1,
+            right: 0.9,
+            bottom: 0.9,
+        };
+        let inner = CropRect {
+            left: 0.25,
+            top: 0.25,
+            right: 0.75,
+            bottom: 0.75,
+        };
         let result = outer.compose(inner);
         assert!((result.left - 0.3).abs() < 0.001);
         assert!((result.right - 0.7).abs() < 0.001);

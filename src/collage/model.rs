@@ -22,7 +22,11 @@ fn photo_aspect_ratio(photo: &PhotoObject) -> f32 {
     let recipe = crate::edit::EditRecipe::decode(&photo.edit_recipe());
     let (width, height) = crate::edit::render::estimated_output_dimensions(width, height, &recipe);
     let ratio = width as f32 / height.max(1) as f32;
-    if ratio.is_finite() && ratio > 0.0 { ratio } else { 1.5 }
+    if ratio.is_finite() && ratio > 0.0 {
+        ratio
+    } else {
+        1.5
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

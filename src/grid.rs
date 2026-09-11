@@ -241,7 +241,9 @@ impl SquareTile {
                 }
             }
         }
-        let fs_ms = fs_started.map(|started| started.elapsed().as_millis()).unwrap_or(0);
+        let fs_ms = fs_started
+            .map(|started| started.elapsed().as_millis())
+            .unwrap_or(0);
         let priority_started = trace.then(Instant::now);
         if request_priority {
             crate::thumbnail::request_priority(
@@ -1059,7 +1061,6 @@ impl Gallery {
             tile.set_vexpand(false);
             tile.set_valign(gtk::Align::Start);
             list_item.set_child(Some(&tile));
-
         });
 
         factory.connect_bind(|_, object| {
@@ -1136,12 +1137,7 @@ impl Gallery {
                 selection_for_context.select_item(position, true);
             }
             root_for_context.grab_focus();
-            (context_menu_for_grid)(
-                photo,
-                frame_widget,
-                local.x() as f64,
-                local.y() as f64,
-            );
+            (context_menu_for_grid)(photo, frame_widget, local.x() as f64, local.y() as f64);
         });
         root.add_controller(right_click);
 
@@ -2013,7 +2009,9 @@ impl Gallery {
         if trace {
             eprintln!(
                 "UI PERF folder_zoom_setting_callback ms={}",
-                callback_started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
+                callback_started
+                    .map(|value| value.elapsed().as_millis())
+                    .unwrap_or(0)
             );
         }
 
@@ -2024,7 +2022,12 @@ impl Gallery {
         if self.group_mode.get() == GroupMode::Folder {
             let mut mapped = self.mapped_folder_tiles.borrow_mut();
             mapped.retain(|tile| tile.is_mapped());
-            tiles.extend(mapped.iter().filter(|tile| tile_near_folder_viewport(tile, &self.folder_root)).cloned());
+            tiles.extend(
+                mapped
+                    .iter()
+                    .filter(|tile| tile_near_folder_viewport(tile, &self.folder_root))
+                    .cloned(),
+            );
         } else {
             collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
         }
@@ -2035,7 +2038,9 @@ impl Gallery {
                 grid_tiles,
                 total_tiles.saturating_sub(grid_tiles),
                 total_tiles,
-                collect_started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
+                collect_started
+                    .map(|value| value.elapsed().as_millis())
+                    .unwrap_or(0)
             );
         }
         let resize_started = trace.then(Instant::now);
@@ -2046,7 +2051,9 @@ impl Gallery {
             eprintln!(
                 "UI PERF folder_zoom_resize_tiles count={} ms={}",
                 total_tiles,
-                resize_started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
+                resize_started
+                    .map(|value| value.elapsed().as_millis())
+                    .unwrap_or(0)
             );
         }
 
@@ -2086,7 +2093,11 @@ impl Gallery {
             tile.refresh_thumbnail();
         }
         if let Some(started) = started {
-            eprintln!("UI PERF refresh_thumbnails tiles={} ms={}", count, started.elapsed().as_millis());
+            eprintln!(
+                "UI PERF refresh_thumbnails tiles={} ms={}",
+                count,
+                started.elapsed().as_millis()
+            );
         }
     }
 
@@ -2287,7 +2298,11 @@ impl Gallery {
                 self.rebuild_folder_rows();
             }
             if let Some(started) = replace_started {
-                eprintln!("UI PERF gallery_replace photos={} unchanged=true ms={}", photos.len(), started.elapsed().as_millis());
+                eprintln!(
+                    "UI PERF gallery_replace photos={} unchanged=true ms={}",
+                    photos.len(),
+                    started.elapsed().as_millis()
+                );
             }
             return;
         }
@@ -2297,15 +2312,13 @@ impl Gallery {
         // tens of thousands of them. Measured 658-1363 ms to rebuild all 66k.
         let same_set = {
             let current = self.current_photos.borrow();
-            current.len() == photos.len()
-                && !current.is_empty()
-                && {
-                    let ids = current
-                        .iter()
-                        .map(|object| object.id())
-                        .collect::<std::collections::HashSet<_>>();
-                    photos.iter().all(|photo| ids.contains(&photo.id))
-                }
+            current.len() == photos.len() && !current.is_empty() && {
+                let ids = current
+                    .iter()
+                    .map(|object| object.id())
+                    .collect::<std::collections::HashSet<_>>();
+                photos.iter().all(|photo| ids.contains(&photo.id))
+            }
         };
         if same_set {
             let current = self.current_photos.borrow().clone();
@@ -2356,7 +2369,11 @@ impl Gallery {
         const PROGRESSIVE_REPLACE_THRESHOLD: usize = 1_000;
         if photos.len() > PROGRESSIVE_REPLACE_THRESHOLD {
             if let Some(started) = replace_started {
-                eprintln!("UI PERF gallery_replace photos={} progressive=true ms={}", photos.len(), started.elapsed().as_millis());
+                eprintln!(
+                    "UI PERF gallery_replace photos={} progressive=true ms={}",
+                    photos.len(),
+                    started.elapsed().as_millis()
+                );
             }
             self.replace_progressive(photos.to_vec(), generation, profile_started);
             return;
@@ -2385,7 +2402,11 @@ impl Gallery {
             }
         }
         if let Some(started) = replace_started {
-            eprintln!("UI PERF gallery_replace photos={} unchanged=false ms={}", objects.len(), started.elapsed().as_millis());
+            eprintln!(
+                "UI PERF gallery_replace photos={} unchanged=false ms={}",
+                objects.len(),
+                started.elapsed().as_millis()
+            );
         }
         crate::diagnostics::refresh_finished(profile_started, objects.len());
     }
@@ -2525,7 +2546,12 @@ impl Gallery {
             }
         }
         if let Some(started) = append_started {
-            eprintln!("UI PERF gallery_append photos={} total={} ms={}", photos.len(), self.current_photos.borrow().len(), started.elapsed().as_millis());
+            eprintln!(
+                "UI PERF gallery_append photos={} total={} ms={}",
+                photos.len(),
+                self.current_photos.borrow().len(),
+                started.elapsed().as_millis()
+            );
         }
     }
 
@@ -2608,8 +2634,8 @@ impl Gallery {
                     folder_root.scroll_to(row, gtk::ListScrollFlags::FOCUS, Some(scroll));
                 }
                 if let Some(adjustment) = folder_root.vadjustment() {
-                    let upper = (adjustment.upper() - adjustment.page_size())
-                        .max(adjustment.lower());
+                    let upper =
+                        (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
                     adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
                 }
             } else {
@@ -2619,8 +2645,8 @@ impl Gallery {
                     Some(scroll),
                 );
                 if let Some(adjustment) = root.vadjustment() {
-                    let upper = (adjustment.upper() - adjustment.page_size())
-                        .max(adjustment.lower());
+                    let upper =
+                        (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
                     adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
                 }
             }
@@ -2654,15 +2680,15 @@ impl Gallery {
                     folder_root.scroll_to(row, gtk::ListScrollFlags::FOCUS, Some(scroll));
                 }
                 if let Some(adjustment) = folder_root.vadjustment() {
-                    let upper = (adjustment.upper() - adjustment.page_size())
-                        .max(adjustment.lower());
+                    let upper =
+                        (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
                     adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
                 }
             } else {
                 root.scroll_to(position as u32, gtk::ListScrollFlags::FOCUS, Some(scroll));
                 if let Some(adjustment) = root.vadjustment() {
-                    let upper = (adjustment.upper() - adjustment.page_size())
-                        .max(adjustment.lower());
+                    let upper =
+                        (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
                     adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
                 }
             }
@@ -2878,20 +2904,15 @@ impl Gallery {
     /// directly, so the first descendant folder header is a valid target.
     pub fn scroll_to_folder(&self, folder_id: i64, folder_path: &str) -> bool {
         let target_path = std::path::Path::new(folder_path);
-        let Some(photo_position) = self
-            .current_photos
-            .borrow()
-            .iter()
-            .position(|photo| {
-                if photo.folder_id() == folder_id {
-                    return true;
-                }
-                photo
-                    .folder_path()
-                    .as_deref()
-                    .is_some_and(|path| std::path::Path::new(path).starts_with(target_path))
-            })
-        else {
+        let Some(photo_position) = self.current_photos.borrow().iter().position(|photo| {
+            if photo.folder_id() == folder_id {
+                return true;
+            }
+            photo
+                .folder_path()
+                .as_deref()
+                .is_some_and(|path| std::path::Path::new(path).starts_with(target_path))
+        }) else {
             return false;
         };
 
@@ -3086,10 +3107,7 @@ fn rebuild_folder_rows_for(
             .item((old_len - 1 - suffix) as u32)
             .and_downcast::<FolderRowObject>()
             .is_some_and(|old_row| {
-                folder_virtual_row_matches(
-                    &old_row.data(),
-                    &new_rows[new_len - 1 - suffix].data(),
-                )
+                folder_virtual_row_matches(&old_row.data(), &new_rows[new_len - 1 - suffix].data())
             })
     {
         suffix += 1;
@@ -3520,7 +3538,10 @@ fn install_folder_root_input(
             return;
         };
         if trace {
-            eprintln!("FOLDER INPUT resolved=true id={} position={position}", photo.id());
+            eprintln!(
+                "FOLDER INPUT resolved=true id={} position={position}",
+                photo.id()
+            );
         }
 
         // Do not claim the sequence here: claiming on press prevents the
@@ -3762,7 +3783,15 @@ fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiS
         tile.set_manual_selected(selected);
     }
     if let Some(started) = started {
-        eprintln!("UI PERF folder_selection_styles tiles={} items={} spfid_calls={} ms={}", count, selection.n_items(), SELECTION_POSITION_CALLS.with(Cell::get).wrapping_sub(calls_before), started.elapsed().as_millis());
+        eprintln!(
+            "UI PERF folder_selection_styles tiles={} items={} spfid_calls={} ms={}",
+            count,
+            selection.n_items(),
+            SELECTION_POSITION_CALLS
+                .with(Cell::get)
+                .wrapping_sub(calls_before),
+            started.elapsed().as_millis()
+        );
     }
 }
 
@@ -4046,7 +4075,10 @@ mod folder_stream_tests {
     #[test]
     fn folder_virtual_photo_chunks_never_exceed_chunk_size() {
         let rows = folder_virtual_rows(&sample_ranges(), FOLDER_PHOTO_CHUNK_SIZE);
-        for row in rows.into_iter().filter(|row| row.kind == FolderRowKind::Photos) {
+        for row in rows
+            .into_iter()
+            .filter(|row| row.kind == FolderRowKind::Photos)
+        {
             assert!(row.end - row.start <= FOLDER_PHOTO_CHUNK_SIZE);
         }
     }
