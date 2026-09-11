@@ -24,3 +24,8 @@
 !/scripts/
 /scripts/*
 !/scripts/check_search_input.py
+
+
+# Keep source images
+!/images/
+!/images/**
