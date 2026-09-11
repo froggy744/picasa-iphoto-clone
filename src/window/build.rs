@@ -535,7 +535,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }) as Rc<dyn Fn(i64, bool)>
     };
     let settings_albums_refresh = albums_home_refresh_slot.clone();
-    info.more.connect_clicked(move |_| {
+    let present_settings: Rc<dyn Fn(Option<&'static str>)> = Rc::new(move |initial_page| {
         let connection = settings_connection.clone();
         let gallery = settings_gallery.clone();
         let filter = settings_filter.clone();
@@ -575,7 +575,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     refresh(&albums);
                 }
             }),
+            initial_page,
         );
+    });
+    let present_settings_from_more = present_settings.clone();
+    info.more.connect_clicked(move |_| {
+        present_settings_from_more(None);
     });
 
     let action_context_for_lightbox = action_context.clone();
@@ -1327,7 +1332,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let albums_home = albums_view::build(
         &albums,
-        &connection.borrow(),
+        connection.clone(),
         grid_thumbnail_size,
         {
             let slot = album_home_click_slot.clone();
@@ -1336,6 +1341,20 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     open(album_id);
                 }
             })
+        },
+        {
+            let connection = connection.clone();
+            let refresh_slot = albums_home_refresh_slot.clone();
+            Rc::new(move || {
+                let albums = db::albums(&connection.borrow()).unwrap_or_default();
+                if let Some(refresh) = refresh_slot.borrow().as_ref() {
+                    refresh(&albums);
+                }
+            })
+        },
+        {
+            let present_settings = present_settings.clone();
+            Rc::new(move || present_settings(Some("themes")))
         },
     );
     let main_stack = gtk::Stack::new();

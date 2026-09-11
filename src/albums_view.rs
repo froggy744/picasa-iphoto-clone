@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -6,10 +7,65 @@ use gtk4 as gtk;
 use rusqlite::Connection;
 
 use crate::db::{self, Album};
-use crate::settings::{self, AlbumViewStyle};
+#[cfg(test)]
+use crate::settings::AlbumViewStyle;
+use crate::settings::{self, AlbumAppearance};
 
 const DEFAULT_THUMBNAIL_WIDTH: i32 = 136;
 const DEFAULT_THUMBNAIL_HEIGHT: i32 = 91;
+const BOOKSHELF_BACKGROUND_NAMES: [&str; 3] = ["bookshelf.jpg", "bookshelf2.png", "bookshel3f.png"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AlbumAppearanceAction {
+    ToggleBookshelf,
+    NextBackground,
+    ToggleCovers,
+    DisableAll,
+    OpenThemeSettings,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AlbumContextMenuItem {
+    label: &'static str,
+    action: AlbumAppearanceAction,
+    checked: Option<bool>,
+    sensitive: bool,
+}
+
+fn album_context_menu_items(appearance: AlbumAppearance) -> Vec<AlbumContextMenuItem> {
+    vec![
+        AlbumContextMenuItem {
+            label: "Bookshelf",
+            action: AlbumAppearanceAction::ToggleBookshelf,
+            checked: Some(appearance.bookshelf_enabled),
+            sensitive: true,
+        },
+        AlbumContextMenuItem {
+            label: "Next Background",
+            action: AlbumAppearanceAction::NextBackground,
+            checked: None,
+            sensitive: true,
+        },
+        AlbumContextMenuItem {
+            label: "Album Covers",
+            action: AlbumAppearanceAction::ToggleCovers,
+            checked: Some(appearance.covers_enabled),
+            sensitive: true,
+        },
+        AlbumContextMenuItem {
+            label: "Disable All Themes",
+            action: AlbumAppearanceAction::DisableAll,
+            checked: None,
+            sensitive: appearance.bookshelf_enabled || appearance.covers_enabled,
+        },
+        AlbumContextMenuItem {
+            label: "Theme Settings…",
+            action: AlbumAppearanceAction::OpenThemeSettings,
+            checked: None,
+            sensitive: true,
+        },
+    ]
+}
 
 // Common opening with a small underlap beneath both supplied skins' opaque edges.
 const PHOTO_X_RATIO: f64 = 0.18;
@@ -17,14 +73,17 @@ const PHOTO_Y_RATIO: f64 = 53.0 / 500.0;
 const PHOTO_WIDTH_RATIO: f64 = 0.64;
 const PHOTO_HEIGHT_RATIO: f64 = 273.0 / 500.0;
 
+#[cfg(test)]
 fn album_frame_paths() -> Vec<PathBuf> {
     album_frame_paths_in(Path::new("images"))
 }
 
+#[cfg(test)]
 fn album_cover_paths() -> Vec<PathBuf> {
     album_cover_paths_in(Path::new("images"))
 }
 
+#[cfg(test)]
 fn album_frame_paths_for_style(style: AlbumViewStyle) -> Vec<PathBuf> {
     match style {
         AlbumViewStyle::Default => Vec::new(),
@@ -33,22 +92,32 @@ fn album_frame_paths_for_style(style: AlbumViewStyle) -> Vec<PathBuf> {
     }
 }
 
+fn album_frame_paths_for_appearance(directory: &Path, appearance: AlbumAppearance) -> Vec<PathBuf> {
+    if !appearance.covers_enabled {
+        Vec::new()
+    } else if appearance.bookshelf_enabled {
+        album_frame_paths_in(directory)
+    } else {
+        album_cover_paths_in(directory)
+    }
+}
+
+fn bookshelf_background_path(directory: &Path, index: usize) -> PathBuf {
+    directory.join(BOOKSHELF_BACKGROUND_NAMES[index % BOOKSHELF_BACKGROUND_NAMES.len()])
+}
+
+fn bookshelf_background_css_class(appearance: AlbumAppearance) -> Option<String> {
+    appearance.bookshelf_enabled.then(|| {
+        format!(
+            "albums-bookshelf-{}",
+            appearance.background_index % BOOKSHELF_BACKGROUND_NAMES.len()
+        )
+    })
+}
+
+#[cfg(test)]
 fn uses_bookshelf_background(style: AlbumViewStyle) -> bool {
     style == AlbumViewStyle::Bookshelf
-}
-
-fn bookshelf_background_path() -> PathBuf {
-    bookshelf_background_path_in(Path::new("images"))
-}
-
-fn bookshelf_background_path_in(directory: &Path) -> PathBuf {
-    for name in ["bookshelf.jpg", "bookshelf.jpeg", "bookshelf.png"] {
-        let path = directory.join(name);
-        if path.is_file() {
-            return path;
-        }
-    }
-    directory.join("bookshelf.png")
 }
 
 fn album_frame_paths_in(directory: &Path) -> Vec<PathBuf> {
@@ -98,9 +167,11 @@ fn frame_index(album: &Album, frame_count: usize) -> Option<usize> {
 
 pub fn build(
     albums: &[Album],
-    connection: &Connection,
+    connection: Rc<RefCell<Connection>>,
     thumbnail_width: i32,
     on_album: Rc<dyn Fn(i64)>,
+    on_appearance_changed: Rc<dyn Fn()>,
+    open_theme_settings: Rc<dyn Fn()>,
 ) -> gtk::ScrolledWindow {
     let scrolled = gtk::ScrolledWindow::new();
     scrolled.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -108,16 +179,24 @@ pub fn build(
     scrolled.set_vexpand(true);
 
     let background = gtk::CssProvider::new();
-    let uri = gio::File::for_path(bookshelf_background_path()).uri();
-    background.load_from_string(&format!(
-        ".albums-bookshelf {{ background-image: url(\"{uri}\"); \
-         background-size: 100% auto; background-repeat: repeat-y; \
-         background-position: center top; }}"
-    ));
+    let background_rules = BOOKSHELF_BACKGROUND_NAMES
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            let uri =
+                gio::File::for_path(bookshelf_background_path(Path::new("images"), index)).uri();
+            format!(
+                ".albums-bookshelf-{index} {{ background-image: url(\"{uri}\"); \
+                 background-size: 100% auto; background-repeat: repeat-y; \
+                 background-position: center top; }}"
+            )
+        })
+        .collect::<String>();
+    background.load_from_string(&background_rules);
     scrolled
         .style_context()
         .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
-    refresh_presentation(&scrolled, connection);
+    refresh_presentation(&scrolled, &connection.borrow());
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
     content.set_margin_start(28);
@@ -155,12 +234,144 @@ pub fn build(
         &cards,
         &count,
         albums,
-        connection,
+        &connection.borrow(),
         thumbnail_width,
-        on_album,
+        on_album.clone(),
+    );
+
+    install_context_menu(
+        &scrolled,
+        connection,
+        on_appearance_changed,
+        open_theme_settings,
     );
 
     scrolled
+}
+
+fn install_context_menu(
+    scrolled: &gtk::ScrolledWindow,
+    connection: Rc<RefCell<Connection>>,
+    on_appearance_changed: Rc<dyn Fn()>,
+    open_theme_settings: Rc<dyn Fn()>,
+) {
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let anchor = scrolled.clone();
+    click.connect_pressed(move |_, _, x, y| {
+        show_context_menu(
+            &anchor,
+            x,
+            y,
+            connection.clone(),
+            on_appearance_changed.clone(),
+            open_theme_settings.clone(),
+        );
+    });
+    scrolled.add_controller(click);
+}
+
+fn show_context_menu(
+    anchor: &gtk::ScrolledWindow,
+    x: f64,
+    y: f64,
+    connection: Rc<RefCell<Connection>>,
+    on_appearance_changed: Rc<dyn Fn()>,
+    open_theme_settings: Rc<dyn Fn()>,
+) {
+    let appearance = settings::album_appearance(&connection.borrow());
+    let popover = gtk::Popover::new();
+    popover.set_autohide(true);
+    popover.set_has_arrow(false);
+    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+        x.round() as i32,
+        y.round() as i32,
+        1,
+        1,
+    )));
+
+    let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    menu.set_margin_top(6);
+    menu.set_margin_bottom(6);
+    menu.set_margin_start(6);
+    menu.set_margin_end(6);
+
+    let heading = gtk::Label::new(Some("Album Appearance"));
+    heading.set_xalign(0.0);
+    heading.set_margin_start(8);
+    heading.set_margin_end(8);
+    heading.set_margin_top(4);
+    heading.set_margin_bottom(4);
+    heading.add_css_class("heading");
+    menu.append(&heading);
+
+    for (index, item) in album_context_menu_items(appearance).into_iter().enumerate() {
+        if index == 3 || index == 4 {
+            menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        }
+        let button = gtk::Button::new();
+        button.set_halign(gtk::Align::Fill);
+        button.set_sensitive(item.sensitive);
+        button.add_css_class("flat");
+
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        if let Some(checked) = item.checked {
+            let mark = gtk::Image::from_icon_name("object-select-symbolic");
+            mark.set_visible(checked);
+            mark.set_size_request(16, 16);
+            row.append(&mark);
+        } else {
+            let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            spacer.set_size_request(16, 16);
+            row.append(&spacer);
+        }
+        let label = gtk::Label::new(Some(item.label));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        row.append(&label);
+        button.set_child(Some(&row));
+
+        let popover_for_action = popover.clone();
+        let connection = connection.clone();
+        let on_appearance_changed = on_appearance_changed.clone();
+        let open_theme_settings = open_theme_settings.clone();
+        button.connect_clicked(move |_| {
+            popover_for_action.popdown();
+            if item.action == AlbumAppearanceAction::OpenThemeSettings {
+                open_theme_settings();
+                return;
+            }
+            let result = match item.action {
+                AlbumAppearanceAction::ToggleBookshelf => settings::set_bookshelf_enabled(
+                    &connection.borrow(),
+                    !settings::album_appearance(&connection.borrow()).bookshelf_enabled,
+                ),
+                AlbumAppearanceAction::NextBackground => {
+                    settings::next_bookshelf_background(&connection.borrow()).map(|_| ())
+                }
+                AlbumAppearanceAction::ToggleCovers => settings::set_covers_enabled(
+                    &connection.borrow(),
+                    !settings::album_appearance(&connection.borrow()).covers_enabled,
+                ),
+                AlbumAppearanceAction::DisableAll => {
+                    settings::disable_all_album_themes(&connection.borrow())
+                }
+                AlbumAppearanceAction::OpenThemeSettings => unreachable!(),
+            };
+            if let Err(error) = result {
+                eprintln!("Could not update album appearance: {error}");
+                return;
+            }
+            on_appearance_changed();
+        });
+        menu.append(&button);
+    }
+
+    popover.set_child(Some(&menu));
+    popover.set_parent(anchor);
+    popover.connect_closed(|popover| popover.unparent());
+    popover.popup();
 }
 
 pub fn refresh(
@@ -197,8 +408,13 @@ pub fn refresh(
 }
 
 pub fn refresh_presentation(scrolled: &gtk::ScrolledWindow, connection: &Connection) {
-    if uses_bookshelf_background(settings::album_view_style(connection)) {
+    let appearance = settings::album_appearance(connection);
+    for index in 0..BOOKSHELF_BACKGROUND_NAMES.len() {
+        scrolled.remove_css_class(&format!("albums-bookshelf-{index}"));
+    }
+    if let Some(background_class) = bookshelf_background_css_class(appearance) {
         scrolled.add_css_class("albums-bookshelf");
+        scrolled.add_css_class(&background_class);
     } else {
         scrolled.remove_css_class("albums-bookshelf");
     }
@@ -258,10 +474,13 @@ fn populate(
         return;
     }
 
-    let frames: Vec<_> = album_frame_paths_for_style(settings::album_view_style(connection))
-        .iter()
-        .filter_map(|path| gtk::gdk::Texture::from_filename(path).ok())
-        .collect();
+    let frames: Vec<_> = album_frame_paths_for_appearance(
+        Path::new("images"),
+        settings::album_appearance(connection),
+    )
+    .iter()
+    .filter_map(|path| gtk::gdk::Texture::from_filename(path).ok())
+    .collect();
     let framed = !frames.is_empty();
     cards.set_row_spacing(if framed { 28 } else { 20 });
     cards.set_column_spacing(if framed { 24 } else { 20 });
@@ -647,45 +866,6 @@ mod tests {
     }
 
     #[test]
-    fn bookshelf_background_prefers_jpg_and_falls_back_to_png() {
-        let directory = std::env::temp_dir().join(format!(
-            "pic-bookshelf-background-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-
-        assert_eq!(
-            bookshelf_background_path_in(&directory),
-            directory.join("bookshelf.png")
-        );
-
-        std::fs::create_dir(&directory).unwrap();
-        std::fs::write(directory.join("bookshelf.png"), []).unwrap();
-        assert_eq!(
-            bookshelf_background_path_in(&directory),
-            directory.join("bookshelf.png")
-        );
-
-        std::fs::write(directory.join("bookshelf.jpg"), []).unwrap();
-        assert_eq!(
-            bookshelf_background_path_in(&directory),
-            directory.join("bookshelf.jpg")
-        );
-
-        std::fs::remove_file(directory.join("bookshelf.jpg")).unwrap();
-        std::fs::write(directory.join("bookshelf.jpeg"), []).unwrap();
-        assert_eq!(
-            bookshelf_background_path_in(&directory),
-            directory.join("bookshelf.jpeg")
-        );
-
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
     fn zero_skins_have_no_selection() {
         assert_eq!(frame_index(&album(1), 0), None);
     }
@@ -708,6 +888,170 @@ mod tests {
         assert!(!uses_bookshelf_background(AlbumViewStyle::Default));
         assert!(uses_bookshelf_background(AlbumViewStyle::Bookshelf));
         assert!(!uses_bookshelf_background(AlbumViewStyle::AlbumCovers));
+    }
+
+    #[test]
+    fn independent_appearance_selects_background_and_cover_assets() {
+        use crate::settings::AlbumAppearance;
+
+        let directory = std::env::temp_dir().join(format!(
+            "pic-album-appearance-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        for name in [
+            "white-album.png",
+            "album-cover-blue.png",
+            "bookshelf.jpg",
+            "bookshelf2.png",
+            "bookshel3f.png",
+        ] {
+            std::fs::write(directory.join(name), []).unwrap();
+        }
+
+        let bookshelf = AlbumAppearance {
+            bookshelf_enabled: true,
+            covers_enabled: true,
+            background_index: 2,
+        };
+        assert_eq!(
+            album_frame_paths_for_appearance(&directory, bookshelf),
+            vec![directory.join("white-album.png")]
+        );
+        assert_eq!(
+            bookshelf_background_path(&directory, bookshelf.background_index),
+            directory.join("bookshel3f.png")
+        );
+        assert_eq!(
+            bookshelf_background_css_class(bookshelf).as_deref(),
+            Some("albums-bookshelf-2")
+        );
+
+        let plain_covers = AlbumAppearance {
+            bookshelf_enabled: false,
+            covers_enabled: true,
+            background_index: 1,
+        };
+        assert_eq!(
+            album_frame_paths_for_appearance(&directory, plain_covers),
+            vec![directory.join("album-cover-blue.png")]
+        );
+        assert_eq!(bookshelf_background_css_class(plain_covers), None);
+
+        let disabled = AlbumAppearance {
+            bookshelf_enabled: true,
+            covers_enabled: false,
+            background_index: 0,
+        };
+        assert!(album_frame_paths_for_appearance(&directory, disabled).is_empty());
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn context_menu_model_exposes_theme_controls_and_current_state() {
+        use crate::settings::AlbumAppearance;
+
+        let items = album_context_menu_items(AlbumAppearance {
+            bookshelf_enabled: true,
+            covers_enabled: false,
+            background_index: 1,
+        });
+
+        assert_eq!(
+            items,
+            vec![
+                AlbumContextMenuItem {
+                    label: "Bookshelf",
+                    action: AlbumAppearanceAction::ToggleBookshelf,
+                    checked: Some(true),
+                    sensitive: true,
+                },
+                AlbumContextMenuItem {
+                    label: "Next Background",
+                    action: AlbumAppearanceAction::NextBackground,
+                    checked: None,
+                    sensitive: true,
+                },
+                AlbumContextMenuItem {
+                    label: "Album Covers",
+                    action: AlbumAppearanceAction::ToggleCovers,
+                    checked: Some(false),
+                    sensitive: true,
+                },
+                AlbumContextMenuItem {
+                    label: "Disable All Themes",
+                    action: AlbumAppearanceAction::DisableAll,
+                    checked: None,
+                    sensitive: true,
+                },
+                AlbumContextMenuItem {
+                    label: "Theme Settings…",
+                    action: AlbumAppearanceAction::OpenThemeSettings,
+                    checked: None,
+                    sensitive: true,
+                },
+            ]
+        );
+
+        let disabled = album_context_menu_items(AlbumAppearance::default());
+        assert!(!disabled[3].sensitive);
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn context_menu_renders_and_applies_the_next_background_action() {
+        fn find_buttons(widget: &gtk::Widget, buttons: &mut Vec<gtk::Button>) {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+                buttons.push(button.clone());
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                find_buttons(&widget, buttons);
+                child = widget.next_sibling();
+            }
+        }
+
+        gtk::init().unwrap();
+        let connection = Rc::new(RefCell::new(Connection::open_in_memory().unwrap()));
+        connection
+            .borrow()
+            .execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            .unwrap();
+        let changed = Rc::new(std::cell::Cell::new(0));
+        let changed_for_callback = changed.clone();
+        let view = gtk::ScrolledWindow::new();
+        let window = gtk::Window::new();
+        window.set_child(Some(&view));
+        window.present();
+
+        show_context_menu(
+            &view,
+            20.0,
+            20.0,
+            connection.clone(),
+            Rc::new(move || changed_for_callback.set(changed_for_callback.get() + 1)),
+            Rc::new(|| {}),
+        );
+        let mut buttons = Vec::new();
+        find_buttons(view.upcast_ref(), &mut buttons);
+        assert_eq!(buttons.len(), 5);
+        buttons[1].emit_clicked();
+        assert_eq!(changed.get(), 1);
+        assert_eq!(
+            settings::album_appearance(&connection.borrow()),
+            AlbumAppearance {
+                bookshelf_enabled: true,
+                covers_enabled: false,
+                background_index: 1,
+            }
+        );
+
+        window.close();
     }
 
     #[test]
@@ -740,13 +1084,22 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let connection = db::open(&directory.join("library.db")).unwrap();
-        let album = db::create_album(&connection, "Holiday").unwrap();
-        let albums = db::albums(&connection).unwrap();
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        let album = db::create_album(&connection.borrow(), "Holiday").unwrap();
+        let albums = db::albums(&connection.borrow()).unwrap();
         let opened = Rc::new(std::cell::Cell::new(None));
         let opened_for_callback = opened.clone();
         let on_album: Rc<dyn Fn(i64)> = Rc::new(move |id| opened_for_callback.set(Some(id)));
-        let view = build(&albums, &connection, 136, on_album.clone());
+        let view = build(
+            &albums,
+            connection.clone(),
+            136,
+            on_album.clone(),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+        );
         assert!(!view.has_css_class("albums-bookshelf"));
         for (style, background, skin) in [
             ("default", false, false),
@@ -755,18 +1108,18 @@ mod tests {
             ("default", false, false),
         ] {
             db::set_setting(
-                &connection,
+                &connection.borrow(),
                 crate::settings::ALBUM_VIEW_STYLE_SETTING_KEY,
                 style,
             )
             .unwrap();
-            refresh(&view, &albums, &connection, 136, on_album.clone());
+            refresh(&view, &albums, &connection.borrow(), 136, on_album.clone());
             assert_eq!(view.has_css_class("albums-bookshelf"), background);
             assert_eq!(
                 find_descendant_with_css_class(view.upcast_ref(), "album-skin").is_some(),
                 skin,
             );
-            assert_eq!(db::albums(&connection).unwrap(), albums);
+            assert_eq!(db::albums(&connection.borrow()).unwrap(), albums);
             let button = find_descendant_with_css_class(view.upcast_ref(), "album-card")
                 .unwrap()
                 .downcast::<gtk::Button>()
