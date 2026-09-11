@@ -452,7 +452,6 @@ pub(crate) const ALBUM_VIEW_STYLE_SETTING_KEY: &str = "albums-home-style";
 pub(crate) const ALBUM_BOOKSHELF_ENABLED_SETTING_KEY: &str = "albums-bookshelf-enabled";
 pub(crate) const ALBUM_COVERS_ENABLED_SETTING_KEY: &str = "albums-covers-enabled";
 pub(crate) const ALBUM_BOOKSHELF_BACKGROUND_SETTING_KEY: &str = "albums-bookshelf-background";
-pub(crate) const BOOKSHELF_BACKGROUND_COUNT: usize = 3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct AlbumAppearance {
@@ -523,7 +522,6 @@ pub(crate) fn album_appearance(connection: &Connection) -> AlbumAppearance {
             .ok()
             .flatten()
             .and_then(|value| value.parse::<usize>().ok())
-            .filter(|index| *index < BOOKSHELF_BACKGROUND_COUNT)
             .unwrap_or(0),
     }
 }
@@ -544,8 +542,14 @@ pub(crate) fn set_covers_enabled(connection: &Connection, enabled: bool) -> anyh
     )
 }
 
-pub(crate) fn next_bookshelf_background(connection: &Connection) -> anyhow::Result<usize> {
-    let next = (album_appearance(connection).background_index + 1) % BOOKSHELF_BACKGROUND_COUNT;
+pub(crate) fn next_bookshelf_background(
+    connection: &Connection,
+    background_count: usize,
+) -> anyhow::Result<usize> {
+    if background_count == 0 {
+        anyhow::bail!("no bookshelf backgrounds are available");
+    }
+    let next = (album_appearance(connection).background_index + 1) % background_count;
     crate::db::set_setting(
         connection,
         ALBUM_BOOKSHELF_BACKGROUND_SETTING_KEY,
@@ -665,7 +669,10 @@ fn themes_page(
         let bookshelf = bookshelf.clone();
         let disable_all = disable_all.clone();
         next_background.connect_clicked(move |_| {
-            if let Err(error) = next_bookshelf_background(&connection.borrow()) {
+            if let Err(error) = next_bookshelf_background(
+                &connection.borrow(),
+                crate::albums_view::bookshelf_background_count(),
+            ) {
                 eprintln!("Could not save bookshelf background: {error}");
                 return;
             }
@@ -897,10 +904,11 @@ mod tests {
             .execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             .unwrap();
 
-        assert_eq!(next_bookshelf_background(&connection).unwrap(), 1);
+        assert_eq!(next_bookshelf_background(&connection, 4).unwrap(), 1);
         assert!(album_appearance(&connection).bookshelf_enabled);
-        assert_eq!(next_bookshelf_background(&connection).unwrap(), 2);
-        assert_eq!(next_bookshelf_background(&connection).unwrap(), 0);
+        assert_eq!(next_bookshelf_background(&connection, 4).unwrap(), 2);
+        assert_eq!(next_bookshelf_background(&connection, 4).unwrap(), 3);
+        assert_eq!(next_bookshelf_background(&connection, 4).unwrap(), 0);
     }
 
     #[test]
@@ -914,7 +922,7 @@ mod tests {
 
         set_bookshelf_enabled(&connection, true).unwrap();
         set_covers_enabled(&connection, true).unwrap();
-        next_bookshelf_background(&connection).unwrap();
+        next_bookshelf_background(&connection, 4).unwrap();
         disable_all_album_themes(&connection).unwrap();
 
         assert_eq!(

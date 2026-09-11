@@ -126,7 +126,7 @@ Run: `git add src/albums_view.rs images/bookshelf.png images/bookshelf-row-templ
 
 Run: `git add -f docs/superpowers/specs/2026-09-11-responsive-bookshelf-layout-design.md docs/superpowers/plans/2026-09-11-responsive-bookshelf-layout.md`
 
-- [ ] **Step 3: Commit after verification and visual approval**
+- [x] **Step 3: Commit after verification and visual approval**
 
 Run: `git commit -m "fix: keep albums aligned with bookshelf rows"`
 

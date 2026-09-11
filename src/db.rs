@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS photos (
@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS folders (
 CREATE TABLE IF NOT EXISTS albums (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-  created_at INTEGER NOT NULL DEFAULT 0
+  created_at INTEGER NOT NULL DEFAULT 0,
+  cover_frame TEXT
 );
 CREATE TABLE IF NOT EXISTS album_photos (
   album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
@@ -66,6 +67,7 @@ pub struct Album {
     pub name: String,
     pub created_at: i64,
     pub photo_count: i64,
+    pub cover_frame: Option<String>,
 }
 
 #[derive(Debug, Clone)]

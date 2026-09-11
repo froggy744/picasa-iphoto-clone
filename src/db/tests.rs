@@ -165,6 +165,19 @@ mod tests {
     }
 
     #[test]
+    fn album_cover_frame_selection_is_persisted() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let album = create_album(&connection, "Styled").unwrap();
+        assert_eq!(album.cover_frame.as_deref(), None);
+
+        set_album_cover_frame(&connection, album.id, "vintage/blue-frame.png").unwrap();
+
+        let album = albums(&connection).unwrap().remove(0);
+        assert_eq!(album.cover_frame.as_deref(), Some("vintage/blue-frame.png"));
+    }
+
+    #[test]
     fn existing_album_tables_gain_timestamps_and_cascades() {
         let connection = Connection::open_in_memory().unwrap();
         connection
@@ -192,6 +205,14 @@ mod tests {
             })
             .unwrap();
         assert!(created_at > 0);
+        let album_columns = connection
+            .prepare("PRAGMA table_info(albums)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(album_columns.iter().any(|column| column == "cover_frame"));
         connection
             .execute("DELETE FROM albums WHERE id = 1", [])
             .unwrap();

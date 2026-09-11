@@ -1,6 +1,6 @@
 pub fn albums(connection: &Connection) -> Result<Vec<Album>> {
     let mut statement = connection.prepare(
-        "SELECT a.id, a.name, a.created_at, COUNT(p.id)
+        "SELECT a.id, a.name, a.created_at, COUNT(p.id), a.cover_frame
          FROM albums a
          LEFT JOIN album_photos ap ON ap.album_id = a.id
          LEFT JOIN photos p ON p.id = ap.photo_id AND p.trashed = 0
@@ -13,6 +13,7 @@ pub fn albums(connection: &Connection) -> Result<Vec<Album>> {
             name: row.get(1)?,
             created_at: row.get(2)?,
             photo_count: row.get(3)?,
+            cover_frame: row.get(4)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -48,7 +49,20 @@ pub fn create_album(connection: &Connection, name: &str) -> Result<Album> {
             |row| row.get(0),
         )?,
         photo_count: 0,
+        cover_frame: None,
     })
+}
+
+pub fn set_album_cover_frame(
+    connection: &Connection,
+    album_id: i64,
+    cover_frame: &str,
+) -> Result<()> {
+    connection.execute(
+        "UPDATE albums SET cover_frame = ?1 WHERE id = ?2",
+        params![cover_frame, album_id],
+    )?;
+    Ok(())
 }
 
 pub fn delete_album(connection: &Connection, album_id: i64) -> Result<()> {
@@ -89,4 +103,3 @@ pub fn remove_photos_from_album(
     transaction.commit()?;
     Ok(removed)
 }
-

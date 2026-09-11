@@ -1330,6 +1330,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     photo_page.set_vexpand(true);
     photo_page.append(&grid_overlay);
 
+    let album_theme_changed: Rc<dyn Fn()> = {
+        let connection = connection.clone();
+        let refresh_slot = albums_home_refresh_slot.clone();
+        Rc::new(move || {
+            let albums = db::albums(&connection.borrow()).unwrap_or_default();
+            if let Some(refresh) = refresh_slot.borrow().as_ref() {
+                refresh(&albums);
+            }
+        })
+    };
     let albums_home = albums_view::build(
         &albums,
         connection.clone(),
@@ -1342,16 +1352,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
             })
         },
-        {
-            let connection = connection.clone();
-            let refresh_slot = albums_home_refresh_slot.clone();
-            Rc::new(move || {
-                let albums = db::albums(&connection.borrow()).unwrap_or_default();
-                if let Some(refresh) = refresh_slot.borrow().as_ref() {
-                    refresh(&albums);
-                }
-            })
-        },
+        album_theme_changed.clone(),
         {
             let present_settings = present_settings.clone();
             Rc::new(move || present_settings(Some("themes")))
@@ -1710,6 +1711,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let main_split = adw::OverlaySplitView::new();
 
+    let album_theme_changed_for_destination = album_theme_changed.clone();
     let destination_click: Rc<dyn Fn(sidebar::SidebarFilter)> = {
         let search_entry = search_entry_slot.clone();
         let search_text = search_text.clone();
@@ -1768,9 +1770,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     albums_view::refresh(
                         &albums_home,
                         &albums,
-                        &connection_for_albums.borrow(),
+                        connection_for_albums.clone(),
                         grid_thumbnail_size,
                         on_album,
+                        album_theme_changed_for_destination.clone(),
                     );
                 }
                 return;
@@ -1843,9 +1846,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             albums_view::refresh(
                 &albums_home,
                 albums,
-                &connection.borrow(),
+                connection.clone(),
                 grid_thumbnail_size,
                 on_album,
+                album_theme_changed.clone(),
             );
         })
     }));

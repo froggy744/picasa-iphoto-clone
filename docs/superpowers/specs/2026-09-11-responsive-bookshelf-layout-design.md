@@ -6,7 +6,7 @@ Keep album covers aligned with bookshelf surfaces while the Albums view changes 
 
 ## Approved visual model
 
-Each bookshelf asset represents one repeating album row. The new `images/bookshelf.png` is the reference asset: it is 2172 by 724 source pixels and the strongest shelf edge is near source y=590. The app renders that source as a 288-logical-pixel row, placing the shelf surface at logical y=235.
+Each bookshelf asset represents one repeating album row. The new `images/theme/bookshelf/single-row-bookshelf.png` is the reference asset: it is 2172 by 724 source pixels and the strongest shelf edge is near source y=590. The app renders that source as a 288-logical-pixel row, placing the shelf surface at logical y=235.
 
 The background stretches horizontally with the album grid. Side edges may move or stretch. Vertical size never depends on window width.
 
@@ -23,7 +23,7 @@ The background stretches horizontally with the album grid. Side edges may move o
 
 ## Background variants
 
-The three background choices remain available. Index zero uses the new `bookshelf.png` and the responsive row geometry. The two existing multi-shelf images remain unchanged as legacy choices until matching one-row redesigns are supplied; their current presentation must not be made worse by stretching all of their shelves into one row.
+Bookshelf backgrounds are discovered from `images/theme/bookshelf/*-bookshelf.png` and `*-bookshelf.jpg`. Index zero uses `single-row-bookshelf.png` and the responsive row geometry. Existing multi-shelf images remain legacy choices until matching one-row redesigns are supplied; their presentation must not be made worse by stretching all of their shelves into one row.
 
 The responsive background CSS targets the FlowBox descendant and uses `background-size: 100% 288px`, `background-repeat: repeat-y`, and `background-position: center top`. Legacy background CSS retains its existing behavior.
 
