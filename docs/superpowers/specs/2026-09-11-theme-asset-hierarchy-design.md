@@ -106,6 +106,22 @@ so a new design only has to ship artwork.
 when it is missing, so existing libraries upgrade in place without losing
 albums or memberships.
 
+## Album cover photo
+
+`albums.cover_photo_id` stores the photo an album draws on its card, chosen from
+the thumbnail menu:
+
+- Inside an album, right-clicking a thumbnail offers `Set as Album Cover`, which
+  applies to the album being viewed. There is no album picker, and the action is
+  not offered outside an album, so a photo can never become another album's
+  cover. The action greys out when the clicked photo already is the cover.
+- The stored photo wins over the automatic first-thumbnail pick, even before its
+  cached thumbnail exists, in which case the card draws the original file.
+- Deleting the photo clears the choice through the column's
+  `ON DELETE SET NULL`, so no album is left pointing at a missing photo.
+- `Reset Album Cover` on the album's own menu clears both the chosen photo and
+  the stored frame; `Reset All Theme Settings` clears every album's cover photo.
+
 ## Deferred
 
 Bookshelf row and album fine-tuning for the multi-shelf backgrounds is out of

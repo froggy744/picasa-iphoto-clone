@@ -1,6 +1,6 @@
 pub fn albums(connection: &Connection) -> Result<Vec<Album>> {
     let mut statement = connection.prepare(
-        "SELECT a.id, a.name, a.created_at, COUNT(p.id), a.cover_frame
+        "SELECT a.id, a.name, a.created_at, COUNT(p.id), a.cover_frame, a.cover_photo_id
          FROM albums a
          LEFT JOIN album_photos ap ON ap.album_id = a.id
          LEFT JOIN photos p ON p.id = ap.photo_id AND p.trashed = 0
@@ -14,6 +14,7 @@ pub fn albums(connection: &Connection) -> Result<Vec<Album>> {
             created_at: row.get(2)?,
             photo_count: row.get(3)?,
             cover_frame: row.get(4)?,
+            cover_photo_id: row.get(5)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -50,6 +51,7 @@ pub fn create_album(connection: &Connection, name: &str) -> Result<Album> {
         )?,
         photo_count: 0,
         cover_frame: None,
+        cover_photo_id: None,
     })
 }
 
@@ -79,6 +81,32 @@ pub fn clear_album_cover_frame(connection: &Connection, album_id: i64) -> Result
 pub fn clear_all_album_cover_frames(connection: &Connection) -> Result<usize> {
     Ok(connection.execute(
         "UPDATE albums SET cover_frame = NULL WHERE cover_frame IS NOT NULL",
+        [],
+    )?)
+}
+
+/// Choose the photo the album shows on its card.
+pub fn set_album_cover_photo(connection: &Connection, album_id: i64, photo_id: i64) -> Result<()> {
+    connection.execute(
+        "UPDATE albums SET cover_photo_id = ?1 WHERE id = ?2",
+        params![photo_id, album_id],
+    )?;
+    Ok(())
+}
+
+/// Drop one album's chosen cover photo so it goes back to the automatic pick.
+pub fn clear_album_cover_photo(connection: &Connection, album_id: i64) -> Result<()> {
+    connection.execute(
+        "UPDATE albums SET cover_photo_id = NULL WHERE id = ?1",
+        [album_id],
+    )?;
+    Ok(())
+}
+
+/// Drop every album's chosen cover photo, returning the number that had one.
+pub fn clear_all_album_cover_photos(connection: &Connection) -> Result<usize> {
+    Ok(connection.execute(
+        "UPDATE albums SET cover_photo_id = NULL WHERE cover_photo_id IS NOT NULL",
         [],
     )?)
 }

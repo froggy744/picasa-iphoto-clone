@@ -159,6 +159,13 @@ fn migrate_album_schema(connection: &Connection) -> Result<()> {
     if !columns.iter().any(|column| column == "cover_frame") {
         connection.execute("ALTER TABLE albums ADD COLUMN cover_frame TEXT", [])?;
     }
+    if !columns.iter().any(|column| column == "cover_photo_id") {
+        connection.execute(
+            "ALTER TABLE albums ADD COLUMN cover_photo_id INTEGER
+             REFERENCES photos(id) ON DELETE SET NULL",
+            [],
+        )?;
+    }
 
     let foreign_key_count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM pragma_foreign_key_list('album_photos')",

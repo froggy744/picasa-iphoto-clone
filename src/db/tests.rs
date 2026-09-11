@@ -201,6 +201,56 @@ mod tests {
     }
 
     #[test]
+    fn album_cover_photo_selection_is_persisted() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let album = create_album(&connection, "Styled").unwrap();
+        assert_eq!(album.cover_photo_id, None);
+        connection
+            .execute_batch(
+                "INSERT INTO photos (id, path) VALUES (7, '/tmp/seven.jpg');
+                 INSERT INTO photos (id, path) VALUES (8, '/tmp/eight.jpg');",
+            )
+            .unwrap();
+
+        set_album_cover_photo(&connection, album.id, 7).unwrap();
+        assert_eq!(
+            albums(&connection).unwrap().remove(0).cover_photo_id,
+            Some(7)
+        );
+
+        // Only albums that had a chosen photo are counted.
+        set_album_cover_photo(&connection, album.id, 8).unwrap();
+        assert_eq!(clear_all_album_cover_photos(&connection).unwrap(), 1);
+        assert_eq!(albums(&connection).unwrap().remove(0).cover_photo_id, None);
+        assert_eq!(clear_all_album_cover_photos(&connection).unwrap(), 0);
+
+        set_album_cover_photo(&connection, album.id, 7).unwrap();
+        clear_album_cover_photo(&connection, album.id).unwrap();
+        assert_eq!(albums(&connection).unwrap().remove(0).cover_photo_id, None);
+    }
+
+    #[test]
+    fn deleting_a_photo_clears_the_albums_that_used_it_as_cover() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        let album = create_album(&connection, "Styled").unwrap();
+        connection
+            .execute_batch("INSERT INTO photos (id, path) VALUES (7, '/tmp/seven.jpg');")
+            .unwrap();
+        set_album_cover_photo(&connection, album.id, 7).unwrap();
+
+        connection
+            .execute("DELETE FROM photos WHERE id = 7", [])
+            .unwrap();
+
+        assert_eq!(albums(&connection).unwrap().remove(0).cover_photo_id, None);
+    }
+
+    #[test]
     fn existing_album_tables_gain_timestamps_and_cascades() {
         let connection = Connection::open_in_memory().unwrap();
         connection
@@ -236,6 +286,11 @@ mod tests {
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
         assert!(album_columns.iter().any(|column| column == "cover_frame"));
+        assert!(
+            album_columns
+                .iter()
+                .any(|column| column == "cover_photo_id")
+        );
         connection
             .execute("DELETE FROM albums WHERE id = 1", [])
             .unwrap();

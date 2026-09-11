@@ -37,6 +37,47 @@ fn photo_context_menu_contains(widget: &gtk::Widget) -> bool {
     })
 }
 
+/// A submenu trigger inside the photo context menu: flat row, label and arrow,
+/// matching the other submenu entries.
+fn context_submenu_button(label: &str, css_class: &str) -> gtk::MenuButton {
+    let button = gtk::MenuButton::new();
+    button.set_focus_on_click(false);
+    button.set_focusable(false);
+    button.set_direction(gtk::ArrowType::None);
+    button.set_halign(gtk::Align::Fill);
+    button.add_css_class("flat");
+    button.add_css_class("photo-context-submenu");
+    button.add_css_class(css_class);
+    button.set_height_request(28);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let text = gtk::Label::new(Some(label));
+    text.set_xalign(0.0);
+    text.set_hexpand(true);
+    row.append(&text);
+    row.append(&gtk::Image::from_icon_name("pan-end-symbolic"));
+    button.set_child(Some(&row));
+    button
+}
+
+/// This submenu lives inside a mouse context menu. Keep its transient buttons
+/// from becoming the window focus: removing a focused submenu and parent menu
+/// makes GtkGridView focus its first item and scroll to top. The separately
+/// built infobar album menu remains keyboard-focusable.
+fn unfocus_submenu(popover: &gtk::Popover) {
+    popover.set_focusable(false);
+    if let Some(menu) = popover.child() {
+        let mut child = menu.first_child();
+        while let Some(widget) = child {
+            let next = widget.next_sibling();
+            if let Ok(button) = widget.downcast::<gtk::Button>() {
+                button.set_focus_on_click(false);
+                button.set_focusable(false);
+            }
+            child = next;
+        }
+    }
+}
+
 fn show_photo_context_menu(
     photo: crate::photo_object::PhotoObject,
     anchor: gtk::Widget,
@@ -108,14 +149,14 @@ fn show_photo_context_menu(
              font-size: 14px;
              font-weight: 400;
          }
-         .photo-context-album {
+         .photo-context-submenu {
              min-height: 28px;
              padding: 0;
              margin: 0;
              background: transparent;
              box-shadow: none;
          }
-         .photo-context-album > button {
+         .photo-context-submenu > button {
              min-height: 28px;
              padding: 0 12px;
              margin: 0;
@@ -126,14 +167,14 @@ fn show_photo_context_menu(
              font-size: 14px;
              font-weight: 400;
          }
-         .photo-context-album > button:hover {
+         .photo-context-submenu > button:hover {
              background-color: alpha(currentColor, 0.07);
          }
-         .photo-context-album label {
+         .photo-context-submenu label {
              font-size: 14px;
              font-weight: 400;
          }
-         .photo-context-album > button > box {
+         .photo-context-submenu > button > box {
              padding: 0;
              margin: 0;
          }
@@ -216,22 +257,7 @@ fn show_photo_context_menu(
     let selection_for_provider = selection_ids.clone();
     let selection_provider: Rc<dyn Fn() -> Vec<i64>> =
         Rc::new(move || selection_for_provider.clone());
-    let add_to_album = gtk::MenuButton::new();
-    add_to_album.set_focus_on_click(false);
-    add_to_album.set_focusable(false);
-    add_to_album.set_direction(gtk::ArrowType::None);
-    add_to_album.set_halign(gtk::Align::Fill);
-    add_to_album.add_css_class("flat");
-    add_to_album.add_css_class("photo-context-album");
-    add_to_album.set_height_request(28);
-    let album_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let album_label = gtk::Label::new(Some("Add to Album"));
-    album_label.set_xalign(0.0);
-    album_label.set_hexpand(true);
-    let album_arrow = gtk::Image::from_icon_name("pan-end-symbolic");
-    album_row.append(&album_label);
-    album_row.append(&album_arrow);
-    add_to_album.set_child(Some(&album_row));
+    let add_to_album = context_submenu_button("Add to Album", "photo-context-album");
     let album_scroll_y = context
         .gallery
         .borrow()
@@ -251,24 +277,9 @@ fn show_photo_context_menu(
         {
             dismiss_menu.clone()
         },
-        restore_album_view,
+        restore_album_view.clone(),
     );
-    // This submenu lives inside a mouse context menu. Keep its transient
-    // buttons from becoming the window focus: removing a focused submenu and
-    // parent menu makes GtkGridView focus its first item and scroll to top.
-    // The separately built infobar album menu remains keyboard-focusable.
-    album_popover.set_focusable(false);
-    if let Some(album_menu) = album_popover.child() {
-        let mut child = album_menu.first_child();
-        while let Some(widget) = child {
-            let next = widget.next_sibling();
-            if let Ok(button) = widget.downcast::<gtk::Button>() {
-                button.set_focus_on_click(false);
-                button.set_focusable(false);
-            }
-            child = next;
-        }
-    }
+    unfocus_submenu(&album_popover);
     add_to_album.set_popover(Some(&album_popover));
     menu.append(&add_to_album);
 
@@ -437,6 +448,36 @@ fn show_photo_context_menu(
     });
 
     if let sidebar::SidebarFilter::Album(album_id) = context.filter.get() {
+        // The cover only makes sense inside an album, and always applies to
+        // the album being viewed: no album list, no cross-album choices.
+        let already_cover = db::albums(&context.connection.borrow())
+            .unwrap_or_default()
+            .into_iter()
+            .find(|album| album.id == album_id)
+            .and_then(|album| album.cover_photo_id)
+            == Some(photo.id());
+        let set_cover = add_action("Set as Album Cover");
+        set_cover.set_sensitive(!already_cover);
+        let set_cover_context = context.clone();
+        let set_cover_photo_id = photo.id();
+        let dismiss_menu_for_cover = dismiss_menu.clone();
+        set_cover.connect_clicked(move |button| {
+            dismiss_menu_for_cover();
+            if let Err(error) = db::set_album_cover_photo(
+                &set_cover_context.connection.borrow(),
+                album_id,
+                set_cover_photo_id,
+            ) {
+                show_error(
+                    button.upcast_ref(),
+                    "Could not set album cover",
+                    &error.to_string(),
+                );
+                return;
+            }
+            refresh_album_ui(&set_cover_context);
+        });
+
         let remove = add_action("Remove from Album");
         let remove_context = context.clone();
         let remove_selection = selection_provider.clone();
@@ -1213,4 +1254,162 @@ fn show_error(parent: &gtk::Widget, heading: &str, message: &str) {
         .build();
     dialog.add_response("close", "Close");
     dialog.present(Some(parent));
+}
+
+#[cfg(test)]
+mod photo_actions_tests {
+    use super::*;
+
+    fn settle_gtk_layout() {
+        let main_loop = gtk::glib::MainLoop::new(None, false);
+        let loop_to_quit = main_loop.clone();
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+            loop_to_quit.quit();
+        });
+        main_loop.run();
+    }
+
+    fn find_action(root: &gtk::Widget, text: &str) -> Option<gtk::Button> {
+        if let Some(button) = root.downcast_ref::<gtk::Button>() {
+            let label = button.label().map(|label| label.to_string()).or_else(|| {
+                button
+                    .child()
+                    .and_then(|child| child.downcast::<gtk::Label>().ok())
+                    .map(|label| label.text().to_string())
+            });
+            if label.as_deref() == Some(text) {
+                return Some(button.clone());
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            let next = widget.next_sibling();
+            if let Some(found) = find_action(&widget, text) {
+                return Some(found);
+            }
+            child = next;
+        }
+        None
+    }
+
+    fn menu() -> gtk::Widget {
+        ACTIVE_PHOTO_MENU
+            .with(|active| active.borrow().clone())
+            .expect("photo context menu is showing")
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn album_cover_action_is_only_offered_inside_an_album() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-photo-context-cover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        connection
+            .borrow()
+            .execute_batch(
+                "INSERT INTO photos (id, path) VALUES (1, 'samples/01-Start Up.jpg');",
+            )
+            .unwrap();
+        let album = db::create_album(&connection.borrow(), "Holiday").unwrap();
+        db::add_photos_to_album(&connection.borrow(), album.id, &[1]).unwrap();
+        let photo = db::photo(&connection.borrow(), 1).unwrap().unwrap();
+        let photo_object = crate::photo_object::PhotoObject::from_photo(&photo);
+
+        let overlay = gtk::Overlay::new();
+        let window = gtk::Window::builder()
+            .default_width(640)
+            .default_height(480)
+            .child(&overlay)
+            .build();
+        window.present();
+        settle_gtk_layout();
+
+        let context_for = |filter: sidebar::SidebarFilter| PhotoActionContext {
+            connection: connection.clone(),
+            gallery: Rc::new(RefCell::new(std::rc::Weak::new())),
+            filter: Rc::new(Cell::new(filter)),
+            search: Rc::new(RefCell::new(String::new())),
+            sort: Rc::new(Cell::new(PhotoSort {
+                field: SortField::DateTaken,
+                direction: SortDirection::Descending,
+            })),
+            info: Rc::new(InfoBar::new()),
+            selected_photo: Rc::new(RefCell::new(None)),
+            lightbox: std::rc::Weak::new(),
+            sidebar: Rc::new(RefCell::new(None)),
+            create_album: Rc::new(|| {}),
+            import_folder: Rc::new(|| {}),
+            delete_album: Rc::new(|_| {}),
+            on_unavailable: Rc::new(|| {}),
+            refresh_albums_home: Rc::new(|_| {}),
+            navigate_to_folder: Rc::new(|_, _| {}),
+            open_collage: Rc::new(|_| {}),
+            open_edit: Rc::new(|_| {}),
+            edit_clipboard: Rc::new(RefCell::new(None)),
+            window: glib::WeakRef::new(),
+            context_menu_host: Rc::new(RefCell::new(Some(overlay.clone().downgrade()))),
+        };
+
+        // Inside the album the action targets the album being viewed, with no
+        // album list and no "Add to Album"-style chooser.
+        show_photo_context_menu(
+            photo_object.clone(),
+            overlay.clone().upcast(),
+            context_for(sidebar::SidebarFilter::Album(album.id)),
+            10.0,
+            10.0,
+        );
+        let open_menu = menu();
+        assert!(find_action(&open_menu, "Set as Album Cover").is_some());
+        assert!(find_action(&open_menu, "Remove from Album").is_some());
+
+        find_action(&open_menu, "Set as Album Cover")
+            .unwrap()
+            .emit_clicked();
+        assert_eq!(
+            db::albums(&connection.borrow()).unwrap().remove(0).cover_photo_id,
+            Some(1)
+        );
+
+        // The action greys out once the photo already is the album's cover.
+        show_photo_context_menu(
+            photo_object.clone(),
+            overlay.clone().upcast(),
+            context_for(sidebar::SidebarFilter::Album(album.id)),
+            10.0,
+            10.0,
+        );
+        assert!(
+            !find_action(&menu(), "Set as Album Cover")
+                .unwrap()
+                .is_sensitive()
+        );
+        dismiss_active_photo_context_menu();
+
+        // Outside an album the cover action is not offered at all.
+        show_photo_context_menu(
+            photo_object,
+            overlay.clone().upcast(),
+            context_for(sidebar::SidebarFilter::All),
+            10.0,
+            10.0,
+        );
+        let open_menu = menu();
+        assert!(find_action(&open_menu, "Set as Album Cover").is_none());
+        assert!(find_action(&open_menu, "Remove from Album").is_none());
+        dismiss_active_photo_context_menu();
+
+        window.close();
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

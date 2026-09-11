@@ -601,6 +601,7 @@ pub(crate) fn reset_all_album_themes(connection: &Connection) -> anyhow::Result<
         crate::db::delete_setting(connection, key)?;
     }
     crate::db::clear_all_album_cover_frames(connection)?;
+    crate::db::clear_all_album_cover_photos(connection)?;
     Ok(())
 }
 
@@ -1073,10 +1074,11 @@ mod tests {
                    id INTEGER PRIMARY KEY,
                    name TEXT NOT NULL,
                    created_at INTEGER NOT NULL,
-                   cover_frame TEXT
+                   cover_frame TEXT,
+                   cover_photo_id INTEGER
                  );
-                 INSERT INTO albums (id, name, created_at, cover_frame)
-                 VALUES (1, 'Styled', 0, 'vintage/blue-frame.png');",
+                 INSERT INTO albums (id, name, created_at, cover_frame, cover_photo_id)
+                 VALUES (1, 'Styled', 0, 'vintage/blue-frame.png', 4);",
             )
             .unwrap();
 
@@ -1106,6 +1108,16 @@ mod tests {
                 .query_row("SELECT cover_frame FROM albums WHERE id = 1", [], |row| {
                     row.get::<_, Option<String>>(0)
                 })
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT cover_photo_id FROM albums WHERE id = 1",
+                    [],
+                    |row| { row.get::<_, Option<i64>>(0) }
+                )
                 .unwrap(),
             None
         );
@@ -1152,7 +1164,8 @@ mod tests {
                    id INTEGER PRIMARY KEY,
                    name TEXT NOT NULL,
                    created_at INTEGER NOT NULL,
-                   cover_frame TEXT
+                   cover_frame TEXT,
+                   cover_photo_id INTEGER
                  );",
             )
             .unwrap();

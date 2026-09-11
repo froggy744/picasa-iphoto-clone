@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS albums (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL COLLATE NOCASE UNIQUE,
   created_at INTEGER NOT NULL DEFAULT 0,
-  cover_frame TEXT
+  cover_frame TEXT,
+  cover_photo_id INTEGER REFERENCES photos(id) ON DELETE SET NULL
 );
 CREATE TABLE IF NOT EXISTS album_photos (
   album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
@@ -68,6 +69,8 @@ pub struct Album {
     pub created_at: i64,
     pub photo_count: i64,
     pub cover_frame: Option<String>,
+    /// Photo the album shows on its card, chosen from the thumbnail menu.
+    pub cover_photo_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]

@@ -646,7 +646,7 @@ fn show_album_context_menu(
     let reset_connection = connection.clone();
     let reset_album = album.clone();
     let reset_appearance_changed = on_appearance_changed.clone();
-    let album_has_own_frame = album.cover_frame.is_some();
+    let album_has_own_cover = album.cover_frame.is_some() || album.cover_photo_id.is_some();
     next_frame.connect_clicked(move |_| {
         popover_for_action.popdown();
         let result = (|| {
@@ -669,18 +669,24 @@ fn show_album_context_menu(
     });
     menu.append(&next_frame);
 
-    // Only an album with a frame of its own can lose one, so the reset stays
-    // disabled for albums that already follow the page-wide design.
+    // Only an album with a cover of its own can lose one, so the reset stays
+    // disabled for albums that already follow the page-wide design and its
+    // automatic thumbnail.
     let reset_frame = gtk::Button::with_label("Reset Album Cover");
     reset_frame.set_halign(gtk::Align::Fill);
-    reset_frame.set_sensitive(album_has_own_frame);
+    reset_frame.set_sensitive(album_has_own_cover);
     reset_frame.add_css_class("flat");
     reset_frame.add_css_class("reset-album-frame-action");
     let popover_for_reset = popover.clone();
     reset_frame.connect_clicked(move |_| {
         popover_for_reset.popdown();
-        if let Err(error) = db::clear_album_cover_frame(&reset_connection.borrow(), reset_album.id)
-        {
+        let result = (|| {
+            let connection = reset_connection.borrow();
+            db::clear_album_cover_frame(&connection, reset_album.id)?;
+            db::clear_album_cover_photo(&connection, reset_album.id)?;
+            anyhow::Ok(())
+        })();
+        if let Err(error) = result {
             eprintln!("Could not reset album cover: {error}");
             return;
         }
@@ -1049,6 +1055,35 @@ fn cover_height(thumbnail_width: i32) -> i32 {
         .max(1.0)) as i32
 }
 
+/// The photo an album draws on its card. A cover chosen from the thumbnail
+/// menu wins even when that photo is not a member of the album; otherwise the
+/// album keeps its automatic first-thumbnail pick.
+fn album_cover_photo(
+    connection: &Connection,
+    album: &Album,
+    photos: &[db::Photo],
+) -> Option<db::Photo> {
+    if let Some(id) = album.cover_photo_id {
+        let chosen = photos
+            .iter()
+            .find(|photo| photo.id == id)
+            .cloned()
+            .or_else(|| db::photo(connection, id).ok().flatten());
+        if chosen.is_some() {
+            return chosen;
+        }
+    }
+    photos
+        .iter()
+        .find(|photo| {
+            crate::thumbnail::existing_cache_path(&photo.path, photo.mtime, photo.size_bytes)
+                .ok()
+                .flatten()
+                .is_some()
+        })
+        .cloned()
+}
+
 fn album_card(
     album: &Album,
     connection: &Connection,
@@ -1126,13 +1161,14 @@ fn album_card(
     picture.add_css_class("thumbnail");
 
     let photos = db::photos_in_album(connection, album.id, None).unwrap_or_default();
-
-    // Use the first album photo that already has a cached thumbnail.
-    let cover_photo = photos.iter().find_map(|photo| {
-        crate::thumbnail::existing_cache_path(&photo.path, photo.mtime, photo.size_bytes)
-            .ok()
-            .flatten()
-            .map(|path| (photo, path))
+    // The chosen cover wins over the automatic pick, even before its cached
+    // thumbnail exists.
+    let cover_photo = album_cover_photo(connection, album, &photos).map(|photo| {
+        let cached =
+            crate::thumbnail::existing_cache_path(&photo.path, photo.mtime, photo.size_bytes)
+                .ok()
+                .flatten();
+        (photo, cached)
     });
 
     if std::env::var_os("PICASA_TRACE").is_some() {
@@ -1141,14 +1177,20 @@ fn album_card(
             album.id,
             album.name,
             photos.len(),
-            cover_photo
-                .as_ref()
-                .map(|(_, path)| path.to_string_lossy().into_owned())
+            cover_photo.as_ref().map(|(photo, path)| path
+                .as_deref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| photo.path.clone()))
         );
     }
 
-    if let Some((photo, path)) = cover_photo.as_ref() {
-        let path_string = path.to_string_lossy();
+    if let Some((photo, cached)) = cover_photo.as_ref() {
+        // A cover without a cached thumbnail yet still draws from its original
+        // file, so a fresh choice is visible straight away.
+        let source = cached
+            .as_deref()
+            .unwrap_or_else(|| Path::new(photo.path.as_str()));
+        let path_string = source.to_string_lossy();
 
         // Use the same RAW/NEF crop as the normal gallery. Some embedded RAW
         // previews contain side bars that GTK's Cover mode cannot remove.
@@ -1311,6 +1353,7 @@ mod tests {
             created_at: 0,
             photo_count: 0,
             cover_frame: None,
+            cover_photo_id: None,
         }
     }
 
@@ -1409,6 +1452,68 @@ mod tests {
     fn zero_skins_have_no_selection() {
         let root = Path::new("images/theme/album-covers");
         assert_eq!(selected_frame_index(&album(1), root, &[], 0), None);
+    }
+
+    #[test]
+    fn album_cover_prefers_the_photo_chosen_from_the_menu() {
+        let directory = std::env::temp_dir().join(format!(
+            "pic-album-cover-photo-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = db::open(&directory.join("library.db")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO photos (id, path) VALUES
+                   (1, '/tmp/one.jpg'),
+                   (2, '/tmp/two.jpg'),
+                   (3, '/tmp/three.jpg');",
+            )
+            .unwrap();
+        let album = db::create_album(&connection, "Holiday").unwrap();
+        let photos: Vec<_> = [1, 2]
+            .into_iter()
+            .filter_map(|id| db::photo(&connection, id).unwrap())
+            .collect();
+
+        // Nothing is cached in this test, so the automatic pick stays empty.
+        assert_eq!(
+            album_cover_photo(&connection, &album, &photos).map(|photo| photo.id),
+            None
+        );
+
+        db::set_album_cover_photo(&connection, album.id, 2).unwrap();
+        let album = db::albums(&connection).unwrap().remove(0);
+        assert_eq!(
+            album_cover_photo(&connection, &album, &photos).map(|photo| photo.id),
+            Some(2)
+        );
+
+        // A chosen photo still resolves when it is not an album member.
+        db::set_album_cover_photo(&connection, album.id, 3).unwrap();
+        let album = db::albums(&connection).unwrap().remove(0);
+        assert_eq!(
+            album_cover_photo(&connection, &album, &photos).map(|photo| photo.id),
+            Some(3)
+        );
+
+        // Deleting the photo clears the choice through the schema's
+        // ON DELETE SET NULL, so nothing points at a missing photo.
+        connection
+            .execute("DELETE FROM photos WHERE id = 3", [])
+            .unwrap();
+        let album = db::albums(&connection).unwrap().remove(0);
+        assert_eq!(album.cover_photo_id, None);
+        assert_eq!(
+            album_cover_photo(&connection, &album, &photos).map(|photo| photo.id),
+            None
+        );
+
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -1926,6 +2031,11 @@ mod tests {
         let album = db::create_album(&connection.borrow(), "Styled").unwrap();
         db::set_album_cover_frame(&connection.borrow(), album.id, "vintage/blue-frame.png")
             .unwrap();
+        connection
+            .borrow()
+            .execute_batch("INSERT INTO photos (id, path) VALUES (7, '/tmp/seven.jpg');")
+            .unwrap();
+        db::set_album_cover_photo(&connection.borrow(), album.id, 7).unwrap();
         let album = db::albums(&connection.borrow()).unwrap().remove(0);
         let changed = Rc::new(std::cell::Cell::new(0));
         let changed_for_callback = changed.clone();
@@ -1949,9 +2059,68 @@ mod tests {
         reset.emit_clicked();
 
         assert_eq!(changed.get(), 1);
-        assert_eq!(
-            db::albums(&connection.borrow()).unwrap()[0].cover_frame,
-            None
+        let album = db::albums(&connection.borrow()).unwrap().remove(0);
+        assert_eq!(album.cover_frame, None);
+        assert_eq!(album.cover_photo_id, None);
+
+        window.close();
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn album_card_draws_the_photo_chosen_as_its_cover() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-chosen-cover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        let album = db::create_album(&connection.borrow(), "Holiday").unwrap();
+        connection
+            .borrow()
+            .execute_batch(
+                "INSERT INTO photos (id, path) VALUES
+                   (1, 'samples/01-Start Up.jpg'),
+                   (2, 'samples/Single Photo.jpg');",
+            )
+            .unwrap();
+        // Photo 2 is only the chosen cover; it never joined the album.
+        db::set_album_cover_photo(&connection.borrow(), album.id, 2).unwrap();
+
+        let albums = db::albums(&connection.borrow()).unwrap();
+        let view = build(
+            &albums,
+            connection.clone(),
+            136,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+        );
+        let window = gtk::Window::builder()
+            .default_width(900)
+            .default_height(800)
+            .child(&view)
+            .build();
+        window.present();
+        settle_gtk_layout();
+
+        let card = find_descendant_with_css_class(view.upcast_ref(), "album-card").unwrap();
+        let picture = find_descendant_with_css_class(card.upcast_ref(), "thumbnail")
+            .unwrap()
+            .downcast::<gtk::Picture>()
+            .unwrap();
+        let drawn = picture.file().and_then(|file| file.path()).unwrap();
+        assert!(
+            drawn.ends_with("samples/Single Photo.jpg"),
+            "card drew {drawn:?}"
         );
 
         window.close();
