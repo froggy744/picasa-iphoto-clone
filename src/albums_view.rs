@@ -1345,7 +1345,7 @@ fn populate(
     let responsive_bookshelf = row_theme.is_some();
     let standard = !appearance.bookshelf_enabled && !appearance.covers_enabled;
     let preferred_width =
-        [180, 240, 280][index_setting(&connection.borrow(), ALBUM_SIZE_KEY, 1, 2) as usize];
+        [160, 240, 280][index_setting(&connection.borrow(), ALBUM_SIZE_KEY, 1, 2) as usize];
     bookshelf_runtime
         .standard_width
         .set(if standard { preferred_width } else { 0 });
@@ -2176,6 +2176,14 @@ mod tests {
         assert!(
             compact_grid.max_children_per_line() >= 4,
             "compact layout should reveal another column"
+        );
+        let compact_columns = compact_grid.max_children_per_line();
+        window.set_default_size(1400, 760);
+        settle_gtk_layout();
+        settle_gtk_layout();
+        assert!(
+            compact_grid.max_children_per_line() > compact_columns,
+            "compact layout should add columns as the app grows"
         );
         size.set_selected(2);
         settle_gtk_layout();
