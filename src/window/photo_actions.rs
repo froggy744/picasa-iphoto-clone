@@ -65,15 +65,16 @@ fn context_submenu_button(label: &str, css_class: &str) -> gtk::MenuButton {
 /// built infobar album menu remains keyboard-focusable.
 fn unfocus_submenu(popover: &gtk::Popover) {
     popover.set_focusable(false);
-    if let Some(menu) = popover.child() {
-        let mut child = menu.first_child();
-        while let Some(widget) = child {
-            let next = widget.next_sibling();
-            if let Ok(button) = widget.downcast::<gtk::Button>() {
-                button.set_focus_on_click(false);
-                button.set_focusable(false);
-            }
-            child = next;
+    let mut pending = popover.child().into_iter().collect::<Vec<_>>();
+    while let Some(widget) = pending.pop() {
+        if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+            button.set_focus_on_click(false);
+            button.set_focusable(false);
+        }
+        let mut child = widget.first_child();
+        while let Some(descendant) = child {
+            child = descendant.next_sibling();
+            pending.push(descendant);
         }
     }
 }
@@ -1296,6 +1297,74 @@ mod photo_actions_tests {
         ACTIVE_PHOTO_MENU
             .with(|active| active.borrow().clone())
             .expect("photo context menu is showing")
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn add_to_album_popover_scrolls_when_the_album_list_is_long() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-add-to-album-scroll-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        for index in 1..=30 {
+            db::create_album(&connection.borrow(), &format!("Album {index:02}")).unwrap();
+        }
+        let context = PhotoActionContext {
+            connection: connection.clone(),
+            gallery: Rc::new(RefCell::new(std::rc::Weak::new())),
+            filter: Rc::new(Cell::new(sidebar::SidebarFilter::All)),
+            search: Rc::new(RefCell::new(String::new())),
+            sort: Rc::new(Cell::new(PhotoSort {
+                field: SortField::DateTaken,
+                direction: SortDirection::Descending,
+            })),
+            info: Rc::new(InfoBar::new()),
+            selected_photo: Rc::new(RefCell::new(None)),
+            lightbox: std::rc::Weak::new(),
+            sidebar: Rc::new(RefCell::new(None)),
+            create_album: Rc::new(|| {}),
+            import_folder: Rc::new(|| {}),
+            delete_album: Rc::new(|_| {}),
+            on_unavailable: Rc::new(|| {}),
+            refresh_albums_home: Rc::new(|_| {}),
+            navigate_to_folder: Rc::new(|_, _| {}),
+            open_collage: Rc::new(|_| {}),
+            open_edit: Rc::new(|_| {}),
+            edit_clipboard: Rc::new(RefCell::new(None)),
+            window: glib::WeakRef::new(),
+            context_menu_host: Rc::new(RefCell::new(None)),
+        };
+
+        let popover = build_album_popover(
+            context,
+            Rc::new(Vec::new),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+        );
+        let scroll = popover
+            .child()
+            .and_then(|child| child.downcast::<gtk::ScrolledWindow>().ok())
+            .expect("a long album chooser must have a scrollable viewport");
+
+        assert_eq!(scroll.vscrollbar_policy(), gtk::PolicyType::Automatic);
+        assert!(scroll.propagates_natural_height());
+        assert!(scroll.max_content_height() > 0);
+        let last_album = find_action(scroll.upcast_ref(), "Album 30")
+            .expect("the final album must remain available inside the viewport");
+        unfocus_submenu(&popover);
+        assert!(!last_album.is_focusable());
+
+        drop(popover);
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

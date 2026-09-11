@@ -114,7 +114,13 @@ fn build_album_popover(
         });
         menu.append(&item);
     }
-    popover.set_child(Some(&menu));
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_propagate_natural_width(true);
+    scroll.set_propagate_natural_height(true);
+    scroll.set_max_content_height(360);
+    scroll.set_child(Some(&menu));
+    popover.set_child(Some(&scroll));
     popover
 }
 
