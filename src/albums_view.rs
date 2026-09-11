@@ -1780,6 +1780,8 @@ fn album_card(
     card.set_width_request(width);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 7);
     content.set_size_request(width, -1);
+    content.set_width_request(width);
+    content.set_overflow(gtk::Overflow::Hidden);
     content.set_hexpand(false);
     content.set_vexpand(false);
     content.set_halign(gtk::Align::Start);
@@ -1934,8 +1936,11 @@ fn album_card(
     let name = gtk::Label::new(Some(&album.name));
     name.add_css_class("album-name");
     name.set_xalign(0.0);
-    name.set_width_chars(1);
-    name.set_max_width_chars(24);
+    name.set_width_request(width);
+    name.set_size_request(width, -1);
+    name.set_hexpand(false);
+    name.set_overflow(gtk::Overflow::Hidden);
+    name.set_max_width_chars(20);
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     name.set_tooltip_text(Some(&album.name));
     if frame.is_some() {
@@ -2188,6 +2193,16 @@ mod tests {
             compact_grid.max_children_per_line() >= 5,
             "compact layout should reveal another column"
         );
+        let mut compact_cards = Vec::new();
+        collect_bookshelf_cards(compact_grid.upcast_ref(), &mut compact_cards);
+        for card in &compact_cards {
+            let cover = find_descendant_with_css_class(card.upcast_ref(), "album-cover").unwrap();
+            assert_eq!(
+                card.allocated_width(),
+                cover.width_request(),
+                "compact album card must not grow beyond its cover"
+            );
+        }
         let compact_columns = compact_grid.max_children_per_line();
         window.set_default_size(1400, 760);
         settle_gtk_layout();
@@ -2216,6 +2231,11 @@ mod tests {
             let cover = find_descendant_with_css_class(card.upcast_ref(), "album-cover").unwrap();
             assert_eq!(cover.width_request(), cards[0].width_request());
             assert_eq!(cover.height_request(), cover.width_request() * 2 / 3);
+            assert_eq!(
+                card.allocated_width(),
+                cover.width_request(),
+                "album card must not grow beyond its cover"
+            );
         }
         assert!(find_descendant_with_css_class(view.upcast_ref(), "album-cover-action").is_none());
         show_album_context_menu(
