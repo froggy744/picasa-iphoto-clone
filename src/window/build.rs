@@ -3145,14 +3145,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .folder-section-icon { color: #c8c8c8; opacity: 0.9; }\
         .folder-section-separator { margin-top: 7px; opacity: 0.42; }\
         .folder-photo-row { background: transparent; }\
-        .folder-photo-selected { border-color: #78b9e8; box-shadow: 0 0 0 1px #c6e6ff, 0 3px 10px rgba(0,0,0,0.75); }\
-        .folder-photo-selected .selection-badge { opacity: 1; }\
         gridview.section-grid { background: transparent; padding: 20px 20px 24px 20px; }\
         gridview.section-grid > child, gridview.section-grid > item { padding: 6px; margin: 0; background: transparent; background-image: none; box-shadow: none; border-radius: 10px; }\
         gridview.section-grid > child:hover, gridview.section-grid > child:selected, gridview.section-grid > child:focus, gridview.section-grid > child:active, gridview.section-grid > item:hover, gridview.section-grid > item:selected, gridview.section-grid > item:focus, gridview.section-grid > item:active { background: transparent; background-image: none; outline: none; box-shadow: none; }\
         .photo-frame { box-shadow: 0 2px 5px rgba(0,0,0,0.62), 0 0 0 1px rgba(255,255,255,0.12); }\
         .photo-tile { border-radius: 7px; border: 2px solid transparent; background: #3a3a3a; transition: border-color 150ms ease, box-shadow 150ms ease; }\
         .photo-tile:hover { border-color: rgba(140,196,237,0.70); box-shadow: 0 3px 10px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.18); }\
+        .folder-photo-flow > flowboxchild { padding: 6px; margin: 0; min-height: 0; background: transparent; background-image: none; box-shadow: none; }\
+        .folder-photo-flow > flowboxchild:hover, .folder-photo-flow > flowboxchild:focus, .folder-photo-flow > flowboxchild:active, .folder-photo-flow > flowboxchild:selected { background: transparent; background-image: none; outline: none; box-shadow: none; }\
+        .folder-photo-selected.photo-tile { border-color: #78b9e8; box-shadow: 0 0 0 1px #c6e6ff, 0 3px 10px rgba(0,0,0,0.75); }\
+        .folder-photo-selected .selection-badge { opacity: 1; }\
         .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }\
         button.album-card { min-width: 0; padding: 0; margin: 0; background: transparent; background-image: none; border: none; box-shadow: none; }\
         button.album-card:hover, button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }\

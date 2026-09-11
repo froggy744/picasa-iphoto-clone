@@ -50,8 +50,6 @@ const STANDARD_GTK4_CSS: &str = r#"
     .folder-section-icon { color: alpha(@theme_fg_color, 0.75); }
     .folder-section-separator { margin-top: 7px; opacity: 0.35; }
     .folder-photo-row { background: transparent; }
-    .folder-photo-selected { border-color: @accent_bg_color; box-shadow: none; }
-    .folder-photo-selected .selection-badge { opacity: 1; }
     /* GtkGridView uses CSS child nodes for its cells. Keep the old `item`
        selector too so this stays harmless across GTK minor-version styling. */
     gridview.section-grid > child,
@@ -78,6 +76,13 @@ const STANDARD_GTK4_CSS: &str = r#"
     .photo-frame { box-shadow: none; }
     .photo-tile { border-radius: 10px; border: 2px solid transparent; background: alpha(@theme_fg_color, 0.05); box-shadow: none; }
     .photo-tile:hover { border-color: alpha(@accent_bg_color, 0.40); box-shadow: none; }
+    .folder-photo-flow > flowboxchild { padding: 6px; margin: 0; min-height: 0; background: transparent; background-image: none; box-shadow: none; }
+    .folder-photo-flow > flowboxchild:hover,
+    .folder-photo-flow > flowboxchild:focus,
+    .folder-photo-flow > flowboxchild:active,
+    .folder-photo-flow > flowboxchild:selected { background: transparent; background-image: none; outline: none; box-shadow: none; }
+    .folder-photo-selected.photo-tile { border-color: @accent_bg_color; box-shadow: none; }
+    .folder-photo-selected .selection-badge { opacity: 1; }
     .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }
     button.album-card { min-width: 0; padding: 0; margin: 0; background: transparent; background-image: none; border: none; box-shadow: none; }
     button.album-card:hover, button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }

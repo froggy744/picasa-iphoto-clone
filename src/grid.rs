@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -23,6 +23,10 @@ const DEFAULT_TILE_HEIGHT: i32 = 120;
 const MIN_TILE_WIDTH: i32 = 100;
 const MAX_TILE_WIDTH: i32 = 300;
 const ZOOM_STEP_WIDTH: i32 = 24;
+
+// Pointer travel (px) required before a folder press becomes a rubberband drag
+// instead of a click. Keeps double-click detection intact.
+const DRAG_CLAIM_THRESHOLD: f64 = 6.0;
 
 const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 128;
 
@@ -737,12 +741,6 @@ fn make_folder_tile(
     tile_width: i32,
     tile_height: i32,
     unavailable: &Rc<dyn Fn(PhotoObject, gtk::Widget)>,
-    selection: &gtk::MultiSelection,
-    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
-    activate: &Rc<dyn Fn(Vec<PhotoObject>, usize)>,
-    context_menu: &Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>,
-    collage_mode: &Rc<Cell<bool>>,
-    collage_ids: &Rc<RefCell<HashSet<i64>>>,
     mapped_tiles: &Rc<RefCell<Vec<SquareTile>>>,
     folder_root_holder: &Rc<RefCell<Option<gtk::ListView>>>,
     folder_rebuild_active: &Rc<Cell<bool>>,
@@ -814,10 +812,6 @@ fn make_folder_tile(
     tile.set_vexpand(false);
     tile.set_valign(gtk::Align::Start);
     tile.set_focusable(true);
-    tile.set_margin_top(6);
-    tile.set_margin_bottom(6);
-    tile.set_margin_start(6);
-    tile.set_margin_end(6);
 
     let tile_for_unavailable = tile.clone();
     let unavailable_for_click = unavailable.clone();
@@ -828,102 +822,6 @@ fn make_folder_tile(
         };
         (unavailable_for_click)(photo, badge_for_click.clone().upcast());
     });
-
-    let tile_for_left = tile.clone();
-    let selection_for_left = selection.clone();
-    let current_photos_for_left = current_photos.clone();
-    let activate_for_left = activate.clone();
-    let collage_mode_for_left = collage_mode.clone();
-    let collage_ids_for_left = collage_ids.clone();
-    let left_click = gtk::GestureClick::new();
-    left_click.set_button(1);
-    left_click.set_propagation_phase(gtk::PropagationPhase::Capture);
-    left_click.connect_pressed(move |gesture, n_press, _, _| {
-        let Some(photo) = tile_for_left.imp().photo.borrow().as_ref().cloned() else {
-            return;
-        };
-        let Some(position) = selection_position_for_id(&selection_for_left, photo.id()) else {
-            return;
-        };
-
-        gesture.set_state(gtk::EventSequenceState::Claimed);
-        tile_for_left.grab_focus();
-        if collage_mode_for_left.get() {
-            let mut selected_ids = collage_ids_for_left.borrow_mut();
-            if selected_ids.remove(&photo.id()) {
-                selection_for_left.unselect_item(position);
-            } else {
-                selected_ids.insert(photo.id());
-                selection_for_left.select_item(position, false);
-            }
-            return;
-        }
-
-        if n_press >= 2 {
-            selection_for_left.select_item(position, true);
-            let photos = current_photos_for_left.borrow().clone();
-            if let Some(index) = photos.iter().position(|item| item.id() == photo.id()) {
-                (activate_for_left)(photos, index);
-            }
-            return;
-        }
-
-        let modifiers = gesture.current_event_state();
-        if modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
-            if selection_for_left.is_selected(position) {
-                selection_for_left.unselect_item(position);
-            } else {
-                selection_for_left.select_item(position, false);
-            }
-        } else if modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK) {
-            let selected = selection_for_left.selection();
-            let anchor = gtk::BitsetIter::init_first(&selected)
-                .map(|(_, position)| position)
-                .unwrap_or(position);
-            let start = anchor.min(position);
-            let end = anchor.max(position);
-            selection_for_left.unselect_all();
-            for item in start..=end {
-                selection_for_left.select_item(item, false);
-            }
-        } else {
-            selection_for_left.select_item(position, true);
-        }
-    });
-    tile.add_controller(left_click);
-
-    let tile_for_context = tile.clone();
-    let selection_for_context = selection.clone();
-    let context_menu_for_tile = context_menu.clone();
-    let right_click = gtk::GestureClick::new();
-    right_click.set_button(3);
-    right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
-    right_click.connect_pressed(move |gesture, _, x, y| {
-        let Some(photo) = tile_for_context.imp().photo.borrow().as_ref().cloned() else {
-            return;
-        };
-        let Some(position) = selection_position_for_id(&selection_for_context, photo.id()) else {
-            return;
-        };
-        let Some(frame) = tile_for_context.first_child().and_downcast::<gtk::Overlay>() else {
-            return;
-        };
-        let frame_widget = frame.clone().upcast::<gtk::Widget>();
-        let local = tile_for_context
-            .compute_point(
-                &frame_widget,
-                &gtk::graphene::Point::new(x as f32, y as f32),
-            )
-            .unwrap_or_else(|| gtk::graphene::Point::new(0.0, 0.0));
-
-        gesture.set_state(gtk::EventSequenceState::Claimed);
-        if !selection_for_context.is_selected(position) {
-            selection_for_context.select_item(position, true);
-        }
-        tile_for_context.grab_focus();
-        (context_menu_for_tile)(photo, frame_widget, local.x() as f64, local.y() as f64);
-    });
-    tile.add_controller(right_click);
 
     let tile_for_map = tile.clone();
     let mapped_for_map = mapped_tiles.clone();
@@ -1418,12 +1316,6 @@ impl Gallery {
         let tile_height_for_folder_bind = tile_height.clone();
         let current_columns_for_folder_bind = current_columns.clone();
         let unavailable_for_folder_bind = unavailable.clone();
-        let selection_for_folder_bind = selection.clone();
-        let current_photos_for_folder_bind = current_photos.clone();
-        let activate_for_folder_bind = activate.clone();
-        let context_menu_for_folder_bind = context_menu.clone();
-        let collage_mode_for_folder_bind = collage_selection_mode.clone();
-        let collage_ids_for_folder_bind = collage_selected_ids.clone();
         let mapped_tiles_for_folder_bind = mapped_folder_tiles.clone();
         let root_holder_for_folder_bind = folder_root_holder.clone();
         let selected_ids_for_folder_bind = folder_selected_ids.clone();
@@ -1491,12 +1383,6 @@ impl Gallery {
                             tile_width_for_folder_bind.get(),
                             tile_height_for_folder_bind.get(),
                             &unavailable_for_folder_bind,
-                            &selection_for_folder_bind,
-                            &current_photos_for_folder_bind,
-                            &activate_for_folder_bind,
-                            &context_menu_for_folder_bind,
-                            &collage_mode_for_folder_bind,
-                            &collage_ids_for_folder_bind,
                             &mapped_tiles_for_folder_bind,
                             &root_holder_for_folder_bind,
                             &rebuild_active_for_folder_bind,
@@ -1580,6 +1466,18 @@ impl Gallery {
         folder_root.add_css_class("folder-stream");
         folder_root.add_css_class("photo-grid");
         folder_root_holder.replace(Some(folder_root.clone()));
+
+        install_folder_root_input(
+            &folder_root,
+            &selection,
+            &current_photos,
+            &activate,
+            &context_menu,
+            &collage_selection_mode,
+            &collage_selected_ids,
+            &mapped_folder_tiles,
+            &folder_rebuild_active,
+        );
 
         let folder_root_for_selection = folder_root.clone();
         let selection_for_folder_style = selection.clone();
@@ -2644,6 +2542,40 @@ impl Gallery {
             .unwrap_or_else(|| self.last_scroll_y.get())
     }
 
+    /// Return keyboard focus to the realized `SquareTile` for `photo_id` in the
+    /// folder stream. A `GtkListView` row may hold several photos, so focusing
+    /// the list alone leaves arrow keys without a thumbnail to start from.
+    /// Falls back to the `ListView` when the tile is not realized yet.
+    fn focus_folder_tile(&self, photo_id: i64) {
+        let root = self.folder_root.clone();
+        let mapped = self.mapped_folder_tiles.clone();
+        glib::idle_add_local_once(move || {
+            let root_for_find = root.clone();
+            let mapped_for_find = mapped.clone();
+            glib::idle_add_local_once(move || {
+                let tile = mapped_for_find
+                    .borrow()
+                    .iter()
+                    .find(|tile| {
+                        tile.imp()
+                            .photo
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|photo| photo.id() == photo_id)
+                    })
+                    .cloned();
+                match tile {
+                    Some(tile) => {
+                        tile.grab_focus();
+                    }
+                    None => {
+                        root_for_find.grab_focus();
+                    }
+                }
+            });
+        });
+    }
+
     pub fn restore_view(&self, photo_id: i64, scroll_y: f64) {
         let Some(position) = self
             .current_photos
@@ -2687,6 +2619,9 @@ impl Gallery {
                 }
             }
         });
+        if folder_mode {
+            self.focus_folder_tile(photo_id);
+        }
     }
 
     pub fn restore_context_view(&self, photo_id: i64, scroll_y: f64) {
@@ -2726,6 +2661,9 @@ impl Gallery {
                 }
             }
         });
+        if folder_mode {
+            self.focus_folder_tile(photo_id);
+        }
     }
 
     pub fn is_at_vertical_boundary(&self, direction: i32) -> bool {
@@ -2915,8 +2853,8 @@ impl Gallery {
                 if let Some(row) = self.folder_row_index_for_photo(photo_id) {
                     self.folder_root
                         .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
-                    self.folder_root.grab_focus();
                 }
+                self.focus_folder_tile(photo_id);
             } else {
                 self.root.scroll_to(
                     position,
@@ -3378,6 +3316,444 @@ fn selected_photo_id_set(selection: &gtk::MultiSelection) -> HashSet<i64> {
     ids
 }
 
+fn selected_positions(selection: &gtk::MultiSelection) -> Vec<u32> {
+    let selected = selection.selection();
+    let mut positions = Vec::new();
+    if let Some((mut iter, first)) = gtk::BitsetIter::init_first(&selected) {
+        for position in std::iter::once(first).chain(&mut iter) {
+            positions.push(position);
+        }
+    }
+    positions
+}
+
+/// Resolve the folder-click outcomes into a sorted, deduplicated set of model
+/// positions. Plain click replaces the selection, Control toggles one position,
+/// and Shift selects the inclusive range between the stored anchor and the
+/// clicked position.
+fn folder_selection_after_click(
+    item_count: u32,
+    selected: &[u32],
+    anchor: Option<u32>,
+    position: u32,
+    control: bool,
+    shift: bool,
+) -> Vec<u32> {
+    if item_count == 0 {
+        return Vec::new();
+    }
+    let last = item_count - 1;
+    let position = position.min(last);
+    let mut result = Vec::new();
+    if control {
+        result.extend_from_slice(selected);
+        if let Some(index) = result.iter().position(|item| *item == position) {
+            result.remove(index);
+        } else {
+            result.push(position);
+        }
+    } else if shift {
+        let anchor = anchor.unwrap_or(position).min(last);
+        let start = anchor.min(position);
+        let end = anchor.max(position);
+        result.extend(start..=end);
+    } else {
+        result.push(position);
+    }
+    result.sort_unstable();
+    result.dedup();
+    result
+}
+
+fn apply_folder_click_selection(
+    selection: &gtk::MultiSelection,
+    anchor: &Cell<Option<u32>>,
+    position: u32,
+    modifiers: gtk::gdk::ModifierType,
+) {
+    let control = modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+    let shift = modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+    let selected = selected_positions(selection);
+    let desired = folder_selection_after_click(
+        selection.n_items(),
+        &selected,
+        anchor.get(),
+        position,
+        control,
+        shift,
+    );
+    if !shift || anchor.get().is_none() {
+        anchor.set(Some(position));
+    }
+    selection.unselect_all();
+    for item in desired {
+        selection.select_item(item, false);
+    }
+}
+
+/// Axis-aligned bounds for one realized folder tile, expressed in the folder
+/// `ListView` coordinate space so drag hit testing is deterministic.
+#[derive(Clone, Copy, Debug)]
+struct FolderTileBounds {
+    position: u32,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+fn folder_dragged_positions(
+    tiles: &[FolderTileBounds],
+    start: (f64, f64),
+    end: (f64, f64),
+) -> Vec<u32> {
+    let left = start.0.min(end.0);
+    let right = start.0.max(end.0);
+    let top = start.1.min(end.1);
+    let bottom = start.1.max(end.1);
+    let mut positions: Vec<u32> = tiles
+        .iter()
+        .filter(|tile| {
+            tile.width > 0.0
+                && tile.height > 0.0
+                && tile.x <= right
+                && tile.x + tile.width >= left
+                && tile.y <= bottom
+                && tile.y + tile.height >= top
+        })
+        .map(|tile| tile.position)
+        .collect();
+    positions.sort_unstable();
+    positions.dedup();
+    positions
+}
+
+#[derive(Default)]
+struct FolderDragState {
+    start: Option<(f64, f64)>,
+    base_ids: HashSet<i64>,
+    id_positions: HashMap<i64, u32>,
+    control: bool,
+    active: bool,
+    last: Vec<u32>,
+}
+
+impl FolderDragState {
+    fn clear(&mut self) {
+        self.start = None;
+        self.base_ids.clear();
+        self.id_positions.clear();
+        self.control = false;
+        self.active = false;
+        self.last.clear();
+    }
+}
+
+/// True when the picked widget sits on the unavailable-source badge button,
+/// which owns its own click handler and must be allowed to receive the event.
+fn picked_offline_badge(picked: &gtk::Widget) -> bool {
+    let mut current = Some(picked.clone());
+    while let Some(widget) = current {
+        if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+            if button.has_css_class("offline-badge") {
+                return true;
+            }
+        }
+        current = widget.parent();
+    }
+    false
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_folder_root_input(
+    folder_root: &gtk::ListView,
+    selection: &gtk::MultiSelection,
+    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
+    activate: &Rc<dyn Fn(Vec<PhotoObject>, usize)>,
+    context_menu: &Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>,
+    collage_mode: &Rc<Cell<bool>>,
+    collage_ids: &Rc<RefCell<HashSet<i64>>>,
+    mapped_tiles: &Rc<RefCell<Vec<SquareTile>>>,
+    folder_rebuild_active: &Rc<Cell<bool>>,
+) {
+    let anchor: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
+    let trace = std::env::var_os("PICASA_TRACE").is_some();
+
+    let left_click = gtk::GestureClick::new();
+    left_click.set_button(1);
+    left_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let root_for_left = folder_root.clone();
+    let selection_for_left = selection.clone();
+    let current_photos_for_left = current_photos.clone();
+    let activate_for_left = activate.clone();
+    let collage_mode_for_left = collage_mode.clone();
+    let collage_ids_for_left = collage_ids.clone();
+    let anchor_for_left = anchor.clone();
+    left_click.connect_pressed(move |gesture, n_press, x, y| {
+        if trace {
+            eprintln!("FOLDER INPUT press x={x:.0} y={y:.0} n={n_press}");
+        }
+        let Some(picked) = root_for_left.pick(x, y, gtk::PickFlags::DEFAULT) else {
+            if trace {
+                eprintln!("FOLDER INPUT resolved=false pick=none");
+            }
+            return;
+        };
+        if picked_offline_badge(&picked) {
+            return;
+        }
+        let Some(tile) = folder_tile_from_pick(&picked) else {
+            if trace {
+                eprintln!("FOLDER INPUT resolved=false pick={} no-tile", picked.type_().name());
+            }
+            return;
+        };
+        let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+            if trace {
+                eprintln!("FOLDER INPUT resolved=false tile-no-photo");
+            }
+            return;
+        };
+        let Some(position) = selection_position_for_id(&selection_for_left, photo.id()) else {
+            if trace {
+                eprintln!("FOLDER INPUT resolved=false no-position id={}", photo.id());
+            }
+            return;
+        };
+        if trace {
+            eprintln!("FOLDER INPUT resolved=true id={} position={position}", photo.id());
+        }
+
+        // Do not claim the sequence here: claiming on press prevents the
+        // grouped drag gesture from ever emitting drag-update, which is what
+        // broke rubberband selection.
+        tile.grab_focus();
+
+        if collage_mode_for_left.get() {
+            let mut selected_ids = collage_ids_for_left.borrow_mut();
+            if selected_ids.remove(&photo.id()) {
+                selection_for_left.unselect_item(position);
+            } else {
+                selected_ids.insert(photo.id());
+                selection_for_left.select_item(position, false);
+            }
+            return;
+        }
+
+        if n_press >= 2 {
+            selection_for_left.select_item(position, true);
+            let photos = current_photos_for_left.borrow().clone();
+            if let Some(index) = photos.iter().position(|item| item.id() == photo.id()) {
+                (activate_for_left)(photos, index);
+            }
+            anchor_for_left.set(Some(position));
+            return;
+        }
+
+        let modifiers = gesture.current_event_state();
+        apply_folder_click_selection(&selection_for_left, &anchor_for_left, position, modifiers);
+    });
+    folder_root.add_controller(left_click.clone());
+
+    let right_click = gtk::GestureClick::new();
+    right_click.set_button(3);
+    right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let root_for_context = folder_root.clone();
+    let selection_for_context = selection.clone();
+    let context_menu_for_root = context_menu.clone();
+    right_click.connect_pressed(move |gesture, _, x, y| {
+        let Some(picked) = root_for_context.pick(x, y, gtk::PickFlags::DEFAULT) else {
+            return;
+        };
+        let Some(tile) = folder_tile_from_pick(&picked) else {
+            return;
+        };
+        let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+            return;
+        };
+        let Some(position) = selection_position_for_id(&selection_for_context, photo.id()) else {
+            return;
+        };
+        let Some(frame) = tile.first_child().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+        let frame_widget = frame.clone().upcast::<gtk::Widget>();
+        let local = root_for_context
+            .compute_point(
+                &frame_widget,
+                &gtk::graphene::Point::new(x as f32, y as f32),
+            )
+            .unwrap_or_else(|| gtk::graphene::Point::new(0.0, 0.0));
+
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        if !selection_for_context.is_selected(position) {
+            selection_for_context.select_item(position, true);
+        }
+        tile.grab_focus();
+        (context_menu_for_root)(photo, frame_widget, local.x() as f64, local.y() as f64);
+    });
+    folder_root.add_controller(right_click);
+
+    let drag = gtk::GestureDrag::new();
+    drag.set_button(1);
+    drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let drag_state = Rc::new(RefCell::new(FolderDragState::default()));
+
+    let root_for_begin = folder_root.clone();
+    let selection_for_begin = selection.clone();
+    let current_photos_for_begin = current_photos.clone();
+    let collage_mode_for_begin = collage_mode.clone();
+    let state_for_begin = drag_state.clone();
+    drag.connect_drag_begin(move |gesture, x, y| {
+        state_for_begin.borrow_mut().clear();
+        if collage_mode_for_begin.get() {
+            gesture.set_state(gtk::EventSequenceState::Denied);
+            return;
+        }
+        let Some(picked) = root_for_begin.pick(x, y, gtk::PickFlags::DEFAULT) else {
+            gesture.set_state(gtk::EventSequenceState::Denied);
+            return;
+        };
+        if picked_offline_badge(&picked) {
+            gesture.set_state(gtk::EventSequenceState::Denied);
+            return;
+        }
+        let Some(tile) = folder_tile_from_pick(&picked) else {
+            gesture.set_state(gtk::EventSequenceState::Denied);
+            return;
+        };
+        let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+            gesture.set_state(gtk::EventSequenceState::Denied);
+            return;
+        };
+        if selection_position_for_id(&selection_for_begin, photo.id()).is_none() {
+            gesture.set_state(gtk::EventSequenceState::Denied);
+            return;
+        }
+        let modifiers = gesture.current_event_state();
+        let mut state = state_for_begin.borrow_mut();
+        state.start = Some((x, y));
+        state.active = true;
+        state.control = modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+        state.base_ids = if state.control {
+            selected_photo_id_set(&selection_for_begin)
+        } else {
+            HashSet::new()
+        };
+        state.id_positions = current_photos_for_begin
+            .borrow()
+            .iter()
+            .enumerate()
+            .map(|(index, photo)| (photo.id(), index as u32))
+            .collect();
+        state.last.clear();
+        drop(state);
+        if trace {
+            eprintln!(
+                "FOLDER INPUT drag_begin photo_id={} position_resolved=true",
+                photo.id()
+            );
+        }
+        tile.grab_focus();
+    });
+
+    let root_for_update = folder_root.clone();
+    let selection_for_update = selection.clone();
+    let mapped_for_update = mapped_tiles.clone();
+    let rebuild_for_update = folder_rebuild_active.clone();
+    let state_for_update = drag_state.clone();
+    drag.connect_drag_update(move |gesture, offset_x, offset_y| {
+        if rebuild_for_update.get() {
+            state_for_update.borrow_mut().active = false;
+            return;
+        }
+        // A stationary press still emits tiny drag updates. Do not claim those,
+        // otherwise the click gesture is cancelled and loses its double-click
+        // counter, which broke double-click-to-open. Only take over once the
+        // pointer has actually travelled.
+        if offset_x.hypot(offset_y) < DRAG_CLAIM_THRESHOLD {
+            return;
+        }
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        let hit = {
+            let state = state_for_update.borrow();
+            if !state.active {
+                return;
+            }
+            let Some(start) = state.start else {
+                return;
+            };
+            let end = (start.0 + offset_x, start.1 + offset_y);
+            let mut bounds = Vec::new();
+            let tiles = mapped_for_update.borrow();
+            for tile in tiles.iter() {
+                if !tile.is_mapped() || tile.height() <= 0 {
+                    continue;
+                }
+                let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+                    continue;
+                };
+                let Some(position) = state.id_positions.get(&photo.id()).copied() else {
+                    continue;
+                };
+                let Some(rect) = tile.compute_bounds(&root_for_update) else {
+                    continue;
+                };
+                bounds.push(FolderTileBounds {
+                    position,
+                    x: rect.x() as f64,
+                    y: rect.y() as f64,
+                    width: rect.width() as f64,
+                    height: rect.height() as f64,
+                });
+            }
+            let mut positions = folder_dragged_positions(&bounds, start, end);
+            if state.control {
+                for id in &state.base_ids {
+                    if let Some(position) = state.id_positions.get(id) {
+                        positions.push(*position);
+                    }
+                }
+                positions.sort_unstable();
+                positions.dedup();
+            }
+            positions
+        };
+        {
+            let mut state = state_for_update.borrow_mut();
+            if state.last == hit {
+                return;
+            }
+            state.last = hit.clone();
+        }
+        if trace {
+            eprintln!(
+                "FOLDER INPUT drag_update mapped={} selected={}",
+                mapped_for_update.borrow().len(),
+                hit.len()
+            );
+        }
+        selection_for_update.unselect_all();
+        for position in &hit {
+            selection_for_update.select_item(*position, false);
+        }
+    });
+
+    let state_for_end = drag_state.clone();
+    drag.connect_drag_end(move |_, _, _| {
+        if trace {
+            eprintln!("FOLDER INPUT drag_end");
+        }
+        state_for_end.borrow_mut().clear();
+    });
+
+    // Group the click and drag gestures so a click that turns into a drag can
+    // hand the sequence over instead of the click denying the drag (the same
+    // coordination GTK's own list widgets rely on for rubberband selection).
+    left_click.group_with(&drag);
+    folder_root.add_controller(drag);
+}
+
 fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiSelection) {
     let trace = std::env::var_os("PICASA_TRACE").is_some();
     let started = trace.then(Instant::now);
@@ -3422,6 +3798,23 @@ fn tile_ancestor(widget: &gtk::Widget) -> Option<SquareTile> {
             return Some(tile);
         }
         current = candidate.parent();
+    }
+    None
+}
+
+/// Resolve a picked folder widget to its tile. The clickable cell includes the
+/// FlowBox child's padding, which picks as the `GtkFlowBoxChild` itself; in
+/// that case the tile is a child, not an ancestor.
+fn folder_tile_from_pick(picked: &gtk::Widget) -> Option<SquareTile> {
+    if let Some(tile) = tile_ancestor(picked) {
+        return Some(tile);
+    }
+    let mut child = picked.first_child();
+    while let Some(current) = child {
+        if let Some(tile) = tile_ancestor(&current) {
+            return Some(tile);
+        }
+        child = current.next_sibling();
     }
     None
 }
@@ -3566,8 +3959,9 @@ fn collect_folder_flows(widget: &gtk::Widget, flows: &mut Vec<gtk::FlowBox>) {
 #[cfg(test)]
 mod folder_stream_tests {
     use super::{
-        folder_chunk_height, folder_chunk_size, folder_virtual_row_matches, folder_virtual_rows,
-        FolderRowData, FolderRowKind, GroupRange, FOLDER_PHOTO_CHUNK_SIZE,
+        folder_chunk_height, folder_chunk_size, folder_dragged_positions,
+        folder_selection_after_click, folder_virtual_row_matches, folder_virtual_rows,
+        FolderRowData, FolderRowKind, FolderTileBounds, GroupRange, FOLDER_PHOTO_CHUNK_SIZE,
     };
 
     fn sample_ranges() -> Vec<GroupRange> {
@@ -3629,6 +4023,69 @@ mod folder_stream_tests {
         for row in rows.into_iter().filter(|row| row.kind == FolderRowKind::Photos) {
             assert!(row.end - row.start <= FOLDER_PHOTO_CHUNK_SIZE);
         }
+    }
+
+    #[test]
+    fn folder_click_selection_matches_grid_semantics() {
+        assert_eq!(
+            folder_selection_after_click(8, &[], None, 2, false, false),
+            vec![2]
+        );
+        assert_eq!(
+            folder_selection_after_click(8, &[2], Some(2), 5, true, false),
+            vec![2, 5]
+        );
+        assert_eq!(
+            folder_selection_after_click(8, &[2], Some(2), 5, false, true),
+            vec![2, 3, 4, 5]
+        );
+        assert_eq!(
+            folder_selection_after_click(8, &[1, 3], None, 5, false, true),
+            vec![5]
+        );
+        assert_eq!(
+            folder_selection_after_click(0, &[], None, 5, false, false),
+            Vec::<u32>::new()
+        );
+    }
+
+    #[test]
+    fn folder_drag_selection_returns_intersecting_tiles_in_model_order() {
+        let tiles = vec![
+            FolderTileBounds {
+                position: 0,
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            FolderTileBounds {
+                position: 1,
+                x: 110.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            FolderTileBounds {
+                position: 2,
+                x: 0.0,
+                y: 110.0,
+                width: 100.0,
+                height: 100.0,
+            },
+        ];
+        assert_eq!(
+            folder_dragged_positions(&tiles, (50.0, 50.0), (160.0, 160.0)),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            folder_dragged_positions(&tiles, (250.0, 250.0), (300.0, 300.0)),
+            Vec::<u32>::new()
+        );
+        assert_eq!(
+            folder_dragged_positions(&tiles, (160.0, 0.0), (50.0, 50.0)),
+            vec![0, 1]
+        );
     }
 
     #[test]
