@@ -1345,7 +1345,7 @@ fn populate(
     let responsive_bookshelf = row_theme.is_some();
     let standard = !appearance.bookshelf_enabled && !appearance.covers_enabled;
     let preferred_width =
-        [220, 240, 280][index_setting(&connection.borrow(), ALBUM_SIZE_KEY, 1, 2) as usize];
+        [180, 240, 280][index_setting(&connection.borrow(), ALBUM_SIZE_KEY, 1, 2) as usize];
     bookshelf_runtime
         .standard_width
         .set(if standard { preferred_width } else { 0 });
@@ -2163,6 +2163,22 @@ mod tests {
         assert_eq!(sort_bounds.y(), create_bounds.y());
         assert_eq!(size_bounds.y(), create_bounds.y());
         assert!(sort_bounds.x() < size_bounds.x() && size_bounds.x() < create_bounds.x());
+        let size = find_descendant_with_css_class(view.upcast_ref(), "albums-size")
+            .unwrap()
+            .downcast::<gtk::DropDown>()
+            .unwrap();
+        size.set_selected(0);
+        settle_gtk_layout();
+        let compact_grid = find_descendant_with_css_class(view.upcast_ref(), "albums-home-grid")
+            .unwrap()
+            .downcast::<gtk::FlowBox>()
+            .unwrap();
+        assert!(
+            compact_grid.max_children_per_line() >= 4,
+            "compact layout should reveal another column"
+        );
+        size.set_selected(2);
+        settle_gtk_layout();
         let grid = find_descendant_with_css_class(view.upcast_ref(), "albums-home-grid")
             .unwrap()
             .downcast::<gtk::FlowBox>()
