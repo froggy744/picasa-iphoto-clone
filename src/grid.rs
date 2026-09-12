@@ -1,7 +1,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
-use std::time::Instant;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use chrono::{Local, TimeZone};
 
@@ -31,9 +32,13 @@ const DRAG_CLAIM_THRESHOLD: f64 = 6.0;
 const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 256;
 // Folder scrolling must never decode or stat thumbnails from the ListView
 // bind callback. Keep a modest RAM LRU of paintables that were loaded by the
-// settled-viewport path so recycled rows can still show an instant thumbnail
-// while the user scrolls through nearby photos.
-const FOLDER_THUMBNAIL_CACHE_CAPACITY: usize = 256;
+// viewport loaders so recycled rows can still show an instant thumbnail while
+// the user scrolls through nearby photos. Motion prefetch fills this cache off
+// the GTK thread; the ListView bind itself remains RAM-only.
+const FOLDER_THUMBNAIL_CACHE_CAPACITY: usize = 512;
+const FOLDER_THUMBNAIL_ASYNC_MAX_IN_FLIGHT: usize = 8;
+
+static FOLDER_THUMBNAIL_ASYNC_IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 thread_local! {
     static RAW_THUMBNAIL_CACHE: RefCell<VecDeque<(String, i32, String, gtk::gdk::Paintable)>> =
@@ -74,6 +79,32 @@ fn folder_thumbnail_cache_insert(path: String, paintable: gtk::gdk::Paintable) {
             cache.pop_front();
         }
     });
+}
+
+fn claim_folder_thumbnail_async(path: &str) -> bool {
+    let in_flight = FOLDER_THUMBNAIL_ASYNC_IN_FLIGHT.get_or_init(|| Mutex::new(HashSet::new()));
+    let Ok(mut in_flight) = in_flight.lock() else {
+        return false;
+    };
+    if in_flight.contains(path) || in_flight.len() >= FOLDER_THUMBNAIL_ASYNC_MAX_IN_FLIGHT {
+        return false;
+    }
+    in_flight.insert(path.to_string());
+    true
+}
+
+fn release_folder_thumbnail_async(path: &str) {
+    if let Some(in_flight) = FOLDER_THUMBNAIL_ASYNC_IN_FLIGHT.get() {
+        if let Ok(mut in_flight) = in_flight.lock() {
+            in_flight.remove(path);
+        }
+    }
+}
+
+enum FolderThumbnailAsyncResult {
+    Loaded { width: i32, height: i32, pixels: Vec<u8> },
+    Missing,
+    Failed,
 }
 
 pub(crate) fn take_scroll_probe_stats() -> (u64, u128, u128) {
@@ -493,6 +524,137 @@ impl SquareTile {
             }
         }
         self.imp().visual_loaded.set(memory_hit.is_some());
+    }
+
+    /// Queue a cached folder thumbnail without blocking the GTK thread.
+    ///
+    /// Fast Folder scrolling can recycle rows faster than the settled viewport
+    /// loader runs. The bind path remains RAM-only; cache-file probing, JPEG
+    /// reading, and decoding happen on a bounded worker set here. The result is
+    /// applied only if this recycled tile still represents the same photo.
+    fn queue_folder_cached_visual_async(&self) -> bool {
+        let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
+            return false;
+        };
+        if self.imp().visual_loaded.get() {
+            return false;
+        }
+        let Some(cached_path) = photo.cached_thumbnail_path() else {
+            return false;
+        };
+
+        if let Some(paintable) = folder_thumbnail_cache_get(&cached_path) {
+            let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+                return false;
+            };
+            let Some(picture) = frame.child().and_downcast::<gtk::Picture>() else {
+                return false;
+            };
+            picture.set_paintable(Some(&paintable));
+            picture.remove_css_class("missing-thumbnail");
+            if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
+                placeholder.set_visible(false);
+            }
+            self.imp().visual_loaded.set(true);
+            return true;
+        }
+
+        if !claim_folder_thumbnail_async(&cached_path) {
+            return false;
+        }
+
+        let photo_id = photo.id();
+        let source_path = photo.path();
+        let mtime = photo.mtime();
+        let size_bytes = photo.size_bytes();
+        let worker_path = cached_path.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = if !std::path::Path::new(&worker_path).is_file() {
+                FolderThumbnailAsyncResult::Missing
+            } else {
+                match image::open(&worker_path) {
+                    Ok(image) => {
+                        let image = image.to_rgba8();
+                        FolderThumbnailAsyncResult::Loaded {
+                            width: image.width() as i32,
+                            height: image.height() as i32,
+                            pixels: image.into_raw(),
+                        }
+                    }
+                    Err(_) => FolderThumbnailAsyncResult::Failed,
+                }
+            };
+            release_folder_thumbnail_async(&worker_path);
+            let _ = sender.send(result);
+        });
+
+        let tile = self.clone();
+        glib::timeout_add_local(Duration::from_millis(8), move || {
+            let Ok(result) = receiver.try_recv() else {
+                return glib::ControlFlow::Continue;
+            };
+
+            let still_bound = tile
+                .imp()
+                .photo
+                .borrow()
+                .as_ref()
+                .is_some_and(|current| current.id() == photo_id);
+
+            match result {
+                FolderThumbnailAsyncResult::Loaded { width, height, pixels } => {
+                    let bytes = glib::Bytes::from_owned(pixels);
+                    let texture = gtk::gdk::MemoryTexture::new(
+                        width,
+                        height,
+                        gtk::gdk::MemoryFormat::R8g8b8a8,
+                        &bytes,
+                        width as usize * 4,
+                    );
+                    let paintable: gtk::gdk::Paintable = texture.upcast();
+                    folder_thumbnail_cache_insert(cached_path.clone(), paintable.clone());
+                    if still_bound {
+                        if let Some(bound) = tile.imp().photo.borrow().as_ref() {
+                            bound.set_thumbnail_available(true);
+                        }
+                        if let Some(frame) = tile.first_child().and_downcast::<gtk::Overlay>() {
+                            if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
+                                picture.set_paintable(Some(&paintable));
+                                picture.remove_css_class("missing-thumbnail");
+                                if let Some(placeholder) =
+                                    picture.next_sibling().and_downcast::<gtk::Image>()
+                                {
+                                    placeholder.set_visible(false);
+                                }
+                            }
+                        }
+                        tile.imp().visual_loaded.set(true);
+                    }
+                }
+                FolderThumbnailAsyncResult::Missing => {
+                    if still_bound {
+                        if let Some(bound) = tile.imp().photo.borrow().as_ref() {
+                            bound.set_thumbnail_available(false);
+                        }
+                        tile.imp().visual_loaded.set(true);
+                    }
+                    crate::thumbnail::request_priority(
+                        source_path.clone(),
+                        Some(mtime),
+                        Some(size_bytes),
+                    );
+                }
+                FolderThumbnailAsyncResult::Failed => {
+                    if still_bound {
+                        tile.imp().visual_loaded.set(true);
+                    }
+                }
+            }
+            glib::ControlFlow::Break
+        });
+
+        true
     }
 
     /// Load the final viewport thumbnail after Folder scrolling settles.
@@ -1005,8 +1167,23 @@ enum FolderRowKind {
 /// One Folder model photo row is exactly one visual line. This keeps row
 /// geometry stable and lets GtkListView own virtualization without a nested
 /// FlowBox wrapping a variable number of internal rows.
+const FOLDER_HEADER_HEIGHT: i32 = 58;
+
 fn folder_chunk_size(columns: u32) -> usize {
     columns.max(1) as usize
+}
+
+/// Exact vertical offset for a virtual Folder row. Folder mode deliberately
+/// gives every model row a fixed height, so we do not need GtkListView's
+/// estimated far-row position when restoring an anchor after a column change.
+fn folder_row_offset(rows: &[FolderVirtualRow], target_row: usize, tile_height: i32) -> f64 {
+    rows.iter()
+        .take(target_row)
+        .map(|row| match row.kind {
+            FolderRowKind::Header => FOLDER_HEADER_HEIGHT,
+            FolderRowKind::Photos => folder_line_height(tile_height),
+        } as f64)
+        .sum()
 }
 
 #[derive(Clone, Default)]
@@ -1622,7 +1799,7 @@ impl Gallery {
 
             match data.kind {
                 FolderRowKind::Header => {
-                    let header_height = 58;
+                    let header_height = FOLDER_HEADER_HEIGHT;
                     if row_root.height_request() != header_height {
                         row_root.set_height_request(header_height);
                     }
@@ -2015,6 +2192,11 @@ impl Gallery {
         let Some(row) = self.folder_row_index_for_photo(photo_id) else {
             return;
         };
+        let exact_offset = {
+            let ranges = self.group_ranges.borrow();
+            let rows = folder_virtual_rows(&ranges, folder_chunk_size(self.current_columns.get()));
+            folder_row_offset(&rows, row as usize, self.tile_height.get())
+        };
         let root = self.folder_root.clone();
         let generation = self.folder_scroll_generation.clone();
         let request = generation.get().wrapping_add(1);
@@ -2032,7 +2214,33 @@ impl Gallery {
             {
                 return;
             }
-            root.scroll_to(row, gtk::ListScrollFlags::NONE, None);
+            // Every Folder row has a fixed model height. Position the viewport
+            // directly instead of asking GtkListView to estimate the offset of
+            // a far, unrealized row. The old scroll_to() path visibly landed
+            // about a row away first and then snapped into place on later
+            // allocation frames.
+            if let Some(adjustment) = root.vadjustment() {
+                let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+                adjustment.set_value(exact_offset.clamp(adjustment.lower(), upper));
+                if trace {
+                    eprintln!(
+                        "UI PERF folder_zoom_anchor_exact row={row} target={:.0} after={:.0}",
+                        exact_offset,
+                        adjustment.value()
+                    );
+                }
+
+                // Exact virtual-row positioning succeeded. Do not run the old
+                // bounds-based settle loop afterwards: GTK can report transient
+                // tile bounds for a few frames after a rebuild, which causes the
+                // small visible "rebound" even though the exact anchor is already
+                // correct.
+                pending.set(false);
+                reframe_photo.set(None);
+                return;
+            }
+            // Exact positioning was unavailable. Fall back to the older
+            // allocation/bounds correction path below.
             // An idle after another idle does NOT guarantee a GTK allocation.
             // Wait for a frame to lay out the rebuilt/rebound rows before using
             // their bounds; otherwise the old coordinates move us to another row.
@@ -2581,8 +2789,9 @@ impl Gallery {
     /// prioritised so they are already in RAM when they scroll into view, which
     /// is what stops the "blank then pop in" flicker during fast scrolling.
     ///
-    /// Each warm may perform cache-file I/O, so callers use a bounded budget.
-    /// The hot ListView bind path stays strictly RAM-only.
+    /// Cache-file I/O and JPEG decode are queued on bounded worker threads;
+    /// only texture creation/application returns to GTK. The hot ListView bind
+    /// path stays strictly RAM-only.
     pub fn prefetch_folder_cached_tiles(&self, budget: usize, direction: f64) -> usize {
         if budget == 0
             || self.group_mode.get() != GroupMode::Folder
@@ -2639,8 +2848,9 @@ impl Gallery {
         let candidate_count = candidates.len();
         let mut loaded = 0usize;
         for (_, tile) in candidates.into_iter().take(budget) {
-            tile.load_folder_cached_visual();
-            loaded += 1;
+            if tile.queue_folder_cached_visual_async() {
+                loaded += 1;
+            }
         }
         if let Some(started) = started {
             let ms = started.elapsed().as_millis();
@@ -4691,6 +4901,20 @@ mod folder_stream_tests {
             "overlapping column changes lost the original anchor"
         );
         window.close();
+    }
+
+    #[test]
+    fn exact_folder_row_offset_uses_fixed_model_heights() {
+        let rows = vec![
+            FolderVirtualRow { kind: FolderRowKind::Header, start: 0, end: 0 },
+            FolderVirtualRow { kind: FolderRowKind::Photos, start: 0, end: 5 },
+            FolderVirtualRow { kind: FolderRowKind::Photos, start: 5, end: 10 },
+            FolderVirtualRow { kind: FolderRowKind::Header, start: 10, end: 10 },
+            FolderVirtualRow { kind: FolderRowKind::Photos, start: 10, end: 15 },
+        ];
+
+        // Header 58 + two 100px photo lines + header 58.
+        assert_eq!(super::folder_row_offset(&rows, 4, 88), 316.0);
     }
 
     fn sample_ranges() -> Vec<GroupRange> {

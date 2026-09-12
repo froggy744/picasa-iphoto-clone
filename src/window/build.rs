@@ -1594,9 +1594,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 let direction = folder_scroll_direction_for_event.get();
                 // Run frequently and warm a decent batch so fast scrolling does
                 // not outrun the RAM cache and leave visible blanks.
-                glib::timeout_add_local_once(Duration::from_millis(40), move || {
+                glib::timeout_add_local_once(Duration::from_millis(24), move || {
                     scheduled.set(false);
-                    gallery_for_motion_warm.prefetch_folder_cached_tiles(16, direction);
+                    gallery_for_motion_warm.prefetch_folder_cached_tiles(24, direction);
                 });
             }
             let gallery_for_visible = gallery_for_folder_scroll.clone();
@@ -1607,17 +1607,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 debounce_slot.borrow_mut().take();
                 gallery_for_visible.refresh_visible_folder_tiles();
 
-                // Once the final viewport is painted, gently warm a RAM-only
-                // thumbnail buffer around it. Four cached files per slice is
-                // deliberately small; any new scroll event cancels this source
-                // before the ListView starts moving again.
+                // Once the final viewport is painted, keep warming the RAM
+                // thumbnail buffer around it through the bounded async cache
+                // loader. Any new scroll event cancels this settle source.
                 let gallery_for_prefetch = gallery_for_visible.clone();
                 let prefetch_slot_for_tick = prefetch_slot.clone();
                 let prefetch_source = glib::timeout_add_local(
                     Duration::from_millis(16),
                     move || {
                         let loaded =
-                            gallery_for_prefetch.prefetch_folder_cached_tiles(12, direction_for_settle);
+                            gallery_for_prefetch.prefetch_folder_cached_tiles(24, direction_for_settle);
                         if loaded == 0 {
                             prefetch_slot_for_tick.borrow_mut().take();
                             glib::ControlFlow::Break
