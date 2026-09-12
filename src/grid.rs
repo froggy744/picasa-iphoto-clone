@@ -221,7 +221,10 @@ impl SquareTile {
             return;
         };
         if let Some(badge) = overlay_image(&frame, "favorite-badge") {
-            badge.set_visible(self.imp().favorite_indicators_visible.get() && photo.favorite());
+            let visible = self.imp().favorite_indicators_visible.get() && photo.favorite();
+            if badge.is_visible() != visible {
+                badge.set_visible(visible);
+            }
         }
     }
 
@@ -368,7 +371,20 @@ impl SquareTile {
     /// generation, or render RAW/edit transforms here. Those operations turn
     /// harmless widget recycling into synchronous main-thread work.
     fn bind_photo_folder_fast(&self, photo: &PhotoObject) {
-        self.set_photo_deferred(photo);
+        // Folder bind immediately paints the correct paintable, so replace the
+        // photo in place instead of running the full unload path. The old path
+        // cleared the paintable and toggled CSS on every recycled tile, which
+        // invalidated GTK's style tree for the whole realized list on each
+        // scroll frame (measured: gtk_css_node_validate_internal dominated).
+        let same_photo = self
+            .imp()
+            .photo
+            .borrow()
+            .as_ref()
+            .is_some_and(|current| current.id() == photo.id());
+        if !same_photo {
+            self.imp().photo.replace(Some(photo.clone()));
+        }
 
         let Some(bound) = self.imp().photo.borrow().as_ref().cloned() else {
             return;
@@ -390,32 +406,51 @@ impl SquareTile {
             .and_then(folder_thumbnail_cache_get);
         if let Some(paintable) = memory_hit.as_ref() {
             picture.set_paintable(Some(paintable));
-            picture.remove_css_class("missing-thumbnail");
+            if picture.has_css_class("missing-thumbnail") {
+                picture.remove_css_class("missing-thumbnail");
+            }
         } else {
             picture.set_paintable(gtk::gdk::Paintable::NONE);
-            picture.add_css_class("missing-thumbnail");
+            if !picture.has_css_class("missing-thumbnail") {
+                picture.add_css_class("missing-thumbnail");
+            }
         }
-        picture.set_tooltip_text(Some(&bound.filename()));
 
         if let Some(badge) = frame.last_child().and_downcast::<gtk::Button>() {
             let unavailable = !bound.original_available();
-            badge.set_visible(unavailable);
-            badge.set_tooltip_text(if unavailable {
+            if badge.is_visible() != unavailable {
+                badge.set_visible(unavailable);
+            }
+            let tip = if unavailable {
                 Some("Original photo unavailable")
             } else {
                 None
-            });
+            };
+            if badge.tooltip_text().as_deref() != tip {
+                badge.set_tooltip_text(tip);
+            }
         }
         if let Some(badge) = overlay_image(&frame, "favorite-badge") {
-            badge.set_visible(self.imp().favorite_indicators_visible.get() && bound.favorite());
+            let visible = self.imp().favorite_indicators_visible.get() && bound.favorite();
+            if badge.is_visible() != visible {
+                badge.set_visible(visible);
+            }
         }
         if let Some(badge) = overlay_image(&frame, "edited-badge") {
             let edited = !crate::edit::EditRecipe::decode(&bound.edit_recipe()).is_default();
-            badge.set_visible(edited);
-            badge.set_tooltip_text(if edited { Some("Edited") } else { None });
+            if badge.is_visible() != edited {
+                badge.set_visible(edited);
+            }
+            let tip = if edited { Some("Edited") } else { None };
+            if badge.tooltip_text().as_deref() != tip {
+                badge.set_tooltip_text(tip);
+            }
         }
         if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
-            placeholder.set_visible(memory_hit.is_none());
+            let visible = memory_hit.is_none();
+            if placeholder.is_visible() != visible {
+                placeholder.set_visible(visible);
+            }
         }
         self.imp().visual_loaded.set(memory_hit.is_some());
     }
@@ -426,9 +461,6 @@ impl SquareTile {
     /// called for only the small near-viewport set, never for every ListView
     /// bind. Pixel transforms remain forbidden on the GTK thread.
     fn load_folder_cached_visual(&self) {
-        if self.imp().visual_loaded.get() {
-            return;
-        }
         let trace = std::env::var_os("PICASA_TRACE").is_some();
         let started = trace.then(Instant::now);
         let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
@@ -440,12 +472,23 @@ impl SquareTile {
         let Some(picture) = frame.child().and_downcast::<gtk::Picture>() else {
             return;
         };
+        // Tooltip setup is deceptively expensive in GTK (it can trigger widget
+        // picking and CSS work), so it is deliberately kept out of the
+        // per-scroll bind path and applied once the viewport settles. Tooltips
+        // are only useful when the pointer can hover, which means scrolling has
+        // stopped.
+        let filename = photo.filename();
+        if picture.tooltip_text().as_deref() != Some(filename.as_str()) {
+            picture.set_tooltip_text(Some(&filename));
+        }
+        if self.imp().visual_loaded.get() {
+            return;
+        }
 
         if let Some(path) = photo.cached_thumbnail_path() {
             if let Some(paintable) = folder_thumbnail_cache_get(&path) {
                 picture.set_paintable(Some(&paintable));
                 picture.remove_css_class("missing-thumbnail");
-                picture.set_tooltip_text(Some(&photo.filename()));
                 if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
                     placeholder.set_visible(false);
                 }
@@ -484,7 +527,6 @@ impl SquareTile {
             );
         }
 
-        picture.set_tooltip_text(Some(&photo.filename()));
         if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
             placeholder.set_visible(existing.is_none());
         }
@@ -545,11 +587,14 @@ impl SquareTile {
         // Opacity is the real on/off switch via CSS, so make the badge visible
         // again here or recycled tiles lose their indicator.
         if let Some(badge) = overlay_image(&frame, "selection-badge") {
-            badge.set_visible(true);
+            if !badge.is_visible() {
+                badge.set_visible(true);
+            }
         }
-        if selected {
+        let has_class = frame.has_css_class("folder-photo-selected");
+        if selected && !has_class {
             frame.add_css_class("folder-photo-selected");
-        } else {
+        } else if !selected && has_class {
             frame.remove_css_class("folder-photo-selected");
         }
     }
@@ -1487,7 +1532,10 @@ impl Gallery {
             };
             let data = row.data();
 
-            row_root.set_widget_name(&format!("picasa-folder-row-{}", data.folder_id));
+            let row_name = format!("picasa-folder-row-{}", data.folder_id);
+            if row_root.widget_name() != row_name {
+                row_root.set_widget_name(&row_name);
+            }
             let Some(header) = row_root.first_child().and_downcast::<gtk::Box>() else {
                 return;
             };
@@ -1497,38 +1545,72 @@ impl Gallery {
 
             match data.kind {
                 FolderRowKind::Header => {
-                    row_root.set_height_request(58);
-                    header.set_visible(true);
-                    photo_line.set_visible(false);
+                    let header_height = 58;
+                    if row_root.height_request() != header_height {
+                        row_root.set_height_request(header_height);
+                    }
+                    if !header.is_visible() {
+                        header.set_visible(true);
+                    }
+                    if photo_line.is_visible() {
+                        photo_line.set_visible(false);
+                    }
                     for tile in box_tiles(&photo_line) {
-                        tile.clear_photo();
-                        tile.set_opacity(1.0);
-                        tile.set_can_target(false);
-                        tile.set_visible(false);
+                        if tile.imp().photo.borrow().is_some() {
+                            tile.clear_photo();
+                        }
+                        if tile.opacity() != 1.0 {
+                            tile.set_opacity(1.0);
+                        }
+                        if tile.can_target() {
+                            tile.set_can_target(false);
+                        }
+                        if tile.is_visible() {
+                            tile.set_visible(false);
+                        }
                     }
                     if let Some(title) = find_named_label(header.upcast_ref(), "picasa-folder-section-title") {
-                        title.set_text(&data.label);
-                        title.set_tooltip_text(Some(&data.folder_path));
+                        if title.text().as_str() != data.label {
+                            title.set_text(&data.label);
+                        }
+                        if title.tooltip_text().as_deref() != Some(data.folder_path.as_str()) {
+                            title.set_tooltip_text(Some(&data.folder_path));
+                        }
                     }
                     if let Some(count) = find_named_label(header.upcast_ref(), "picasa-folder-section-count") {
-                        count.set_text(&format!(
+                        let count_text = format!(
                             "{} {}",
                             format_count(data.count),
                             if data.count == 1 { "photo" } else { "photos" }
-                        ));
+                        );
+                        if count.text().as_str() != count_text {
+                            count.set_text(&count_text);
+                        }
                     }
-                    if list_item.position() == 0 {
-                        header.add_css_class("first-folder-section-header");
-                        header.set_margin_top(10);
-                    } else {
-                        header.remove_css_class("first-folder-section-header");
-                        header.set_margin_top(26);
+                    let is_first = list_item.position() == 0;
+                    if header.has_css_class("first-folder-section-header") != is_first {
+                        if is_first {
+                            header.add_css_class("first-folder-section-header");
+                        } else {
+                            header.remove_css_class("first-folder-section-header");
+                        }
+                    }
+                    let first_margin = if is_first { 10 } else { 26 };
+                    if header.margin_top() != first_margin {
+                        header.set_margin_top(first_margin);
                     }
                 }
                 FolderRowKind::Photos => {
-                    header.set_visible(false);
-                    photo_line.set_visible(true);
-                    row_root.set_height_request(folder_line_height(tile_height_for_folder_bind.get()));
+                    if header.is_visible() {
+                        header.set_visible(false);
+                    }
+                    if !photo_line.is_visible() {
+                        photo_line.set_visible(true);
+                    }
+                    let line_height = folder_line_height(tile_height_for_folder_bind.get());
+                    if row_root.height_request() != line_height {
+                        row_root.set_height_request(line_height);
+                    }
 
                     let row_photos = {
                         let photos = current_photos_for_folder_bind.borrow();
@@ -1551,21 +1633,35 @@ impl Gallery {
 
                     for (slot, tile) in tiles.iter().enumerate() {
                         if slot >= slot_count {
-                            tile.clear_photo();
-                            tile.set_opacity(1.0);
-                            tile.set_can_target(false);
-                            tile.set_visible(false);
+                            if tile.imp().photo.borrow().is_some() {
+                                tile.clear_photo();
+                            }
+                            if tile.opacity() != 1.0 {
+                                tile.set_opacity(1.0);
+                            }
+                            if tile.can_target() {
+                                tile.set_can_target(false);
+                            }
+                            if tile.is_visible() {
+                                tile.set_visible(false);
+                            }
                             continue;
                         }
 
-                        tile.set_visible(true);
+                        if !tile.is_visible() {
+                            tile.set_visible(true);
+                        }
                         tile.set_tile_size(
                             tile_width_for_folder_bind.get(),
                             tile_height_for_folder_bind.get(),
                         );
                         if let Some(photo) = row_photos.get(slot) {
-                            tile.set_opacity(1.0);
-                            tile.set_can_target(true);
+                            if tile.opacity() != 1.0 {
+                                tile.set_opacity(1.0);
+                            }
+                            if !tile.can_target() {
+                                tile.set_can_target(true);
+                            }
                             tile.bind_photo_folder_fast(photo);
                             tile.set_manual_selected(
                                 selected_ids_for_folder_bind.borrow().contains(&photo.id()),
@@ -1574,9 +1670,15 @@ impl Gallery {
                             // Hidden widgets do not participate in GtkBox layout.
                             // Keep an allocated transparent slot so a short final
                             // line preserves the exact same column geometry.
-                            tile.clear_photo();
-                            tile.set_opacity(0.0);
-                            tile.set_can_target(false);
+                            if tile.imp().photo.borrow().is_some() {
+                                tile.clear_photo();
+                            }
+                            if tile.opacity() != 0.0 {
+                                tile.set_opacity(0.0);
+                            }
+                            if tile.can_target() {
+                                tile.set_can_target(false);
+                            }
                         }
                     }
                 }
@@ -2306,8 +2408,11 @@ impl Gallery {
         }
 
         let viewport = self.folder_root.height() as f32;
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let started = trace.then(Instant::now);
         let mut tiles = Vec::new();
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        let realized = tiles.len();
         let mut candidates: Vec<(f32, SquareTile)> = Vec::new();
 
         for tile in tiles {
@@ -2347,10 +2452,20 @@ impl Gallery {
         }
 
         candidates.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let candidate_count = candidates.len();
         let mut loaded = 0usize;
         for (_, tile) in candidates.into_iter().take(budget) {
             tile.load_folder_cached_visual();
             loaded += 1;
+        }
+        if let Some(started) = started {
+            let ms = started.elapsed().as_millis();
+            if ms >= 8 {
+                eprintln!(
+                    "UI PERF folder_prefetch_slow realized={} candidates={} loaded={} ms={}",
+                    realized, candidate_count, loaded, ms
+                );
+            }
         }
         loaded
     }
