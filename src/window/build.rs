@@ -733,6 +733,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }) as Rc<dyn Fn(i64, bool)>
     };
     let settings_albums_refresh = albums_home_refresh_slot.clone();
+    let settings_folder_watch_changed_for_settings = settings_folder_watch_changed.clone();
     let present_settings: Rc<dyn Fn(Option<&'static str>)> = Rc::new(move |initial_page| {
         let connection = settings_connection.clone();
         let gallery = settings_gallery.clone();
@@ -742,7 +743,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let lightbox = settings_lightbox.clone();
         let sidebar = settings_sidebar.clone();
         let on_unavailable = settings_on_unavailable.clone();
-        let folder_watch_changed = settings_folder_watch_changed.clone();
+        let folder_watch_changed = settings_folder_watch_changed_for_settings.clone();
         let theme_connection = settings_connection.clone();
         let theme_albums_refresh = settings_albums_refresh.clone();
         settings_window.present(
@@ -2192,6 +2193,27 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         show_error(
                             context.info.root.upcast_ref(),
                             "Could not update folder favourites",
+                            &error.to_string(),
+                        );
+                    }
+                }
+            })
+        },
+        {
+            let connection = connection.clone();
+            let folder_watch_changed = settings_folder_watch_changed.clone();
+            let refresh = availability_refresh.clone();
+            let parent: gtk::Widget = window.clone().upcast();
+            Rc::new(move |folder: db::Folder, watched: bool| {
+                match db::set_folder_watched(&connection.borrow(), folder.id, watched) {
+                    Ok(()) => {
+                        folder_watch_changed(folder.id, watched);
+                        refresh();
+                    }
+                    Err(error) => {
+                        show_error(
+                            &parent,
+                            "Could not update folder watching",
                             &error.to_string(),
                         );
                     }
