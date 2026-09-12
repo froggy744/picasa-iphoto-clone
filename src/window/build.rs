@@ -117,24 +117,45 @@ fn install_smooth_gallery_scroll(
     // grid. The folder view is a GtkListView; during upward scrolling it
     // performs anchor corrections that look like external adjustment jumps.
     // Cancelling on those corrections breaks/warps the smooth wheel animation.
-    if !quantize_to_pixels {
+    // Cancel a pending wheel spring when the adjustment moves by an amount we
+    // did not animate to. The sensitivity differs by view:
+    //
+    // - GridView has no scroll anchor corrections, so any movement we did not
+    //   make is external and cancels immediately (2 px tolerance).
+    // - GtkListView performs sub-row anchor corrections while scrolling, which
+    //   must NOT cancel the spring. Only a jump larger than roughly half a
+    //   viewport (a programmatic folder navigation, selection scroll, or model
+    //   swap) is treated as external. Without this, a stale wheel target fought
+    //   the programmatic scroll and produced a large snap (measured 592 px).
+    {
         let target = target.clone();
         let velocity = velocity.clone();
         let active = active.clone();
         let last_animation_value = last_animation_value.clone();
+        let stall_frames = stall_frames.clone();
+        let last_error_abs = last_error_abs.clone();
         adjustment.connect_value_changed(move |adjustment| {
             let value = adjustment.value();
             if active.get() {
                 let animated = last_animation_value.get();
-                if animated.is_finite() && (value - animated).abs() <= 2.0 {
+                let threshold = if quantize_to_pixels {
+                    (adjustment.page_size() * 0.5).max(200.0)
+                } else {
+                    2.0
+                };
+                if animated.is_finite() && (value - animated).abs() <= threshold {
                     return;
                 }
-                // A large adjustment jump while the wheel spring is active is
-                // user/native scrolling (for example dragging the scrollbar).
-                // Cancel the stale wheel target without treating GTK's tiny
-                // anchor corrections as external input.
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "UI PERF smooth_scroll_external_cancel value={:.2} animated={:.2} threshold={:.2}",
+                        value, animated, threshold
+                    );
+                }
                 active.set(false);
                 velocity.set(0.0);
+                stall_frames.set(0);
+                last_error_abs.set(f64::INFINITY);
             }
             target.set(value);
         });
