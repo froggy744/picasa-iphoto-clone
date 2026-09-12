@@ -81,6 +81,30 @@ fn install_smooth_gallery_scroll(
     let velocity = Rc::new(Cell::new(0.0_f64));
     let active = Rc::new(Cell::new(false));
     let last_frame_us = Rc::new(Cell::new(0_i64));
+    let last_animation_value = Rc::new(Cell::new(f64::NAN));
+
+    {
+        let target = target.clone();
+        let velocity = velocity.clone();
+        let active = active.clone();
+        let last_animation_value = last_animation_value.clone();
+        adjustment.connect_value_changed(move |adjustment| {
+            let value = adjustment.value();
+            if active.get() {
+                let animated = last_animation_value.get();
+                if animated.is_finite() && (value - animated).abs() <= 2.0 {
+                    return;
+                }
+                // A large adjustment jump while the wheel spring is active is
+                // user/native scrolling (for example dragging the scrollbar).
+                // Cancel the stale wheel target without treating GTK's tiny
+                // ListView anchor corrections as external input.
+                active.set(false);
+                velocity.set(0.0);
+            }
+            target.set(value);
+        });
+    }
 
     {
         let adjustment = adjustment.clone();
@@ -88,6 +112,7 @@ fn install_smooth_gallery_scroll(
         let velocity = velocity.clone();
         let active = active.clone();
         let last_frame_us = last_frame_us.clone();
+        let last_animation_value = last_animation_value.clone();
         scrolled.add_tick_callback(move |_, clock| {
             let now = clock.frame_time();
             let previous = last_frame_us.replace(now);
@@ -114,6 +139,7 @@ fn install_smooth_gallery_scroll(
             let mut speed = velocity.get();
 
             if error.abs() <= STOP_DISTANCE_PX && speed.abs() <= STOP_SPEED_PX_S {
+                last_animation_value.set(destination);
                 adjustment.set_value(destination);
                 velocity.set(0.0);
                 active.set(false);
@@ -134,6 +160,7 @@ fn install_smooth_gallery_scroll(
             // Avoid sending a no-op value back through GtkListView's anchor
             // machinery on every frame.
             if (next - current).abs() > f64::EPSILON {
+                last_animation_value.set(next);
                 adjustment.set_value(next);
             }
             velocity.set(speed);
