@@ -160,18 +160,20 @@ pub fn build(
         });
     }
 
-    // The Library section stays fixed; Albums and Folders share one scrollable
-    // region below it, so a long album list can never push the folders off
-    // screen and both scroll together as one list.
+    // The Library section stays fixed. Albums and Folders headings are kept
+    // outside their row scrollers so each behaves like a sticky section header
+    // while its rows scroll underneath it.
     let sections_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     sections_box.set_hexpand(true);
     let sections_scroll = gtk::ScrolledWindow::new();
     sections_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     sections_scroll.set_hexpand(true);
-    sections_scroll.set_vexpand(true);
+    sections_scroll.set_vexpand(false);
+    sections_scroll.set_propagate_natural_height(true);
+    sections_scroll.set_max_content_height(220);
     sections_scroll.set_child(Some(&sections_box));
 
-    // ALBUMS: collapsible rows inside the shared scroll region.
+    // ALBUMS: sticky heading plus bounded scrolling album rows.
     let (album_heading, album_indicator) = collapsible_heading(
         "Albums",
         Some(on_create_album.clone()),
@@ -182,15 +184,18 @@ pub fn build(
             Rc::new(move || on_filter(SidebarFilter::Albums))
         }),
     );
-    sections_box.append(&album_heading);
+    album_heading.add_css_class("sidebar-sticky-heading");
 
     let album_list = section_list();
     connect_filter_list(&album_list, on_filter.clone(), filter_syncing.clone());
+    sections_box.append(&album_list);
+
     let album_revealer = gtk::Revealer::new();
     album_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     album_revealer.set_reveal_child(true);
-    album_revealer.set_child(Some(&album_list));
-    sections_box.append(&album_revealer);
+    album_revealer.set_hexpand(true);
+    album_revealer.set_vexpand(false);
+    album_revealer.set_child(Some(&sections_scroll));
 
     {
         let state = state.clone();
@@ -233,7 +238,7 @@ pub fn build(
         album_heading.add_controller(double_click);
     }
 
-    // FOLDERS: heading plus the folder tree, all inside the shared scroll.
+    // FOLDERS: sticky heading plus an independently scrollable folder tree.
     let (folder_heading, folder_indicator) = collapsible_heading(
         "Folders",
         Some(on_import_folder.clone()),
@@ -241,6 +246,7 @@ pub fn build(
         true,
         None,
     );
+    folder_heading.add_css_class("sidebar-sticky-heading");
 
     let folder_mode_toggle = gtk::Button::from_icon_name(match folder_display_mode {
         FolderDisplayMode::Tree => "folder-symbolic",
@@ -254,17 +260,26 @@ pub fn build(
     // button. It changes presentation only; scanner/database scope is untouched.
     folder_heading.insert_child_after(&folder_mode_toggle, Some(&folder_indicator));
 
-    sections_box.append(&folder_heading);
+    root.append(&album_heading);
+    root.append(&album_revealer);
+    root.append(&folder_heading);
 
     let folder_list = section_list();
     connect_filter_list(&folder_list, on_filter, filter_syncing.clone());
+
+    let folder_scroll = gtk::ScrolledWindow::new();
+    folder_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    folder_scroll.set_hexpand(true);
+    folder_scroll.set_vexpand(true);
+    folder_scroll.set_child(Some(&folder_list));
 
     let folder_revealer = gtk::Revealer::new();
     folder_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     folder_revealer.set_reveal_child(true);
     folder_revealer.set_hexpand(true);
-    folder_revealer.set_child(Some(&folder_list));
-    sections_box.append(&folder_revealer);
+    folder_revealer.set_vexpand(true);
+    folder_revealer.set_child(Some(&folder_scroll));
+    root.append(&folder_revealer);
 
     {
         let state = state.clone();
@@ -305,8 +320,6 @@ pub fn build(
         });
         folder_heading.add_controller(double_click);
     }
-
-    root.append(&sections_scroll);
 
     {
         let list = folder_list.clone();
@@ -349,7 +362,7 @@ pub fn build(
         outer.set_data(ALBUM_REVEALER_KEY, album_revealer);
         outer.set_data(ALBUM_INDICATOR_KEY, album_indicator);
         outer.set_data(FOLDER_LIST_KEY, folder_list);
-        outer.set_data(FOLDER_SCROLL_KEY, sections_scroll);
+        outer.set_data(FOLDER_SCROLL_KEY, folder_scroll);
         outer.set_data(FOLDER_REVEALER_KEY, folder_revealer);
         outer.set_data(FOLDER_INDICATOR_KEY, folder_indicator);
         outer.set_data(FILTER_SYNCING_KEY, filter_syncing);
