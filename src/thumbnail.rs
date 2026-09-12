@@ -48,12 +48,26 @@ const PRIORITY_NEWEST_DISPATCHES: usize = 7;
 const PRIORITY_HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn priority_trace(event: &str, path: &str, destination: &Path) {
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "THUMB PRIORITY {event} path={path} cache={}",
-            destination.display()
-        );
+    if std::env::var_os("PICASA_TRACE").is_none() {
+        return;
     }
+    // Per-photo skip traces are emitted from the GTK main thread whenever a
+    // settled viewport tile probes a missing/known-bad original. A single
+    // scroll pass can emit thousands of lines, and synchronous stderr writes
+    // then become part of the scroll workload. Keep them behind the verbose
+    // opt-in; queue/queue_len summaries remain on the normal trace flag.
+    match event {
+        "skip_known_bad" | "skip_existing" | "skip_offline" | "skip_pending" => {
+            if std::env::var_os("PICASA_TRACE_VERBOSE").is_none() {
+                return;
+            }
+        }
+        _ => {}
+    }
+    eprintln!(
+        "THUMB PRIORITY {event} path={path} cache={}",
+        destination.display()
+    );
 }
 
 fn cache_entry_in_flight(destination: &Path) -> bool {

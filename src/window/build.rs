@@ -82,6 +82,12 @@ fn install_smooth_gallery_scroll(
     let active = Rc::new(Cell::new(false));
     let last_frame_us = Rc::new(Cell::new(0_i64));
     let last_animation_value = Rc::new(Cell::new(f64::NAN));
+    // Counts consecutive frames where the spring error does not shrink. GTK's
+    // ListView anchor corrections can pin the adjustment between two quantized
+    // values, which previously left the animation looping "up and down" until
+    // an unrelated click/scroll reset it.
+    let stall_frames = Rc::new(Cell::new(0_u32));
+    let last_error_abs = Rc::new(Cell::new(f64::INFINITY));
     // A scrollbar drag begins with a button press, unlike mouse-wheel motion.
     // Cancel any old wheel spring immediately so the scrollbar cannot be pulled
     // back toward a stale target. This is especially important for folder
@@ -92,6 +98,8 @@ fn install_smooth_gallery_scroll(
         let target = target.clone();
         let velocity = velocity.clone();
         let active = active.clone();
+        let last_error_abs = last_error_abs.clone();
+        let stall_frames = stall_frames.clone();
         let click = gtk::GestureClick::new();
         click.set_button(0);
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -99,6 +107,8 @@ fn install_smooth_gallery_scroll(
             active.set(false);
             velocity.set(0.0);
             target.set(adjustment.value());
+            stall_frames.set(0);
+            last_error_abs.set(f64::INFINITY);
         });
         scrolled.add_controller(click);
     }
@@ -137,12 +147,16 @@ fn install_smooth_gallery_scroll(
         let active = active.clone();
         let last_frame_us = last_frame_us.clone();
         let last_animation_value = last_animation_value.clone();
+        let stall_frames = stall_frames.clone();
+        let last_error_abs = last_error_abs.clone();
         scrolled.add_tick_callback(move |_, clock| {
             let now = clock.frame_time();
             let previous = last_frame_us.replace(now);
 
             if !active.get() {
                 velocity.set(0.0);
+                stall_frames.set(0);
+                last_error_abs.set(f64::INFINITY);
                 return glib::ControlFlow::Continue;
             }
 
@@ -167,27 +181,82 @@ fn install_smooth_gallery_scroll(
                 adjustment.set_value(destination);
                 velocity.set(0.0);
                 active.set(false);
+                stall_frames.set(0);
+                last_error_abs.set(f64::INFINITY);
                 return glib::ControlFlow::Continue;
             }
 
             // Critically damped spring: smooth acceleration into the movement
-            // and smooth deceleration at the target, without overshoot.
+            // and smooth deceleration at the target. Clamp overshoot explicitly:
+            // GtkListView can quantize/anchor-correct folder scrolling, and a
+            // tiny spring overshoot around the destination can otherwise look
+            // like the view is stuck bouncing up/down until the next click.
             let acceleration = SPRING * error - DAMPING * speed;
             speed += acceleration * dt;
-            let next = (current + speed * dt).clamp(lower, upper);
+            let proposed = (current + speed * dt).clamp(lower, upper);
+            let overshot = (destination - current).signum() != 0.0
+                && (destination - proposed).signum() != (destination - current).signum();
+            if overshot {
+                last_animation_value.set(destination);
+                adjustment.set_value(destination);
+                velocity.set(0.0);
+                active.set(false);
+                return glib::ControlFlow::Continue;
+            }
+
             let next = if quantize_to_pixels {
-                next.round().clamp(lower, upper)
+                proposed.round().clamp(lower, upper)
             } else {
-                next
+                proposed
             };
 
             // Avoid sending a no-op value back through GtkListView's anchor
-            // machinery on every frame.
-            if (next - current).abs() > f64::EPSILON {
+            // machinery on every frame. If pixel quantization leaves us within
+            // one device pixel of the destination, finish the animation instead
+            // of accumulating velocity against an unmoving adjustment.
+            let moved = (next - current).abs() > f64::EPSILON;
+            if moved {
                 last_animation_value.set(next);
                 adjustment.set_value(next);
+            } else if quantize_to_pixels && error.abs() <= 1.0 {
+                last_animation_value.set(destination);
+                adjustment.set_value(destination);
+                velocity.set(0.0);
+                active.set(false);
+                stall_frames.set(0);
+                last_error_abs.set(f64::INFINITY);
+                return glib::ControlFlow::Continue;
             }
             velocity.set(speed);
+
+            // Stall guard: when GTK pins the adjustment (anchor correction, or
+            // the scrollable range shrinking as recycled rows are unbound), the
+            // absolute error stops shrinking and the spring oscillates without
+            // converging. Detect that and finish deterministically instead of
+            // leaving the view stuck until the next click/scroll.
+            let error_abs = error.abs();
+            let progressed = error_abs < last_error_abs.get() - 0.05;
+            last_error_abs.set(error_abs);
+            if progressed {
+                stall_frames.set(0);
+            } else {
+                let stalled = stall_frames.get().saturating_add(1);
+                stall_frames.set(stalled);
+                if stalled >= 8 {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!(
+                            "UI PERF smooth_scroll_stall destination={:.2} current={:.2} error={:.2}",
+                            destination, current, error_abs
+                        );
+                    }
+                    last_animation_value.set(destination);
+                    adjustment.set_value(destination);
+                    velocity.set(0.0);
+                    active.set(false);
+                    stall_frames.set(0);
+                    last_error_abs.set(f64::INFINITY);
+                }
+            }
             glib::ControlFlow::Continue
         });
     }
@@ -199,6 +268,7 @@ fn install_smooth_gallery_scroll(
     let target_for_scroll = target.clone();
     let velocity_for_scroll = velocity.clone();
     let active_for_scroll = active.clone();
+    let last_error_abs_for_scroll = last_error_abs.clone();
     controller.connect_scroll(move |controller, _, dy| {
         if controller
             .current_event_state()
@@ -258,6 +328,9 @@ fn install_smooth_gallery_scroll(
                 } else {
                     destination
                 });
+                // New input is a fresh convergence attempt; clear the stall
+                // history so the first frame cannot be mistaken for a stall.
+                last_error_abs_for_scroll.set(f64::INFINITY);
                 active_for_scroll.set(true);
                 glib::Propagation::Stop
             }
@@ -1438,6 +1511,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let folder_thumbnail_prefetch: Rc<RefCell<Option<glib::SourceId>>> =
         Rc::new(RefCell::new(None));
     let folder_thumbnail_prefetch_for_event = folder_thumbnail_prefetch.clone();
+    // The settled loader paints the final viewport after motion stops, but a
+    // long scrollbar drag/wheel run can otherwise show blanks indefinitely
+    // because every movement cancels the 90 ms settle timer. Warm a tiny batch
+    // during sustained motion so thumbnails progressively appear without
+    // returning heavy I/O to every ListView bind.
+    let folder_thumbnail_motion_warm_scheduled = Rc::new(Cell::new(false));
+    let folder_thumbnail_motion_warm_for_event = folder_thumbnail_motion_warm_scheduled.clone();
     let scroll_handler_calls = Rc::new(Cell::new(0u64));
     let scroll_handler_calls_for_event = scroll_handler_calls.clone();
     folder_scroll
@@ -1459,12 +1539,23 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             gallery_for_folder_scroll.update_group_header_for_scroll(scroll_y);
 
             // Cancel the previous settle callback and arm a new one. Only the
-            // final viewport after ~90 ms of idle motion gets thumbnail I/O.
+            // final viewport after ~90 ms of idle motion gets a full visible
+            // refresh. During sustained scrolling, separately warm a tiny
+            // budgeted batch so the viewport does not remain blank until the
+            // user fully stops.
             if let Some(source) = folder_thumbnail_debounce_for_event.borrow_mut().take() {
                 source.remove();
             }
             if let Some(source) = folder_thumbnail_prefetch_for_event.borrow_mut().take() {
                 source.remove();
+            }
+            if !folder_thumbnail_motion_warm_for_event.replace(true) {
+                let gallery_for_motion_warm = gallery_for_folder_scroll.clone();
+                let scheduled = folder_thumbnail_motion_warm_for_event.clone();
+                glib::timeout_add_local_once(Duration::from_millis(120), move || {
+                    scheduled.set(false);
+                    gallery_for_motion_warm.prefetch_folder_cached_tiles(8);
+                });
             }
             let gallery_for_visible = gallery_for_folder_scroll.clone();
             let debounce_slot = folder_thumbnail_debounce_for_event.clone();
@@ -2116,17 +2207,38 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             glib::timeout_add_local(Duration::from_millis(25), move || {
                 let attempt = attempts_for_timer.get() + 1;
                 attempts_for_timer.set(attempt);
-                if gallery.select_photo(photo_id) && first_success_for_timer.get().is_none() {
+                // While the Folder stream is still building, do NOT scan the
+                // growing model: select_photo is O(photos), and calling it
+                // every 25 ms starves the very idle build that would create the
+                // target row (measured: build stalled at 40k/66k for 20 s).
+                // Wait for the build to finish, then select once per tick.
+                let building = gallery.stream_building();
+                let revealed = if building {
+                    false
+                } else {
+                    gallery.select_photo(photo_id)
+                };
+                if revealed && first_success_for_timer.get().is_none() {
                     first_success_for_timer.set(Some(attempt));
                 }
 
-                // Folder navigation can start while the previous search/result
-                // model still contains the target photo. A too-early success
-                // can therefore be against the old model, before the full
-                // Folder stream has replaced it. Keep re-applying the target
-                // for a fixed settling window so the final select happens after
-                // the folder refresh/progressive rebuild and any header scroll.
-                if first_success_for_timer.get().is_some() && attempt >= 80 || attempt >= 240 {
+                let settled = first_success_for_timer
+                    .get()
+                    .is_some_and(|success| attempt.saturating_sub(success) >= 24);
+                // Keep retrying until the stream is fully built AND the target
+                // has stayed selected for a short settling window. The hard
+                // limit is only a safety net for genuinely missing photos.
+                if (!building && settled) || attempt >= 800 {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!(
+                            "UI TRACE open_in_folder_done id={} attempt={} building={} first_success={:?} revealed={}",
+                            photo_id,
+                            attempt,
+                            building,
+                            first_success_for_timer.get(),
+                            revealed
+                        );
+                    }
                     glib::ControlFlow::Break
                 } else {
                     glib::ControlFlow::Continue
@@ -2144,7 +2256,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     let attempt = sidebar_attempts_for_timer.get() + 1;
                     sidebar_attempts_for_timer.set(attempt);
                     sidebar::scroll_to_folder(&sidebar, folder_id);
-                    if attempt >= 12 {
+                    if attempt >= 24 {
                         glib::ControlFlow::Break
                     } else {
                         glib::ControlFlow::Continue

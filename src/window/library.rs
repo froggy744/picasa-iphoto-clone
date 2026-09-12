@@ -149,19 +149,37 @@ fn scroll_gallery_to_folder_when_ready(
     folder_id: i64,
     folder_path: String,
 ) {
-    let attempts = Rc::new(Cell::new(0u32));
-    let attempts_for_timer = attempts.clone();
+    let total_attempts = Rc::new(Cell::new(0u32));
+    // Counts only the attempts made after the progressive stream finished.
+    // While rows are still being built, the target folder may legitimately not
+    // exist yet, so those attempts must not count toward giving up.
+    let settled_attempts = Rc::new(Cell::new(0u32));
+    let total_for_timer = total_attempts.clone();
+    let settled_for_timer = settled_attempts.clone();
     glib::timeout_add_local(Duration::from_millis(25), move || {
-        attempts_for_timer.set(attempts_for_timer.get() + 1);
-        if gallery.scroll_to_folder(folder_id, &folder_path) {
-            glib::ControlFlow::Break
-        } else if attempts_for_timer.get() >= 240 {
-            // Six seconds is intentionally generous for a very large library
-            // using progressive ListStore replacement. A missing/empty folder
-            // simply leaves the current scroll position unchanged.
+        total_for_timer.set(total_for_timer.get() + 1);
+        // scroll_to_folder scans the whole photo model. Calling it every 25 ms
+        // while the progressive Folder stream is still being built starves that
+        // very build, so wait for it to finish before scanning at all.
+        if gallery.stream_building() {
+            if total_for_timer.get() >= 1200 {
+                // Hard safety net (30 s) for a build that never completes.
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        } else if gallery.scroll_to_folder(folder_id, &folder_path) {
             glib::ControlFlow::Break
         } else {
-            glib::ControlFlow::Continue
+            let settled = settled_for_timer.get() + 1;
+            settled_for_timer.set(settled);
+            if settled >= 240 {
+                // Six seconds after the Folder stream is fully built is
+                // generous; a missing/empty folder leaves the position as-is.
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
         }
     });
 }

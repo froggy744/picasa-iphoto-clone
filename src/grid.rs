@@ -1055,6 +1055,11 @@ pub struct Gallery {
     tile_height: Rc<Cell<i32>>,
     current_photos: Rc<RefCell<Vec<PhotoObject>>>,
     replace_generation: Rc<Cell<u64>>,
+    // True while a progressive gallery replacement is still building batches.
+    // Folder navigation relies on this to keep retrying until the virtualized
+    // Folder rows actually exist, instead of stopping as soon as the backing
+    // photo store contains the target id.
+    stream_building: Rc<Cell<bool>>,
     group_mode: Rc<Cell<GroupMode>>,
     group_date: Rc<Cell<GroupDate>>,
     group_ranges: Rc<RefCell<Vec<GroupRange>>>,
@@ -1655,6 +1660,7 @@ impl Gallery {
             tile_height,
             current_photos,
             replace_generation: Rc::new(Cell::new(0)),
+            stream_building: Rc::new(Cell::new(false)),
             group_mode: Rc::new(Cell::new(GroupMode::None)),
             group_date: Rc::new(Cell::new(GroupDate::Taken)),
             group_ranges: Rc::new(RefCell::new(Vec::new())),
@@ -2473,6 +2479,10 @@ impl Gallery {
         let profile_started = crate::diagnostics::refresh_started(photos.len());
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
+        // Assume a build is in progress until each completion path clears it.
+        // Callers such as folder navigation wait on this so they do not give
+        // up while the virtualized Folder rows are still being constructed.
+        self.stream_building.set(true);
         let unchanged = {
             let current = self.current_photos.borrow();
             current.len() == photos.len()
@@ -2498,6 +2508,7 @@ impl Gallery {
                     started.elapsed().as_millis()
                 );
             }
+            self.stream_building.set(false);
             return;
         }
 
@@ -2553,6 +2564,7 @@ impl Gallery {
                 );
             }
             crate::diagnostics::refresh_finished(profile_started, reordered.len());
+            self.stream_building.set(false);
             return;
         }
 
@@ -2603,6 +2615,7 @@ impl Gallery {
             );
         }
         crate::diagnostics::refresh_finished(profile_started, objects.len());
+        self.stream_building.set(false);
     }
 
     fn replace_progressive(
@@ -2611,7 +2624,11 @@ impl Gallery {
         generation: u64,
         profile_started: Option<Instant>,
     ) {
-        const BATCH_SIZE: usize = 500;
+        // Larger batches finish the model build in far fewer main-loop hops.
+        // Each hop is scheduled at idle priority, so with 500-photo batches a
+        // 66k stream needed 133 hops and could take >20 s of wall time even
+        // though the actual construction work was under a second.
+        const BATCH_SIZE: usize = 2_000;
 
         let photos = Rc::new(photos);
         let offset = Rc::new(Cell::new(0usize));
@@ -2635,18 +2652,27 @@ impl Gallery {
         let folder_order = self.folder_order.clone();
         let folder_root = self.folder_root.clone();
         let replace_generation = self.replace_generation.clone();
+        let stream_building = self.stream_building.clone();
 
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let build_started = trace.then(Instant::now);
         glib::idle_add_local(move || {
             if replace_generation.get() != generation {
                 return glib::ControlFlow::Break;
             }
 
+            let batch_started = trace.then(Instant::now);
             let start = offset.get();
             let end = (start + BATCH_SIZE).min(photos.len());
+            let create_started = trace.then(Instant::now);
             let objects: Vec<PhotoObject> = photos[start..end]
                 .iter()
                 .map(PhotoObject::from_photo)
                 .collect();
+            let create_ms = create_started
+                .map(|value| value.elapsed().as_millis())
+                .unwrap_or(0);
+            let splice_started = trace.then(Instant::now);
             offset.set(end);
 
             if !initialized.replace(true) {
@@ -2659,6 +2685,26 @@ impl Gallery {
             } else {
                 current_photos.borrow_mut().extend(objects.iter().cloned());
                 store.splice(store.n_items(), 0, &objects);
+            }
+
+            if let (Some(batch_started), Some(splice_started)) = (batch_started, splice_started)
+            {
+                let splice_ms = splice_started.elapsed().as_millis();
+                let total_ms = batch_started.elapsed().as_millis();
+                // Log sparsely so the trace itself does not dominate the build.
+                if end == photos.len() || end % 10000 == 0 {
+                    eprintln!(
+                        "UI PERF progressive offset={} size={} create_ms={} splice_ms={} batch_ms={} wall_ms={}",
+                        end,
+                        photos.len(),
+                        create_ms,
+                        splice_ms,
+                        total_ms,
+                        build_started
+                            .map(|value| value.elapsed().as_millis())
+                            .unwrap_or(0)
+                    );
+                }
             }
 
             if end >= photos.len() {
@@ -2710,6 +2756,17 @@ impl Gallery {
                     profile_started,
                     current_photos.borrow().len(),
                 );
+                if let Some(value) = build_started {
+                    eprintln!(
+                        "UI PERF progressive_done photos={} wall_ms={} folder_rows={}",
+                        current_photos.borrow().len(),
+                        value.elapsed().as_millis(),
+                        folder_store.n_items()
+                    );
+                }
+                // Folder rows (and therefore folder navigation targets) only
+                // exist once every batch has been applied.
+                stream_building.set(false);
                 glib::ControlFlow::Break
             }
         });
@@ -3056,6 +3113,13 @@ impl Gallery {
         }
     }
 
+    /// True while the gallery is still constructing a progressive replacement.
+    /// Folder navigation uses this to keep retrying folder/photo reveal until
+    /// the virtualized Folder rows exist.
+    pub fn stream_building(&self) -> bool {
+        self.stream_building.get()
+    }
+
     pub fn select_photo(&self, photo_id: i64) -> bool {
         let Some(model) = self.selection.model() else {
             return false;
@@ -3068,20 +3132,27 @@ impl Gallery {
             if !matches {
                 continue;
             }
-            self.selection.select_item(position, true);
             if self.group_mode.get() == GroupMode::Folder {
-                if let Some(row) = self.folder_row_index_for_photo(photo_id) {
-                    self.folder_root
-                        .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
-                }
+                // The backing store is filled progressively, but the Folder
+                // ListView rows are only built once the whole stream is ready.
+                // Selecting the photo is safe early, but report success only
+                // when the row exists so callers keep retrying instead of
+                // leaving the user parked at the folder header/wrong row.
+                self.selection.select_item(position, true);
+                let Some(row) = self.folder_row_index_for_photo(photo_id) else {
+                    return false;
+                };
+                self.folder_root
+                    .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
                 self.focus_folder_tile(photo_id);
-            } else {
-                self.root.scroll_to(
-                    position,
-                    gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
-                    None,
-                );
+                return true;
             }
+            self.selection.select_item(position, true);
+            self.root.scroll_to(
+                position,
+                gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                None,
+            );
             return true;
         }
         false
