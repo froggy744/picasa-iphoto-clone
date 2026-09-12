@@ -82,8 +82,32 @@ fn install_smooth_gallery_scroll(
     let active = Rc::new(Cell::new(false));
     let last_frame_us = Rc::new(Cell::new(0_i64));
     let last_animation_value = Rc::new(Cell::new(f64::NAN));
-
+    // A scrollbar drag begins with a button press, unlike mouse-wheel motion.
+    // Cancel any old wheel spring immediately so the scrollbar cannot be pulled
+    // back toward a stale target. This is especially important for folder
+    // GtkListView, where value-change based detection conflicts with GTK's own
+    // scroll-anchor corrections.
     {
+        let adjustment = adjustment.clone();
+        let target = target.clone();
+        let velocity = velocity.clone();
+        let active = active.clone();
+        let click = gtk::GestureClick::new();
+        click.set_button(0);
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        click.connect_pressed(move |_, _, _, _| {
+            active.set(false);
+            velocity.set(0.0);
+            target.set(adjustment.value());
+        });
+        scrolled.add_controller(click);
+    }
+
+    // Keep the value-change stale-target protection only on the ordinary photo
+    // grid. The folder view is a GtkListView; during upward scrolling it
+    // performs anchor corrections that look like external adjustment jumps.
+    // Cancelling on those corrections breaks/warps the smooth wheel animation.
+    if !quantize_to_pixels {
         let target = target.clone();
         let velocity = velocity.clone();
         let active = active.clone();
@@ -98,7 +122,7 @@ fn install_smooth_gallery_scroll(
                 // A large adjustment jump while the wheel spring is active is
                 // user/native scrolling (for example dragging the scrollbar).
                 // Cancel the stale wheel target without treating GTK's tiny
-                // ListView anchor corrections as external input.
+                // anchor corrections as external input.
                 active.set(false);
                 velocity.set(0.0);
             }
@@ -1542,7 +1566,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     }
 
     install_smooth_gallery_scroll(&grid_scroll, gallery.clone(), true);
-    install_gallery_zoom_scroll(&folder_scroll, gallery.clone());
+    install_smooth_gallery_scroll(&folder_scroll, gallery.clone(), true);
 
     // While the sidebar divider is being dragged, keep the gallery column
     // count fixed. Otherwise every few pixels can cross a column threshold
