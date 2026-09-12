@@ -835,6 +835,20 @@ struct GroupRange {
     folder_id: i64,
 }
 
+/// A fully built Folder stream kept alive between view switches.
+///
+/// The Folder virtual rows in `folder_store` reference photos by index and the
+/// shared selection model reads them through `store`, so keeping the exact
+/// PhotoObjects plus their group ranges lets re-entering Folder mode reuse an
+/// already populated model instead of rebuilding ~12k rows with GTK.
+#[derive(Clone)]
+struct FolderStreamCache {
+    photos: Vec<PhotoObject>,
+    ranges: Vec<GroupRange>,
+    columns: u32,
+    order: Vec<i64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum FolderRowKind {
     #[default]
@@ -1038,6 +1052,9 @@ pub struct Gallery {
     group_title: gtk::Label,
     group_count: gtk::Label,
     folder_store: gio::ListStore,
+    // Reusable Folder stream. Populated whenever the Folder rows are rebuilt
+    // and restored when re-entering Folder mode so Open in Folder is instant.
+    folder_cache: Rc<RefCell<Option<FolderStreamCache>>>,
     // Presentation-only Folder section order. This must never reorder the
     // shared Library photo model. Empty means use the natural range order.
     folder_order: Rc<RefCell<Vec<i64>>>,
@@ -1645,6 +1662,7 @@ impl Gallery {
             group_title,
             group_count,
             folder_store,
+            folder_cache: Rc::new(RefCell::new(None)),
             folder_order: Rc::new(RefCell::new(Vec::new())),
             folder_view_changed: Rc::new(RefCell::new(None)),
             selected,
@@ -1839,7 +1857,7 @@ impl Gallery {
             self.group_header.set_visible(false);
             self.group_title.set_text("");
             self.group_count.set_text("");
-            if old_mode != GroupMode::Folder {
+            if old_mode != GroupMode::Folder && !self.restore_folder_cache() {
                 // The current model may still contain All Photos/Favourites in
                 // a global date order. Do not briefly render that as hundreds
                 // of false folder sections while the correctly ordered Folder
@@ -1945,6 +1963,50 @@ impl Gallery {
             &self.folder_order,
             &self.folder_store,
         );
+        self.save_folder_cache();
+    }
+
+    /// Remember the current Folder stream so re-entering Folder mode can reuse
+    /// the already built PhotoObjects and virtual rows.
+    fn save_folder_cache(&self) {
+        if self.group_mode.get() != GroupMode::Folder {
+            return;
+        }
+        save_folder_cache_for(
+            &self.folder_cache,
+            &self.current_photos,
+            &self.group_ranges,
+            &self.current_columns,
+            &self.folder_order,
+        );
+    }
+
+    /// Restore a previously built Folder stream when re-entering Folder mode.
+    ///
+    /// Returns true when the cached rows can be reused as-is (tile geometry and
+    /// section order unchanged), in which case `folder_store` must not be
+    /// cleared. The Folder rows reference the restored PhotoObjects by index and
+    /// `selection` reads them through `store`, so both must be replaced.
+    fn restore_folder_cache(&self) -> bool {
+        let Some(cache) = self.folder_cache.borrow().clone() else {
+            return false;
+        };
+        if cache.columns != self.current_columns.get()
+            || cache.order != *self.folder_order.borrow()
+        {
+            return false;
+        }
+        self.current_photos.replace(cache.photos.clone());
+        self.group_ranges.replace(cache.ranges.clone());
+        self.store.splice(0, self.store.n_items(), &cache.photos);
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "UI PERF folder_cache_restore photos={} rows={}",
+                cache.photos.len(),
+                self.folder_store.n_items()
+            );
+        }
+        true
     }
 
     /// Reorder only the Folder presentation to match a new sidebar tree mode.
@@ -2661,6 +2723,7 @@ impl Gallery {
         let tile_height = self.tile_height.clone();
         let folder_store = self.folder_store.clone();
         let folder_order = self.folder_order.clone();
+        let folder_cache = self.folder_cache.clone();
         let folder_root = self.folder_root.clone();
         let replace_generation = self.replace_generation.clone();
         let stream_building = self.stream_building.clone();
@@ -2732,6 +2795,15 @@ impl Gallery {
                         &folder_order,
                         &folder_store,
                     );
+                    if group_mode.get() == GroupMode::Folder {
+                        save_folder_cache_for(
+                            &folder_cache,
+                            &current_photos,
+                            &group_ranges,
+                            &current_columns,
+                            &folder_order,
+                        );
+                    }
                     if let Some(value) = rows_started {
                         eprintln!(
                             "UI PERF folder_rows_build ranges_ms={} rows_ms={}",
@@ -3358,6 +3430,21 @@ fn ordered_folder_ranges(ranges: &[GroupRange], folder_order: &[i64]) -> Vec<Gro
     let mut ordered = ranges.to_vec();
     ordered.sort_by_key(|range| rank.get(&range.folder_id).copied().unwrap_or(usize::MAX));
     ordered
+}
+
+fn save_folder_cache_for(
+    cache: &Rc<RefCell<Option<FolderStreamCache>>>,
+    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
+    group_ranges: &Rc<RefCell<Vec<GroupRange>>>,
+    current_columns: &Rc<Cell<u32>>,
+    folder_order: &Rc<RefCell<Vec<i64>>>,
+) {
+    cache.replace(Some(FolderStreamCache {
+        photos: current_photos.borrow().clone(),
+        ranges: group_ranges.borrow().clone(),
+        columns: current_columns.get(),
+        order: folder_order.borrow().clone(),
+    }));
 }
 
 fn rebuild_folder_rows_for(
