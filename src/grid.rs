@@ -36,7 +36,8 @@ const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 256;
 // the user scrolls through nearby photos. Motion prefetch fills this cache off
 // the GTK thread; the ListView bind itself remains RAM-only.
 const FOLDER_THUMBNAIL_CACHE_CAPACITY: usize = 512;
-const FOLDER_THUMBNAIL_ASYNC_MAX_IN_FLIGHT: usize = 8;
+const FOLDER_THUMBNAIL_ASYNC_PREFETCH_MAX_IN_FLIGHT: usize = 8;
+const FOLDER_THUMBNAIL_ASYNC_VISIBLE_MAX_IN_FLIGHT: usize = 16;
 
 static FOLDER_THUMBNAIL_ASYNC_IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
@@ -81,12 +82,17 @@ fn folder_thumbnail_cache_insert(path: String, paintable: gtk::gdk::Paintable) {
     });
 }
 
-fn claim_folder_thumbnail_async(path: &str) -> bool {
+fn claim_folder_thumbnail_async(path: &str, visible_priority: bool) -> bool {
     let in_flight = FOLDER_THUMBNAIL_ASYNC_IN_FLIGHT.get_or_init(|| Mutex::new(HashSet::new()));
     let Ok(mut in_flight) = in_flight.lock() else {
         return false;
     };
-    if in_flight.contains(path) || in_flight.len() >= FOLDER_THUMBNAIL_ASYNC_MAX_IN_FLIGHT {
+    let limit = if visible_priority {
+        FOLDER_THUMBNAIL_ASYNC_VISIBLE_MAX_IN_FLIGHT
+    } else {
+        FOLDER_THUMBNAIL_ASYNC_PREFETCH_MAX_IN_FLIGHT
+    };
+    if in_flight.contains(path) || in_flight.len() >= limit {
         return false;
     }
     in_flight.insert(path.to_string());
@@ -532,7 +538,7 @@ impl SquareTile {
     /// loader runs. The bind path remains RAM-only; cache-file probing, JPEG
     /// reading, and decoding happen on a bounded worker set here. The result is
     /// applied only if this recycled tile still represents the same photo.
-    fn queue_folder_cached_visual_async(&self) -> bool {
+    fn queue_folder_cached_visual_async(&self, visible_priority: bool) -> bool {
         let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
             return false;
         };
@@ -559,7 +565,7 @@ impl SquareTile {
             return true;
         }
 
-        if !claim_folder_thumbnail_async(&cached_path) {
+        if !claim_folder_thumbnail_async(&cached_path, visible_priority) {
             return false;
         }
 
@@ -2782,6 +2788,51 @@ impl Gallery {
         }
     }
 
+    /// Queue cached thumbnails for the tiles that are actually visible now.
+    ///
+    /// This is the high-priority fast-scroll path. It may use the reserved
+    /// visible-thumbnail worker capacity even when background prefetch already
+    /// occupies its smaller quota, so a scrollbar jump cannot be blocked by
+    /// thumbnails for rows the user has already passed.
+    pub fn queue_visible_folder_cached_tiles_async(&self, budget: usize) -> usize {
+        if budget == 0
+            || self.group_mode.get() != GroupMode::Folder
+            || self.folder_root.height() <= 0
+        {
+            return 0;
+        }
+
+        let viewport = self.folder_root.height() as f32;
+        let mut tiles = Vec::new();
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        let mut candidates: Vec<(f32, SquareTile)> = Vec::new();
+
+        for tile in tiles {
+            if tile.height() <= 0 || tile.imp().visual_loaded.get() {
+                continue;
+            }
+            let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
+                continue;
+            };
+            let center = bounds.y() + bounds.height() * 0.5;
+            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
+                continue;
+            }
+            // Start near the viewport centre, then fan out. This makes a large
+            // scrollbar jump paint the part the user is looking at first.
+            candidates.push(((center - viewport * 0.5).abs(), tile));
+        }
+
+        candidates.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let mut queued = 0usize;
+        for (_, tile) in candidates.into_iter().take(budget) {
+            if tile.queue_folder_cached_visual_async(true) {
+                queued += 1;
+            }
+        }
+        queued
+    }
+
     /// Warm a RAM thumbnail buffer around the Folder viewport.
     ///
     /// `direction` is the current scroll direction (negative = up, positive =
@@ -2848,7 +2899,7 @@ impl Gallery {
         let candidate_count = candidates.len();
         let mut loaded = 0usize;
         for (_, tile) in candidates.into_iter().take(budget) {
-            if tile.queue_folder_cached_visual_async() {
+            if tile.queue_folder_cached_visual_async(false) {
                 loaded += 1;
             }
         }

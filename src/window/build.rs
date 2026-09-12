@@ -1546,13 +1546,63 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let folder_thumbnail_prefetch: Rc<RefCell<Option<glib::SourceId>>> =
         Rc::new(RefCell::new(None));
     let folder_thumbnail_prefetch_for_event = folder_thumbnail_prefetch.clone();
-    // The settled loader paints the final viewport after motion stops, but a
-    // long scrollbar drag/wheel run can otherwise show blanks indefinitely
-    // because every movement cancels the 90 ms settle timer. Warm a tiny batch
-    // during sustained motion so thumbnails progressively appear without
-    // returning heavy I/O to every ListView bind.
-    let folder_thumbnail_motion_warm_scheduled = Rc::new(Cell::new(false));
-    let folder_thumbnail_motion_warm_for_event = folder_thumbnail_motion_warm_scheduled.clone();
+    // The settled loader paints the final viewport after motion stops. During
+    // active motion, drive thumbnail work from GTK frame ticks instead of a
+    // 16 ms timeout. A timeout can run before GtkListView has rebound/allocated
+    // the rows for a large scrollbar jump, which warms the old viewport and
+    // leaves the new one blank. The short frame pump keeps retrying long enough
+    // for recycled rows and async cache decodes to catch up.
+    const FOLDER_THUMBNAIL_MOTION_PUMP_FRAMES: u8 = 12;
+    let folder_thumbnail_motion_frames = Rc::new(Cell::new(0u8));
+    let folder_thumbnail_motion_frames_for_event = folder_thumbnail_motion_frames.clone();
+    let folder_thumbnail_motion_frames_for_tick = folder_thumbnail_motion_frames.clone();
+    let folder_thumbnail_motion_phase = Rc::new(Cell::new(0u8));
+    let folder_thumbnail_motion_phase_for_tick = folder_thumbnail_motion_phase.clone();
+    let gallery_for_thumbnail_motion_tick = gallery.clone();
+    let folder_scroll_direction_for_tick = folder_scroll_direction.clone();
+    folder_scroll.add_tick_callback(move |_, _| {
+        let frames_left = folder_thumbnail_motion_frames_for_tick.get();
+        if frames_left == 0 {
+            return glib::ControlFlow::Continue;
+        }
+        folder_thumbnail_motion_frames_for_tick.set(frames_left.saturating_sub(1));
+
+        // Always prioritise the tiles actually visible in the frame GTK is
+        // about to paint. queue_visible... uses reserved async capacity, so
+        // stale prefetch requests cannot starve a scrollbar jump.
+        let visible_queued =
+            gallery_for_thumbnail_motion_tick.queue_visible_folder_cached_tiles_async(96);
+
+        // Warming ahead is useful, but doing the larger offscreen scan on every
+        // frame is unnecessary. Run it every third pump frame so visible work
+        // remains dominant and GTK has plenty of time to render.
+        let phase = folder_thumbnail_motion_phase_for_tick
+            .get()
+            .wrapping_add(1);
+        folder_thumbnail_motion_phase_for_tick.set(phase);
+        let ahead_queued = if phase % 3 == 0 {
+            gallery_for_thumbnail_motion_tick.prefetch_folder_cached_tiles(
+                24,
+                folder_scroll_direction_for_tick.get(),
+            )
+        } else {
+            0
+        };
+
+        if std::env::var_os("PICASA_TRACE").is_some()
+            && (visible_queued > 0 || ahead_queued > 0)
+        {
+            eprintln!(
+                "UI PERF folder_motion_thumb_pump visible={} ahead={} frames_left={}",
+                visible_queued,
+                ahead_queued,
+                frames_left.saturating_sub(1)
+            );
+        }
+
+        glib::ControlFlow::Continue
+    });
+
     let scroll_handler_calls = Rc::new(Cell::new(0u64));
     let scroll_handler_calls_for_event = scroll_handler_calls.clone();
     folder_scroll
@@ -1588,17 +1638,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if let Some(source) = folder_thumbnail_prefetch_for_event.borrow_mut().take() {
                 source.remove();
             }
-            if !folder_thumbnail_motion_warm_for_event.replace(true) {
-                let gallery_for_motion_warm = gallery_for_folder_scroll.clone();
-                let scheduled = folder_thumbnail_motion_warm_for_event.clone();
-                let direction = folder_scroll_direction_for_event.get();
-                // Run frequently and warm a decent batch so fast scrolling does
-                // not outrun the RAM cache and leave visible blanks.
-                glib::timeout_add_local_once(Duration::from_millis(24), move || {
-                    scheduled.set(false);
-                    gallery_for_motion_warm.prefetch_folder_cached_tiles(24, direction);
-                });
-            }
+            // Keep a frame-synchronised thumbnail pump alive after every
+            // movement. Re-arming it is cheap and covers wheel/touchpad motion,
+            // kinetic scrolling, and direct scrollbar jumps with the same path.
+            // The pump runs after GtkListView has had frame opportunities to
+            // recycle/rebind rows, so it follows the new viewport instead of a
+            // stale one captured by a wall-clock timeout.
+            folder_thumbnail_motion_frames_for_event
+                .set(FOLDER_THUMBNAIL_MOTION_PUMP_FRAMES);
             let gallery_for_visible = gallery_for_folder_scroll.clone();
             let debounce_slot = folder_thumbnail_debounce_for_event.clone();
             let prefetch_slot = folder_thumbnail_prefetch_for_event.clone();
