@@ -46,7 +46,9 @@ Make forward/backward lightbox scrolling over NEF/RAW feel smooth:
       cache miss, decode queued, decode completed, decode cancelled.
 - [x] Log cache capacity, current size, and evictions.
 - [x] Separate RAW vs non-RAW and edited vs unedited in the miss reason.
-- [ ] Log directional prefetch hit rate (once 3.3 exists).
+- [x] Log directional prefetch hit rate (once 3.3 exists). Cache entries now
+      record whether they came from prefetch, and a hit on one increments
+      `prefetch_used`, so the summary shows prefetch_used vs prefetch_done.
 
 Acceptance: one lightbox session makes it obvious whether time is decode,
 texture upload, cache eviction, or cancellation.

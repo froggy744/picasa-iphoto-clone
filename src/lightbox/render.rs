@@ -204,6 +204,7 @@ fn show_photo(
                         target_width,
                         target_height,
                         texture.clone(),
+                        false,
                     );
                 }
                 if zoom.get() < 0.0 {
@@ -289,6 +290,9 @@ fn display_texture_cache_lookup(
     })?;
     let entry = cache.remove(position)?;
     let texture = entry.texture.clone();
+    if entry.prefetched {
+        LIGHTBOX_STATS.prefetch_used.fetch_add(1, Ordering::Relaxed);
+    }
     cache.push_front(entry);
     LIGHTBOX_STATS.cache_hits.fetch_add(1, Ordering::Relaxed);
     let total: usize = cache.iter().map(|entry| entry.bytes).sum();
@@ -304,6 +308,7 @@ fn display_texture_cache_insert(
     target_width: u32,
     target_height: u32,
     texture: gtk::gdk::MemoryTexture,
+    prefetched: bool,
 ) {
     // RGBA8 footprint of the texture. Used by the byte budget so a large or
     // zoomed viewport cannot cache an unbounded amount of pixel memory.
@@ -326,6 +331,7 @@ fn display_texture_cache_insert(
         target_height,
         texture,
         bytes,
+        prefetched,
     });
     // Evict least-recently-used entries past either the count or the byte
     // budget. Always keep at least one entry so a single oversized texture can
@@ -530,6 +536,7 @@ fn prefetch_display_texture(
             target_width,
             target_height,
             texture,
+            true,
         );
         LIGHTBOX_STATS
             .prefetches_completed

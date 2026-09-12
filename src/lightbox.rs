@@ -96,6 +96,10 @@ struct DisplayTextureCacheEntry {
     texture: gtk::gdk::MemoryTexture,
     // Approximate RGBA footprint, used by the byte budget below.
     bytes: usize,
+    // True when this texture was produced by the directional prefetch rather
+    // than the visible decode. A later hit on a prefetched entry is what makes
+    // prefetch useful, so the two are counted separately.
+    prefetched: bool,
 }
 
 type DisplayTextureCache = Rc<RefCell<VecDeque<DisplayTextureCacheEntry>>>;
@@ -130,6 +134,8 @@ struct LightboxStats {
     decodes_cancelled: AtomicU64,
     prefetches_started: AtomicU64,
     prefetches_completed: AtomicU64,
+    // Cache hits on entries that were produced by prefetch.
+    prefetch_used: AtomicU64,
     evictions: AtomicU64,
     // Gauges, not counters: last observed cache occupancy.
     cache_size: AtomicU64,
@@ -148,6 +154,7 @@ static LIGHTBOX_STATS: LightboxStats = LightboxStats {
     decodes_cancelled: AtomicU64::new(0),
     prefetches_started: AtomicU64::new(0),
     prefetches_completed: AtomicU64::new(0),
+    prefetch_used: AtomicU64::new(0),
     evictions: AtomicU64::new(0),
     cache_size: AtomicU64::new(0),
     cache_bytes: AtomicU64::new(0),
@@ -177,6 +184,7 @@ pub(crate) fn take_lightbox_stats() -> Option<String> {
     let decodes_cancelled = swap(&LIGHTBOX_STATS.decodes_cancelled);
     let prefetches_started = swap(&LIGHTBOX_STATS.prefetches_started);
     let prefetches_completed = swap(&LIGHTBOX_STATS.prefetches_completed);
+    let prefetch_used = swap(&LIGHTBOX_STATS.prefetch_used);
     let evictions = swap(&LIGHTBOX_STATS.evictions);
     if preview_hits == 0
         && cache_hits == 0
@@ -187,6 +195,7 @@ pub(crate) fn take_lightbox_stats() -> Option<String> {
         && decodes_cancelled == 0
         && prefetches_started == 0
         && prefetches_completed == 0
+        && prefetch_used == 0
         && evictions == 0
     {
         return None;
@@ -196,8 +205,8 @@ pub(crate) fn take_lightbox_stats() -> Option<String> {
          miss_raw={cache_misses_raw} miss_edited={cache_misses_edited} \
          queued={decodes_queued} completed={decodes_completed} failed={decodes_failed} \
          cancelled={decodes_cancelled} prefetch_started={prefetches_started} \
-         prefetch_done={prefetches_completed} evictions={evictions} cache_size={} \
-         cache_mb={} capacity={} budget_mb={}",
+         prefetch_done={prefetches_completed} prefetch_used={prefetch_used} \
+         evictions={evictions} cache_size={} cache_mb={} capacity={} budget_mb={}",
         LIGHTBOX_STATS.cache_size.load(Ordering::Relaxed),
         LIGHTBOX_STATS.cache_bytes.load(Ordering::Relaxed) / (1024 * 1024),
         DISPLAY_TEXTURE_CACHE_CAPACITY,
