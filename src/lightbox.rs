@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Condvar, Mutex, OnceLock,
 };
 use std::task::{Context, Poll, Waker};
@@ -99,6 +99,82 @@ struct DisplayTextureCacheEntry {
 type DisplayTextureCache = Rc<RefCell<VecDeque<DisplayTextureCacheEntry>>>;
 
 const DISPLAY_TEXTURE_CACHE_CAPACITY: usize = 8;
+
+/// Phase 3 lightbox performance counters.
+///
+/// Global atomics rather than thread-local state because decode completion and
+/// cancellation happen on worker threads, while cache hits/misses happen on the
+/// GTK main thread. `take_lightbox_stats` drains the counters so the periodic
+/// reporter shows activity only for the interval it covers.
+struct LightboxStats {
+    preview_hits: AtomicU64,
+    cache_hits: AtomicU64,
+    cache_misses: AtomicU64,
+    cache_misses_raw: AtomicU64,
+    cache_misses_edited: AtomicU64,
+    decodes_queued: AtomicU64,
+    decodes_completed: AtomicU64,
+    decodes_failed: AtomicU64,
+    decodes_cancelled: AtomicU64,
+    evictions: AtomicU64,
+    // Gauge, not a counter: last observed cache occupancy.
+    cache_size: AtomicU64,
+}
+
+static LIGHTBOX_STATS: LightboxStats = LightboxStats {
+    preview_hits: AtomicU64::new(0),
+    cache_hits: AtomicU64::new(0),
+    cache_misses: AtomicU64::new(0),
+    cache_misses_raw: AtomicU64::new(0),
+    cache_misses_edited: AtomicU64::new(0),
+    decodes_queued: AtomicU64::new(0),
+    decodes_completed: AtomicU64::new(0),
+    decodes_failed: AtomicU64::new(0),
+    decodes_cancelled: AtomicU64::new(0),
+    evictions: AtomicU64::new(0),
+    cache_size: AtomicU64::new(0),
+};
+
+fn lightbox_cache_size_observed(size: usize) {
+    LIGHTBOX_STATS
+        .cache_size
+        .store(size as u64, Ordering::Relaxed);
+}
+
+/// Drain and format lightbox performance counters. Returns `None` when nothing
+/// happened in the interval, so the reporter stays quiet while idle.
+pub(crate) fn take_lightbox_stats() -> Option<String> {
+    let swap = |cell: &AtomicU64| cell.swap(0, Ordering::Relaxed);
+    let preview_hits = swap(&LIGHTBOX_STATS.preview_hits);
+    let cache_hits = swap(&LIGHTBOX_STATS.cache_hits);
+    let cache_misses = swap(&LIGHTBOX_STATS.cache_misses);
+    let cache_misses_raw = swap(&LIGHTBOX_STATS.cache_misses_raw);
+    let cache_misses_edited = swap(&LIGHTBOX_STATS.cache_misses_edited);
+    let decodes_queued = swap(&LIGHTBOX_STATS.decodes_queued);
+    let decodes_completed = swap(&LIGHTBOX_STATS.decodes_completed);
+    let decodes_failed = swap(&LIGHTBOX_STATS.decodes_failed);
+    let decodes_cancelled = swap(&LIGHTBOX_STATS.decodes_cancelled);
+    let evictions = swap(&LIGHTBOX_STATS.evictions);
+    if preview_hits == 0
+        && cache_hits == 0
+        && cache_misses == 0
+        && decodes_queued == 0
+        && decodes_completed == 0
+        && decodes_failed == 0
+        && decodes_cancelled == 0
+        && evictions == 0
+    {
+        return None;
+    }
+    Some(format!(
+        "preview_hits={preview_hits} cache_hits={cache_hits} cache_misses={cache_misses} \
+         miss_raw={cache_misses_raw} miss_edited={cache_misses_edited} \
+         queued={decodes_queued} completed={decodes_completed} failed={decodes_failed} \
+         cancelled={decodes_cancelled} evictions={evictions} cache_size={} capacity={}",
+        LIGHTBOX_STATS.cache_size.load(Ordering::Relaxed),
+        DISPLAY_TEXTURE_CACHE_CAPACITY
+    ))
+}
 
 struct ResultSlot<T> {
     value: Mutex<Option<T>>,

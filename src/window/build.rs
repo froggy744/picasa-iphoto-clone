@@ -1685,6 +1685,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
             glib::ControlFlow::Continue
         });
+
+        // Phase 3 lightbox counters. Drained every 2 s so a summary is emitted
+        // only while the viewer is actually doing work.
+        glib::timeout_add_local(Duration::from_secs(2), move || {
+            if let Some(summary) = crate::lightbox::take_lightbox_stats() {
+                eprintln!("UI PERF lightbox_activity {summary}");
+            }
+            glib::ControlFlow::Continue
+        });
     }
 
     install_smooth_gallery_scroll(&grid_scroll, gallery.clone(), true);
