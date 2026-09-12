@@ -789,28 +789,28 @@ fn apply_scroll_location(scrolled: &gtk::ScrolledWindow) {
     };
     let mode = state.borrow().folder_display_mode;
     let display_id = match mode {
-        FolderDisplayMode::Tree => folder_id,
+        FolderDisplayMode::Tree => {
+            // Passive scroll-follow must never expand/rebuild the sidebar. If
+            // the exact child row is hidden under a collapsed ancestor, mark
+            // the nearest ancestor that is already rendered instead.
+            if row_for_filter(&list, SidebarFilter::Folder(folder_id)).is_some() {
+                Some(folder_id)
+            } else {
+                folder_ancestor_ids(&folders, folder_id)
+                    .into_iter()
+                    .find(|ancestor_id| {
+                        row_for_filter(&list, SidebarFilter::Folder(*ancestor_id)).is_some()
+                    })
+            }
+        }
         FolderDisplayMode::ImportedOnly => {
-            imported_root_for_folder(&folders, folder_id).unwrap_or(folder_id)
+            Some(imported_root_for_folder(&folders, folder_id).unwrap_or(folder_id))
         }
     };
 
-    if mode == FolderDisplayMode::Tree {
-        let ancestors = folder_ancestor_ids(&folders, folder_id);
-        let changed = {
-            let mut state = state.borrow_mut();
-            let before = state.expanded_folders.len();
-            state.expanded_folders.extend(ancestors);
-            state.expanded_folders.len() != before
-        };
-        if changed {
-            rebuild_folder_list_from_rows(&list, &state);
-            let scrolled = scrolled.clone();
-            glib::idle_add_local_once(move || apply_scroll_location(&scrolled));
-            return;
-        }
-    }
-
+    let Some(display_id) = display_id else {
+        return;
+    };
     let Some(row) = row_for_filter(&list, SidebarFilter::Folder(display_id)) else {
         return;
     };
@@ -1365,10 +1365,18 @@ fn populate_folders(
     }
 
     let roots = children.get(&None).cloned().unwrap_or_default();
-    if std::env::var_os("PICASA_TRACE").is_some() {
+    if std::env::var_os("PICASA_TRACE_VERBOSE").is_some() {
+        let imported_roots = folders.iter().filter(|folder| folder.imported_root).count();
         eprintln!(
-            "FOLDER TRACE sidebar folders={} roots={:?} relationships={:?}",
+            "FOLDER TRACE sidebar folders={} root_count={} imported_roots={}",
             folders.len(),
+            roots.len(),
+            imported_roots
+        );
+    }
+    if std::env::var_os("PICASA_TRACE_VERBOSE").is_some() {
+        eprintln!(
+            "FOLDER TRACE sidebar_detail roots={:?} relationships={:?}",
             roots,
             folders
                 .iter()

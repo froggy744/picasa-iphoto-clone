@@ -51,6 +51,204 @@ fn format_folder_bytes(bytes: u64) -> String {
     }
 }
 
+
+fn install_smooth_gallery_scroll(
+    scrolled: &gtk::ScrolledWindow,
+    gallery: Rc<grid::Gallery>,
+    ctrl_zoom: bool,
+) {
+    // GtkScrolledWindow does not ease normal mouse-wheel detents. Its built-in
+    // kinetic-scrolling property is for touchscreen scrolling. Keep native
+    // touchpad/surface-pixel scrolling, but turn discrete wheel clicks into a
+    // short critically-damped animation of the vertical adjustment.
+    const WHEEL_STEP_PX: f64 = 120.0;
+    const SPRING: f64 = 240.0;
+    const DAMPING: f64 = 31.0;
+    const STOP_DISTANCE_PX: f64 = 0.35;
+    const STOP_SPEED_PX_S: f64 = 4.0;
+
+    // GtkListView keeps its scroll anchor on device-pixel boundaries. Feeding
+    // it fractional adjustment values makes GTK immediately write a rounded
+    // value back, fighting the animation. GridView/ordinary content accepts
+    // fractional values, so only quantize the Folder ListView path.
+    let quantize_to_pixels = scrolled
+        .child()
+        .and_then(|child| child.downcast::<gtk::ListView>().ok())
+        .is_some();
+
+    let adjustment = scrolled.vadjustment();
+    let target = Rc::new(Cell::new(adjustment.value()));
+    let velocity = Rc::new(Cell::new(0.0_f64));
+    let active = Rc::new(Cell::new(false));
+    let last_frame_us = Rc::new(Cell::new(0_i64));
+
+    {
+        let adjustment = adjustment.clone();
+        let target = target.clone();
+        let velocity = velocity.clone();
+        let active = active.clone();
+        let last_frame_us = last_frame_us.clone();
+        scrolled.add_tick_callback(move |_, clock| {
+            let now = clock.frame_time();
+            let previous = last_frame_us.replace(now);
+
+            if !active.get() {
+                velocity.set(0.0);
+                return glib::ControlFlow::Continue;
+            }
+
+            if previous <= 0 || now <= previous {
+                return glib::ControlFlow::Continue;
+            }
+
+            // Frame times are microseconds. Clamp long frames so a temporary
+            // stall cannot make the spring jump past its destination.
+            let dt = ((now - previous) as f64 / 1_000_000.0).clamp(1.0 / 240.0, 0.033);
+            let lower = adjustment.lower();
+            let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
+            let destination = target.get().clamp(lower, upper);
+            target.set(destination);
+
+            let current = adjustment.value().clamp(lower, upper);
+            let error = destination - current;
+            let mut speed = velocity.get();
+
+            if error.abs() <= STOP_DISTANCE_PX && speed.abs() <= STOP_SPEED_PX_S {
+                adjustment.set_value(destination);
+                velocity.set(0.0);
+                active.set(false);
+                return glib::ControlFlow::Continue;
+            }
+
+            // Critically damped spring: smooth acceleration into the movement
+            // and smooth deceleration at the target, without overshoot.
+            let acceleration = SPRING * error - DAMPING * speed;
+            speed += acceleration * dt;
+            let next = (current + speed * dt).clamp(lower, upper);
+            let next = if quantize_to_pixels {
+                next.round().clamp(lower, upper)
+            } else {
+                next
+            };
+
+            // Avoid sending a no-op value back through GtkListView's anchor
+            // machinery on every frame.
+            if (next - current).abs() > f64::EPSILON {
+                adjustment.set_value(next);
+            }
+            velocity.set(speed);
+            glib::ControlFlow::Continue
+        });
+    }
+
+    let controller = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+    let adjustment_for_scroll = adjustment.clone();
+    let target_for_scroll = target.clone();
+    let velocity_for_scroll = velocity.clone();
+    let active_for_scroll = active.clone();
+    controller.connect_scroll(move |controller, _, dy| {
+        if controller
+            .current_event_state()
+            .contains(gtk::gdk::ModifierType::CONTROL_MASK)
+        {
+            active_for_scroll.set(false);
+            velocity_for_scroll.set(0.0);
+            target_for_scroll.set(adjustment_for_scroll.value());
+
+            if ctrl_zoom {
+                if dy < 0.0 {
+                    gallery.zoom_in();
+                } else if dy > 0.0 {
+                    gallery.zoom_out();
+                }
+                return glib::Propagation::Stop;
+            }
+
+            // Albums home has no thumbnail-zoom action. Preserve the normal
+            // Ctrl+wheel behavior instead of zooming the hidden photo grid.
+            return glib::Propagation::Proceed;
+        }
+
+        if dy == 0.0 {
+            return glib::Propagation::Proceed;
+        }
+
+        match controller.unit() {
+            gtk::gdk::ScrollUnit::Wheel => {
+                let lower = adjustment_for_scroll.lower();
+                let upper = (adjustment_for_scroll.upper()
+                    - adjustment_for_scroll.page_size())
+                    .max(lower);
+
+                let current = adjustment_for_scroll.value().clamp(lower, upper);
+                let delta = dy * WHEEL_STEP_PX;
+                let pending = target_for_scroll.get() - current;
+                let reversing = active_for_scroll.get()
+                    && pending.abs() > STOP_DISTANCE_PX
+                    && pending.signum() != delta.signum();
+
+                // Rapid clicks in the same direction accumulate naturally. If
+                // the wheel reverses direction, however, do not make the user
+                // first consume the old queued destination: reverse NOW from
+                // the current viewport and discard the old spring velocity.
+                let base = if reversing {
+                    velocity_for_scroll.set(0.0);
+                    current
+                } else if active_for_scroll.get() {
+                    target_for_scroll.get()
+                } else {
+                    current
+                };
+                let destination = (base + delta).clamp(lower, upper);
+                target_for_scroll.set(if quantize_to_pixels {
+                    destination.round().clamp(lower, upper)
+                } else {
+                    destination
+                });
+                active_for_scroll.set(true);
+                glib::Propagation::Stop
+            }
+            gtk::gdk::ScrollUnit::Surface => {
+                // Precision touchpads already provide pixel deltas. Let GTK
+                // consume them directly so native touchpad scrolling is kept.
+                active_for_scroll.set(false);
+                velocity_for_scroll.set(0.0);
+                target_for_scroll.set(adjustment_for_scroll.value());
+                glib::Propagation::Proceed
+            }
+            _ => glib::Propagation::Proceed,
+        }
+    });
+
+    scrolled.add_controller(controller);
+}
+
+
+fn install_gallery_zoom_scroll(scrolled: &gtk::ScrolledWindow, gallery: Rc<grid::Gallery>) {
+    // Folder mode deliberately leaves ordinary wheel/touchpad/scrollbar input
+    // entirely to GTK. Only Ctrl+wheel is intercepted for thumbnail zoom.
+    let controller = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    controller.connect_scroll(move |controller, _, dy| {
+        if !controller
+            .current_event_state()
+            .contains(gtk::gdk::ModifierType::CONTROL_MASK)
+        {
+            return glib::Propagation::Proceed;
+        }
+
+        if dy < 0.0 {
+            gallery.zoom_in();
+        } else if dy > 0.0 {
+            gallery.zoom_out();
+        }
+        glib::Propagation::Stop
+    });
+    scrolled.add_controller(controller);
+}
+
 pub fn build(app: &adw::Application, connection: Connection) -> adw::ApplicationWindow {
     let build_started = Instant::now();
     let window = adw::ApplicationWindow::new(app);
@@ -1148,12 +1346,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     gallery_scroll_stack.add_named(&folder_scroll, Some("folders"));
     {
         let gallery_scroll_stack = gallery_scroll_stack.clone();
+        let gallery_for_folder_view = gallery.clone();
         gallery.set_folder_view_changed_handler(move |folder_mode| {
             gallery_scroll_stack.set_visible_child_name(if folder_mode {
                 "folders"
             } else {
                 "grid"
             });
+            if folder_mode {
+                // The Folder model rebuild is synchronous. This timeout runs
+                // after that work returns to GTK and paints only the final
+                // visible viewport instead of every intermediate bound row.
+                let gallery = gallery_for_folder_view.clone();
+                glib::timeout_add_local_once(Duration::from_millis(90), move || {
+                    gallery.refresh_visible_folder_tiles();
+                });
+            }
         });
     }
 
@@ -1167,6 +1375,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let gallery_for_folder_scroll = gallery.clone();
     let sidebar_for_scroll_location = sidebar_selection_slot.clone();
     let filter_for_scroll_location = filter.clone();
+    let folder_follow_scheduled = Rc::new(Cell::new(false));
+    let latest_folder_scroll_y = Rc::new(Cell::new(0.0_f64));
+    // Thumbnail loading is intentionally debounced until Folder motion stops.
+    // GtkListView may rebind thousands of intermediate rows during a scrollbar
+    // jump; loading thumbnails from each bind is pure wasted main-thread work.
+    let folder_thumbnail_debounce: Rc<RefCell<Option<glib::SourceId>>> =
+        Rc::new(RefCell::new(None));
+    let folder_thumbnail_debounce_for_event = folder_thumbnail_debounce.clone();
+    let folder_thumbnail_prefetch: Rc<RefCell<Option<glib::SourceId>>> =
+        Rc::new(RefCell::new(None));
+    let folder_thumbnail_prefetch_for_event = folder_thumbnail_prefetch.clone();
     let scroll_handler_calls = Rc::new(Cell::new(0u64));
     let scroll_handler_calls_for_event = scroll_handler_calls.clone();
     folder_scroll
@@ -1179,99 +1398,123 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     .set(scroll_handler_calls_for_event.get().wrapping_add(1));
             }
             let scroll_y = adjustment.value();
-            // This stores the active adjustment for view restoration. Folder
-            // mode deliberately has no external/sticky group heading.
-            let header_started = trace.then(Instant::now);
-            gallery_for_folder_scroll.update_group_header_for_scroll(scroll_y);
-            let header_ms = header_started
-                .map(|started| started.elapsed().as_millis())
-                .unwrap_or(0);
+            latest_folder_scroll_y.set(scroll_y);
 
-            // Sidebar follow is Folder-mode only. It is visual tracking, not
-            // navigation: changing the highlighted row must never reload the
-            // continuous stream.
-            let mut sidebar_ms = 0u128;
+            // Keep only the cheap position bookkeeping in the raw adjustment
+            // callback. Widget picking and sidebar work are throttled below so
+            // wheel/touchpad/scrollbar motion cannot spend a frame walking GTK
+            // widgets merely to update a visual location marker.
+            gallery_for_folder_scroll.update_group_header_for_scroll(scroll_y);
+
+            // Cancel the previous settle callback and arm a new one. Only the
+            // final viewport after ~90 ms of idle motion gets thumbnail I/O.
+            if let Some(source) = folder_thumbnail_debounce_for_event.borrow_mut().take() {
+                source.remove();
+            }
+            if let Some(source) = folder_thumbnail_prefetch_for_event.borrow_mut().take() {
+                source.remove();
+            }
+            let gallery_for_visible = gallery_for_folder_scroll.clone();
+            let debounce_slot = folder_thumbnail_debounce_for_event.clone();
+            let prefetch_slot = folder_thumbnail_prefetch_for_event.clone();
+            let source = glib::timeout_add_local(Duration::from_millis(90), move || {
+                debounce_slot.borrow_mut().take();
+                gallery_for_visible.refresh_visible_folder_tiles();
+
+                // Once the final viewport is painted, gently warm a RAM-only
+                // thumbnail buffer around it. Four cached files per slice is
+                // deliberately small; any new scroll event cancels this source
+                // before the ListView starts moving again.
+                let gallery_for_prefetch = gallery_for_visible.clone();
+                let prefetch_slot_for_tick = prefetch_slot.clone();
+                let prefetch_source = glib::timeout_add_local(
+                    Duration::from_millis(16),
+                    move || {
+                        let loaded = gallery_for_prefetch.prefetch_folder_cached_tiles(4);
+                        if loaded == 0 {
+                            prefetch_slot_for_tick.borrow_mut().take();
+                            glib::ControlFlow::Break
+                        } else {
+                            glib::ControlFlow::Continue
+                        }
+                    },
+                );
+                prefetch_slot.replace(Some(prefetch_source));
+                glib::ControlFlow::Break
+            });
+            folder_thumbnail_debounce_for_event.replace(Some(source));
+
             if matches!(
                 filter_for_scroll_location.get(),
                 sidebar::SidebarFilter::Folder(_)
-            ) {
-                let folder_id = gallery_for_folder_scroll
-                    .photo_for_scroll_position(scroll_y)
-                    .map(|photo| photo.folder_id())
-                    .filter(|folder_id| *folder_id > 0);
-                if let Some(folder_id) = folder_id {
-                    filter_for_scroll_location
-                        .set(sidebar::SidebarFilter::Folder(folder_id));
-                }
-                let sidebar_started = trace.then(Instant::now);
-                if let Some(sidebar) = sidebar_for_scroll_location.borrow().as_ref() {
-                    sidebar::set_scroll_location(sidebar, folder_id);
-                }
-                sidebar_ms = sidebar_started
-                    .map(|started| started.elapsed().as_millis())
-                    .unwrap_or(0);
+            ) && !folder_follow_scheduled.replace(true)
+            {
+                let gallery = gallery_for_folder_scroll.clone();
+                let sidebar_slot = sidebar_for_scroll_location.clone();
+                let filter = filter_for_scroll_location.clone();
+                let scheduled = folder_follow_scheduled.clone();
+                let latest_y = latest_folder_scroll_y.clone();
+                glib::timeout_add_local_once(Duration::from_millis(50), move || {
+                    scheduled.set(false);
+                    if !matches!(filter.get(), sidebar::SidebarFilter::Folder(_)) {
+                        return;
+                    }
+
+                    let follow_started = trace.then(Instant::now);
+                    let y = latest_y.get();
+                    let folder_id = gallery.visible_folder_id();
+                    if let Some(sidebar) = sidebar_slot.borrow().as_ref() {
+                        sidebar::set_scroll_location(sidebar, folder_id);
+                    }
+                    if trace {
+                        let (pick_calls, pick_ns, scan_ns) = crate::grid::take_scroll_probe_stats();
+                        let total_ms = follow_started
+                            .map(|started| started.elapsed().as_millis())
+                            .unwrap_or(0);
+                        if total_ms >= 8 || pick_ns / 1_000_000 >= 8 || scan_ns / 1_000_000 >= 8 {
+                            eprintln!(
+                                "UI PERF folder_scroll_follow_slow pick_calls={} pick_ms={} scan_ms={} total_ms={} y={}",
+                                pick_calls,
+                                pick_ns / 1_000_000,
+                                scan_ns / 1_000_000,
+                                total_ms,
+                                y
+                            );
+                        }
+                    }
+                });
             }
 
-            if trace {
-                let (pick_calls, pick_ns, scan_ns) = crate::grid::take_scroll_probe_stats();
-                eprintln!(
-                    "UI PERF scroll_handler pick_calls={} pick_ms={} scan_ms={} header_ms={} sidebar_ms={} total_ms={} y={}",
-                    pick_calls,
-                    pick_ns / 1_000_000,
-                    scan_ns / 1_000_000,
-                    header_ms,
-                    sidebar_ms,
-                    handler_started
-                        .map(|started| started.elapsed().as_millis())
-                        .unwrap_or(0),
-                    scroll_y
-                );
+            if let Some(started) = handler_started {
+                let total_ms = started.elapsed().as_millis();
+                if total_ms >= 8 {
+                    eprintln!(
+                        "UI PERF scroll_handler_slow total_ms={} y={}",
+                        total_ms,
+                        scroll_y
+                    );
+                }
             }
         });
 
     if std::env::var_os("PICASA_TRACE").is_some() {
         let scroll_handler_calls = scroll_handler_calls.clone();
-        glib::timeout_add_local(Duration::from_secs(1), move || {
+        glib::timeout_add_local(Duration::from_secs(2), move || {
             let calls = scroll_handler_calls.replace(0);
-            if calls > 0 {
-                eprintln!("UI PERF scroll_handler_freq calls={calls}");
-            }
             let (loads, reloads, max_ms, fs_ms, apply_ms) =
                 crate::grid::take_thumb_load_stats();
-            if loads > 0 {
+            if calls > 0 || loads > 0 {
                 eprintln!(
-                    "UI PERF thumb_load_freq loads={} reloads={} max_ms={} fs_ms={} apply_ms={}",
-                    loads, reloads, max_ms, fs_ms, apply_ms
+                    "UI PERF folder_activity scroll_calls={} thumb_loads={} reloads={} max_thumb_ms={} fs_ms={} apply_ms={}",
+                    calls, loads, reloads, max_ms, fs_ms, apply_ms
                 );
             }
             glib::ControlFlow::Continue
         });
     }
 
-    let make_zoom_controller = |gallery: Rc<grid::Gallery>| {
-        let controller =
-            gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
-        controller.connect_scroll(move |controller, _, dy| {
-            if controller
-                .current_event_state()
-                .contains(gtk::gdk::ModifierType::CONTROL_MASK)
-            {
-                if dy < 0.0 {
-                    gallery.zoom_in();
-                } else if dy > 0.0 {
-                    gallery.zoom_out();
-                }
-                return glib::Propagation::Stop;
-            }
-
-            // Plain wheel/touchpad input is never intercepted. The current
-            // folder header and the following folder are part of one scroll.
-            glib::Propagation::Proceed
-        });
-        controller
-    };
-    grid_scroll.add_controller(make_zoom_controller(gallery.clone()));
-    folder_scroll.add_controller(make_zoom_controller(gallery.clone()));
+    install_smooth_gallery_scroll(&grid_scroll, gallery.clone(), true);
+    install_gallery_zoom_scroll(&folder_scroll, gallery.clone());
 
     // While the sidebar divider is being dragged, keep the gallery column
     // count fixed. Otherwise every few pixels can cross a column threshold
@@ -1358,6 +1601,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             Rc::new(move || present_settings(Some("themes")))
         },
     );
+    // Albums home is a separate ScrolledWindow, so it needs the same wheel
+    // easing as the photo views. Ctrl+wheel must not zoom the hidden gallery.
+    install_smooth_gallery_scroll(&albums_home, gallery.clone(), false);
     albums_view::connect_create_album(&albums_home, create_album.clone());
     let main_stack = gtk::Stack::new();
     main_stack.set_hexpand(true);
@@ -3194,8 +3440,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .photo-frame { box-shadow: 0 2px 5px rgba(0,0,0,0.62), 0 0 0 1px rgba(255,255,255,0.12); }\
         .photo-tile { border-radius: 7px; border: 2px solid transparent; background: #3a3a3a; transition: border-color 150ms ease, box-shadow 150ms ease; }\
         .photo-tile:hover { border-color: rgba(140,196,237,0.70); box-shadow: 0 3px 10px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.18); }\
-        .folder-photo-flow > flowboxchild { padding: 6px; margin: 0; min-height: 0; background: transparent; background-image: none; box-shadow: none; }\
-        .folder-photo-flow > flowboxchild:hover, .folder-photo-flow > flowboxchild:focus, .folder-photo-flow > flowboxchild:active, .folder-photo-flow > flowboxchild:selected { background: transparent; background-image: none; outline: none; box-shadow: none; }\
+        .folder-photo-line { background: transparent; }\
         .folder-photo-selected.photo-tile { border-color: #78b9e8; box-shadow: 0 0 0 1px #c6e6ff, 0 3px 10px rgba(0,0,0,0.75); }\
         .folder-photo-selected .selection-badge { opacity: 1; }\
         .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }\

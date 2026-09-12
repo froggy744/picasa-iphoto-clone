@@ -29,9 +29,16 @@ const ZOOM_STEP_WIDTH: i32 = 24;
 const DRAG_CLAIM_THRESHOLD: f64 = 6.0;
 
 const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 128;
+// Folder scrolling must never decode or stat thumbnails from the ListView
+// bind callback. Keep a modest RAM LRU of paintables that were loaded by the
+// settled-viewport path so recycled rows can still show an instant thumbnail
+// while the user scrolls through nearby photos.
+const FOLDER_THUMBNAIL_CACHE_CAPACITY: usize = 256;
 
 thread_local! {
     static RAW_THUMBNAIL_CACHE: RefCell<VecDeque<(String, i32, gtk::gdk::Paintable)>> =
+        const { RefCell::new(VecDeque::new()) };
+    static FOLDER_THUMBNAIL_CACHE: RefCell<VecDeque<(String, gtk::gdk::Paintable)>> =
         const { RefCell::new(VecDeque::new()) };
     static SELECTION_POSITION_CALLS: Cell<u64> = const { Cell::new(0) };
     static SCROLL_PROBE_PICK_CALLS: Cell<u64> = const { Cell::new(0) };
@@ -43,6 +50,28 @@ thread_local! {
     static THUMB_LOAD_FS_MS: Cell<u128> = const { Cell::new(0) };
     static THUMB_LOAD_APPLY_MS: Cell<u128> = const { Cell::new(0) };
     static THUMB_LOAD_SEEN: RefCell<HashSet<i64>> = RefCell::new(HashSet::new());
+}
+
+fn folder_thumbnail_cache_get(path: &str) -> Option<gtk::gdk::Paintable> {
+    FOLDER_THUMBNAIL_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let index = cache.iter().position(|(cached_path, _)| cached_path == path)?;
+        let entry = cache.remove(index)?;
+        let paintable = entry.1.clone();
+        cache.push_back(entry);
+        Some(paintable)
+    })
+}
+
+fn folder_thumbnail_cache_insert(path: String, paintable: gtk::gdk::Paintable) {
+    FOLDER_THUMBNAIL_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|(cached_path, _)| cached_path != &path);
+        cache.push_back((path, paintable));
+        while cache.len() > FOLDER_THUMBNAIL_CACHE_CAPACITY {
+            cache.pop_front();
+        }
+    });
 }
 
 pub(crate) fn take_scroll_probe_stats() -> (u64, u128, u128) {
@@ -231,7 +260,7 @@ impl SquareTile {
             cache_hit = available;
             if !available {
                 request_priority = true;
-                if trace {
+                if std::env::var_os("PICASA_TRACE_VERBOSE").is_some() {
                     eprintln!(
                         "THUMB PRIORITY visible_missing thread=main id={} path={} cache={}",
                         photo.id(),
@@ -265,41 +294,54 @@ impl SquareTile {
         if let Some(started) = load_started {
             let total_ms = started.elapsed().as_millis();
             record_thumb_load(photo.id(), total_ms, fs_ms, apply_ms);
-            eprintln!(
-                "UI PERF load_visual id={} fs_ms={} priority_ms={} apply_ms={} total_ms={} cache={}",
-                photo.id(),
-                fs_ms,
-                priority_ms,
-                apply_ms,
-                total_ms,
-                if cache_hit { "hit" } else { "miss" }
-            );
+            // Per-tile tracing can dominate the GTK main thread during a large
+            // ListView jump. Keep the aggregate counters above, but emit an
+            // individual line only when this bind is itself slow enough to be
+            // diagnostically useful.
+            if total_ms >= 12 {
+                let raw = crate::image_format::uses(
+                    &photo.path(),
+                    crate::image_format::DecoderKind::Raw,
+                );
+                let rotation = photo.rotation().rem_euclid(360);
+                let edited = !crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default();
+                let apply_kind = if raw && rotation == 0 && !edited {
+                    "filename"
+                } else if raw {
+                    "raw_transform"
+                } else if rotation != 0 || edited {
+                    "edited_transform"
+                } else {
+                    "filename"
+                };
+                eprintln!(
+                    "UI PERF load_visual_slow id={} fs_ms={} priority_ms={} apply_ms={} total_ms={} cache={} kind={} raw={} rotation={} edited={} path={}",
+                    photo.id(),
+                    fs_ms,
+                    priority_ms,
+                    apply_ms,
+                    total_ms,
+                    if cache_hit { "hit" } else { "miss" },
+                    apply_kind,
+                    raw,
+                    rotation,
+                    edited,
+                    photo.path()
+                );
+            }
         }
     }
 
     fn unload_visual(&self) {
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let started = trace.then(Instant::now);
         self.imp().visual_loaded.set(false);
         if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
             if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
                 picture.set_paintable(gtk::gdk::Paintable::NONE);
             }
         }
-        if let Some(started) = started {
-            let id = self
-                .imp()
-                .photo
-                .borrow()
-                .as_ref()
-                .map(|photo| photo.id())
-                .unwrap_or_default();
-            eprintln!(
-                "UI PERF unload_visual id={} total_ms={}",
-                id,
-                started.elapsed().as_millis()
-            );
-        }
+        // Deliberately no per-tile trace here. GtkListView can unbind
+        // thousands of tiles during a scrollbar jump; synchronous stderr
+        // output would become part of the scroll workload.
     }
 
     fn bind_photo(&self, photo: &PhotoObject) {
@@ -314,6 +356,154 @@ impl SquareTile {
                     "UI PERF grid_bind_slow id={} elapsed_ms={}",
                     photo.id(),
                     elapsed_ms
+                );
+            }
+        }
+    }
+
+    /// Folder ListView bind must stay strictly presentation-only.
+    ///
+    /// GtkListView can recycle hundreds or thousands of rows during a large
+    /// scrollbar jump. Do not stat files, probe originals, request thumbnail
+    /// generation, or render RAW/edit transforms here. Those operations turn
+    /// harmless widget recycling into synchronous main-thread work.
+    fn bind_photo_folder_fast(&self, photo: &PhotoObject) {
+        self.set_photo_deferred(photo);
+
+        let Some(bound) = self.imp().photo.borrow().as_ref().cloned() else {
+            return;
+        };
+        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+        let Some(picture) = frame.child().and_downcast::<gtk::Picture>() else {
+            return;
+        };
+
+        // RAM-only fast path. Never touch the filesystem from ListView bind,
+        // but reuse a paintable that the settled-viewport loader has already
+        // decoded. This keeps nearby thumbnails visible during wheel scrolling
+        // without restoring the old per-bind I/O/RAW/edit work.
+        let memory_hit = bound
+            .cached_thumbnail_path()
+            .as_deref()
+            .and_then(folder_thumbnail_cache_get);
+        if let Some(paintable) = memory_hit.as_ref() {
+            picture.set_paintable(Some(paintable));
+            picture.remove_css_class("missing-thumbnail");
+        } else {
+            picture.set_paintable(gtk::gdk::Paintable::NONE);
+            picture.add_css_class("missing-thumbnail");
+        }
+        picture.set_tooltip_text(Some(&bound.filename()));
+
+        if let Some(badge) = frame.last_child().and_downcast::<gtk::Button>() {
+            let unavailable = !bound.original_available();
+            badge.set_visible(unavailable);
+            badge.set_tooltip_text(if unavailable {
+                Some("Original photo unavailable")
+            } else {
+                None
+            });
+        }
+        if let Some(badge) = overlay_image(&frame, "favorite-badge") {
+            badge.set_visible(
+                self.imp().favorite_indicators_visible.get() && bound.favorite(),
+            );
+        }
+        if let Some(badge) = overlay_image(&frame, "edited-badge") {
+            let edited =
+                !crate::edit::EditRecipe::decode(&bound.edit_recipe()).is_default();
+            badge.set_visible(edited);
+            badge.set_tooltip_text(if edited { Some("Edited") } else { None });
+        }
+        if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
+            placeholder.set_visible(memory_hit.is_none());
+        }
+        self.imp().visual_loaded.set(memory_hit.is_some());
+    }
+
+    /// Load the final viewport thumbnail after Folder scrolling settles.
+    ///
+    /// Cache probing and priority generation are allowed here because this is
+    /// called for only the small near-viewport set, never for every ListView
+    /// bind. Pixel transforms remain forbidden on the GTK thread.
+    fn load_folder_cached_visual(&self) {
+        if self.imp().visual_loaded.get() {
+            return;
+        }
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let started = trace.then(Instant::now);
+        let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
+            return;
+        };
+        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+        let Some(picture) = frame.child().and_downcast::<gtk::Picture>() else {
+            return;
+        };
+
+        if let Some(path) = photo.cached_thumbnail_path() {
+            if let Some(paintable) = folder_thumbnail_cache_get(&path) {
+                picture.set_paintable(Some(&paintable));
+                picture.remove_css_class("missing-thumbnail");
+                picture.set_tooltip_text(Some(&photo.filename()));
+                if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
+                    placeholder.set_visible(false);
+                }
+                self.imp().visual_loaded.set(true);
+                return;
+            }
+        }
+
+        schedule_availability_probe(self, &photo);
+        let fs_started = trace.then(Instant::now);
+        let cached = photo.cached_thumbnail_path();
+        let existing = cached
+            .as_deref()
+            .filter(|path| std::path::Path::new(path).is_file());
+        photo.set_thumbnail_available(existing.is_some());
+        let fs_ms = fs_started
+            .map(|value| value.elapsed().as_millis())
+            .unwrap_or(0);
+
+        if let Some(path) = existing {
+            // The cached JPEG is already EXIF-oriented. Folder scrolling uses
+            // the base cache immediately; RAW/edit refinements must never run
+            // from ListView recycling.
+            picture.set_filename(Some(path));
+            picture.remove_css_class("missing-thumbnail");
+            if let Some(paintable) = picture.paintable() {
+                folder_thumbnail_cache_insert(path.to_string(), paintable);
+            }
+        } else {
+            picture.set_paintable(gtk::gdk::Paintable::NONE);
+            picture.add_css_class("missing-thumbnail");
+            crate::thumbnail::request_priority(
+                photo.path(),
+                Some(photo.mtime()),
+                Some(photo.size_bytes()),
+            );
+        }
+
+        picture.set_tooltip_text(Some(&photo.filename()));
+        if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
+            placeholder.set_visible(existing.is_none());
+        }
+        self.imp().visual_loaded.set(true);
+
+        if let Some(started) = started {
+            let total_ms = started.elapsed().as_millis();
+            record_thumb_load(photo.id(), total_ms, fs_ms, total_ms.saturating_sub(fs_ms));
+            if total_ms >= 12 {
+                eprintln!(
+                    "UI PERF folder_cached_load_slow id={} total_ms={} fs_ms={} cache={} path={}",
+                    photo.id(),
+                    total_ms,
+                    fs_ms,
+                    if existing.is_some() { "hit" } else { "miss" },
+                    photo.path()
                 );
             }
         }
@@ -651,17 +841,11 @@ enum FolderRowKind {
     Photos,
 }
 
-const FOLDER_PHOTO_CHUNK_SIZE: usize = 8;
-
-/// Chunk size for a given column count: a multiple of `columns` close to
-/// `FOLDER_PHOTO_CHUNK_SIZE`. Keeping chunks a whole number of rows means no
-/// chunk ends in a partial line, so the Folder grid has no ragged/padded rows.
+/// One Folder model photo row is exactly one visual line. This keeps row
+/// geometry stable and lets GtkListView own virtualization without a nested
+/// FlowBox wrapping a variable number of internal rows.
 fn folder_chunk_size(columns: u32) -> usize {
-    let columns = columns.max(1) as usize;
-    let lines = (FOLDER_PHOTO_CHUNK_SIZE as f64 / columns as f64)
-        .round()
-        .max(1.0) as usize;
-    columns * lines
+    columns.max(1) as usize
 }
 
 #[derive(Clone, Default)]
@@ -671,7 +855,12 @@ pub(crate) struct FolderRowData {
     folder_path: String,
     label: String,
     count: usize,
-    photos: Vec<PhotoObject>,
+    start: usize,
+    end: usize,
+    // Lightweight identity for the photos represented by this visual line.
+    // Range geometry alone is not enough: a refresh can replace photo ids in
+    // place while leaving folder/count/start/end unchanged.
+    photo_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -681,10 +870,9 @@ struct FolderVirtualRow {
     end: usize,
 }
 
-/// Folder mode uses a virtualized model: one lightweight header row plus photo
-/// chunks sized to a whole number of rows for the current column count. A
-/// column change therefore reshapes the rows (rebuilt cheaply), which keeps
-/// every chunk aligned to full rows.
+/// Folder mode uses a flat virtualized model: one lightweight header row plus
+/// fixed photo lines containing at most `columns` photos. GtkListView therefore
+/// virtualizes one stable-height visual line at a time.
 fn folder_virtual_rows(ranges: &[GroupRange], chunk_size: usize) -> Vec<FolderVirtualRow> {
     let chunk_size = chunk_size.max(1);
     let mut rows = Vec::new();
@@ -749,9 +937,6 @@ fn make_folder_tile(
     tile_width: i32,
     tile_height: i32,
     unavailable: &Rc<dyn Fn(PhotoObject, gtk::Widget)>,
-    mapped_tiles: &Rc<RefCell<Vec<SquareTile>>>,
-    folder_root_holder: &Rc<RefCell<Option<gtk::ListView>>>,
-    folder_rebuild_active: &Rc<Cell<bool>>,
 ) -> SquareTile {
     let frame = gtk::Overlay::new();
     frame.set_overflow(gtk::Overflow::Hidden);
@@ -816,9 +1001,16 @@ fn make_folder_tile(
     frame.add_overlay(&unavailable_badge);
 
     let tile = SquareTile::new(tile_width, tile_height, &frame);
-    tile.set_hexpand(false);
+    // The old FlowBoxChild supplied 6 px padding around each thumbnail. Keep
+    // the same geometry directly on the tile now that the nested FlowBox is
+    // gone, and let the horizontal line distribute spare width evenly.
+    tile.set_hexpand(true);
     tile.set_vexpand(false);
     tile.set_valign(gtk::Align::Start);
+    tile.set_margin_start(6);
+    tile.set_margin_end(6);
+    tile.set_margin_top(6);
+    tile.set_margin_bottom(6);
     tile.set_focusable(true);
 
     let tile_for_unavailable = tile.clone();
@@ -831,44 +1023,6 @@ fn make_folder_tile(
         (unavailable_for_click)(photo, badge_for_click.clone().upcast());
     });
 
-    let tile_for_map = tile.clone();
-    let mapped_for_map = mapped_tiles.clone();
-    let root_for_map = folder_root_holder.clone();
-    let rebuild_active_for_map = folder_rebuild_active.clone();
-    tile.connect_map(move |_| {
-        {
-            let mut mapped = mapped_for_map.borrow_mut();
-            if !mapped.iter().any(|candidate| candidate == &tile_for_map) {
-                mapped.push(tile_for_map.clone());
-            }
-        }
-        // During a folder-store swap GTK maps its whole offscreen pool; the
-        // deferred viewport pass loads the visible tiles instead.
-        if rebuild_active_for_map.get() {
-            return;
-        }
-        if let Some(root) = root_for_map.borrow().as_ref() {
-            if tile_near_folder_viewport(&tile_for_map, root) {
-                tile_for_map.load_visual();
-            } else {
-                let tile_for_idle = tile_for_map.clone();
-                let root_for_idle = root.clone();
-                glib::idle_add_local_once(move || {
-                    if tile_near_folder_viewport(&tile_for_idle, &root_for_idle) {
-                        tile_for_idle.load_visual();
-                    }
-                });
-            }
-        }
-    });
-    let tile_for_unmap = tile.clone();
-    let mapped_for_unmap = mapped_tiles.clone();
-    tile.connect_unmap(move |_| {
-        tile_for_unmap.unload_visual();
-        mapped_for_unmap
-            .borrow_mut()
-            .retain(|candidate| candidate != &tile_for_unmap);
-    });
 
     tile
 }
@@ -884,13 +1038,9 @@ pub struct Gallery {
     group_title: gtk::Label,
     group_count: gtk::Label,
     folder_store: gio::ListStore,
-    folder_selection: gtk::NoSelection,
-    mapped_folder_tiles: Rc<RefCell<Vec<SquareTile>>>,
-    // True while rebuild_folder_rows_for is swapping the folder model. The bind
-    // path then skips eager thumbnail decodes (GTK binds its whole offscreen
-    // pool on a model change) and a deferred viewport pass loads the visible
-    // tiles. During normal scrolling this is false so tiles load immediately.
-    folder_rebuild_active: Rc<Cell<bool>>,
+    // Presentation-only Folder section order. This must never reorder the
+    // shared Library photo model. Empty means use the natural range order.
+    folder_order: Rc<RefCell<Vec<i64>>>,
     folder_view_changed: Rc<RefCell<Option<Rc<dyn Fn(bool)>>>>,
     selected: Rc<dyn Fn(Option<PhotoObject>)>,
     store: gio::ListStore,
@@ -1215,24 +1365,16 @@ impl Gallery {
             (activate_for_grid)(photos, index);
         });
 
-        // Folder mode is a single virtualized ListView. Its model shape is
-        // stable across zoom levels: one header row per folder plus photo
-        // chunks of at most 8 items (the maximum supported column count).
-        // GTK therefore realizes only viewport-near chunks instead of one
-        // giant FlowBox containing every photo in a folder.
+        // Folder mode is a flat virtualized ListView. Each Photos model item
+        // represents exactly one visual line (at most `current_columns`
+        // photos). There is no nested FlowBox and no second viewport/prefetch
+        // system: GtkListView owns row lifetime, while bind/unbind owns the
+        // SquareTile thumbnail lifetime exactly like the working GridView.
         let folder_store = gio::ListStore::new::<FolderRowObject>();
         let folder_selection = gtk::NoSelection::new(Some(folder_store.clone()));
         let folder_factory = gtk::SignalListItemFactory::new();
-        let mapped_folder_tiles: Rc<RefCell<Vec<SquareTile>>> = Rc::new(RefCell::new(Vec::new()));
-        let folder_rebuild_active: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-        let folder_root_holder: Rc<RefCell<Option<gtk::ListView>>> = Rc::new(RefCell::new(None));
-        // Cached selected photo ids. The folder bind path used to call
-        // selection_position_for_id (an O(n_items) scan of the 66k-photo model)
-        // eight times per bound chunk, which made each row bind ~29 ms and
-        // saturated the main thread during scroll.
         let folder_selected_ids: Rc<RefCell<HashSet<i64>>> = Rc::new(RefCell::new(HashSet::new()));
 
-        let setup_columns = current_columns.clone();
         let setup_tile_height = tile_height.clone();
         folder_factory.connect_setup(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -1243,15 +1385,7 @@ impl Gallery {
             row_root.set_hexpand(true);
             row_root.set_vexpand(false);
             row_root.add_css_class("folder-stream-row");
-            // Give GTK a realistic height before bind. Without it the row
-            // measures ~0 at setup, so a large scrollbar jump made the
-            // ListView realize hundreds of rows (mapped=1407, 3081 ms frame).
-            // connect_bind overrides this for headers and short chunks.
-            row_root.set_height_request(folder_chunk_height(
-                folder_chunk_size(setup_columns.get()),
-                setup_columns.get().max(1),
-                setup_tile_height.get(),
-            ));
+            row_root.set_height_request(folder_line_height(setup_tile_height.get()));
 
             let header_outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
             header_outer.set_widget_name("picasa-folder-section-header");
@@ -1298,18 +1432,14 @@ impl Gallery {
             header_outer.append(&separator);
             row_root.append(&header_outer);
 
-            let flow = gtk::FlowBox::new();
-            flow.set_widget_name("picasa-folder-chunk-flow");
-            flow.set_hexpand(true);
-            flow.set_vexpand(false);
-            flow.set_homogeneous(true);
-            flow.set_selection_mode(gtk::SelectionMode::None);
-            flow.set_row_spacing(0);
-            flow.set_column_spacing(0);
-            flow.set_min_children_per_line(1);
-            flow.set_max_children_per_line(FOLDER_PHOTO_CHUNK_SIZE as u32);
-            flow.add_css_class("folder-photo-flow");
-            row_root.append(&flow);
+            let photo_line = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            photo_line.set_widget_name("picasa-folder-photo-line");
+            photo_line.set_hexpand(true);
+            photo_line.set_vexpand(false);
+            photo_line.set_halign(gtk::Align::Fill);
+            photo_line.set_valign(gtk::Align::Start);
+            photo_line.add_css_class("folder-photo-line");
+            row_root.append(&photo_line);
 
             list_item.set_child(Some(&row_root));
         });
@@ -1317,11 +1447,9 @@ impl Gallery {
         let tile_width_for_folder_bind = tile_width.clone();
         let tile_height_for_folder_bind = tile_height.clone();
         let current_columns_for_folder_bind = current_columns.clone();
+        let current_photos_for_folder_bind = current_photos.clone();
         let unavailable_for_folder_bind = unavailable.clone();
-        let mapped_tiles_for_folder_bind = mapped_folder_tiles.clone();
-        let root_holder_for_folder_bind = folder_root_holder.clone();
         let selected_ids_for_folder_bind = folder_selected_ids.clone();
-        let rebuild_active_for_folder_bind = folder_rebuild_active.clone();
 
         folder_factory.connect_bind(move |_, object| {
             let trace = std::env::var_os("PICASA_TRACE").is_some();
@@ -1341,7 +1469,7 @@ impl Gallery {
             let Some(header) = row_root.first_child().and_downcast::<gtk::Box>() else {
                 return;
             };
-            let Some(flow) = row_root.last_child().and_downcast::<gtk::FlowBox>() else {
+            let Some(photo_line) = row_root.last_child().and_downcast::<gtk::Box>() else {
                 return;
             };
 
@@ -1349,7 +1477,13 @@ impl Gallery {
                 FolderRowKind::Header => {
                     row_root.set_height_request(58);
                     header.set_visible(true);
-                    flow.set_visible(false);
+                    photo_line.set_visible(false);
+                    for tile in box_tiles(&photo_line) {
+                        tile.clear_photo();
+                        tile.set_opacity(1.0);
+                        tile.set_can_target(false);
+                        tile.set_visible(false);
+                    }
                     if let Some(title) = find_named_label(header.upcast_ref(), "picasa-folder-section-title") {
                         title.set_text(&data.label);
                         title.set_tooltip_text(Some(&data.folder_path));
@@ -1371,57 +1505,58 @@ impl Gallery {
                 }
                 FolderRowKind::Photos => {
                     header.set_visible(false);
-                    flow.set_visible(true);
-                    flow.set_max_children_per_line(current_columns_for_folder_bind.get().max(1));
+                    photo_line.set_visible(true);
+                    row_root.set_height_request(folder_line_height(tile_height_for_folder_bind.get()));
 
-                    // A recycled ListItem keeps a fixed pool of at most eight
-                    // tile widgets. Rebinding changes only the PhotoObject; it
-                    // does not rebuild overlays, gestures, or badges. Create
-                    // only as many as this chunk needs so small folders (many
-                    // of the 497) do not build seven unused tiles each.
-                    let mut tiles = flow_box_tiles(&flow);
-                    while tiles.len() < data.photos.len() {
+                    let row_photos = {
+                        let photos = current_photos_for_folder_bind.borrow();
+                        photos
+                            .get(data.start..data.end)
+                            .map(|slice| slice.to_vec())
+                            .unwrap_or_default()
+                    };
+                    let slot_count = current_columns_for_folder_bind.get().max(1) as usize;
+                    let mut tiles = box_tiles(&photo_line);
+                    while tiles.len() < slot_count {
                         let tile = make_folder_tile(
                             tile_width_for_folder_bind.get(),
                             tile_height_for_folder_bind.get(),
                             &unavailable_for_folder_bind,
-                            &mapped_tiles_for_folder_bind,
-                            &root_holder_for_folder_bind,
-                            &rebuild_active_for_folder_bind,
                         );
-                        flow.insert(&tile, -1);
+                        photo_line.append(&tile);
                         tiles.push(tile);
                     }
 
                     for (slot, tile) in tiles.iter().enumerate() {
-                        if let Some(photo) = data.photos.get(slot) {
-                            tile.set_visible(true);
-                            tile.set_tile_size(
-                                tile_width_for_folder_bind.get(),
-                                tile_height_for_folder_bind.get(),
-                            );
-                            tile.set_photo_deferred(photo);
-                            let selected = selected_ids_for_folder_bind
-                                .borrow()
-                                .contains(&photo.id());
-                            tile.set_manual_selected(selected);
-                            if !rebuild_active_for_folder_bind.get() && tile.is_mapped() {
-                                if let Some(root) = root_holder_for_folder_bind.borrow().as_ref() {
-                                    if tile_near_folder_viewport(tile, root) {
-                                        tile.load_visual();
-                                    }
-                                }
-                            }
-                        } else {
+                        if slot >= slot_count {
                             tile.clear_photo();
+                            tile.set_opacity(1.0);
+                            tile.set_can_target(false);
                             tile.set_visible(false);
+                            continue;
+                        }
+
+                        tile.set_visible(true);
+                        tile.set_tile_size(
+                            tile_width_for_folder_bind.get(),
+                            tile_height_for_folder_bind.get(),
+                        );
+                        if let Some(photo) = row_photos.get(slot) {
+                            tile.set_opacity(1.0);
+                            tile.set_can_target(true);
+                            tile.bind_photo_folder_fast(photo);
+                            tile.set_manual_selected(
+                                selected_ids_for_folder_bind.borrow().contains(&photo.id()),
+                            );
+                        } else {
+                            // Hidden widgets do not participate in GtkBox layout.
+                            // Keep an allocated transparent slot so a short final
+                            // line preserves the exact same column geometry.
+                            tile.clear_photo();
+                            tile.set_opacity(0.0);
+                            tile.set_can_target(false);
                         }
                     }
-                    row_root.set_height_request(folder_chunk_height(
-                        data.photos.len(),
-                        current_columns_for_folder_bind.get().max(1),
-                        tile_height_for_folder_bind.get(),
-                    ));
                 }
             }
 
@@ -1431,11 +1566,11 @@ impl Gallery {
                     .unwrap_or(0);
                 if elapsed_ms >= 12 {
                     eprintln!(
-                        "UI PERF folder_virtual_bind_slow row={} kind={:?} folder_id={} photos={} elapsed_ms={}",
+                        "UI PERF folder_line_bind_slow row={} kind={:?} folder_id={} photos={} elapsed_ms={}",
                         list_item.position(),
                         data.kind,
                         data.folder_id,
-                        data.photos.len(),
+                        data.end.saturating_sub(data.start),
                         elapsed_ms
                     );
                 }
@@ -1449,11 +1584,13 @@ impl Gallery {
             let Some(row_root) = list_item.child().and_downcast::<gtk::Box>() else {
                 return;
             };
-            let Some(flow) = row_root.last_child().and_downcast::<gtk::FlowBox>() else {
+            let Some(photo_line) = row_root.last_child().and_downcast::<gtk::Box>() else {
                 return;
             };
-            for tile in flow_box_tiles(&flow) {
+            for tile in box_tiles(&photo_line) {
                 tile.clear_photo();
+                tile.set_opacity(1.0);
+                tile.set_can_target(false);
                 tile.set_visible(false);
             }
         });
@@ -1467,7 +1604,6 @@ impl Gallery {
         folder_root.set_valign(gtk::Align::Fill);
         folder_root.add_css_class("folder-stream");
         folder_root.add_css_class("photo-grid");
-        folder_root_holder.replace(Some(folder_root.clone()));
 
         install_folder_root_input(
             &folder_root,
@@ -1477,8 +1613,6 @@ impl Gallery {
             &context_menu,
             &collage_selection_mode,
             &collage_selected_ids,
-            &mapped_folder_tiles,
-            &folder_rebuild_active,
         );
 
         let folder_root_for_selection = folder_root.clone();
@@ -1486,11 +1620,7 @@ impl Gallery {
         let selected_ids_for_selection = folder_selected_ids.clone();
         let styles_refresh_scheduled = Rc::new(Cell::new(false));
         selection.connect_selection_changed(move |selection, _, _| {
-            // Keep the bind-path cache current. GtkMultiSelection emits
-            // selection-changed both when the model gains items and when
-            // select_item runs, so one logical change can fire this twice.
             selected_ids_for_selection.replace(selected_photo_id_set(selection));
-            // Coalesce the burst into a single idle refresh.
             if styles_refresh_scheduled.replace(true) {
                 return;
             }
@@ -1510,9 +1640,7 @@ impl Gallery {
             group_title,
             group_count,
             folder_store,
-            folder_selection,
-            mapped_folder_tiles,
-            folder_rebuild_active,
+            folder_order: Rc::new(RefCell::new(Vec::new())),
             folder_view_changed: Rc::new(RefCell::new(None)),
             selected,
             store,
@@ -1577,16 +1705,15 @@ impl Gallery {
                     self.photo_for_scroll_position(self.last_scroll_y.get())
                         .map(|photo| photo.id())
                 });
-                let mut flows = Vec::new();
-                collect_folder_flows(self.folder_root.upcast_ref(), &mut flows);
-                for flow in flows {
-                    update_folder_flow_layout(&flow, columns.max(1), self.tile_height.get());
-                }
+                update_folder_realized_rows(
+                    self.folder_root.upcast_ref(),
+                    self.tile_width.get(),
+                    self.tile_height.get(),
+                );
                 self.folder_root.queue_resize();
                 if let Some(anchor) = anchor {
                     self.scroll_folder_to_photo(anchor);
                 }
-                self.refresh_folder_viewport_tiles();
             } else {
                 self.root.queue_resize();
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
@@ -1629,7 +1756,6 @@ impl Gallery {
                     anchor, before
                 );
             }
-            self.refresh_folder_viewport_tiles();
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
@@ -1655,24 +1781,20 @@ impl Gallery {
             return;
         };
         let root = self.folder_root.clone();
-        let mapped = self.mapped_folder_tiles.clone();
         let trace = std::env::var_os("PICASA_TRACE").is_some();
         glib::idle_add_local_once(move || {
             root.scroll_to(row, gtk::ListScrollFlags::NONE, None);
             let root_for_align = root.clone();
-            let mapped_for_align = mapped.clone();
             glib::idle_add_local_once(move || {
-                let tile = mapped_for_align
-                    .borrow()
-                    .iter()
-                    .find(|tile| {
-                        tile.imp()
-                            .photo
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|photo| photo.id() == photo_id)
-                    })
-                    .cloned();
+                let mut tiles = Vec::new();
+                collect_tiles(root_for_align.upcast_ref(), &mut tiles);
+                let tile = tiles.into_iter().find(|tile| {
+                    tile.imp()
+                        .photo
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|photo| photo.id() == photo_id)
+                });
                 let Some(tile) = tile else {
                     return;
                 };
@@ -1746,7 +1868,6 @@ impl Gallery {
         self.last_scroll_y.set(scroll_y.max(0.0));
         let mode = self.group_mode.get();
         if mode == GroupMode::Folder {
-            self.refresh_folder_viewport_tiles();
             return;
         }
         if mode == GroupMode::None {
@@ -1815,73 +1936,50 @@ impl Gallery {
             &self.current_photos,
             &self.group_ranges,
             &self.current_columns,
+            &self.folder_order,
             &self.folder_store,
-            &self.folder_selection,
-            &self.folder_root,
-            &self.mapped_folder_tiles,
-            &self.folder_rebuild_active,
         );
     }
 
-    /// Reorder the Folder stream to match a new sidebar tree mode without
-    /// re-querying the database or rebuilding every PhotoObject. Photos keep
-    /// their within-folder order; only whole folder blocks move.
+    /// Reorder only the Folder presentation to match a new sidebar tree mode.
+    /// The shared Library photo model and GtkMultiSelection stay untouched;
+    /// Folder rows retain their source positions and are merely presented in a
+    /// different section order.
     pub fn reorder_folder_stream(&self, folder_order: &[i64]) {
-        // Splicing the whole store clears GtkMultiSelection, so remember which
-        // photos were selected and re-select them at their new positions.
-        let selected_ids = selected_photo_id_set(&self.selection);
-        let photos = self.current_photos.borrow().clone();
-        let mut buckets: std::collections::HashMap<i64, Vec<PhotoObject>> =
-            std::collections::HashMap::new();
-        let mut seen: Vec<i64> = Vec::new();
-        for photo in photos.iter() {
-            let folder_id = photo.folder_id();
-            if !buckets.contains_key(&folder_id) {
-                seen.push(folder_id);
-                buckets.insert(folder_id, Vec::new());
-            }
-            if let Some(bucket) = buckets.get_mut(&folder_id) {
-                bucket.push(photo.clone());
-            }
-        }
-
-        let mut reordered = Vec::with_capacity(photos.len());
-        for folder_id in folder_order {
-            if let Some(mut bucket) = buckets.remove(folder_id) {
-                reordered.append(&mut bucket);
-            }
-        }
-        // Folders missing from the computed order (legacy/corrupt links) keep
-        // their previous relative order at the end.
-        for folder_id in seen {
-            if let Some(mut bucket) = buckets.remove(&folder_id) {
-                reordered.append(&mut bucket);
-            }
-        }
-
-        self.current_photos.replace(reordered.clone());
-        self.store.splice(0, self.store.n_items(), &reordered);
-        if !selected_ids.is_empty() {
-            let positions = self
-                .current_photos
-                .borrow()
-                .iter()
-                .enumerate()
-                .filter(|(_, photo)| selected_ids.contains(&photo.id()))
-                .map(|(position, _)| position as u32)
-                .collect::<Vec<_>>();
-            for position in positions {
-                self.selection.select_item(position, false);
-            }
-        }
-        self.rebuild_group_ranges();
+        self.folder_order.replace(folder_order.to_vec());
         if self.group_mode.get() == GroupMode::Folder {
             self.rebuild_folder_rows();
         }
     }
 
-    fn refresh_folder_viewport_tiles(&self) {
-        refresh_folder_viewport_tiles_for(&self.folder_root, &self.mapped_folder_tiles);
+    /// Folder id at the leading visible row. This is intentionally cheaper
+    /// than `photo_for_visible_folder_row`: passive sidebar follow needs only
+    /// the row's folder identity, not a PhotoObject or a group-range scan.
+    pub fn visible_folder_id(&self) -> Option<i64> {
+        if self.group_mode.get() != GroupMode::Folder {
+            return None;
+        }
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let width = self.folder_root.width().max(1) as f64;
+        for y in [4.0_f64, 20.0, 40.0, 64.0] {
+            let pick_started = trace.then(Instant::now);
+            let picked = self
+                .folder_root
+                .pick(width * 0.5, y, gtk::PickFlags::DEFAULT);
+            if let Some(started) = pick_started {
+                SCROLL_PROBE_PICK_CALLS.with(|calls| calls.set(calls.get().wrapping_add(1)));
+                SCROLL_PROBE_PICK_NS
+                    .with(|ns| ns.set(ns.get().wrapping_add(started.elapsed().as_nanos())));
+            }
+            if let Some(folder_id) = picked
+                .as_ref()
+                .and_then(folder_id_from_named_ancestor)
+                .filter(|folder_id| *folder_id > 0)
+            {
+                return Some(folder_id);
+            }
+        }
+        None
     }
 
     fn photo_for_visible_folder_row(&self) -> Option<PhotoObject> {
@@ -2019,18 +2117,7 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         let grid_tiles = tiles.len();
-        if self.group_mode.get() == GroupMode::Folder {
-            let mut mapped = self.mapped_folder_tiles.borrow_mut();
-            mapped.retain(|tile| tile.is_mapped());
-            tiles.extend(
-                mapped
-                    .iter()
-                    .filter(|tile| tile_near_folder_viewport(tile, &self.folder_root))
-                    .cloned(),
-            );
-        } else {
-            collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        }
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
         let total_tiles = tiles.len();
         if trace {
             eprintln!(
@@ -2080,6 +2167,111 @@ impl Gallery {
                 zoom_started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
             );
         }
+    }
+
+    /// After Folder scrolling settles, load only cached thumbnails for tiles
+    /// close to the actual viewport. GtkListView keeps a much larger recycled
+    /// widget pool than the visible rows, so loading every bound tile causes
+    /// thousands of unnecessary thumbnail operations during scrollbar jumps.
+    pub fn refresh_visible_folder_tiles(&self) {
+        if self.group_mode.get() != GroupMode::Folder || self.folder_root.height() <= 0 {
+            return;
+        }
+
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let started = trace.then(Instant::now);
+        let viewport = self.folder_root.height() as f32;
+        let mut tiles = Vec::new();
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        let realized = tiles.len();
+        let mut near = 0usize;
+        let mut loaded = 0usize;
+
+        for tile in tiles {
+            if !tile.is_mapped() || tile.height() <= 0 {
+                tile.unload_visual();
+                continue;
+            }
+            let is_near = tile
+                .compute_bounds(&self.folder_root)
+                .is_some_and(|bounds| {
+                    bounds.y() + bounds.height() >= -viewport * 0.25
+                        && bounds.y() <= viewport * 1.25
+                });
+            if is_near {
+                near += 1;
+                if !tile.imp().visual_loaded.get() {
+                    loaded += 1;
+                }
+                tile.load_folder_cached_visual();
+            } else {
+                tile.unload_visual();
+            }
+        }
+
+        if let Some(started) = started {
+            let elapsed_ms = started.elapsed().as_millis();
+            if elapsed_ms >= 16 {
+                eprintln!(
+                    "UI PERF folder_visible_refresh_slow realized={} near={} loaded={} elapsed_ms={}",
+                    realized, near, loaded, elapsed_ms
+                );
+            }
+        }
+    }
+
+    /// Warm a small RAM thumbnail buffer around the settled Folder viewport.
+    ///
+    /// This is intentionally budgeted. It may perform cache-file I/O, so the
+    /// caller invokes only a few tiles per idle/timer slice and cancels the
+    /// process as soon as scrolling resumes. The hot ListView bind path remains
+    /// strictly RAM-only.
+    pub fn prefetch_folder_cached_tiles(&self, budget: usize) -> usize {
+        if budget == 0
+            || self.group_mode.get() != GroupMode::Folder
+            || self.folder_root.height() <= 0
+        {
+            return 0;
+        }
+
+        let viewport = self.folder_root.height() as f32;
+        let mut tiles = Vec::new();
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        let mut candidates: Vec<(f32, SquareTile)> = Vec::new();
+
+        for tile in tiles {
+            if !tile.is_mapped() || tile.height() <= 0 || tile.imp().visual_loaded.get() {
+                continue;
+            }
+            let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
+                continue;
+            };
+            // Keep a generous but finite rolling buffer around the viewport.
+            // Large scrollbar jumps still remain cheap because warming is
+            // cancelled immediately when adjustment values start moving.
+            if bounds.y() + bounds.height() < -viewport * 2.0
+                || bounds.y() > viewport * 3.0
+            {
+                continue;
+            }
+
+            let distance = if bounds.y() + bounds.height() < 0.0 {
+                -(bounds.y() + bounds.height())
+            } else if bounds.y() > viewport {
+                bounds.y() - viewport
+            } else {
+                0.0
+            };
+            candidates.push((distance, tile));
+        }
+
+        candidates.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let mut loaded = 0usize;
+        for (_, tile) in candidates.into_iter().take(budget) {
+            tile.load_folder_cached_visual();
+            loaded += 1;
+        }
+        loaded
     }
 
     pub fn refresh_thumbnails(&self) {
@@ -2438,10 +2630,8 @@ impl Gallery {
         let current_columns = self.current_columns.clone();
         let tile_height = self.tile_height.clone();
         let folder_store = self.folder_store.clone();
-        let folder_selection = self.folder_selection.clone();
+        let folder_order = self.folder_order.clone();
         let folder_root = self.folder_root.clone();
-        let mapped_folder_tiles = self.mapped_folder_tiles.clone();
-        let folder_rebuild_active = self.folder_rebuild_active.clone();
         let replace_generation = self.replace_generation.clone();
 
         glib::idle_add_local(move || {
@@ -2476,11 +2666,8 @@ impl Gallery {
                         &current_photos,
                         &group_ranges,
                         &current_columns,
+                        &folder_order,
                         &folder_store,
-                        &folder_selection,
-                        &folder_root,
-                        &mapped_folder_tiles,
-                        &folder_rebuild_active,
                     );
                     group_header.set_visible(false);
                     group_title.set_text("");
@@ -2580,22 +2767,18 @@ impl Gallery {
     /// Falls back to the `ListView` when the tile is not realized yet.
     fn focus_folder_tile(&self, photo_id: i64) {
         let root = self.folder_root.clone();
-        let mapped = self.mapped_folder_tiles.clone();
         glib::idle_add_local_once(move || {
             let root_for_find = root.clone();
-            let mapped_for_find = mapped.clone();
             glib::idle_add_local_once(move || {
-                let tile = mapped_for_find
-                    .borrow()
-                    .iter()
-                    .find(|tile| {
-                        tile.imp()
-                            .photo
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|photo| photo.id() == photo_id)
-                    })
-                    .cloned();
+                let mut tiles = Vec::new();
+                collect_tiles(root_for_find.upcast_ref(), &mut tiles);
+                let tile = tiles.into_iter().find(|tile| {
+                    tile.imp()
+                        .photo
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|photo| photo.id() == photo_id)
+                });
                 match tile {
                     Some(tile) => {
                         tile.grab_focus();
@@ -2825,7 +3008,10 @@ impl Gallery {
                 continue;
             };
             let data = row.data();
-            if data.photos.iter().any(|photo| photo.id() == photo_id) {
+            if data.kind != FolderRowKind::Photos {
+                continue;
+            }
+            if data.photo_ids.contains(&photo_id) {
                 return Some(position);
             }
         }
@@ -3003,37 +3189,53 @@ fn rebuild_group_ranges_for(
 fn build_folder_virtual_objects(
     ranges: &[GroupRange],
     photos: &[PhotoObject],
-    chunk_size: usize,
+    line_size: usize,
 ) -> Vec<FolderRowObject> {
-    let plans = folder_virtual_rows(ranges, chunk_size);
-    let mut rows = Vec::with_capacity(plans.len());
-    let mut range_index = 0usize;
+    let line_size = line_size.max(1);
+    let estimated_rows = ranges.iter().fold(0usize, |total, range| {
+        let photos_in_range = range.end.saturating_sub(range.start);
+        total + 1 + photos_in_range.div_ceil(line_size)
+    });
+    let mut rows = Vec::with_capacity(estimated_rows);
 
-    for plan in plans {
-        while range_index + 1 < ranges.len() && plan.start >= ranges[range_index].end {
-            range_index += 1;
-        }
-        let Some(range) = ranges.get(range_index) else {
-            break;
-        };
-        let folder_path = photos
-            .get(range.start)
-            .and_then(|photo| photo.folder_path())
-            .unwrap_or_default();
-        let row_photos = if plan.kind == FolderRowKind::Photos {
-            photos[plan.start..plan.end].to_vec()
-        } else {
-            Vec::new()
-        };
+    for range in ranges {
         rows.push(FolderRowObject::new(FolderRowData {
-            kind: plan.kind,
+            kind: FolderRowKind::Header,
             folder_id: range.folder_id,
-            folder_path,
+            folder_path: photos
+                .get(range.start)
+                .and_then(|photo| photo.folder_path())
+                .unwrap_or_default(),
             label: range.label.clone(),
             count: range.end.saturating_sub(range.start),
-            photos: row_photos,
+            start: range.start,
+            end: range.start,
+            photo_ids: Vec::new(),
         }));
+
+        let mut start = range.start;
+        while start < range.end {
+            let end = (start + line_size).min(range.end);
+            let photo_ids = photos
+                .get(start..end)
+                .map(|slice| slice.iter().map(|photo| photo.id()).collect())
+                .unwrap_or_default();
+            rows.push(FolderRowObject::new(FolderRowData {
+                kind: FolderRowKind::Photos,
+                folder_id: range.folder_id,
+                // Photo lines need only folder/range/photo identity. Avoid
+                // cloning heading strings into thousands of rows.
+                folder_path: String::new(),
+                label: String::new(),
+                count: 0,
+                start,
+                end,
+                photo_ids,
+            }));
+            start = end;
+        }
     }
+
     rows
 }
 
@@ -3043,38 +3245,48 @@ fn folder_virtual_row_matches(old: &FolderRowData, new: &FolderRowData) -> bool 
         && old.folder_path == new.folder_path
         && old.label == new.label
         && old.count == new.count
-        && old.photos.len() == new.photos.len()
-        && old
-            .photos
-            .iter()
-            .zip(&new.photos)
-            .all(|(left, right)| left.id() == right.id())
+        && old.start == new.start
+        && old.end == new.end
+        && old.photo_ids == new.photo_ids
+}
+
+fn ordered_folder_ranges(ranges: &[GroupRange], folder_order: &[i64]) -> Vec<GroupRange> {
+    if folder_order.is_empty() {
+        return ranges.to_vec();
+    }
+
+    let rank = folder_order
+        .iter()
+        .enumerate()
+        .map(|(index, folder_id)| (*folder_id, index))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut ordered = ranges.to_vec();
+    ordered.sort_by_key(|range| rank.get(&range.folder_id).copied().unwrap_or(usize::MAX));
+    ordered
 }
 
 fn rebuild_folder_rows_for(
     current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
     group_ranges: &Rc<RefCell<Vec<GroupRange>>>,
     current_columns: &Rc<Cell<u32>>,
+    folder_order: &Rc<RefCell<Vec<i64>>>,
     folder_store: &gio::ListStore,
-    folder_selection: &gtk::NoSelection,
-    folder_root: &gtk::ListView,
-    mapped_folder_tiles: &Rc<RefCell<Vec<SquareTile>>>,
-    folder_rebuild_active: &Rc<Cell<bool>>,
 ) {
-    let trace = std::env::var_os("PICASA_TRACE").is_some();
+    let trace = std::env::var_os("PICASA_TRACE_VERBOSE").is_some();
     let started = trace.then(Instant::now);
     let ranges = group_ranges.borrow();
     let photos = current_photos.borrow();
     let old_rows = folder_store.n_items();
-    let chunk_size = folder_chunk_size(current_columns.get());
-    let new_rows = build_folder_virtual_objects(&ranges, &photos, chunk_size);
+    let line_size = folder_chunk_size(current_columns.get());
+    let ordered_ranges = ordered_folder_ranges(&ranges, &folder_order.borrow());
+    let new_rows = build_folder_virtual_objects(&ordered_ranges, &photos, line_size);
 
     if trace {
         eprintln!(
-            "UI PERF folder_virtual_plan photos={} folders={} chunk_size={} columns={} model_rows={} old_store_rows={} ms={}",
+            "UI PERF folder_line_plan photos={} folders={} line_size={} columns={} model_rows={} old_store_rows={} ms={}",
             photos.len(),
-            ranges.len(),
-            chunk_size,
+            ordered_ranges.len(),
+            line_size,
             current_columns.get().max(1),
             new_rows.len(),
             old_rows,
@@ -3082,10 +3294,6 @@ fn rebuild_folder_rows_for(
         );
     }
 
-    // Find the unchanged head and tail so a mostly-unchanged stream does not
-    // force the live ListView to rebind every visible tile. This subsumes the
-    // old all-or-nothing "unchanged" check, which never fired in any measured
-    // run (scroll-baseline*.log) despite old_rows == new_rows.
     let old_len = old_rows as usize;
     let new_len = new_rows.len();
     let mut prefix = 0usize;
@@ -3114,8 +3322,6 @@ fn rebuild_folder_rows_for(
     }
 
     if trace && prefix < old_len && prefix < new_len {
-        // First differing row: pinpoints why the stream is considered changed
-        // when old_rows == new_rows (photos, label, folder, count...).
         if let Some(old_row) = folder_store
             .item(prefix as u32)
             .and_downcast::<FolderRowObject>()
@@ -3123,7 +3329,7 @@ fn rebuild_folder_rows_for(
             let old_data = old_row.data();
             let new_data = new_rows[prefix].data();
             eprintln!(
-                "UI PERF folder_store_first_row index={} old_kind={:?} new_kind={:?} old_folder_id={} new_folder_id={} old_label={:?} new_label={:?} old_count={} new_count={} old_photos={} new_photos={}",
+                "UI PERF folder_store_first_row index={} old_kind={:?} new_kind={:?} old_folder_id={} new_folder_id={} old_label={:?} new_label={:?} old_count={} new_count={} old_range={}..{} new_range={}..{}",
                 prefix,
                 old_data.kind,
                 new_data.kind,
@@ -3133,8 +3339,10 @@ fn rebuild_folder_rows_for(
                 new_data.label,
                 old_data.count,
                 new_data.count,
-                old_data.photos.len(),
-                new_data.photos.len(),
+                old_data.start,
+                old_data.end,
+                new_data.start,
+                new_data.end,
             );
         }
     }
@@ -3154,27 +3362,13 @@ fn rebuild_folder_rows_for(
     let update_started = trace.then(Instant::now);
     let removed = (old_len - prefix - suffix) as u32;
     let inserted = &new_rows[prefix..new_len - suffix];
-    // Suppress eager bind decodes while the model is swapped: GTK binds its
-    // whole offscreen pool here and would otherwise decode ~1400 cached JPEGs.
-    folder_rebuild_active.set(true);
-    // The old "attached splice is slower" measurement (6207 ms,
-    // scroll-baseline4.log) predates the O(n) selection fix. With per-row binds
-    // now ~1 ms, splicing while attached lets the ListView reuse its realized
-    // pool instead of the detach rebuilding it. Only a from-scratch build
-    // detaches.
-    let strategy = if old_len == 0 {
-        folder_selection.set_model(Option::<&gio::ListStore>::None);
-        folder_store.splice(0, 0, inserted);
-        folder_selection.set_model(Some(folder_store));
-        "virtual_chunks_detached"
-    } else {
-        folder_store.splice(prefix as u32, removed, inserted);
-        "attached_splice"
-    };
+    // Keep the ListView attached. Fixed-height photo lines give GTK a stable
+    // geometry estimate, so normal ListStore splicing can reuse the realized
+    // row pool without a detach/re-attach storm.
+    folder_store.splice(prefix as u32, removed, inserted);
     if trace {
         eprintln!(
-            "UI PERF folder_store_update strategy={} old_rows={} new_rows={} prefix={} suffix={} model_ms={} total_ms={}",
-            strategy,
+            "UI PERF folder_store_update strategy=fixed_lines_attached old_rows={} new_rows={} prefix={} suffix={} model_ms={} total_ms={}",
             old_rows,
             folder_store.n_items(),
             prefix,
@@ -3183,16 +3377,6 @@ fn rebuild_folder_rows_for(
             started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
         );
     }
-    // The bind path skipped decodes while the model swapped, so load the tiles
-    // GTK actually allocates for the new model on the next idle, then re-enable
-    // eager loading.
-    let root = folder_root.clone();
-    let mapped = mapped_folder_tiles.clone();
-    let rebuild_active = folder_rebuild_active.clone();
-    glib::idle_add_local_once(move || {
-        refresh_folder_viewport_tiles_for(&root, &mapped);
-        rebuild_active.set(false);
-    });
 }
 
 fn update_group_header_for_index_for(
@@ -3499,11 +3683,9 @@ fn install_folder_root_input(
     context_menu: &Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>,
     collage_mode: &Rc<Cell<bool>>,
     collage_ids: &Rc<RefCell<HashSet<i64>>>,
-    mapped_tiles: &Rc<RefCell<Vec<SquareTile>>>,
-    folder_rebuild_active: &Rc<Cell<bool>>,
 ) {
     let anchor: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
-    let trace = std::env::var_os("PICASA_TRACE").is_some();
+    let trace = std::env::var_os("PICASA_TRACE_VERBOSE").is_some();
 
     let left_click = gtk::GestureClick::new();
     left_click.set_button(1);
@@ -3628,7 +3810,7 @@ fn install_folder_root_input(
         }
         // Rubber-band from anywhere in the folder stream, exactly like the
         // Library GridView: a press on a tile focuses it, while a press in the
-        // row/FlowBox padding or the empty tail of a row starts an empty
+        // row padding or the empty tail of a row starts an empty
         // rectangle instead of being rejected.
         if let Some(tile) = resolve_folder_tile(&root_for_begin, x, y) {
             tile.grab_focus();
@@ -3653,15 +3835,9 @@ fn install_folder_root_input(
 
     let root_for_update = folder_root.clone();
     let selection_for_update = selection.clone();
-    let mapped_for_update = mapped_tiles.clone();
-    let rebuild_for_update = folder_rebuild_active.clone();
     let current_photos_for_update = current_photos.clone();
     let state_for_update = drag_state.clone();
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
-        if rebuild_for_update.get() {
-            state_for_update.borrow_mut().active = false;
-            return;
-        }
         // A stationary press still emits tiny drag updates. Do not claim those,
         // otherwise the click gesture is cancelled and loses its double-click
         // counter, which broke double-click-to-open. Only take over once the
@@ -3694,7 +3870,8 @@ fn install_folder_root_input(
             };
             let end = (start.0 + offset_x, start.1 + offset_y);
             let mut bounds = Vec::new();
-            let tiles = mapped_for_update.borrow();
+            let mut tiles = Vec::new();
+            collect_tiles(root_for_update.upcast_ref(), &mut tiles);
             for tile in tiles.iter() {
                 if !tile.is_mapped() || tile.height() <= 0 {
                     continue;
@@ -3736,9 +3913,11 @@ fn install_folder_root_input(
             state.last = hit.clone();
         }
         if trace {
+            let mut realized = Vec::new();
+            collect_tiles(root_for_update.upcast_ref(), &mut realized);
             eprintln!(
-                "FOLDER INPUT drag_update mapped={} selected={}",
-                mapped_for_update.borrow().len(),
+                "FOLDER INPUT drag_update realized={} selected={}",
+                realized.len(),
                 hit.len()
             );
         }
@@ -3761,13 +3940,16 @@ fn install_folder_root_input(
     // Group the click and drag gestures so a click that turns into a drag can
     // hand the sequence over instead of the click denying the drag (the same
     // coordination GTK's own list widgets rely on for rubberband selection).
+    // Both gestures must already belong to the same widget before grouping.
+    // Grouping first triggered gtk_gesture_group assertions at startup.
+    folder_root.add_controller(drag.clone());
     left_click.group_with(&drag);
-    folder_root.add_controller(drag);
 }
 
 fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiSelection) {
     let trace = std::env::var_os("PICASA_TRACE").is_some();
-    let started = trace.then(Instant::now);
+    let verbose = std::env::var_os("PICASA_TRACE_VERBOSE").is_some();
+    let started = (trace || verbose).then(Instant::now);
     let calls_before = SELECTION_POSITION_CALLS.with(Cell::get);
     let selected_ids = selected_photo_id_set(selection);
     let mut tiles = Vec::new();
@@ -3783,15 +3965,19 @@ fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiS
         tile.set_manual_selected(selected);
     }
     if let Some(started) = started {
-        eprintln!(
-            "UI PERF folder_selection_styles tiles={} items={} spfid_calls={} ms={}",
-            count,
-            selection.n_items(),
-            SELECTION_POSITION_CALLS
-                .with(Cell::get)
-                .wrapping_sub(calls_before),
-            started.elapsed().as_millis()
-        );
+        let elapsed_ms = started.elapsed().as_millis();
+        if verbose || elapsed_ms >= 8 {
+            eprintln!(
+                "UI PERF folder_selection_styles{} tiles={} items={} spfid_calls={} ms={}",
+                if elapsed_ms >= 8 { "_slow" } else { "" },
+                count,
+                selection.n_items(),
+                SELECTION_POSITION_CALLS
+                    .with(Cell::get)
+                    .wrapping_sub(calls_before),
+                elapsed_ms
+            );
+        }
     }
 }
 
@@ -3821,57 +4007,20 @@ fn tile_ancestor(widget: &gtk::Widget) -> Option<SquareTile> {
     None
 }
 
-/// Resolve a point inside the folder `ListView` to the photo tile under it.
-///
-/// `pick` often returns the `GtkFlowBox`, its `GtkFlowBoxChild`, or the row
-/// `GtkBox` rather than the tile: the FlowBox child padding is part of the
-/// clickable cell, and recycled pool tiles sit hidden behind it. Ask the
-/// owning `GtkFlowBox` for the child at the point instead, and never return a
-/// tile that has no bound photo.
+/// Resolve a point inside the Folder ListView to the bound SquareTile under it.
+/// Folder rows now contain direct tile children, so GTK's normal `pick` result
+/// is sufficient; there is no nested FlowBox child to resolve manually.
 fn resolve_folder_tile(root: &gtk::ListView, x: f64, y: f64) -> Option<SquareTile> {
     let picked = root.pick(x, y, gtk::PickFlags::DEFAULT)?;
     if picked_offline_badge(&picked) {
         return None;
     }
-    if let Some(tile) = tile_ancestor(&picked) {
-        if tile.imp().photo.borrow().is_some() {
-            return Some(tile);
-        }
-    }
-    let flow = flow_ancestor(&picked).or_else(|| flow_descendant(&picked))?;
-    let point = root.compute_point(&flow, &gtk::graphene::Point::new(x as f32, y as f32))?;
-    let child = flow.child_at_pos(point.x().round() as i32, point.y().round() as i32)?;
-    let tile = child.first_child().and_downcast::<SquareTile>()?;
+    let tile = tile_ancestor(&picked)?;
     if tile.imp().photo.borrow().is_some() {
         Some(tile)
     } else {
         None
     }
-}
-
-fn flow_ancestor(widget: &gtk::Widget) -> Option<gtk::FlowBox> {
-    let mut current = Some(widget.clone());
-    while let Some(candidate) = current {
-        if let Ok(flow) = candidate.clone().downcast::<gtk::FlowBox>() {
-            return Some(flow);
-        }
-        current = candidate.parent();
-    }
-    None
-}
-
-fn flow_descendant(widget: &gtk::Widget) -> Option<gtk::FlowBox> {
-    if let Ok(flow) = widget.clone().downcast::<gtk::FlowBox>() {
-        return Some(flow);
-    }
-    let mut child = widget.first_child();
-    while let Some(current) = child {
-        if let Some(flow) = flow_descendant(&current) {
-            return Some(flow);
-        }
-        child = current.next_sibling();
-    }
-    None
 }
 
 fn schedule_scroll_restore(
@@ -3891,102 +4040,40 @@ fn schedule_scroll_restore(
     });
 }
 
-fn folder_chunk_height(photo_count: usize, columns: u32, tile_height: i32) -> i32 {
-    let columns = columns.max(1) as usize;
-    let lines = photo_count.max(1).div_ceil(columns);
-    (lines as i32) * (tile_height.max(1) + 12)
+fn folder_line_height(tile_height: i32) -> i32 {
+    tile_height.max(1) + 12
 }
 
-fn update_folder_flow_layout(flow: &gtk::FlowBox, columns: u32, tile_height: i32) {
-    flow.set_max_children_per_line(columns.max(1));
-    let visible_photos = flow_box_tiles(flow)
-        .into_iter()
-        .filter(|tile| tile.is_visible() && tile.imp().photo.borrow().is_some())
-        .count();
-    if let Some(row_root) = flow.parent().and_downcast::<gtk::Box>() {
-        row_root.set_height_request(folder_chunk_height(visible_photos, columns, tile_height));
-    }
-}
-
-fn refresh_folder_viewport_tiles_for(
-    root: &gtk::ListView,
-    mapped_tiles: &Rc<RefCell<Vec<SquareTile>>>,
-) {
-    let trace = std::env::var_os("PICASA_TRACE").is_some();
-    let started = trace.then(Instant::now);
-    let mut mapped = mapped_tiles.borrow_mut();
-    mapped.retain(|tile| tile.is_mapped());
-    let mapped_count = mapped.len();
-    let mut near = 0usize;
-    let mut loaded = 0usize;
-    let mut unloaded = 0usize;
-    for tile in mapped.iter() {
-        // A recycled pool tile that GTK has not allocated reports height 0 and
-        // bounds at the origin, so it looked "near" and made us decode
-        // thumbnails for hundreds of offscreen rows. Leave it untouched.
-        if tile.height() <= 0 {
-            continue;
-        }
-        if tile_near_folder_viewport(tile, root) {
-            near += 1;
-            if !tile.imp().visual_loaded.get() {
-                loaded += 1;
-            }
-            tile.load_visual();
-        } else {
-            if tile.imp().visual_loaded.get() {
-                unloaded += 1;
-            }
-            tile.unload_visual();
-        }
-    }
-    let _ = near;
-    if let Some(started) = started {
-        let page = root
-            .vadjustment()
-            .map(|adjustment| adjustment.page_size())
-            .unwrap_or_default();
-        eprintln!(
-            "UI PERF viewport_tiles mapped={} near={} loaded={} unloaded={} ms={} root_h={} page={}",
-            mapped_count,
-            near,
-            loaded,
-            unloaded,
-            started.elapsed().as_millis(),
-            root.height(),
-            page
-        );
-    }
-}
-
-fn tile_near_folder_viewport(tile: &SquareTile, root: &gtk::ListView) -> bool {
-    if !tile.is_mapped() || root.height() <= 0 {
-        return false;
-    }
-    let Some(bounds) = tile.compute_bounds(root) else {
-        return false;
-    };
-    let viewport = root.height() as f32;
-    // Keep one viewport of prefetch on either side. This preserves smooth
-    // scrolling while avoiding thumbnail work for ListView overscan rows.
-    bounds.y() + bounds.height() >= -viewport && bounds.y() <= viewport * 2.0
-}
-
-fn flow_box_tiles(flow: &gtk::FlowBox) -> Vec<SquareTile> {
+fn box_tiles(line: &gtk::Box) -> Vec<SquareTile> {
     let mut tiles = Vec::new();
-    let mut child = flow.first_child();
+    let mut child = line.first_child();
     while let Some(current) = child {
-        if let Some(tile) = current
-            .first_child()
-            .and_then(|widget| widget.downcast::<SquareTile>().ok())
-        {
-            tiles.push(tile);
-        } else if let Ok(tile) = current.clone().downcast::<SquareTile>() {
+        if let Ok(tile) = current.clone().downcast::<SquareTile>() {
             tiles.push(tile);
         }
         child = current.next_sibling();
     }
     tiles
+}
+
+fn update_folder_realized_rows(widget: &gtk::Widget, tile_width: i32, tile_height: i32) {
+    if widget.widget_name().as_str() == "picasa-folder-photo-line" {
+        if let Some(line) = widget.downcast_ref::<gtk::Box>() {
+            for tile in box_tiles(line) {
+                tile.set_tile_size(tile_width, tile_height);
+            }
+            if line.is_visible() {
+                if let Some(row_root) = line.parent().and_downcast::<gtk::Box>() {
+                    row_root.set_height_request(folder_line_height(tile_height));
+                }
+            }
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        update_folder_realized_rows(&current, tile_width, tile_height);
+        child = current.next_sibling();
+    }
 }
 
 fn collect_tiles(widget: &gtk::Widget, tiles: &mut Vec<SquareTile>) {
@@ -4000,23 +4087,13 @@ fn collect_tiles(widget: &gtk::Widget, tiles: &mut Vec<SquareTile>) {
     }
 }
 
-fn collect_folder_flows(widget: &gtk::Widget, flows: &mut Vec<gtk::FlowBox>) {
-    if let Some(flow) = widget.downcast_ref::<gtk::FlowBox>() {
-        flows.push(flow.clone());
-    }
-    let mut child = widget.first_child();
-    while let Some(current) = child {
-        collect_folder_flows(&current, flows);
-        child = current.next_sibling();
-    }
-}
 
 #[cfg(test)]
 mod folder_stream_tests {
     use super::{
-        folder_chunk_height, folder_chunk_size, folder_dragged_positions,
+        folder_chunk_size, folder_dragged_positions, folder_line_height,
         folder_selection_after_click, folder_virtual_row_matches, folder_virtual_rows,
-        FolderRowData, FolderRowKind, FolderTileBounds, GroupRange, FOLDER_PHOTO_CHUNK_SIZE,
+        ordered_folder_ranges, FolderRowData, FolderRowKind, FolderTileBounds, GroupRange,
     };
 
     fn sample_ranges() -> Vec<GroupRange> {
@@ -4037,49 +4114,51 @@ mod folder_stream_tests {
     }
 
     #[test]
-    fn folder_virtual_stream_uses_header_plus_fixed_eight_photo_chunks() {
-        let rows = folder_virtual_rows(&sample_ranges(), FOLDER_PHOTO_CHUNK_SIZE);
-        assert_eq!(FOLDER_PHOTO_CHUNK_SIZE, 8);
-        assert_eq!(rows.len(), 5);
+    fn folder_virtual_stream_uses_one_fixed_photo_line_per_column_width() {
+        let rows = folder_virtual_rows(&sample_ranges(), 3);
+        assert_eq!(rows.len(), 9);
         assert_eq!(rows[0].kind, FolderRowKind::Header);
-        assert_eq!((rows[1].start, rows[1].end), (0, 5));
-        assert_eq!(rows[2].kind, FolderRowKind::Header);
-        assert_eq!((rows[3].start, rows[3].end), (5, 13));
-        assert_eq!((rows[4].start, rows[4].end), (13, 18));
+        assert_eq!((rows[1].start, rows[1].end), (0, 3));
+        assert_eq!((rows[2].start, rows[2].end), (3, 5));
+        assert_eq!(rows[3].kind, FolderRowKind::Header);
+        assert_eq!((rows[4].start, rows[4].end), (5, 8));
+        assert_eq!((rows[5].start, rows[5].end), (8, 11));
+        assert_eq!((rows[6].start, rows[6].end), (11, 14));
+        assert_eq!((rows[7].start, rows[7].end), (14, 17));
+        assert_eq!((rows[8].start, rows[8].end), (17, 18));
     }
 
     #[test]
-    fn folder_chunk_size_is_a_whole_number_of_rows() {
-        // Every chunk must be a whole number of rows for the column count so
-        // no chunk ends in a partial line.
+    fn folder_chunk_size_equals_columns() {
         for columns in 1..=8u32 {
-            let chunk = folder_chunk_size(columns);
-            assert_eq!(
-                chunk % columns as usize,
-                0,
-                "chunk {chunk} not aligned to {columns} columns"
-            );
+            assert_eq!(folder_chunk_size(columns), columns as usize);
         }
-        assert_eq!(folder_chunk_size(3), 9);
-        assert_eq!(folder_chunk_size(5), 10);
-        assert_eq!(folder_chunk_size(8), 8);
     }
 
     #[test]
-    fn folder_chunk_height_tracks_wrapped_lines_without_changing_model_shape() {
-        assert_eq!(folder_chunk_height(8, 8, 100), 112);
-        assert_eq!(folder_chunk_height(8, 4, 100), 224);
-        assert_eq!(folder_chunk_height(5, 3, 100), 224);
+    fn folder_photo_line_height_is_fixed() {
+        assert_eq!(folder_line_height(100), 112);
+        assert_eq!(folder_line_height(163), 175);
     }
 
     #[test]
-    fn folder_virtual_photo_chunks_never_exceed_chunk_size() {
-        let rows = folder_virtual_rows(&sample_ranges(), FOLDER_PHOTO_CHUNK_SIZE);
-        for row in rows
-            .into_iter()
-            .filter(|row| row.kind == FolderRowKind::Photos)
-        {
-            assert!(row.end - row.start <= FOLDER_PHOTO_CHUNK_SIZE);
+    fn folder_virtual_photo_lines_cover_each_range_without_gaps() {
+        for columns in 1..=8u32 {
+            let rows = folder_virtual_rows(&sample_ranges(), folder_chunk_size(columns));
+            for range in sample_ranges() {
+                let covered = rows
+                    .iter()
+                    .filter(|row| row.kind == FolderRowKind::Photos)
+                    .filter(|row| row.start >= range.start && row.end <= range.end)
+                    .flat_map(|row| row.start..row.end)
+                    .collect::<Vec<_>>();
+                assert_eq!(covered, (range.start..range.end).collect::<Vec<_>>());
+                assert!(rows
+                    .iter()
+                    .filter(|row| row.kind == FolderRowKind::Photos)
+                    .filter(|row| row.start >= range.start && row.end <= range.end)
+                    .all(|row| row.end - row.start <= columns as usize));
+            }
         }
     }
 
@@ -4147,6 +4226,17 @@ mod folder_stream_tests {
     }
 
     #[test]
+    fn folder_range_order_changes_presentation_without_changing_source_ranges() {
+        let original = sample_ranges();
+        let ordered = ordered_folder_ranges(&original, &[11, 10]);
+
+        assert_eq!(ordered.iter().map(|range| range.folder_id).collect::<Vec<_>>(), vec![11, 10]);
+        assert_eq!((ordered[0].start, ordered[0].end), (5, 18));
+        assert_eq!((ordered[1].start, ordered[1].end), (0, 5));
+        assert_eq!(original.iter().map(|range| range.folder_id).collect::<Vec<_>>(), vec![10, 11]);
+    }
+
+    #[test]
     fn folder_virtual_row_match_compares_identity_fields() {
         let base = FolderRowData {
             kind: FolderRowKind::Header,
@@ -4154,7 +4244,9 @@ mod folder_stream_tests {
             folder_path: "/photos".to_string(),
             label: "photos".to_string(),
             count: 3,
-            photos: Vec::new(),
+            start: 0,
+            end: 0,
+            photo_ids: Vec::new(),
         };
         assert!(folder_virtual_row_matches(&base, &base.clone()));
 
@@ -4165,5 +4257,17 @@ mod folder_stream_tests {
         let mut different_count = base.clone();
         different_count.count = 4;
         assert!(!folder_virtual_row_matches(&base, &different_count));
+
+        let mut different_photos = base.clone();
+        different_photos.kind = FolderRowKind::Photos;
+        different_photos.start = 0;
+        different_photos.end = 2;
+        different_photos.photo_ids = vec![10, 11];
+        let mut same_geometry_new_photos = different_photos.clone();
+        same_geometry_new_photos.photo_ids = vec![10, 12];
+        assert!(!folder_virtual_row_matches(
+            &different_photos,
+            &same_geometry_new_photos
+        ));
     }
 }
