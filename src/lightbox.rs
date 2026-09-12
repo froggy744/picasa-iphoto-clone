@@ -128,6 +128,8 @@ struct LightboxStats {
     decodes_completed: AtomicU64,
     decodes_failed: AtomicU64,
     decodes_cancelled: AtomicU64,
+    prefetches_started: AtomicU64,
+    prefetches_completed: AtomicU64,
     evictions: AtomicU64,
     // Gauges, not counters: last observed cache occupancy.
     cache_size: AtomicU64,
@@ -144,6 +146,8 @@ static LIGHTBOX_STATS: LightboxStats = LightboxStats {
     decodes_completed: AtomicU64::new(0),
     decodes_failed: AtomicU64::new(0),
     decodes_cancelled: AtomicU64::new(0),
+    prefetches_started: AtomicU64::new(0),
+    prefetches_completed: AtomicU64::new(0),
     evictions: AtomicU64::new(0),
     cache_size: AtomicU64::new(0),
     cache_bytes: AtomicU64::new(0),
@@ -171,6 +175,8 @@ pub(crate) fn take_lightbox_stats() -> Option<String> {
     let decodes_completed = swap(&LIGHTBOX_STATS.decodes_completed);
     let decodes_failed = swap(&LIGHTBOX_STATS.decodes_failed);
     let decodes_cancelled = swap(&LIGHTBOX_STATS.decodes_cancelled);
+    let prefetches_started = swap(&LIGHTBOX_STATS.prefetches_started);
+    let prefetches_completed = swap(&LIGHTBOX_STATS.prefetches_completed);
     let evictions = swap(&LIGHTBOX_STATS.evictions);
     if preview_hits == 0
         && cache_hits == 0
@@ -179,6 +185,8 @@ pub(crate) fn take_lightbox_stats() -> Option<String> {
         && decodes_completed == 0
         && decodes_failed == 0
         && decodes_cancelled == 0
+        && prefetches_started == 0
+        && prefetches_completed == 0
         && evictions == 0
     {
         return None;
@@ -187,7 +195,8 @@ pub(crate) fn take_lightbox_stats() -> Option<String> {
         "preview_hits={preview_hits} cache_hits={cache_hits} cache_misses={cache_misses} \
          miss_raw={cache_misses_raw} miss_edited={cache_misses_edited} \
          queued={decodes_queued} completed={decodes_completed} failed={decodes_failed} \
-         cancelled={decodes_cancelled} evictions={evictions} cache_size={} \
+         cancelled={decodes_cancelled} prefetch_started={prefetches_started} \
+         prefetch_done={prefetches_completed} evictions={evictions} cache_size={} \
          cache_mb={} capacity={} budget_mb={}",
         LIGHTBOX_STATS.cache_size.load(Ordering::Relaxed),
         LIGHTBOX_STATS.cache_bytes.load(Ordering::Relaxed) / (1024 * 1024),
