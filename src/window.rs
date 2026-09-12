@@ -12,6 +12,9 @@ use rusqlite::Connection;
 use crate::albums_view;
 use crate::{db, grid, infobar::InfoBar, lightbox::Lightbox, scanner, sidebar};
 
+mod layout_settle;
+use layout_settle::{should_observe_width, WidthSettleGate};
+
 // This intentionally mirrors the original, system-colour-aware GTK4 look.
 // It is installed above the iPhone stylesheet only while selected from the
 // gear menu, so switching back reveals the dark gallery without rebuilding UI.

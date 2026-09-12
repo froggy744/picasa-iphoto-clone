@@ -1717,13 +1717,32 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // and repeatedly rebuild visible rows. Apply the final width once after
     // the drag ends.
     let sidebar_resize_active = Rc::new(Cell::new(false));
+    // Temporary hover-autohide is presentation only. While that overlay is
+    // sliding in or out, keep the gallery's logical width/column model frozen
+    // so Folder mode does not rebuild rows just because the pointer touched
+    // the left edge. Pin/unpin remains a real layout change and uses the settle
+    // gate below to perform one final responsive update after the animation.
+    let sidebar_hover_layout_freeze = Rc::new(Cell::new(false));
+    // Generation protects against a delayed hide callback unfreezing a newer
+    // hover reveal when the pointer returns to the edge very quickly.
+    let sidebar_hover_freeze_generation = Rc::new(Cell::new(0u64));
+    let sidebar_layout_settle = Rc::new(RefCell::new(WidthSettleGate::new(3)));
     let gallery_for_resize = gallery.clone();
     let sidebar_resize_active_for_tick = sidebar_resize_active.clone();
+    let sidebar_hover_layout_freeze_for_tick = sidebar_hover_layout_freeze.clone();
+    let sidebar_layout_settle_for_tick = sidebar_layout_settle.clone();
     gallery_scroll_stack.add_tick_callback(move |surface, _clock| {
         crate::diagnostics::scroll_tick();
-        if !sidebar_resize_active_for_tick.get() {
+        if should_observe_width(
+            sidebar_resize_active_for_tick.get(),
+            sidebar_hover_layout_freeze_for_tick.get(),
+        ) {
             let width = surface.width();
-            if width > 100 {
+            if width > 100
+                && sidebar_layout_settle_for_tick
+                    .borrow_mut()
+                    .observe(width)
+            {
                 gallery_for_resize.update_width(width);
             }
         }
@@ -2673,10 +2692,20 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let sidebar_hover_motion = gtk::EventControllerMotion::new();
     let main_split_for_hover_reveal = main_split.clone();
     let sidebar_for_hover_reveal = sidebar.clone();
+    let sidebar_hover_layout_freeze_for_reveal = sidebar_hover_layout_freeze.clone();
+    let sidebar_hover_freeze_generation_for_reveal = sidebar_hover_freeze_generation.clone();
     sidebar_hover_motion.connect_enter(move |_, _, _| {
         if !main_split_for_hover_reveal.shows_sidebar()
             && !sidebar::is_pinned(&sidebar_for_hover_reveal)
         {
+            // Hover reveal is intentionally presentation-only. Freeze the
+            // gallery model before OverlaySplitView starts changing width.
+            sidebar_hover_freeze_generation_for_reveal.set(
+                sidebar_hover_freeze_generation_for_reveal
+                    .get()
+                    .wrapping_add(1),
+            );
+            sidebar_hover_layout_freeze_for_reveal.set(true);
             sidebar::set_hover_open(&sidebar_for_hover_reveal, true);
             main_split_for_hover_reveal.set_show_sidebar(true);
         }
@@ -2690,15 +2719,41 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let sidebar_for_hover_hide = sidebar.clone();
     sidebar_leave_motion.connect_leave(move |_| {
         if sidebar::is_hover_open(&sidebar_for_hover_hide) {
-            sidebar::clear_hover_open(&sidebar_for_hover_hide);
+            // The show-sidebar notify handler below owns release of the layout
+            // freeze after the hide animation. This also covers other UI paths
+            // that can close a temporarily revealed sidebar.
             main_split_for_hover_hide.set_show_sidebar(false);
+            sidebar::clear_hover_open(&sidebar_for_hover_hide);
         }
     });
     sidebar_shell.add_controller(sidebar_leave_motion);
 
     let sidebar_hover_reveal_for_state = sidebar_hover_reveal.clone();
+    let sidebar_for_show_state = sidebar.clone();
+    let sidebar_hover_layout_freeze_for_state = sidebar_hover_layout_freeze.clone();
+    let sidebar_hover_freeze_generation_for_state = sidebar_hover_freeze_generation.clone();
     main_split.connect_show_sidebar_notify(move |split| {
         sidebar_hover_reveal_for_state.set_visible(!split.shows_sidebar());
+
+        if !split.shows_sidebar() && sidebar_hover_layout_freeze_for_state.get() {
+            // A hover-open sidebar may be closed by mouse-leave, destination
+            // selection, search, or another compact-layout action. Keep the
+            // gallery frozen through the slide-out, then release without a
+            // forced reflow. If another hover reveal starts first, generation
+            // matching prevents this old timeout from unfreezing the new one.
+            sidebar::clear_hover_open(&sidebar_for_show_state);
+            let generation = sidebar_hover_freeze_generation_for_state
+                .get()
+                .wrapping_add(1);
+            sidebar_hover_freeze_generation_for_state.set(generation);
+            let freeze = sidebar_hover_layout_freeze_for_state.clone();
+            let active_generation = sidebar_hover_freeze_generation_for_state.clone();
+            glib::timeout_add_local_once(Duration::from_millis(400), move || {
+                if active_generation.get() == generation {
+                    freeze.set(false);
+                }
+            });
+        }
     });
 
     // Keep resize geometry stable for the full drag gesture. Recomputing the
@@ -2720,7 +2775,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let sidebar_drag_start_width_begin = sidebar_drag_start_width.clone();
     let sidebar_drag_split_width_begin = sidebar_drag_split_width.clone();
     let sidebar_resize_active_for_begin = sidebar_resize_active.clone();
+    let sidebar_layout_settle_for_drag_begin = sidebar_layout_settle.clone();
     sidebar_drag.connect_drag_begin(move |_, _, _| {
+        sidebar_layout_settle_for_drag_begin.borrow_mut().cancel();
         sidebar_resize_active_for_begin.set(true);
         sidebar_drag_start_width_begin
             .set(sidebar_shell_for_drag_begin.width().max(1) as f64);
@@ -2775,7 +2832,20 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let main_split_for_hide = main_split.clone();
     let sidebar_for_hide = sidebar.clone();
+    let sidebar_layout_settle_for_hide = sidebar_layout_settle.clone();
+    let sidebar_hover_layout_freeze_for_unpin = sidebar_hover_layout_freeze.clone();
+    let sidebar_hover_freeze_generation_for_unpin = sidebar_hover_freeze_generation.clone();
     menu.connect_clicked(move |_| {
+        // Unpinning is a persistent layout change. Allow the animation to run
+        // without intermediate Folder rebuilds, then reflow once at its final
+        // width through WidthSettleGate.
+        sidebar_hover_freeze_generation_for_unpin.set(
+            sidebar_hover_freeze_generation_for_unpin
+                .get()
+                .wrapping_add(1),
+        );
+        sidebar_hover_layout_freeze_for_unpin.set(false);
+        sidebar_layout_settle_for_hide.borrow_mut().begin();
         sidebar::set_pinned(&sidebar_for_hide, false);
         sidebar::clear_hover_open(&sidebar_for_hide);
         main_split_for_hide.set_show_sidebar(false);
@@ -2794,7 +2864,19 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     show_sidebar.set_visible(false);
     let main_split_for_show = main_split.clone();
     let sidebar_for_show = sidebar.clone();
+    let sidebar_layout_settle_for_show = sidebar_layout_settle.clone();
+    let sidebar_hover_layout_freeze_for_pin = sidebar_hover_layout_freeze.clone();
+    let sidebar_hover_freeze_generation_for_pin = sidebar_hover_freeze_generation.clone();
     show_sidebar.connect_clicked(move |_| {
+        // Pinning is the point where the sidebar becomes part of the persistent
+        // layout. Recalculate only once after the slide has settled.
+        sidebar_hover_freeze_generation_for_pin.set(
+            sidebar_hover_freeze_generation_for_pin
+                .get()
+                .wrapping_add(1),
+        );
+        sidebar_hover_layout_freeze_for_pin.set(false);
+        sidebar_layout_settle_for_show.borrow_mut().begin();
         sidebar::set_pinned(&sidebar_for_show, true);
         main_split_for_show.set_show_sidebar(true);
     });
