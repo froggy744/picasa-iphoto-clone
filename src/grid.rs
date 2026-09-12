@@ -2226,13 +2226,16 @@ impl Gallery {
         }
     }
 
-    /// Warm a small RAM thumbnail buffer around the settled Folder viewport.
+    /// Warm a RAM thumbnail buffer around the Folder viewport.
     ///
-    /// This is intentionally budgeted. It may perform cache-file I/O, so the
-    /// caller invokes only a few tiles per idle/timer slice and cancels the
-    /// process as soon as scrolling resumes. The hot ListView bind path remains
-    /// strictly RAM-only.
-    pub fn prefetch_folder_cached_tiles(&self, budget: usize) -> usize {
+    /// `direction` is the current scroll direction (negative = up, positive =
+    /// down, 0 = unknown). Tiles ahead of the viewport in that direction are
+    /// prioritised so they are already in RAM when they scroll into view, which
+    /// is what stops the "blank then pop in" flicker during fast scrolling.
+    ///
+    /// Each warm may perform cache-file I/O, so callers use a bounded budget.
+    /// The hot ListView bind path stays strictly RAM-only.
+    pub fn prefetch_folder_cached_tiles(&self, budget: usize, direction: f64) -> usize {
         if budget == 0
             || self.group_mode.get() != GroupMode::Folder
             || self.folder_root.height() <= 0
@@ -2246,26 +2249,38 @@ impl Gallery {
         let mut candidates: Vec<(f32, SquareTile)> = Vec::new();
 
         for tile in tiles {
-            if !tile.is_mapped() || tile.height() <= 0 || tile.imp().visual_loaded.get() {
+            // Deliberately do NOT require is_mapped(): GtkListView recycles a
+            // large pool of realized-but-offscreen rows, and those are exactly
+            // the ones about to scroll into view. Warm them ahead of time so the
+            // bind finds a RAM hit instead of showing a blank tile. Bounds are
+            // still checked against a bounded window below.
+            if tile.height() <= 0 || tile.imp().visual_loaded.get() {
                 continue;
             }
             let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
                 continue;
             };
-            // Keep a generous but finite rolling buffer around the viewport.
-            // Large scrollbar jumps still remain cheap because warming is
-            // cancelled immediately when adjustment values start moving.
-            if bounds.y() + bounds.height() < -viewport * 2.0 || bounds.y() > viewport * 3.0 {
+            let below = bounds.y();
+            let above_end = bounds.y() + bounds.height();
+            // Keep a generous rolling buffer around the viewport. Warming is
+            // bounded per slice, so a wide window is cheap and gives fast
+            // scrolling more time to reach the warmed tiles.
+            if above_end < -viewport * 4.0 || below > viewport * 5.0 {
                 continue;
             }
 
-            let distance = if bounds.y() + bounds.height() < 0.0 {
-                -(bounds.y() + bounds.height())
-            } else if bounds.y() > viewport {
-                bounds.y() - viewport
+            let base = if above_end < 0.0 {
+                -above_end
+            } else if below > viewport {
+                below - viewport
             } else {
                 0.0
             };
+            // Penalise tiles behind the direction of travel so request order
+            // follows the user rather than filling both sides equally.
+            let behind = (direction >= 0.0 && above_end < 0.0)
+                || (direction < 0.0 && below > viewport);
+            let distance = if behind { base + viewport * 4.0 } else { base };
             candidates.push((distance, tile));
         }
 

@@ -1533,6 +1533,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let filter_for_scroll_location = filter.clone();
     let folder_follow_scheduled = Rc::new(Cell::new(false));
     let latest_folder_scroll_y = Rc::new(Cell::new(0.0_f64));
+    // Last scroll direction, used to warm thumbnails ahead of the user rather
+    // than both sides equally.
+    let folder_scroll_direction = Rc::new(Cell::new(0.0_f64));
+    let folder_scroll_direction_for_event = folder_scroll_direction.clone();
     // Thumbnail loading is intentionally debounced until Folder motion stops.
     // GtkListView may rebind thousands of intermediate rows during a scrollbar
     // jump; loading thumbnails from each bind is pure wasted main-thread work.
@@ -1561,7 +1565,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     .set(scroll_handler_calls_for_event.get().wrapping_add(1));
             }
             let scroll_y = adjustment.value();
-            latest_folder_scroll_y.set(scroll_y);
+            let previous_y = latest_folder_scroll_y.replace(scroll_y);
+            let direction = scroll_y - previous_y;
+            if direction != 0.0 {
+                folder_scroll_direction_for_event.set(direction);
+            }
 
             // Keep only the cheap position bookkeeping in the raw adjustment
             // callback. Widget picking and sidebar work are throttled below so
@@ -1583,14 +1591,18 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if !folder_thumbnail_motion_warm_for_event.replace(true) {
                 let gallery_for_motion_warm = gallery_for_folder_scroll.clone();
                 let scheduled = folder_thumbnail_motion_warm_for_event.clone();
-                glib::timeout_add_local_once(Duration::from_millis(120), move || {
+                let direction = folder_scroll_direction_for_event.get();
+                // Run frequently and warm a decent batch so fast scrolling does
+                // not outrun the RAM cache and leave visible blanks.
+                glib::timeout_add_local_once(Duration::from_millis(40), move || {
                     scheduled.set(false);
-                    gallery_for_motion_warm.prefetch_folder_cached_tiles(8);
+                    gallery_for_motion_warm.prefetch_folder_cached_tiles(16, direction);
                 });
             }
             let gallery_for_visible = gallery_for_folder_scroll.clone();
             let debounce_slot = folder_thumbnail_debounce_for_event.clone();
             let prefetch_slot = folder_thumbnail_prefetch_for_event.clone();
+            let direction_for_settle = folder_scroll_direction_for_event.get();
             let source = glib::timeout_add_local(Duration::from_millis(90), move || {
                 debounce_slot.borrow_mut().take();
                 gallery_for_visible.refresh_visible_folder_tiles();
@@ -1604,7 +1616,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 let prefetch_source = glib::timeout_add_local(
                     Duration::from_millis(16),
                     move || {
-                        let loaded = gallery_for_prefetch.prefetch_folder_cached_tiles(4);
+                        let loaded =
+                            gallery_for_prefetch.prefetch_folder_cached_tiles(12, direction_for_settle);
                         if loaded == 0 {
                             prefetch_slot_for_tick.borrow_mut().take();
                             glib::ControlFlow::Break
