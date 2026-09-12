@@ -215,9 +215,19 @@ fn install_smooth_gallery_scroll(
             let acceleration = SPRING * error - DAMPING * speed;
             speed += acceleration * dt;
             let proposed = (current + speed * dt).clamp(lower, upper);
-            let overshot = (destination - current).signum() != 0.0
-                && (destination - proposed).signum() != (destination - current).signum();
-            if overshot {
+            let current_dist = (destination - current).abs();
+            let proposed_dist = (destination - proposed).abs();
+            // Crossing the destination in one step, or moving *away* from it,
+            // both mean the spring has overshot. The divergence case matters
+            // for the folder ListView: GTK can push the adjustment past our
+            // target while the spring is still moving in that direction, so the
+            // spring keeps accelerating away and the stall guard later snaps a
+            // large distance (measured 563 px).
+            let sign_flip = current_dist > f64::EPSILON
+                && (destination - proposed).signum()
+                    != (destination - current).signum();
+            let diverging = proposed_dist > current_dist;
+            if sign_flip || diverging {
                 last_animation_value.set(destination);
                 adjustment.set_value(destination);
                 velocity.set(0.0);
