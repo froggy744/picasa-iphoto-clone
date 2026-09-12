@@ -120,13 +120,10 @@ impl PhotoObject {
         // re-probed after a TTL. Probing every original while constructing a
         // library-sized model, or synchronously while scrolling, blocks GTK.
         imp.original_available.set(true);
-        *imp.cached_thumbnail_path.borrow_mut() = thumbnail::cache_path(
-            &photo.path,
-            photo.mtime,
-            photo.size_bytes,
-        )
-        .ok()
-        .map(|path| path.to_string_lossy().into_owned());
+        *imp.cached_thumbnail_path.borrow_mut() =
+            thumbnail::cache_path(&photo.path, photo.mtime, photo.size_bytes)
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned());
         // The visible tile performs this inexpensive cache check lazily.
         imp.thumbnail_available.set(false);
         imp.original_checked_at.set(None);

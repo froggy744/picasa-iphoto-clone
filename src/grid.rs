@@ -2093,8 +2093,7 @@ impl Gallery {
         let Some(cache) = self.folder_cache.borrow().clone() else {
             return false;
         };
-        if cache.columns != self.current_columns.get()
-            || cache.order != *self.folder_order.borrow()
+        if cache.columns != self.current_columns.get() || cache.order != *self.folder_order.borrow()
         {
             return false;
         }
@@ -2445,8 +2444,8 @@ impl Gallery {
             };
             // Penalise tiles behind the direction of travel so request order
             // follows the user rather than filling both sides equally.
-            let behind = (direction >= 0.0 && above_end < 0.0)
-                || (direction < 0.0 && below > viewport);
+            let behind =
+                (direction >= 0.0 && above_end < 0.0) || (direction < 0.0 && below > viewport);
             let distance = if behind { base + viewport * 4.0 } else { base };
             candidates.push((distance, tile));
         }
