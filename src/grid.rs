@@ -28,7 +28,7 @@ const ZOOM_STEP_WIDTH: i32 = 24;
 // instead of a click. Keeps double-click detection intact.
 const DRAG_CLAIM_THRESHOLD: f64 = 6.0;
 
-const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 128;
+const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 256;
 // Folder scrolling must never decode or stat thumbnails from the ListView
 // bind callback. Keep a modest RAM LRU of paintables that were loaded by the
 // settled-viewport path so recycled rows can still show an instant thumbnail
@@ -36,7 +36,7 @@ const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 128;
 const FOLDER_THUMBNAIL_CACHE_CAPACITY: usize = 256;
 
 thread_local! {
-    static RAW_THUMBNAIL_CACHE: RefCell<VecDeque<(String, i32, gtk::gdk::Paintable)>> =
+    static RAW_THUMBNAIL_CACHE: RefCell<VecDeque<(String, i32, String, gtk::gdk::Paintable)>> =
         const { RefCell::new(VecDeque::new()) };
     static FOLDER_THUMBNAIL_CACHE: RefCell<VecDeque<(String, gtk::gdk::Paintable)>> =
         const { RefCell::new(VecDeque::new()) };
@@ -718,11 +718,10 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
     }
 
     let rotation = photo.rotation().rem_euclid(360);
-    let recipe = crate::edit::EditRecipe::decode(&photo.edit_recipe());
-    if recipe.is_default() {
-        if let Some(paintable) = raw_thumbnail_cache_get(&source_path, rotation) {
-            return Some(paintable);
-        }
+    let edit_recipe = photo.edit_recipe();
+    let recipe = crate::edit::EditRecipe::decode(&edit_recipe);
+    if let Some(paintable) = raw_thumbnail_cache_get(&source_path, rotation, &edit_recipe) {
+        return Some(paintable);
     }
 
     let mut image = image::open(path).ok()?.to_rgba8();
@@ -776,32 +775,35 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
         width as usize * 4,
     );
     let paintable: gtk::gdk::Paintable = texture.upcast();
-    if recipe.is_default() {
-        raw_thumbnail_cache_insert(source_path, rotation, paintable.clone());
-    }
+    raw_thumbnail_cache_insert(source_path, rotation, edit_recipe, paintable.clone());
     Some(paintable)
 }
 
-fn raw_thumbnail_cache_get(path: &str, rotation: i32) -> Option<gtk::gdk::Paintable> {
+fn raw_thumbnail_cache_get(path: &str, rotation: i32, recipe: &str) -> Option<gtk::gdk::Paintable> {
     RAW_THUMBNAIL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        let index = cache.iter().position(|(cached_path, cached_rotation, _)| {
-            cached_path == path && *cached_rotation == rotation
+        let index = cache.iter().position(|(cached_path, cached_rotation, cached_recipe, _)| {
+            cached_path == path && *cached_rotation == rotation && cached_recipe == recipe
         })?;
         let entry = cache.remove(index)?;
-        let paintable = entry.2.clone();
+        let paintable = entry.3.clone();
         cache.push_back(entry);
         Some(paintable)
     })
 }
 
-fn raw_thumbnail_cache_insert(path: String, rotation: i32, paintable: gtk::gdk::Paintable) {
+fn raw_thumbnail_cache_insert(
+    path: String,
+    rotation: i32,
+    recipe: String,
+    paintable: gtk::gdk::Paintable,
+) {
     RAW_THUMBNAIL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        cache.retain(|(cached_path, cached_rotation, _)| {
-            cached_path != &path || *cached_rotation != rotation
+        cache.retain(|(cached_path, cached_rotation, cached_recipe, _)| {
+            cached_path != &path || *cached_rotation != rotation || cached_recipe != &recipe
         });
-        cache.push_back((path, rotation, paintable));
+        cache.push_back((path, rotation, recipe, paintable));
         while cache.len() > RAW_THUMBNAIL_CACHE_CAPACITY {
             cache.pop_front();
         }
