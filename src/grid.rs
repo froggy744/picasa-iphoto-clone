@@ -1127,6 +1127,11 @@ pub struct Gallery {
     // Photo at the viewport top captured before a zoom resizes the tiles, so
     // the row reshape can restore the same viewport after the relayout.
     zoom_anchor: Rc<Cell<Option<i64>>>,
+    // Coalesces rapid Ctrl+wheel zoom input: the visual reflow is deferred while
+    // the user is still spinning so crossing several column boundaries triggers
+    // one Folder row rebuild instead of one per notch.
+    pending_zoom_width: Rc<Cell<Option<i32>>>,
+    zoom_reflow_source: Rc<RefCell<Option<glib::SourceId>>>,
     on_zoom_changed: Rc<dyn Fn(i32)>,
 }
 
@@ -1784,6 +1789,8 @@ impl Gallery {
             group_ranges: Rc::new(RefCell::new(Vec::new())),
             last_scroll_y: Rc::new(Cell::new(0.0)),
             zoom_anchor: Rc::new(Cell::new(None)),
+            pending_zoom_width: Rc::new(Cell::new(None)),
+            zoom_reflow_source: Rc::new(RefCell::new(None)),
             on_zoom_changed,
         };
         gallery.replace(photos);
@@ -2222,17 +2229,63 @@ impl Gallery {
         ));
     }
 
-    pub fn zoom_in(&self) {
-        self.set_zoom(self.tile_width.get() + ZOOM_STEP_WIDTH);
+    pub fn zoom_in(self: &Rc<Self>) {
+        let base = self
+            .pending_zoom_width
+            .get()
+            .unwrap_or_else(|| self.tile_width.get());
+        self.request_zoom(base + ZOOM_STEP_WIDTH);
     }
 
-    pub fn zoom_out(&self) {
-        self.set_zoom(self.tile_width.get() - ZOOM_STEP_WIDTH);
+    pub fn zoom_out(self: &Rc<Self>) {
+        let base = self
+            .pending_zoom_width
+            .get()
+            .unwrap_or_else(|| self.tile_width.get());
+        self.request_zoom(base - ZOOM_STEP_WIDTH);
+    }
+
+    /// Record a zoom request. Isolated clicks apply immediately; a rapid
+    /// Ctrl+wheel spin coalesces its extra notches into one trailing reflow so
+    /// crossing several column boundaries does not rebuild the Folder rows per
+    /// notch.
+    pub fn request_zoom(self: &Rc<Self>, width: i32) {
+        let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+        let base = self
+            .pending_zoom_width
+            .get()
+            .unwrap_or_else(|| self.tile_width.get());
+        if width == base {
+            return;
+        }
+        // A burst is already in progress if a trailing source exists.
+        let leading = self.zoom_reflow_source.borrow().is_none();
+        self.pending_zoom_width.set(Some(width));
+        if leading {
+            let this = self.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(width) = this.pending_zoom_width.take() {
+                    this.apply_zoom(width);
+                }
+            });
+        }
+        if let Some(source) = self.zoom_reflow_source.borrow_mut().take() {
+            source.remove();
+        }
+        let this = self.clone();
+        let source = glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
+            this.zoom_reflow_source.borrow_mut().take();
+            if let Some(width) = this.pending_zoom_width.take() {
+                this.apply_zoom(width);
+            }
+            glib::ControlFlow::Break
+        });
+        self.zoom_reflow_source.replace(Some(source));
     }
 
     /// Zoom is driven by width. Height scales by the same factor, preserving
     /// the custom width/height shape configured above.
-    pub fn set_zoom(&self, width: i32) {
+    fn apply_zoom(&self, width: i32) {
         let trace = std::env::var_os("PICASA_TRACE").is_some();
         let zoom_started = trace.then(Instant::now);
         let old_width = self.tile_width.get().max(1);

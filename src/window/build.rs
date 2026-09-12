@@ -2047,7 +2047,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 editor.fit();
             }
         } else {
-            gallery_for_zoom_reset.set_zoom(DEFAULT_GRID_THUMBNAIL_SIZE);
+            gallery_for_zoom_reset.request_zoom(DEFAULT_GRID_THUMBNAIL_SIZE);
         }
     });
     let gallery_for_zoom_in = gallery.clone();
