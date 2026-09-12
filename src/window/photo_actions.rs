@@ -570,8 +570,31 @@ fn show_photo_context_menu(
         let navigate_to_folder = context.navigate_to_folder.clone();
         let dismiss_menu_for_folder = dismiss_menu.clone();
         let photo_id = photo.id();
+        let current_filter = context.filter.clone();
+        let current_search = context.search.clone();
+        let gallery_for_folder = context.gallery.clone();
+        let sidebar_for_folder = context.sidebar.clone();
         open_in_folder.connect_clicked(move |_| {
             if folder_id != 0 {
+                // If we are already in the continuous Folder tree/stream and no
+                // search filter is active, do not route through destination
+                // navigation again. That path can first scroll to the folder
+                // header and then re-select the photo, which is fragile for
+                // virtualized folder rows. Directly select/scroll the clicked
+                // photo instead, and still reveal its folder in the sidebar.
+                if matches!(current_filter.get(), sidebar::SidebarFilter::Folder(_))
+                    && current_search.borrow().is_empty()
+                {
+                    if let Some(gallery) = gallery_for_folder.borrow().upgrade() {
+                        if gallery.select_photo(photo_id) {
+                            if let Some(sidebar) = sidebar_for_folder.borrow().as_ref() {
+                                sidebar::scroll_to_folder(sidebar, folder_id);
+                            }
+                            dismiss_menu_for_folder();
+                            return;
+                        }
+                    }
+                }
                 navigate_to_folder(folder_id, photo_id);
             }
             dismiss_menu_for_folder();

@@ -84,6 +84,8 @@ const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
 const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
 const FOLDER_WATCH_KEY: &str = "picasa-sidebar-folder-watch";
+const FOLDER_MODE_TOGGLE_KEY: &str = "picasa-sidebar-folder-mode-toggle";
+const FOLDER_MODE_CHANGED_KEY: &str = "picasa-sidebar-folder-mode-changed";
 const KEYBOARD_GRID_TARGET_KEY: &str = "picasa-sidebar-keyboard-grid-target";
 const SCROLL_LOCATION_FOLDER_KEY: &str = "picasa-sidebar-scroll-location-folder";
 
@@ -373,6 +375,8 @@ pub fn build(
         outer.set_data(FOLDER_SCROLL_KEY, folder_scroll);
         outer.set_data(FOLDER_REVEALER_KEY, folder_revealer);
         outer.set_data(FOLDER_INDICATOR_KEY, folder_indicator);
+        outer.set_data(FOLDER_MODE_TOGGLE_KEY, folder_mode_toggle);
+        outer.set_data(FOLDER_MODE_CHANGED_KEY, on_folder_display_mode_changed);
         outer.set_data(FILTER_SYNCING_KEY, filter_syncing);
     }
 
@@ -960,6 +964,32 @@ pub fn visible_folder_ids(scrolled: &gtk::ScrolledWindow) -> Vec<i64> {
     ids
 }
 
+pub fn set_folder_display_mode(scrolled: &gtk::ScrolledWindow, mode: FolderDisplayMode) -> bool {
+    let Some(state) = sidebar_state(scrolled) else {
+        return false;
+    };
+    if state.borrow().folder_display_mode == mode {
+        return false;
+    }
+
+    state.borrow_mut().folder_display_mode = mode;
+    if let Some(toggle) = stored_widget::<gtk::Button>(scrolled, FOLDER_MODE_TOGGLE_KEY) {
+        set_folder_mode_toggle_presentation(&toggle, mode);
+    }
+    if let Some(list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) {
+        rebuild_folder_list_from_rows(&list, &state);
+    }
+    let callback = unsafe {
+        scrolled
+            .data::<Rc<dyn Fn(FolderDisplayMode)>>(FOLDER_MODE_CHANGED_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
+    if let Some(callback) = callback {
+        callback(mode);
+    }
+    true
+}
+
 pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) {
     unsafe {
         scrolled.set_data(CURRENT_FILTER_KEY, filter);
@@ -1042,6 +1072,18 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
         return;
     };
 
+    // A navigation request should reveal the exact folder row, not only an
+    // imported parent/root. Force Tree mode for Open in Folder/search reveals
+    // so the full ancestor path exists in the sidebar, then continue scrolling
+    // after the rebuilt rows have been allocated.
+    if set_folder_display_mode(scrolled, FolderDisplayMode::Tree) {
+        let scrolled = scrolled.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
+            scroll_to_folder(&scrolled, folder_id);
+        });
+        return;
+    }
+
     // A navigation request must make the target row visible even when the
     // user previously collapsed the entire Folders section.
     state.borrow_mut().folders_expanded = true;
@@ -1106,6 +1148,7 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
                     syncing.set(true);
                 }
                 select_matching_row(scrolled, FOLDER_LIST_KEY, SidebarFilter::Folder(folder_id));
+                row.grab_focus();
                 if let Some(syncing) = syncing {
                     syncing.set(false);
                 }

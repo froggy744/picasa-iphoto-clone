@@ -2109,11 +2109,24 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         Rc::new(move |folder_id, photo_id| {
             destination_click(sidebar::SidebarFilter::Folder(folder_id));
             let gallery = gallery.clone();
-            let attempts = Rc::new(Cell::new(0));
+            let attempts = Rc::new(Cell::new(0u32));
+            let first_success = Rc::new(Cell::new(None::<u32>));
             let attempts_for_timer = attempts.clone();
+            let first_success_for_timer = first_success.clone();
             glib::timeout_add_local(Duration::from_millis(25), move || {
-                attempts_for_timer.set(attempts_for_timer.get() + 1);
-                if gallery.select_photo(photo_id) || attempts_for_timer.get() >= 200 {
+                let attempt = attempts_for_timer.get() + 1;
+                attempts_for_timer.set(attempt);
+                if gallery.select_photo(photo_id) && first_success_for_timer.get().is_none() {
+                    first_success_for_timer.set(Some(attempt));
+                }
+
+                // Folder navigation can start while the previous search/result
+                // model still contains the target photo. A too-early success
+                // can therefore be against the old model, before the full
+                // Folder stream has replaced it. Keep re-applying the target
+                // for a fixed settling window so the final select happens after
+                // the folder refresh/progressive rebuild and any header scroll.
+                if first_success_for_timer.get().is_some() && attempt >= 80 || attempt >= 240 {
                     glib::ControlFlow::Break
                 } else {
                     glib::ControlFlow::Continue
@@ -2121,11 +2134,21 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             });
             let sidebar = sidebar_selection.borrow().as_ref().cloned();
             if let Some(sidebar) = sidebar {
-                // set_active_filter() restores the previous folder scroll
-                // position on idle; reveal and scroll after that restoration
-                // so repeated navigation cannot overwrite the target.
-                glib::timeout_add_local_once(Duration::from_millis(100), move || {
+                // set_active_filter(), tree expansion, and folder-list rebuilds
+                // can each schedule their own scroll restoration. Re-apply the
+                // sidebar reveal briefly so Open in Folder from search/lightbox
+                // reliably ends with the target folder visible and selected.
+                let sidebar_attempts = Rc::new(Cell::new(0u32));
+                let sidebar_attempts_for_timer = sidebar_attempts.clone();
+                glib::timeout_add_local(Duration::from_millis(100), move || {
+                    let attempt = sidebar_attempts_for_timer.get() + 1;
+                    sidebar_attempts_for_timer.set(attempt);
                     sidebar::scroll_to_folder(&sidebar, folder_id);
+                    if attempt >= 12 {
+                        glib::ControlFlow::Break
+                    } else {
+                        glib::ControlFlow::Continue
+                    }
                 });
             }
         })
