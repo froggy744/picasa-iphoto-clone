@@ -89,33 +89,46 @@ impl PhotoObject {
     }
 
     pub fn from_photo(photo: &Photo) -> Self {
-        let cached_thumbnail_path =
-            thumbnail::cache_path(&photo.path, photo.mtime, photo.size_bytes)
-                .ok()
-                .map(|path| path.to_string_lossy().into_owned());
-        let object = glib::Object::builder::<Self>()
-            .property("id", photo.id)
-            .property("path", &photo.path)
-            .property("filename", crate::source::filename(&photo.path))
-            .property("taken-at", photo.taken_at.clone())
-            .property("camera", photo.camera.clone())
-            .property("width", photo.width.unwrap_or_default())
-            .property("height", photo.height.unwrap_or_default())
-            .property("size-bytes", photo.size_bytes.unwrap_or_default())
-            .property("mtime", photo.mtime.unwrap_or_default())
-            .property("rotation", photo.rotation)
-            .property("edit-recipe", &photo.edit_recipe)
-            .property("favorite", photo.favorite)
-            .property("folder-id", photo.folder_id.unwrap_or_default())
-            .property("folder-path", photo.folder_path.clone())
-            // Availability is probed asynchronously when a tile is bound, and
-            // re-probed after a TTL. Probing every original while constructing a
-            // library-sized model, or synchronously while scrolling, blocks GTK.
-            .property("original-available", true)
-            .property("cached-thumbnail-path", cached_thumbnail_path.clone())
-            // The visible tile performs this inexpensive cache check lazily.
-            .property("thumbnail-available", false)
-            .build();
+        let object: Self = glib::Object::new();
+        object.set_from_photo(photo);
         object
+    }
+
+    /// Populate a fresh object directly rather than through the GObject property
+    /// system. Constructing a library-sized model sets ~15 properties for each
+    /// of tens of thousands of photos; going through `set_property` (ParamSpec
+    /// lookup, `Value` boxing, notifications) dominated folder-open time. No
+    /// consumer connects to these properties' notify signals, so writing the
+    /// subclass fields directly is equivalent and several times faster.
+    pub fn set_from_photo(&self, photo: &Photo) {
+        let imp = self.imp();
+        imp.id.set(photo.id);
+        *imp.path.borrow_mut() = photo.path.clone();
+        *imp.filename.borrow_mut() = crate::source::filename(&photo.path);
+        *imp.taken_at.borrow_mut() = photo.taken_at.clone();
+        *imp.camera.borrow_mut() = photo.camera.clone();
+        imp.width.set(photo.width.unwrap_or_default());
+        imp.height.set(photo.height.unwrap_or_default());
+        imp.size_bytes.set(photo.size_bytes.unwrap_or_default());
+        imp.mtime.set(photo.mtime.unwrap_or_default());
+        imp.rotation.set(photo.rotation);
+        *imp.edit_recipe.borrow_mut() = photo.edit_recipe.clone();
+        imp.favorite.set(photo.favorite);
+        imp.folder_id.set(photo.folder_id.unwrap_or_default());
+        *imp.folder_path.borrow_mut() = photo.folder_path.clone();
+        // Availability is probed asynchronously when a tile is bound, and
+        // re-probed after a TTL. Probing every original while constructing a
+        // library-sized model, or synchronously while scrolling, blocks GTK.
+        imp.original_available.set(true);
+        *imp.cached_thumbnail_path.borrow_mut() = thumbnail::cache_path(
+            &photo.path,
+            photo.mtime,
+            photo.size_bytes,
+        )
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
+        // The visible tile performs this inexpensive cache check lazily.
+        imp.thumbnail_available.set(false);
+        imp.original_checked_at.set(None);
     }
 }

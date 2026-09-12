@@ -55,7 +55,9 @@ thread_local! {
 fn folder_thumbnail_cache_get(path: &str) -> Option<gtk::gdk::Paintable> {
     FOLDER_THUMBNAIL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        let index = cache.iter().position(|(cached_path, _)| cached_path == path)?;
+        let index = cache
+            .iter()
+            .position(|(cached_path, _)| cached_path == path)?;
         let entry = cache.remove(index)?;
         let paintable = entry.1.clone();
         cache.push_back(entry);
@@ -299,10 +301,8 @@ impl SquareTile {
             // individual line only when this bind is itself slow enough to be
             // diagnostically useful.
             if total_ms >= 12 {
-                let raw = crate::image_format::uses(
-                    &photo.path(),
-                    crate::image_format::DecoderKind::Raw,
-                );
+                let raw =
+                    crate::image_format::uses(&photo.path(), crate::image_format::DecoderKind::Raw);
                 let rotation = photo.rotation().rem_euclid(360);
                 let edited = !crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default();
                 let apply_kind = if raw && rotation == 0 && !edited {
@@ -407,13 +407,10 @@ impl SquareTile {
             });
         }
         if let Some(badge) = overlay_image(&frame, "favorite-badge") {
-            badge.set_visible(
-                self.imp().favorite_indicators_visible.get() && bound.favorite(),
-            );
+            badge.set_visible(self.imp().favorite_indicators_visible.get() && bound.favorite());
         }
         if let Some(badge) = overlay_image(&frame, "edited-badge") {
-            let edited =
-                !crate::edit::EditRecipe::decode(&bound.edit_recipe()).is_default();
+            let edited = !crate::edit::EditRecipe::decode(&bound.edit_recipe()).is_default();
             badge.set_visible(edited);
             badge.set_tooltip_text(if edited { Some("Edited") } else { None });
         }
@@ -782,9 +779,11 @@ pub(crate) fn raw_cached_thumbnail(photo: &PhotoObject, path: &str) -> Option<gt
 fn raw_thumbnail_cache_get(path: &str, rotation: i32, recipe: &str) -> Option<gtk::gdk::Paintable> {
     RAW_THUMBNAIL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        let index = cache.iter().position(|(cached_path, cached_rotation, cached_recipe, _)| {
-            cached_path == path && *cached_rotation == rotation && cached_recipe == recipe
-        })?;
+        let index = cache
+            .iter()
+            .position(|(cached_path, cached_rotation, cached_recipe, _)| {
+                cached_path == path && *cached_rotation == rotation && cached_recipe == recipe
+            })?;
         let entry = cache.remove(index)?;
         let paintable = entry.3.clone();
         cache.push_back(entry);
@@ -1024,7 +1023,6 @@ fn make_folder_tile(
         };
         (unavailable_for_click)(photo, badge_for_click.clone().upcast());
     });
-
 
     tile
 }
@@ -2257,9 +2255,7 @@ impl Gallery {
             // Keep a generous but finite rolling buffer around the viewport.
             // Large scrollbar jumps still remain cheap because warming is
             // cancelled immediately when adjustment values start moving.
-            if bounds.y() + bounds.height() < -viewport * 2.0
-                || bounds.y() > viewport * 3.0
-            {
+            if bounds.y() + bounds.height() < -viewport * 2.0 || bounds.y() > viewport * 3.0 {
                 continue;
             }
 
@@ -2687,8 +2683,7 @@ impl Gallery {
                 store.splice(store.n_items(), 0, &objects);
             }
 
-            if let (Some(batch_started), Some(splice_started)) = (batch_started, splice_started)
-            {
+            if let (Some(batch_started), Some(splice_started)) = (batch_started, splice_started) {
                 let splice_ms = splice_started.elapsed().as_millis();
                 let total_ms = batch_started.elapsed().as_millis();
                 // Log sparsely so the trace itself does not dominate the build.
@@ -2708,8 +2703,13 @@ impl Gallery {
             }
 
             if end >= photos.len() {
+                let ranges_started = trace.then(Instant::now);
                 rebuild_group_ranges_for(&current_photos, &group_mode, &group_date, &group_ranges);
+                let ranges_ms = ranges_started
+                    .map(|value| value.elapsed().as_millis())
+                    .unwrap_or(0);
                 if group_mode.get() == GroupMode::Folder {
+                    let rows_started = trace.then(Instant::now);
                     rebuild_folder_rows_for(
                         &current_photos,
                         &group_ranges,
@@ -2717,6 +2717,13 @@ impl Gallery {
                         &folder_order,
                         &folder_store,
                     );
+                    if let Some(value) = rows_started {
+                        eprintln!(
+                            "UI PERF folder_rows_build ranges_ms={} rows_ms={}",
+                            ranges_ms,
+                            value.elapsed().as_millis()
+                        );
+                    }
                     group_header.set_visible(false);
                     group_title.set_text("");
                     group_count.set_text("");
@@ -3438,6 +3445,15 @@ fn rebuild_folder_rows_for(
     // Keep the ListView attached. Fixed-height photo lines give GTK a stable
     // geometry estimate, so normal ListStore splicing can reuse the realized
     // row pool without a detach/re-attach storm.
+    //
+    // Note: this splice is the dominant cost of opening a folder (~400 ms for
+    // the ~11.7k-row 66k stream). Measurement showed the ListStore splice itself
+    // is ~0-1 ms; GTK's GtkListView spends the time incorporating the new rows.
+    // Detaching the model before the splice and re-attaching with set_model
+    // moved the cost to the re-attach (413 ms), so it is the ListView
+    // population, not the store, that is expensive. Making folder open instant
+    // therefore requires reusing an already-populated folder model instead of
+    // rebuilding it.
     folder_store.splice(prefix as u32, removed, inserted);
     if trace {
         eprintln!(
@@ -4160,7 +4176,6 @@ fn collect_tiles(widget: &gtk::Widget, tiles: &mut Vec<SquareTile>) {
     }
 }
 
-
 #[cfg(test)]
 mod folder_stream_tests {
     use super::{
@@ -4303,10 +4318,22 @@ mod folder_stream_tests {
         let original = sample_ranges();
         let ordered = ordered_folder_ranges(&original, &[11, 10]);
 
-        assert_eq!(ordered.iter().map(|range| range.folder_id).collect::<Vec<_>>(), vec![11, 10]);
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|range| range.folder_id)
+                .collect::<Vec<_>>(),
+            vec![11, 10]
+        );
         assert_eq!((ordered[0].start, ordered[0].end), (5, 18));
         assert_eq!((ordered[1].start, ordered[1].end), (0, 5));
-        assert_eq!(original.iter().map(|range| range.folder_id).collect::<Vec<_>>(), vec![10, 11]);
+        assert_eq!(
+            original
+                .iter()
+                .map(|range| range.folder_id)
+                .collect::<Vec<_>>(),
+            vec![10, 11]
+        );
     }
 
     #[test]
