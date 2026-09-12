@@ -114,6 +114,7 @@ pub(crate) fn take_thumb_load_stats() -> (u64, u64, u128, u128, u128) {
 
 mod square_tile {
     use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
 
     use glib::subclass::prelude::*;
     use gtk::prelude::*;
@@ -129,6 +130,9 @@ mod square_tile {
         pub favorite_indicators_visible: Cell<bool>,
         pub photo: RefCell<Option<PhotoObject>>,
         pub visual_loaded: Cell<bool>,
+        // Stored so the offline badge can be created lazily on first use
+        // (folder tiles no longer build it eagerly).
+        pub unavailable: RefCell<Option<Rc<dyn Fn(PhotoObject, gtk::Widget)>>>,
     }
 
     #[glib::object_subclass]
@@ -208,6 +212,42 @@ impl SquareTile {
         self.queue_resize();
     }
 
+    /// Remember how to open the unavailable dialog so the offline badge can be
+    /// created lazily instead of on every folder tile.
+    fn set_unavailable_handler(&self, handler: Rc<dyn Fn(PhotoObject, gtk::Widget)>) {
+        self.imp().unavailable.replace(Some(handler));
+    }
+
+    fn ensure_offline_badge(&self, frame: &gtk::Overlay) -> gtk::Button {
+        if let Some(existing) = find_overlay_child(frame, "offline-badge") {
+            if let Ok(button) = existing.downcast::<gtk::Button>() {
+                return button;
+            }
+        }
+        let badge = gtk::Button::with_label("!");
+        badge.set_halign(gtk::Align::Start);
+        badge.set_valign(gtk::Align::Start);
+        badge.set_margin_top(8);
+        badge.set_margin_start(8);
+        badge.add_css_class("offline-badge");
+        badge.set_tooltip_text(Some("Original photo unavailable"));
+        badge.set_visible(false);
+        frame.add_overlay(&badge);
+        if let Some(handler) = self.imp().unavailable.borrow().clone() {
+            let tile = self.downgrade();
+            badge.connect_clicked(move |badge| {
+                let Some(tile) = tile.upgrade() else {
+                    return;
+                };
+                let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+                    return;
+                };
+                handler(photo, badge.clone().upcast());
+            });
+        }
+        badge
+    }
+
     fn set_favorite_indicator_visible(&self, visible: bool) {
         self.imp().favorite_indicators_visible.set(visible);
         self.refresh_favorite_indicator();
@@ -220,11 +260,11 @@ impl SquareTile {
         let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
             return;
         };
-        if let Some(badge) = overlay_image(&frame, "favorite-badge") {
-            let visible = self.imp().favorite_indicators_visible.get() && photo.favorite();
-            if badge.is_visible() != visible {
-                badge.set_visible(visible);
-            }
+        let visible = self.imp().favorite_indicators_visible.get() && photo.favorite();
+        if visible {
+            ensure_favorite_badge(&frame).set_visible(true);
+        } else if let Some(child) = find_overlay_child(&frame, "favorite-badge") {
+            child.set_visible(false);
         }
     }
 
@@ -416,35 +456,35 @@ impl SquareTile {
             }
         }
 
-        if let Some(badge) = frame.last_child().and_downcast::<gtk::Button>() {
-            let unavailable = !bound.original_available();
-            if badge.is_visible() != unavailable {
-                badge.set_visible(unavailable);
+        let unavailable = !bound.original_available();
+        if unavailable {
+            let badge = self.ensure_offline_badge(&frame);
+            if !badge.is_visible() {
+                badge.set_visible(true);
             }
-            let tip = if unavailable {
-                Some("Original photo unavailable")
-            } else {
-                None
-            };
-            if badge.tooltip_text().as_deref() != tip {
-                badge.set_tooltip_text(tip);
+            if badge.tooltip_text().as_deref() != Some("Original photo unavailable") {
+                badge.set_tooltip_text(Some("Original photo unavailable"));
             }
-        }
-        if let Some(badge) = overlay_image(&frame, "favorite-badge") {
-            let visible = self.imp().favorite_indicators_visible.get() && bound.favorite();
-            if badge.is_visible() != visible {
-                badge.set_visible(visible);
+        } else if let Some(child) = find_overlay_child(&frame, "offline-badge") {
+            if child.is_visible() {
+                child.set_visible(false);
             }
         }
-        if let Some(badge) = overlay_image(&frame, "edited-badge") {
-            let edited = !crate::edit::EditRecipe::decode(&bound.edit_recipe()).is_default();
-            if badge.is_visible() != edited {
-                badge.set_visible(edited);
+        let favorite = self.imp().favorite_indicators_visible.get() && bound.favorite();
+        if favorite {
+            ensure_favorite_badge(&frame).set_visible(true);
+        } else if let Some(child) = find_overlay_child(&frame, "favorite-badge") {
+            child.set_visible(false);
+        }
+        let edited = !crate::edit::EditRecipe::decode(&bound.edit_recipe()).is_default();
+        if edited {
+            let badge = ensure_edited_badge(&frame);
+            badge.set_visible(true);
+            if badge.tooltip_text().as_deref() != Some("Edited") {
+                badge.set_tooltip_text(Some("Edited"));
             }
-            let tip = if edited { Some("Edited") } else { None };
-            if badge.tooltip_text().as_deref() != tip {
-                badge.set_tooltip_text(tip);
-            }
+        } else if let Some(child) = find_overlay_child(&frame, "edited-badge") {
+            child.set_visible(false);
         }
         if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
             let visible = memory_hit.is_none();
@@ -586,7 +626,8 @@ impl SquareTile {
         // `clear_photo` hides the selection badge when a tile is recycled.
         // Opacity is the real on/off switch via CSS, so make the badge visible
         // again here or recycled tiles lose their indicator.
-        if let Some(badge) = overlay_image(&frame, "selection-badge") {
+        if selected {
+            let badge = ensure_selection_badge(&frame);
             if !badge.is_visible() {
                 badge.set_visible(true);
             }
@@ -612,8 +653,10 @@ impl SquareTile {
         let available = photo.original_available();
 
         if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
-            if let Some(badge) = frame.last_child().and_downcast::<gtk::Button>() {
-                badge.set_visible(!available);
+            if !available {
+                self.ensure_offline_badge(&frame).set_visible(true);
+            } else if let Some(child) = find_overlay_child(&frame, "offline-badge") {
+                child.set_visible(false);
             }
         }
     }
@@ -629,9 +672,6 @@ impl SquareTile {
             return;
         };
         let placeholder = picture.next_sibling().and_downcast::<gtk::Image>();
-        let favorite_badge = overlay_image(&frame, "favorite-badge");
-        let edited_badge = overlay_image(&frame, "edited-badge");
-        let unavailable_badge = frame.last_child().and_downcast::<gtk::Button>();
         let cached = photo.cached_thumbnail_path();
         let thumbnail_available = if probe_thumbnail {
             // This is an explicit refresh (for example after thumbnail
@@ -670,22 +710,26 @@ impl SquareTile {
             picture.set_paintable(gtk::gdk::Paintable::NONE);
         }
         picture.set_tooltip_text(Some(&photo.filename()));
-        if let Some(badge) = unavailable_badge {
-            let unavailable = !photo.original_available();
-            badge.set_visible(unavailable);
-            badge.set_tooltip_text(if unavailable {
-                Some("Original photo unavailable")
-            } else {
-                None
-            });
+        let unavailable = !photo.original_available();
+        if unavailable {
+            let badge = self.ensure_offline_badge(&frame);
+            badge.set_visible(true);
+            badge.set_tooltip_text(Some("Original photo unavailable"));
+        } else if let Some(child) = find_overlay_child(&frame, "offline-badge") {
+            child.set_visible(false);
         }
-        if let Some(badge) = favorite_badge {
-            badge.set_visible(self.imp().favorite_indicators_visible.get() && photo.favorite());
+        if self.imp().favorite_indicators_visible.get() && photo.favorite() {
+            ensure_favorite_badge(&frame).set_visible(true);
+        } else if let Some(child) = find_overlay_child(&frame, "favorite-badge") {
+            child.set_visible(false);
         }
-        if let Some(badge) = edited_badge {
-            let edited = !crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default();
-            badge.set_visible(edited);
-            badge.set_tooltip_text(if edited { Some("Edited") } else { None });
+        let edited = !crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default();
+        if edited {
+            let badge = ensure_edited_badge(&frame);
+            badge.set_visible(true);
+            badge.set_tooltip_text(Some("Edited"));
+        } else if let Some(child) = find_overlay_child(&frame, "edited-badge") {
+            child.set_visible(false);
         }
         if let Some(placeholder) = placeholder {
             placeholder.set_visible(existing.is_none());
@@ -730,17 +774,74 @@ fn schedule_availability_probe(tile: &SquareTile, photo: &PhotoObject) {
     );
 }
 
-fn overlay_image(frame: &gtk::Overlay, css_class: &str) -> Option<gtk::Image> {
+fn find_overlay_child(frame: &gtk::Overlay, css_class: &str) -> Option<gtk::Widget> {
     let mut child = frame.first_child();
     while let Some(current) = child {
-        if let Some(image) = current.downcast_ref::<gtk::Image>() {
-            if image.has_css_class(css_class) {
-                return Some(image.clone());
-            }
+        if current.has_css_class(css_class) {
+            return Some(current);
         }
         child = current.next_sibling();
     }
     None
+}
+
+/// Folder tiles are built without badges; almost no photo needs one, and
+/// creating four extra widgets per tile was the dominant cost of rebuilding the
+/// Folder rows (~250-520 ms per column change). These helpers create a badge the
+/// first time it is actually needed.
+fn ensure_favorite_badge(frame: &gtk::Overlay) -> gtk::Image {
+    if let Some(existing) = find_overlay_child(frame, "favorite-badge") {
+        if let Ok(image) = existing.downcast::<gtk::Image>() {
+            return image;
+        }
+    }
+    let badge = gtk::Image::from_icon_name("emote-love-symbolic");
+    badge.set_pixel_size(18);
+    badge.set_halign(gtk::Align::End);
+    badge.set_valign(gtk::Align::End);
+    badge.set_margin_bottom(8);
+    badge.set_margin_end(8);
+    badge.add_css_class("favorite-badge");
+    badge.set_visible(false);
+    frame.add_overlay(&badge);
+    badge
+}
+
+fn ensure_edited_badge(frame: &gtk::Overlay) -> gtk::Image {
+    if let Some(existing) = find_overlay_child(frame, "edited-badge") {
+        if let Ok(image) = existing.downcast::<gtk::Image>() {
+            return image;
+        }
+    }
+    let badge = gtk::Image::from_icon_name("document-edit-symbolic");
+    badge.set_pixel_size(18);
+    badge.set_halign(gtk::Align::Start);
+    badge.set_valign(gtk::Align::End);
+    badge.set_margin_bottom(8);
+    badge.set_margin_start(8);
+    badge.add_css_class("edited-badge");
+    badge.set_tooltip_text(Some("Edited"));
+    badge.set_visible(false);
+    frame.add_overlay(&badge);
+    badge
+}
+
+fn ensure_selection_badge(frame: &gtk::Overlay) -> gtk::Image {
+    if let Some(existing) = find_overlay_child(frame, "selection-badge") {
+        if let Ok(image) = existing.downcast::<gtk::Image>() {
+            return image;
+        }
+    }
+    let badge = gtk::Image::from_icon_name("object-select-symbolic");
+    badge.set_pixel_size(18);
+    badge.set_halign(gtk::Align::End);
+    badge.set_valign(gtk::Align::Start);
+    badge.set_margin_top(8);
+    badge.set_margin_end(8);
+    badge.add_css_class("selection-badge");
+    badge.set_visible(false);
+    frame.add_overlay(&badge);
+    badge
 }
 
 /// Nikon RAW thumbnails can contain a letterboxed embedded preview whose
@@ -991,6 +1092,14 @@ impl FolderRowObject {
     fn data(&self) -> FolderRowData {
         self.imp().data.borrow().clone()
     }
+
+    /// Cheap membership test that does not clone the row data. This runs over
+    /// tens of thousands of rows when a zoom/column change re-anchors the
+    /// viewport, so it must not allocate.
+    fn contains_photo(&self, photo_id: i64) -> bool {
+        let data = self.imp().data.borrow();
+        data.kind == FolderRowKind::Photos && data.photo_ids.contains(&photo_id)
+    }
 }
 
 fn make_folder_tile(
@@ -1020,47 +1129,13 @@ fn make_folder_tile(
     placeholder.set_visible(false);
     frame.add_overlay(&placeholder);
 
-    let checkmark = gtk::Image::from_icon_name("object-select-symbolic");
-    checkmark.set_pixel_size(18);
-    checkmark.set_halign(gtk::Align::End);
-    checkmark.set_valign(gtk::Align::Start);
-    checkmark.set_margin_top(8);
-    checkmark.set_margin_end(8);
-    checkmark.add_css_class("selection-badge");
-    frame.add_overlay(&checkmark);
-
-    let favorite_badge = gtk::Image::from_icon_name("emote-love-symbolic");
-    favorite_badge.set_pixel_size(18);
-    favorite_badge.set_halign(gtk::Align::End);
-    favorite_badge.set_valign(gtk::Align::End);
-    favorite_badge.set_margin_bottom(8);
-    favorite_badge.set_margin_end(8);
-    favorite_badge.add_css_class("favorite-badge");
-    favorite_badge.set_visible(false);
-    frame.add_overlay(&favorite_badge);
-
-    let edited_badge = gtk::Image::from_icon_name("document-edit-symbolic");
-    edited_badge.set_pixel_size(18);
-    edited_badge.set_halign(gtk::Align::Start);
-    edited_badge.set_valign(gtk::Align::End);
-    edited_badge.set_margin_bottom(8);
-    edited_badge.set_margin_start(8);
-    edited_badge.add_css_class("edited-badge");
-    edited_badge.set_tooltip_text(Some("Edited"));
-    edited_badge.set_visible(false);
-    frame.add_overlay(&edited_badge);
-
-    let unavailable_badge = gtk::Button::with_label("!");
-    unavailable_badge.set_halign(gtk::Align::Start);
-    unavailable_badge.set_valign(gtk::Align::Start);
-    unavailable_badge.set_margin_top(8);
-    unavailable_badge.set_margin_start(8);
-    unavailable_badge.add_css_class("offline-badge");
-    unavailable_badge.set_tooltip_text(Some("Original photo unavailable"));
-    unavailable_badge.set_visible(false);
-    frame.add_overlay(&unavailable_badge);
-
+    // Badges (selection / favourite / edited / offline) are deliberately NOT
+    // built here. GtkListView destroys and re-creates every realized Folder row
+    // on a column change, so four extra widgets per tile dominated the rebuild
+    // (~250-520 ms) and made the sidebar animation jerk. Each badge is created
+    // lazily by ensure_*_badge() only when a photo actually needs it.
     let tile = SquareTile::new(tile_width, tile_height, &frame);
+    tile.set_unavailable_handler(unavailable.clone());
     // The old FlowBoxChild supplied 6 px padding around each thumbnail. Keep
     // the same geometry directly on the tile now that the nested FlowBox is
     // gone, and let the horizontal line distribute spare width evenly.
@@ -1072,16 +1147,6 @@ fn make_folder_tile(
     tile.set_margin_top(6);
     tile.set_margin_bottom(6);
     tile.set_focusable(true);
-
-    let tile_for_unavailable = tile.clone();
-    let unavailable_for_click = unavailable.clone();
-    let badge_for_click = unavailable_badge.clone();
-    unavailable_badge.connect_clicked(move |_| {
-        let Some(photo) = tile_for_unavailable.imp().photo.borrow().as_ref().cloned() else {
-            return;
-        };
-        (unavailable_for_click)(photo, badge_for_click.clone().upcast());
-    });
 
     tile
 }
@@ -1127,6 +1192,8 @@ pub struct Gallery {
     // Photo at the viewport top captured before a zoom resizes the tiles, so
     // the row reshape can restore the same viewport after the relayout.
     zoom_anchor: Rc<Cell<Option<i64>>>,
+    folder_scroll_generation: Rc<Cell<u64>>,
+    folder_anchor_photo: Cell<Option<i64>>,
     // Coalesces rapid Ctrl+wheel zoom input: the visual reflow is deferred while
     // the user is still spinning so crossing several column boundaries triggers
     // one Folder row rebuild instead of one per notch.
@@ -1789,6 +1856,8 @@ impl Gallery {
             group_ranges: Rc::new(RefCell::new(Vec::new())),
             last_scroll_y: Rc::new(Cell::new(0.0)),
             zoom_anchor: Rc::new(Cell::new(None)),
+            folder_scroll_generation: Rc::new(Cell::new(0)),
+            folder_anchor_photo: Cell::new(None),
             pending_zoom_width: Rc::new(Cell::new(None)),
             zoom_reflow_source: Rc::new(RefCell::new(None)),
             on_zoom_changed,
@@ -1797,16 +1866,25 @@ impl Gallery {
         gallery
     }
 
+    /// Column count a content width produces for the current tile size.
+    fn columns_for_width(&self, width: i32) -> u32 {
+        let available = (width - 48).max(200);
+        ((available as f64) / (self.tile_width.get() as f64 + 30.0))
+            .floor()
+            .clamp(1.0, 8.0) as u32
+    }
+
     pub fn update_width(&self, width: i32) {
+        self.update_layout(width, false);
+    }
+
+    fn update_layout(&self, width: i32, tile_size_changed: bool) {
         let trace = std::env::var_os("PICASA_TRACE").is_some();
         let started = trace.then(Instant::now);
         let old_columns = self.current_columns.get();
         let old_width = self.last_layout_width.get();
-        let available = (width - 48).max(200);
-        let columns = ((available as f64) / (self.tile_width.get() as f64 + 30.0))
-            .floor()
-            .clamp(1.0, 8.0) as u32;
-        if width == old_width && columns == old_columns {
+        let columns = self.columns_for_width(width);
+        if width == old_width && columns == old_columns && !tile_size_changed {
             return;
         }
         if trace {
@@ -1830,7 +1908,7 @@ impl Gallery {
             // Zooming within the same column count only changes tile geometry.
             // Replacing the Folder ListStore here used to invalidate every
             // realized row and cost ~0.8-1.1s for a 4.5k-photo library.
-            if folder_mode {
+            if folder_mode && tile_size_changed {
                 // Tile size changed within the same columns: the rows keep
                 // their photos but their heights change, so re-anchor the
                 // viewport to the photo that was at the top.
@@ -1847,16 +1925,20 @@ impl Gallery {
                 if let Some(anchor) = anchor {
                     self.scroll_folder_to_photo(anchor);
                 }
-            } else {
+            } else if !folder_mode {
                 self.root.queue_resize();
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
             }
+            // Width-only changes with the same columns need no vertical layout
+            // work. GTK stretches the row boxes itself. Re-anchoring here made
+            // every sidebar animation frame issue competing scroll requests.
             if trace {
                 eprintln!(
-                    "UI PERF update_width_skip_reflow mode={:?} width={} columns={} reason=columns_unchanged",
+                    "UI PERF update_width_skip_reflow mode={:?} width={} columns={} reason=columns_unchanged scroll_y={:.0}",
                     self.group_mode.get(),
                     width,
-                    columns
+                    columns,
+                    self.folder_root.vadjustment().map(|a| a.value()).unwrap_or(0.0)
                 );
             }
             return;
@@ -1867,9 +1949,8 @@ impl Gallery {
         self.root.set_max_columns(columns);
         self.root.queue_resize();
         if folder_mode {
-            // The chunk size is a multiple of the column count, so a column
-            // change reshapes the rows. Rebuild once (fast now) so every chunk
-            // is a whole number of full rows, keeping the photo at the top.
+            // Each model item is one visual photo line. A column change must
+            // rebuild those lines to keep the layout gapless.
             let anchor = self.zoom_anchor.take().or_else(|| {
                 self.photo_for_scroll_position(self.last_scroll_y.get())
                     .map(|photo| photo.id())
@@ -1908,17 +1989,44 @@ impl Gallery {
     /// Keep the Folder viewport on `photo_id` after the rows were reshaped by a
     /// zoom/column change. Realizes the target row, then aligns its tile to the
     /// top edge using the tile's computed bounds (independent of the variable
-    /// row heights). Runs on idle so it applies after the model swap's layout.
+    /// row heights). Waits for allocation and bounds the settling corrections.
     fn scroll_folder_to_photo(&self, photo_id: i64) {
+        self.folder_anchor_photo.set(Some(photo_id));
         let Some(row) = self.folder_row_index_for_photo(photo_id) else {
             return;
         };
         let root = self.folder_root.clone();
+        let generation = self.folder_scroll_generation.clone();
+        let request = generation.get().wrapping_add(1);
+        generation.set(request);
+        let model_generation = self.replace_generation.clone();
+        let model_request = model_generation.get();
+        let mode = self.group_mode.clone();
         let trace = std::env::var_os("PICASA_TRACE").is_some();
         glib::idle_add_local_once(move || {
+            if generation.get() != request
+                || model_generation.get() != model_request
+                || mode.get() != GroupMode::Folder
+            {
+                return;
+            }
             root.scroll_to(row, gtk::ListScrollFlags::NONE, None);
-            let root_for_align = root.clone();
-            glib::idle_add_local_once(move || {
+            // An idle after another idle does NOT guarantee a GTK allocation.
+            // Wait for a frame to lay out the rebuilt/rebound rows before using
+            // their bounds; otherwise the old coordinates move us to another row.
+            let frames = Cell::new(0);
+            let stable_frames = Cell::new(0);
+            root.add_tick_callback(move |root_for_align, _| {
+                if generation.get() != request
+                    || model_generation.get() != model_request
+                    || mode.get() != GroupMode::Folder
+                {
+                    return glib::ControlFlow::Break;
+                }
+                frames.set(frames.get() + 1);
+                if frames.get() < 2 {
+                    return glib::ControlFlow::Continue;
+                }
                 let mut tiles = Vec::new();
                 collect_tiles(root_for_align.upcast_ref(), &mut tiles);
                 let tile = tiles.into_iter().find(|tile| {
@@ -1929,23 +2037,37 @@ impl Gallery {
                         .is_some_and(|photo| photo.id() == photo_id)
                 });
                 let Some(tile) = tile else {
-                    return;
+                    return glib::ControlFlow::Break;
                 };
-                let Some(bounds) = tile.compute_bounds(&root_for_align) else {
-                    return;
+                let Some(bounds) = tile.compute_bounds(root_for_align) else {
+                    return glib::ControlFlow::Break;
                 };
                 let Some(adjustment) = root_for_align.vadjustment() else {
-                    return;
+                    return glib::ControlFlow::Break;
                 };
-                let target = adjustment.value() + bounds.y() as f64;
+                // Align the row, not the tile's six-pixel top margin. GTK may
+                // refine its estimated row heights for another frame after a
+                // splice; allow a bounded correction until the anchor settles.
+                let target = adjustment.value() + bounds.y() as f64 - tile.margin_top() as f64;
                 let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
-                adjustment.set_value(target.clamp(adjustment.lower(), upper));
+                let target = target.clamp(adjustment.lower(), upper);
+                if (target - adjustment.value()).abs() <= 1.0 {
+                    stable_frames.set(stable_frames.get() + 1);
+                } else {
+                    stable_frames.set(0);
+                    adjustment.set_value(target);
+                }
                 if trace {
                     eprintln!(
                         "UI PERF folder_zoom_anchor row={row} bounds_y={:.0} after={:.0}",
                         bounds.y(),
                         adjustment.value()
                     );
+                }
+                if stable_frames.get() >= 2 || frames.get() >= 8 {
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
                 }
             });
         });
@@ -2159,53 +2281,35 @@ impl Gallery {
     }
 
     fn photo_for_visible_folder_row(&self) -> Option<PhotoObject> {
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let width = self.folder_root.width().max(1) as f64;
-        let mut folder_fallback: Option<PhotoObject> = None;
-        for y in [6.0_f64, 20.0, 40.0, 64.0, 92.0, 120.0] {
-            let pick_started = trace.then(Instant::now);
-            let picked = self
-                .folder_root
-                .pick(width * 0.5, y, gtk::PickFlags::DEFAULT);
-            if let Some(started) = pick_started {
-                SCROLL_PROBE_PICK_CALLS.with(|calls| calls.set(calls.get().wrapping_add(1)));
-                SCROLL_PROBE_PICK_NS
-                    .with(|ns| ns.set(ns.get().wrapping_add(started.elapsed().as_nanos())));
-            }
-            let Some(picked) = picked else {
-                continue;
-            };
-            // Prefer the photo tile actually under the probe point. Callers
-            // that need the visible photo (zoom anchoring) must not jump to the
-            // folder's first photo.
-            if let Some(tile) = tile_ancestor(&picked) {
-                if let Some(photo) = tile.imp().photo.borrow().clone() {
-                    return Some(photo);
+        // A hit-test at the viewport centre can land between columns (especially
+        // with an even column count). Falling back to the folder's first photo
+        // then jumps thousands of rows. Use actual visible tile bounds instead.
+        let mut tiles = Vec::new();
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        let height = self.folder_root.height() as f32;
+        let preferred = self.folder_anchor_photo.get();
+        tiles
+            .into_iter()
+            .filter_map(|tile| {
+                if !tile.is_mapped() || !tile.is_visible() {
+                    return None;
                 }
-            }
-            if folder_fallback.is_none() {
-                if let Some(folder_id) = folder_id_from_named_ancestor(&picked) {
-                    let scan_started = trace.then(Instant::now);
-                    folder_fallback = {
-                        let ranges = self.group_ranges.borrow();
-                        let photos = self.current_photos.borrow();
-                        ranges
-                            .iter()
-                            .find(|range| range.folder_id == folder_id)
-                            .and_then(|range| photos.get(range.start))
-                            .cloned()
-                    };
-                    if let Some(started) = scan_started {
-                        SCROLL_PROBE_SCAN_NS
-                            .with(|ns| ns.set(ns.get().wrapping_add(started.elapsed().as_nanos())));
-                    }
+                let photo = tile.imp().photo.borrow().clone()?;
+                let bounds = tile.compute_bounds(&self.folder_root)?;
+                if bounds.y() + bounds.height() <= 0.0 || bounds.y() >= height {
+                    return None;
                 }
-            }
-        }
-        // During a resize/rebind there may briefly be no realized row at the
-        // probe point. Keep the existing sidebar location instead of falsely
-        // jumping it back to the first folder.
-        folder_fallback
+                Some((bounds.y(), bounds.x(), photo))
+            })
+            // Keep the same logical photo while it remains in the leading row.
+            // Choosing the leftmost slot anew on every 6↔7-column transition
+            // rounds backwards each time and gradually scrolls up the folder.
+            .min_by(|a, b| {
+                a.0.total_cmp(&b.0)
+                    .then_with(|| (Some(b.2.id()) == preferred).cmp(&(Some(a.2.id()) == preferred)))
+                    .then_with(|| a.1.total_cmp(&b.1))
+            })
+            .map(|(_, _, photo)| photo)
     }
 
     fn update_group_header_for_index(&self, index: usize) {
@@ -2371,10 +2475,9 @@ impl Gallery {
         } else {
             self.root.width()
         };
-        self.last_layout_width.set(0);
         let layout_started = trace.then(Instant::now);
         if root_width > 100 {
-            self.update_width(root_width);
+            self.update_layout(root_width, true);
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
@@ -3327,11 +3430,7 @@ impl Gallery {
             else {
                 continue;
             };
-            let data = row.data();
-            if data.kind != FolderRowKind::Photos {
-                continue;
-            }
-            if data.photo_ids.contains(&photo_id) {
+            if row.contains_photo(photo_id) {
                 return Some(position);
             }
         }
@@ -4452,6 +4551,105 @@ mod folder_stream_tests {
         folder_selection_after_click, folder_virtual_row_matches, folder_virtual_rows,
         ordered_folder_ranges, FolderRowData, FolderRowKind, FolderTileBounds, GroupRange,
     };
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn sidebar_width_changes_do_not_scroll_or_lose_the_visible_photo() {
+        use super::{gtk, Gallery, GroupMode, PhotoObject};
+        use gtk::prelude::*;
+
+        fn settle() {
+            let context = glib::MainContext::default();
+            for _ in 0..30 {
+                while context.pending() {
+                    context.iteration(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+
+        gtk::init().unwrap();
+        let gallery = Gallery::new(
+            &[], 148, |_| {}, |_, _| {}, |_, _, _, _| {}, |_, _| {}, |_| {},
+        );
+        gallery.group_mode.set(GroupMode::Folder);
+        gallery.current_photos.replace(
+            (1..=1200_i64)
+                .map(|id| {
+                    glib::Object::builder::<PhotoObject>()
+                        .property("id", id)
+                        .property("folder-id", 1_i64)
+                        .property("original-available", true)
+                        .build()
+                })
+                .collect(),
+        );
+        gallery.rebuild_group_ranges();
+        gallery.update_width(1124);
+        let scroll = gtk::ScrolledWindow::builder()
+            .child(&gallery.folder_root)
+            .build();
+        let window = gtk::Window::builder()
+            .default_width(1124)
+            .default_height(600)
+            .child(&scroll)
+            .build();
+        window.present();
+        settle();
+        scroll.vadjustment().set_value(8000.0);
+        settle();
+
+        // Six columns put the centre probe between tiles. The anchor must be
+        // a visible photo, never the first photo of this long folder.
+        let before = gallery.photo_for_visible_folder_row().unwrap().id();
+        assert!(before > 100, "deep viewport anchored to photo {before}");
+        let y = scroll.vadjustment().value();
+        gallery.zoom_anchor.set(Some(before));
+        for width in [1135, 1157, 1184, 1217, 1246, 1273, 1246, 1124] {
+            gallery.update_width(width);
+            settle();
+            assert_eq!(
+                scroll.vadjustment().value(), y,
+                "sidebar width {width} scrolled"
+            );
+            assert_eq!(
+                gallery.zoom_anchor.get(), Some(before),
+                "width-only resize consumed zoom anchor"
+            );
+            assert_eq!(gallery.photo_for_visible_folder_row().unwrap().id(), before);
+        }
+
+        gallery.zoom_anchor.set(None);
+        for width in [1440, 1124].into_iter().cycle().take(8) {
+            gallery.update_width(width);
+            window.set_default_size(width, 600);
+            settle();
+            let after = gallery.photo_for_visible_folder_row().unwrap().id();
+            assert_eq!(after, before, "column change lost anchor at width {width}");
+        }
+        gallery.zoom_anchor.set(Some(before));
+
+        // An actual zoom within the same columns still updates row geometry
+        // and consumes its saved anchor, even when the width is unchanged.
+        gallery.tile_height.set(gallery.tile_height.get() + 10);
+        gallery.update_layout(1124, true);
+        assert_eq!(gallery.zoom_anchor.get(), None);
+        settle();
+        let after = gallery.photo_for_visible_folder_row().unwrap().id();
+        assert_eq!(after, before, "zoom lost anchor");
+
+        // Ordinary scrolling must move the logical anchor too; retaining the
+        // resize anchor must never pin the viewport to an old photo.
+        scroll.vadjustment().set_value(16000.0);
+        settle();
+        let scrolled = gallery.photo_for_visible_folder_row().unwrap().id();
+        assert_ne!(scrolled, before);
+        gallery.update_width(1440);
+        window.set_default_size(1440, 600);
+        settle();
+        assert_eq!(gallery.photo_for_visible_folder_row().unwrap().id(), scrolled);
+        window.close();
+    }
 
     fn sample_ranges() -> Vec<GroupRange> {
         vec![
