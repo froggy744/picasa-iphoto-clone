@@ -4648,6 +4648,19 @@ mod folder_stream_tests {
         window.set_default_size(1440, 600);
         settle();
         assert_eq!(gallery.photo_for_visible_folder_row().unwrap().id(), scrolled);
+
+        // A second column change can arrive before GTK has allocated the first
+        // rebuild. Its adjustment may transiently reset to zero (as in the
+        // reported 7→6→5 transition). Never capture that transient viewport.
+        gallery.update_width(1124);
+        scroll.vadjustment().set_value(0.0);
+        gallery.update_width(970);
+        window.set_default_size(970, 600);
+        settle();
+        assert_eq!(
+            gallery.photo_for_visible_folder_row().unwrap().id(), scrolled,
+            "overlapping column changes lost the original anchor"
+        );
         window.close();
     }
 
