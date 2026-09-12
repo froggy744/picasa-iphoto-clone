@@ -1194,6 +1194,11 @@ pub struct Gallery {
     zoom_anchor: Rc<Cell<Option<i64>>>,
     folder_scroll_generation: Rc<Cell<u64>>,
     folder_anchor_photo: Cell<Option<i64>>,
+    // True while a column change is still positioning the viewport. A second
+    // change before it settles must reuse the original anchor instead of
+    // reading GTK's transient (often zeroed) adjustment.
+    folder_pending_reframe: Rc<Cell<bool>>,
+    folder_reframe_photo: Rc<Cell<Option<i64>>>,
     // Coalesces rapid Ctrl+wheel zoom input: the visual reflow is deferred while
     // the user is still spinning so crossing several column boundaries triggers
     // one Folder row rebuild instead of one per notch.
@@ -1858,6 +1863,8 @@ impl Gallery {
             zoom_anchor: Rc::new(Cell::new(None)),
             folder_scroll_generation: Rc::new(Cell::new(0)),
             folder_anchor_photo: Cell::new(None),
+            folder_pending_reframe: Rc::new(Cell::new(false)),
+            folder_reframe_photo: Rc::new(Cell::new(None)),
             pending_zoom_width: Rc::new(Cell::new(None)),
             zoom_reflow_source: Rc::new(RefCell::new(None)),
             on_zoom_changed,
@@ -1912,10 +1919,7 @@ impl Gallery {
                 // Tile size changed within the same columns: the rows keep
                 // their photos but their heights change, so re-anchor the
                 // viewport to the photo that was at the top.
-                let anchor = self.zoom_anchor.take().or_else(|| {
-                    self.photo_for_scroll_position(self.last_scroll_y.get())
-                        .map(|photo| photo.id())
-                });
+                let anchor = self.take_reframe_anchor();
                 update_folder_realized_rows(
                     self.folder_root.upcast_ref(),
                     self.tile_width.get(),
@@ -1951,10 +1955,7 @@ impl Gallery {
         if folder_mode {
             // Each model item is one visual photo line. A column change must
             // rebuild those lines to keep the layout gapless.
-            let anchor = self.zoom_anchor.take().or_else(|| {
-                self.photo_for_scroll_position(self.last_scroll_y.get())
-                    .map(|photo| photo.id())
-            });
+            let anchor = self.take_reframe_anchor();
             let before = self
                 .folder_root
                 .vadjustment()
@@ -1986,6 +1987,25 @@ impl Gallery {
         }
     }
 
+    /// Photo that must stay at the top across a reshape. While a previous
+    /// reframe is still settling, keep its photo: the viewport is mid-flight
+    /// and no longer describes the user's position. Otherwise capture the
+    /// current photo (or a zoom's saved anchor) and mark the reframe pending.
+    fn take_reframe_anchor(&self) -> Option<i64> {
+        if self.folder_pending_reframe.get() {
+            return self.folder_reframe_photo.get();
+        }
+        let captured = self.zoom_anchor.take().or_else(|| {
+            self.photo_for_scroll_position(self.last_scroll_y.get())
+                .map(|photo| photo.id())
+        });
+        if let Some(photo_id) = captured {
+            self.folder_reframe_photo.set(Some(photo_id));
+            self.folder_pending_reframe.set(true);
+        }
+        captured
+    }
+
     /// Keep the Folder viewport on `photo_id` after the rows were reshaped by a
     /// zoom/column change. Realizes the target row, then aligns its tile to the
     /// top edge using the tile's computed bounds (independent of the variable
@@ -2002,6 +2022,8 @@ impl Gallery {
         let model_generation = self.replace_generation.clone();
         let model_request = model_generation.get();
         let mode = self.group_mode.clone();
+        let pending = self.folder_pending_reframe.clone();
+        let reframe_photo = self.folder_reframe_photo.clone();
         let trace = std::env::var_os("PICASA_TRACE").is_some();
         glib::idle_add_local_once(move || {
             if generation.get() != request
@@ -2037,12 +2059,15 @@ impl Gallery {
                         .is_some_and(|photo| photo.id() == photo_id)
                 });
                 let Some(tile) = tile else {
+                    pending.set(false);
                     return glib::ControlFlow::Break;
                 };
                 let Some(bounds) = tile.compute_bounds(root_for_align) else {
+                    pending.set(false);
                     return glib::ControlFlow::Break;
                 };
                 let Some(adjustment) = root_for_align.vadjustment() else {
+                    pending.set(false);
                     return glib::ControlFlow::Break;
                 };
                 // Align the row, not the tile's six-pixel top margin. GTK may
@@ -2065,6 +2090,10 @@ impl Gallery {
                     );
                 }
                 if stable_frames.get() >= 2 || frames.get() >= 8 {
+                    // Selecting a fresh anchor is allowed again once this
+                    // reshape has been positioned.
+                    pending.set(false);
+                    reframe_photo.set(None);
                     glib::ControlFlow::Break
                 } else {
                     glib::ControlFlow::Continue
