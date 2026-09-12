@@ -40,27 +40,33 @@ Make forward/backward lightbox scrolling over NEF/RAW feel smooth:
 - The next photo should already be decoding when the user steps to it.
 - No multi-hundred-ms stall when stepping through a burst.
 
-## Phase 3.1 — Measurement first
+## Phase 3.1 — Measurement first  ✅ done
 
-- [ ] Add distinct lightbox counters: preview hit, display cache hit, display
+- [x] Add distinct lightbox counters: preview hit, display cache hit, display
       cache miss, decode queued, decode completed, decode cancelled.
-- [ ] Log cache capacity, current size, and evictions.
-- [ ] Separate RAW vs non-RAW and edited vs unedited in the miss reason.
+- [x] Log cache capacity, current size, and evictions.
+- [x] Separate RAW vs non-RAW and edited vs unedited in the miss reason.
 - [ ] Log directional prefetch hit rate (once 3.3 exists).
 
 Acceptance: one lightbox session makes it obvious whether time is decode,
 texture upload, cache eviction, or cancellation.
 
-## Phase 3.2 — Tune and correctly size the display cache
+Result: `UI PERF lightbox_activity ...` summary every 2 s. First run showed
+constant eviction at capacity 8, justifying Phase 3.2.
 
-- [ ] Re-test `DISPLAY_TEXTURE_CACHE_CAPACITY = 32` with the new counters.
-- [ ] Decide key: include path, rotation, edit recipe, and target size, so
+## Phase 3.2 — Tune and correctly size the display cache  ✅ done
+
+- [x] Re-test `DISPLAY_TEXTURE_CACHE_CAPACITY = 32` with the new counters.
+- [x] Decide key: include path, rotation, edit recipe, and target size, so
       zooming/rotation does not evict valid entries.
-- [ ] Consider a soft byte budget instead of a pure count, clamped so a single
+- [x] Consider a soft byte budget instead of a pure count, clamped so a single
       delete or zoom does not drop the whole cache.
 
 Acceptance: stepping 10–20 photos forward then back stays cache-hit for the
 recent window; memory stays bounded.
+
+Result: capacity 32 + 256 MB byte budget. 20 NEF steps forward then back are
+now all cache hits with 0 evictions; cache peaked at ~57 MB for that run.
 
 ## Phase 3.3 — Directional prefetch
 

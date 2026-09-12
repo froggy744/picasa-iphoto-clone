@@ -291,7 +291,8 @@ fn display_texture_cache_lookup(
     let texture = entry.texture.clone();
     cache.push_front(entry);
     LIGHTBOX_STATS.cache_hits.fetch_add(1, Ordering::Relaxed);
-    lightbox_cache_size_observed(cache.len());
+    let total: usize = cache.iter().map(|entry| entry.bytes).sum();
+    lightbox_cache_size_observed(cache.len(), total);
     Some(texture)
 }
 
@@ -304,6 +305,11 @@ fn display_texture_cache_insert(
     target_height: u32,
     texture: gtk::gdk::MemoryTexture,
 ) {
+    // RGBA8 footprint of the texture. Used by the byte budget so a large or
+    // zoomed viewport cannot cache an unbounded amount of pixel memory.
+    let bytes = (texture.width().max(0) as usize)
+        .saturating_mul(texture.height().max(0) as usize)
+        .saturating_mul(4);
     let mut cache = cache.borrow_mut();
     cache.retain(|entry| {
         !(entry.path == path
@@ -319,15 +325,28 @@ fn display_texture_cache_insert(
         target_width,
         target_height,
         texture,
+        bytes,
     });
-    if cache.len() > DISPLAY_TEXTURE_CACHE_CAPACITY {
-        LIGHTBOX_STATS.evictions.fetch_add(
-            (cache.len() - DISPLAY_TEXTURE_CACHE_CAPACITY) as u64,
-            Ordering::Relaxed,
-        );
+    // Evict least-recently-used entries past either the count or the byte
+    // budget. Always keep at least one entry so a single oversized texture can
+    // still be shown without the cache immediately dropping everything.
+    let mut total: usize = cache.iter().map(|entry| entry.bytes).sum();
+    let mut evicted = 0u64;
+    while cache.len() > DISPLAY_TEXTURE_CACHE_CAPACITY
+        || (total > DISPLAY_TEXTURE_CACHE_BYTE_BUDGET && cache.len() > 1)
+    {
+        let Some(removed) = cache.pop_back() else {
+            break;
+        };
+        total = total.saturating_sub(removed.bytes);
+        evicted += 1;
     }
-    cache.truncate(DISPLAY_TEXTURE_CACHE_CAPACITY);
-    lightbox_cache_size_observed(cache.len());
+    if evicted > 0 {
+        LIGHTBOX_STATS
+            .evictions
+            .fetch_add(evicted, Ordering::Relaxed);
+    }
+    lightbox_cache_size_observed(cache.len(), total);
 }
 
 fn prepare_navigation_photo(
