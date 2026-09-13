@@ -357,6 +357,27 @@ struct PhotoActionContext {
 }
 
 include!("window/build.rs");
+
+#[cfg(test)]
+mod folder_scroll_tests {
+    use super::{Duration, FolderScrollbarScrub, Instant};
+
+    #[test]
+    fn thumb_drag_samples_immediately_then_waits_for_the_interval() {
+        let started = Instant::now();
+        let mut scrub = FolderScrollbarScrub::default();
+
+        assert!(!scrub.sample_due(started));
+
+        scrub.begin();
+        assert!(scrub.sample_due(started));
+        assert!(!scrub.sample_due(started + Duration::from_millis(49)));
+        assert!(scrub.sample_due(started + Duration::from_millis(50)));
+
+        scrub.end();
+        assert!(!scrub.sample_due(started + Duration::from_millis(100)));
+    }
+}
 include!("window/search.rs");
 include!("window/availability.rs");
 include!("window/albums.rs");

@@ -129,7 +129,10 @@ fn submit_with_policy(request: DisplayRequest, newest_visible_first: bool) -> bo
     drop(pending);
 
     let queue = DISPLAY_QUEUE.get_or_init(|| {
-        let queue = Arc::new((Mutex::new(VecDeque::<DisplayRequest>::new()), Condvar::new()));
+        let queue = Arc::new((
+            Mutex::new(VecDeque::<DisplayRequest>::new()),
+            Condvar::new(),
+        ));
         for _ in 0..display_worker_count() {
             let queue = queue.clone();
             std::thread::spawn(move || worker_loop(queue));
@@ -232,7 +235,10 @@ pub fn replace_visible_requests(mut requests: Vec<DisplayRequest>) -> usize {
     };
 
     let queue = DISPLAY_QUEUE.get_or_init(|| {
-        let queue = Arc::new((Mutex::new(VecDeque::<DisplayRequest>::new()), Condvar::new()));
+        let queue = Arc::new((
+            Mutex::new(VecDeque::<DisplayRequest>::new()),
+            Condvar::new(),
+        ));
         for _ in 0..display_worker_count() {
             let queue = queue.clone();
             std::thread::spawn(move || worker_loop(queue));
@@ -320,7 +326,9 @@ fn worker_loop(queue: Arc<Queue>) {
     loop {
         let request = {
             let (jobs, wake) = &*queue;
-            let mut jobs = jobs.lock().expect("thumbnail display queue should not be poisoned");
+            let mut jobs = jobs
+                .lock()
+                .expect("thumbnail display queue should not be poisoned");
             while jobs.is_empty() {
                 jobs = wake
                     .wait(jobs)
@@ -384,10 +392,7 @@ fn load_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
         }
     };
 
-    if crate::image_format::uses(
-        &request.source_path,
-        crate::image_format::DecoderKind::Raw,
-    ) {
+    if crate::image_format::uses(&request.source_path, crate::image_format::DecoderKind::Raw) {
         image = crop_raw_cached_preview(image, request.source_width, request.source_height);
     }
 

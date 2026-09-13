@@ -87,9 +87,7 @@ fn folder_thumbnail_cache_insert(path: String, paintable: gtk::gdk::Paintable) {
 
 fn folder_thumbnail_cache_remove(key: &str) {
     FOLDER_THUMBNAIL_CACHE.with(|cache| {
-        cache
-            .borrow_mut()
-            .retain(|(cached_key, _)| cached_key != key);
+        cache.borrow_mut().retain(|(cached_key, _)| cached_key != key);
     });
 }
 
@@ -690,7 +688,17 @@ impl SquareTile {
         self.imp().photo_index.set(None);
         if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
             if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
-                picture.set_paintable(gtk::gdk::Paintable::NONE);
+                // A fast Folder scrollbar scrub unbinds/rebinds rows faster
+                // than thumbnail decodes can land. Blanking the paintable
+                // here would leave the recycled tile with nothing to show
+                // when bind_photo_folder_fast tries to keep the previous
+                // image as a transient backstop. The settle refresh clears
+                // any unresolved stale image once scrubbing stops; the
+                // completion drain validates presentation keys before
+                // applying, so no wrong image can persist on screen.
+                if !grid_scrub_active() {
+                    picture.set_paintable(gtk::gdk::Paintable::NONE);
+                }
                 picture.set_tooltip_text(None);
             }
             for class_name in ["manual-selected", "folder-photo-selected"] {
@@ -1379,9 +1387,7 @@ impl Gallery {
             let Some(tile) = list_item.child().and_downcast::<SquareTile>() else {
                 return;
             };
-            tile.imp()
-                .photo_index
-                .set(Some(list_item.position() as usize));
+            tile.imp().photo_index.set(Some(list_item.position() as usize));
             tile.bind_photo(&photo);
         });
 
@@ -2669,6 +2675,50 @@ impl Gallery {
         crate::thumbnail_display::replace_visible_requests(requests)
     }
 
+    /// Apply already-decoded RAM paintables to the tiles visible in the
+    /// GridView without touching the decode queue.
+    ///
+    /// During a direct scrollbar scrub the model-derived sampler owns the
+    /// queue, so widget-derived requests must not replace it. Display must not
+    /// be tied to that restriction: a recycled tile binds once, usually before
+    /// its thumbnail decode completes, and the completion drain misses tiles
+    /// that are recycled again before the decode arrives. Re-checking the
+    /// visible tiles against the RAM cache every frame paints exactly those
+    /// finished thumbnails while the scrub is still moving.
+    pub fn apply_visible_grid_cached_paintables(&self) -> usize {
+        if self.group_mode.get() == GroupMode::Folder || self.root.height() <= 0 {
+            return 0;
+        }
+
+        let viewport = self.root.height() as f32;
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        let mut applied = 0usize;
+        for tile in tiles {
+            if !tile.is_mapped() || tile.height() <= 0 || tile.imp().visual_loaded.get() {
+                continue;
+            }
+            let Some(bounds) = tile.compute_bounds(&self.root) else {
+                continue;
+            };
+            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
+                continue;
+            }
+            let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+                continue;
+            };
+            let Some(key) = photo_presentation_key(&photo) else {
+                continue;
+            };
+            if let Some(paintable) = folder_thumbnail_cache_get(&key) {
+                if tile.apply_presentation_paintable(&key, &paintable) {
+                    applied += 1;
+                }
+            }
+        }
+        applied
+    }
+
     /// Queue the photo-model range that a large GridView scrollbar jump is
     /// moving toward, without waiting for GTK to realize/rebind those tiles.
     ///
@@ -2691,8 +2741,8 @@ impl Gallery {
         let columns = self.current_columns.get().max(1) as usize;
         let row_pitch = self.tile_height.get().max(1) as f64 + ITEM_PADDING * 2.0;
         let first = self.index_for_scroll_position(scroll_y);
-        let visible_rows =
-            ((viewport_height.max(row_pitch) / row_pitch).ceil() as usize).saturating_add(2);
+        let visible_rows = ((viewport_height.max(row_pitch) / row_pitch).ceil() as usize)
+            .saturating_add(2);
         let wanted = visible_rows.saturating_mul(columns).min(budget);
 
         let photos = self.current_photos.borrow();
@@ -2891,6 +2941,43 @@ impl Gallery {
             }
         }
         queued
+    }
+
+    /// Folder counterpart of apply_visible_grid_cached_paintables: paint RAM
+    /// thumbnails onto currently visible rows during a direct scrub without
+    /// replacing the model-derived decode target.
+    pub fn apply_visible_folder_cached_paintables(&self) -> usize {
+        if self.group_mode.get() != GroupMode::Folder || self.folder_root.height() <= 0 {
+            return 0;
+        }
+
+        let viewport = self.folder_root.height() as f32;
+        let mut tiles = Vec::new();
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        let mut applied = 0usize;
+        for tile in tiles {
+            if tile.height() <= 0 || tile.imp().visual_loaded.get() {
+                continue;
+            }
+            let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
+                continue;
+            };
+            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
+                continue;
+            }
+            let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+                continue;
+            };
+            let Some(key) = photo_presentation_key(&photo) else {
+                continue;
+            };
+            if let Some(paintable) = folder_thumbnail_cache_get(&key) {
+                if tile.apply_presentation_paintable(&key, &paintable) {
+                    applied += 1;
+                }
+            }
+        }
+        applied
     }
 
     /// Queue the Folder destination directly from virtual-row geometry.
@@ -3130,11 +3217,7 @@ impl Gallery {
         let mut missing = HashSet::<String>::new();
         for completion in completions {
             match completion.outcome {
-                crate::thumbnail_display::DisplayOutcome::Loaded {
-                    width,
-                    height,
-                    pixels,
-                } => {
+                crate::thumbnail_display::DisplayOutcome::Loaded { width, height, pixels } => {
                     let bytes = glib::Bytes::from_owned(pixels);
                     let texture = gtk::gdk::MemoryTexture::new(
                         width,
@@ -5101,7 +5184,8 @@ mod folder_stream_tests {
     use super::{
         folder_chunk_size, folder_dragged_positions, folder_line_height,
         folder_selection_after_click, folder_virtual_row_matches, folder_virtual_rows,
-        ordered_folder_ranges, FolderRowData, FolderRowKind, FolderTileBounds, GroupRange,
+        ordered_folder_ranges, FolderRowData, FolderRowKind, FolderTileBounds, FolderVirtualRow,
+        GroupRange,
     };
 
     #[test]
@@ -5122,13 +5206,7 @@ mod folder_stream_tests {
 
         gtk::init().unwrap();
         let gallery = Gallery::new(
-            &[],
-            148,
-            |_| {},
-            |_, _| {},
-            |_, _, _, _| {},
-            |_, _| {},
-            |_| {},
+            &[], 148, |_| {}, |_, _| {}, |_, _, _, _| {}, |_, _| {}, |_| {},
         );
         gallery.group_mode.set(GroupMode::Folder);
         gallery.current_photos.replace(
@@ -5167,13 +5245,11 @@ mod folder_stream_tests {
             gallery.update_width(width);
             settle();
             assert_eq!(
-                scroll.vadjustment().value(),
-                y,
+                scroll.vadjustment().value(), y,
                 "sidebar width {width} scrolled"
             );
             assert_eq!(
-                gallery.zoom_anchor.get(),
-                Some(before),
+                gallery.zoom_anchor.get(), Some(before),
                 "width-only resize consumed zoom anchor"
             );
             assert_eq!(gallery.photo_for_visible_folder_row().unwrap().id(), before);
@@ -5207,10 +5283,7 @@ mod folder_stream_tests {
         gallery.update_width(1440);
         window.set_default_size(1440, 600);
         settle();
-        assert_eq!(
-            gallery.photo_for_visible_folder_row().unwrap().id(),
-            scrolled
-        );
+        assert_eq!(gallery.photo_for_visible_folder_row().unwrap().id(), scrolled);
 
         // A second column change can arrive before GTK has allocated the first
         // rebuild. Its adjustment may transiently reset to zero (as in the
@@ -5221,8 +5294,7 @@ mod folder_stream_tests {
         window.set_default_size(970, 600);
         settle();
         assert_eq!(
-            gallery.photo_for_visible_folder_row().unwrap().id(),
-            scrolled,
+            gallery.photo_for_visible_folder_row().unwrap().id(), scrolled,
             "overlapping column changes lost the original anchor"
         );
         window.close();
@@ -5231,31 +5303,11 @@ mod folder_stream_tests {
     #[test]
     fn exact_folder_row_offset_uses_fixed_model_heights() {
         let rows = vec![
-            FolderVirtualRow {
-                kind: FolderRowKind::Header,
-                start: 0,
-                end: 0,
-            },
-            FolderVirtualRow {
-                kind: FolderRowKind::Photos,
-                start: 0,
-                end: 5,
-            },
-            FolderVirtualRow {
-                kind: FolderRowKind::Photos,
-                start: 5,
-                end: 10,
-            },
-            FolderVirtualRow {
-                kind: FolderRowKind::Header,
-                start: 10,
-                end: 10,
-            },
-            FolderVirtualRow {
-                kind: FolderRowKind::Photos,
-                start: 10,
-                end: 15,
-            },
+            FolderVirtualRow { kind: FolderRowKind::Header, start: 0, end: 0 },
+            FolderVirtualRow { kind: FolderRowKind::Photos, start: 0, end: 5 },
+            FolderVirtualRow { kind: FolderRowKind::Photos, start: 5, end: 10 },
+            FolderVirtualRow { kind: FolderRowKind::Header, start: 10, end: 10 },
+            FolderVirtualRow { kind: FolderRowKind::Photos, start: 10, end: 15 },
         ];
 
         // Header 58 + two 100px photo lines + header 58.

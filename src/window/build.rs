@@ -1670,13 +1670,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         // During direct scrollbar scrubbing the model-derived target queued by
         // the adjustment callback is authoritative. Do NOT replace it with
         // widget-derived visibility here: GtkGridView may still expose recycled
-        // cells from the previous viewport for several frames. Once scrubbing
-        // settles, normal widget-based visible prioritization resumes.
-        let visible_queued = if grid_scrub_active_for_tick.get() {
-            0
+        // cells from the previous viewport for several frames. Applying the
+        // paintables the workers already finished is still required, though:
+        // during fast movement a tile binds once, usually before its decode
+        // completes, and the completion drain misses tiles that were recycled
+        // again before the decode arrived. Re-checking visible tiles against
+        // the RAM cache every frame heals exactly those tiles.
+        let visible_queued;
+        let mut scrub_ram_applied = 0usize;
+        if grid_scrub_active_for_tick.get() {
+            scrub_ram_applied =
+                gallery_for_grid_motion_tick.apply_visible_grid_cached_paintables();
+            visible_queued = 0;
         } else {
-            gallery_for_grid_motion_tick.queue_visible_grid_cached_tiles_async(128)
-        };
+            visible_queued =
+                gallery_for_grid_motion_tick.queue_visible_grid_cached_tiles_async(128);
+        }
 
         let scrub_left = grid_scrub_frames_for_tick.get();
         if scrub_left > 0 {
@@ -1696,12 +1705,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         };
 
         if std::env::var_os("PICASA_TRACE").is_some()
-            && (visible_queued > 0 || ahead_queued > 0)
+            && (visible_queued > 0 || ahead_queued > 0 || scrub_ram_applied > 0)
         {
             eprintln!(
-                "UI PERF grid_motion_thumb_pump visible={} ahead={} frames_left={}",
+                "UI PERF grid_motion_thumb_pump visible={} ahead={} scrub_ram={} frames_left={}",
                 visible_queued,
                 ahead_queued,
+                scrub_ram_applied,
                 frames_left.saturating_sub(1)
             );
         }
@@ -1760,15 +1770,24 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         // Always prioritise the tiles actually visible in the frame GTK is
         // about to paint. queue_visible... uses reserved async capacity, so
         // stale prefetch requests cannot starve a scrollbar jump.
-        let visible_queued = if folder_direct_scrub_active_for_tick.get() {
+        let visible_queued;
+        let mut scrub_ram_applied = 0usize;
+        if folder_direct_scrub_active_for_tick.get() {
             // The model-derived scrub target is authoritative while the thumb is
             // teleporting. GtkListView may still expose rows from the previous
             // viewport, so never let those recycled widgets replace the target
-            // queue during an active direct scrub.
-            0
+            // queue during an active direct scrub. Thumbnails the workers have
+            // already finished must still be displayed: rows bind once, usually
+            // before their decode completes, and the completion drain misses
+            // rows recycled again mid-scrub. Applying RAM hits every frame
+            // heals those rows without touching the decode queue.
+            scrub_ram_applied =
+                gallery_for_thumbnail_motion_tick.apply_visible_folder_cached_paintables();
+            visible_queued = 0;
         } else {
-            gallery_for_thumbnail_motion_tick.queue_visible_folder_cached_tiles_async(96)
-        };
+            visible_queued =
+                gallery_for_thumbnail_motion_tick.queue_visible_folder_cached_tiles_async(96);
+        }
 
         // Warming ahead is useful, but doing the larger offscreen scan on every
         // frame is unnecessary. Run it every third pump frame so visible work
@@ -1787,12 +1806,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         };
 
         if std::env::var_os("PICASA_TRACE").is_some()
-            && (visible_queued > 0 || ahead_queued > 0)
+            && (visible_queued > 0 || ahead_queued > 0 || scrub_ram_applied > 0)
         {
             eprintln!(
-                "UI PERF folder_motion_thumb_pump visible={} ahead={} frames_left={}",
+                "UI PERF folder_motion_thumb_pump visible={} ahead={} scrub_ram={} frames_left={}",
                 visible_queued,
                 ahead_queued,
+                scrub_ram_applied,
                 frames_left.saturating_sub(1)
             );
         }
@@ -1830,6 +1850,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let direct_scrub = direction.abs() > page_size * 1.60;
             if direct_scrub {
                 folder_direct_scrub_active_for_event.set(true);
+                // Folder and grid views are never visible at the same time,
+                // so reuse the shared scrub thread-local: it keeps recycled
+                // folder tiles from being blanked at unbind while rows are
+                // rebound faster than thumbnail decodes can land. The folder
+                // settle callback clears it again.
+                crate::grid::set_grid_scrub_active(true);
                 if folder_target_sample_for_event.borrow().is_none() {
                     let gallery = gallery_for_folder_scroll.clone();
                     let latest_y = latest_folder_scroll_y.clone();
@@ -1888,6 +1914,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let source = glib::timeout_add_local(Duration::from_millis(110), move || {
                 debounce_slot.borrow_mut().take();
                 direct_scrub_active_for_settle.set(false);
+                // End the shared scrub window before the visible refresh so
+                // tiles that never received their thumbnail drop the stale
+                // backstop image and return to the normal placeholder state.
+                crate::grid::set_grid_scrub_active(false);
                 let final_queued = gallery_for_visible.queue_folder_scroll_target_cached_tiles_async(
                     final_scroll_y.get(),
                     final_page_size,
