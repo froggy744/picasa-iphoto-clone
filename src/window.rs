@@ -12,6 +12,9 @@ use rusqlite::Connection;
 use crate::albums_view;
 use crate::{db, grid, infobar::InfoBar, lightbox::Lightbox, scanner, sidebar};
 
+mod layout_settle;
+use layout_settle::{should_observe_width, WidthSettleGate};
+
 // This intentionally mirrors the original, system-colour-aware GTK4 look.
 // It is installed above the iPhone stylesheet only while selected from the
 // gear menu, so switching back reveals the dark gallery without rebuilding UI.
@@ -121,6 +124,14 @@ const STANDARD_GTK4_CSS: &str = r#"
     .one-to-one-btn:checked { color: @accent_fg_color; background: @accent_bg_color; }
     .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; }
     .section-count { font-size: 13px; }
+    .scroll-scrub-date {
+        padding: 7px 10px;
+        border-radius: 8px;
+        background: alpha(@window_bg_color, 0.88);
+        color: @theme_fg_color;
+        font-weight: 700;
+        box-shadow: 0 1px 4px alpha(black, 0.22);
+    }
     .navigation-sidebar row { color: @theme_fg_color; }
     .navigation-sidebar row:hover { background: alpha(@theme_fg_color, 0.06); }
     .navigation-sidebar .sidebar-section-heading { margin-top: 8px; padding-top: 0; }
@@ -269,6 +280,7 @@ fn grid_thumbnail_size_from_setting(connection: &Connection) -> i32 {
 enum ScanJobKind {
     Import,
     Refresh,
+    FolderRefresh,
     Maintenance,
 }
 
@@ -276,6 +288,21 @@ enum ScanJobKind {
 struct ScanUiEvent {
     generation: u64,
     event: scanner::ScanEvent,
+}
+
+#[derive(Debug)]
+enum RefreshPrepareEvent {
+    LibraryReady {
+        generation: u64,
+        folders: Result<Vec<db::Folder>, String>,
+        elapsed_ms: u128,
+    },
+    FolderReady {
+        generation: u64,
+        path: String,
+        imported_root: Result<bool, String>,
+        elapsed_ms: u128,
+    },
 }
 
 #[derive(Default)]
@@ -286,6 +313,7 @@ struct ScanJobState {
     active: Option<scanner::ScanControl>,
     imported_total: usize,
     failed_total: usize,
+    stop_requested: bool,
 }
 
 fn spawn_tagged_scan(
@@ -354,6 +382,68 @@ struct PhotoActionContext {
 }
 
 include!("window/build.rs");
+
+/// Folder scrollbar-scrub sampling state.
+///
+/// A direct scrub samples its decode target immediately in the frame the jump
+/// happens, then at most once per 50 ms while the drag continues, and never
+/// after it ends. GtkListView emits tiny ±1 px anchor corrections during
+/// drags; coalescing samples keeps the decode queue owned by one destination
+/// at a time instead of one per correction.
+#[derive(Default)]
+struct FolderScrollbarScrub {
+    active: bool,
+    last_sample: Option<Instant>,
+}
+
+impl FolderScrollbarScrub {
+    const SAMPLE_INTERVAL: Duration = Duration::from_millis(50);
+
+    fn begin(&mut self) {
+        self.active = true;
+    }
+
+    fn end(&mut self) {
+        self.active = false;
+        self.last_sample = None;
+    }
+
+    /// Returns true (and records the sample time) when a new scrub sample
+    /// should be queued now.
+    fn sample_due(&mut self, now: Instant) -> bool {
+        if !self.active {
+            return false;
+        }
+        let due = self.last_sample.map_or(true, |last| {
+            now.duration_since(last) >= Self::SAMPLE_INTERVAL
+        });
+        if due {
+            self.last_sample = Some(now);
+        }
+        due
+    }
+}
+
+#[cfg(test)]
+mod folder_scroll_tests {
+    use super::{Duration, FolderScrollbarScrub, Instant};
+
+    #[test]
+    fn thumb_drag_samples_immediately_then_waits_for_the_interval() {
+        let started = Instant::now();
+        let mut scrub = FolderScrollbarScrub::default();
+
+        assert!(!scrub.sample_due(started));
+
+        scrub.begin();
+        assert!(scrub.sample_due(started));
+        assert!(!scrub.sample_due(started + Duration::from_millis(49)));
+        assert!(scrub.sample_due(started + Duration::from_millis(50)));
+
+        scrub.end();
+        assert!(!scrub.sample_due(started + Duration::from_millis(100)));
+    }
+}
 include!("window/search.rs");
 include!("window/availability.rs");
 include!("window/albums.rs");

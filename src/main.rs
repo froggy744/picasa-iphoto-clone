@@ -15,6 +15,7 @@ mod settings;
 mod sidebar;
 mod source;
 mod thumbnail;
+mod thumbnail_display;
 mod window;
 
 fn main() {

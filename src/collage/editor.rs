@@ -590,9 +590,11 @@ fn refresh_preview(
             .as_deref()
             .filter(|path| std::path::Path::new(path).is_file())
         {
-            if let Some(rotated) =
-                crate::photo_texture::edited_thumbnail(path, item.photo.library_rotation, &item.photo.edit_recipe)
-            {
+            if let Some(rotated) = crate::photo_texture::edited_thumbnail(
+                path,
+                item.photo.library_rotation,
+                &item.photo.edit_recipe,
+            ) {
                 picture.set_paintable(Some(&rotated));
             } else {
                 picture.set_filename(Some(path));
@@ -621,7 +623,7 @@ fn refresh_preview(
         offline_badge.set_margin_start(8);
         offline_badge.add_css_class("offline-badge");
         offline_badge.set_tooltip_text(Some("Original photo offline"));
-        offline_badge.set_visible(!crate::source::cached_file_available(&item.photo.path));
+        offline_badge.set_visible(!crate::source::folder_available(item.photo.folder_id));
         tile.add_overlay(&offline_badge);
         frame.set_child(Some(&tile));
         canvas.put(&frame, 0.0, 0.0);
@@ -877,6 +879,7 @@ mod sizing_tests {
             .map(|i| CollageItem {
                 photo: CollagePhoto {
                     id: i,
+                    folder_id: None,
                     path: String::new(),
                     filename: String::new(),
                     thumbnail_path: None,

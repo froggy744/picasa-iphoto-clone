@@ -468,6 +468,15 @@ impl Lightbox {
                     fit_geometry_fixed,
                     cache_hit,
                 );
+                schedule_lightbox_prefetch(
+                    photos_for_scroll.clone(),
+                    next,
+                    if dy < 0.0 { -1 } else { 1 },
+                    root_for_scroll.clone(),
+                    zoom_for_scroll.clone(),
+                    display_cache_for_scroll.clone(),
+                    generation_for_scroll.clone(),
+                );
             }
 
             glib::Propagation::Stop
@@ -594,6 +603,15 @@ impl Lightbox {
                         display_cache_for_key.clone(),
                         fit_geometry_fixed,
                         cache_hit,
+                    );
+                    schedule_lightbox_prefetch(
+                        photos_for_key.clone(),
+                        next,
+                        if key == gtk::gdk::Key::Left { -1 } else { 1 },
+                        root_for_escape.clone(),
+                        zoom_for_key.clone(),
+                        display_cache_for_key.clone(),
+                        generation_for_key.clone(),
                     );
                 }
                 glib::Propagation::Stop
@@ -848,6 +866,15 @@ impl Lightbox {
             );
             glib::ControlFlow::Break
         });
+        schedule_lightbox_prefetch(
+            self.photos.clone(),
+            self.index.get(),
+            1,
+            self.root.clone(),
+            self.zoom.clone(),
+            self.display_texture_cache.clone(),
+            self.load_generation.clone(),
+        );
     }
 
 
@@ -904,6 +931,15 @@ impl Lightbox {
             self.display_texture_cache.clone(),
             fit_geometry_fixed,
             cache_hit,
+        );
+        schedule_lightbox_prefetch(
+            self.photos.clone(),
+            next,
+            direction,
+            self.root.clone(),
+            self.zoom.clone(),
+            self.display_texture_cache.clone(),
+            self.load_generation.clone(),
         );
     }
 
@@ -993,6 +1029,7 @@ impl Lightbox {
     }
 
     pub fn close(&self) {
+        cancel_lightbox_prefetch();
         // Invalidate an in-flight full-resolution decode as well as hiding
         // the viewer. A late worker result must not repopulate a closed view.
         self.load_generation

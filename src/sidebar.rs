@@ -80,9 +80,22 @@ const FOLDER_INDICATOR_KEY: &str = "picasa-sidebar-folder-indicator";
 const CURRENT_FILTER_KEY: &str = "picasa-sidebar-current-filter";
 const FILTER_SYNCING_KEY: &str = "picasa-sidebar-filter-syncing";
 const FOLDER_REFRESH_KEY: &str = "picasa-sidebar-folder-refresh";
+const REFRESH_GATE_KEY: &str = "picasa-sidebar-refresh-gate";
+
+/// Share the window's refresh sensitivity with existing and future menus.
+pub fn bind_refresh_gate(scrolled: &gtk::ScrolledWindow, gate: &gtk::Button) {
+    if let Some(list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) {
+        unsafe {
+            list.set_data(REFRESH_GATE_KEY, gate.downgrade());
+        }
+    }
+}
 const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
 const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
+const FOLDER_WATCH_KEY: &str = "picasa-sidebar-folder-watch";
+const FOLDER_MODE_TOGGLE_KEY: &str = "picasa-sidebar-folder-mode-toggle";
+const FOLDER_MODE_CHANGED_KEY: &str = "picasa-sidebar-folder-mode-changed";
 const KEYBOARD_GRID_TARGET_KEY: &str = "picasa-sidebar-keyboard-grid-target";
 const SCROLL_LOCATION_FOLDER_KEY: &str = "picasa-sidebar-scroll-location-folder";
 
@@ -104,6 +117,7 @@ pub fn build(
     on_folder_statistics: Rc<dyn Fn(Folder)>,
     on_remove_folder: Rc<dyn Fn(Folder)>,
     on_folder_favorite: Rc<dyn Fn(Folder, bool)>,
+    on_folder_watch: Rc<dyn Fn(Folder, bool)>,
     folder_display_mode: FolderDisplayMode,
     on_folder_display_mode_changed: Rc<dyn Fn(FolderDisplayMode)>,
 ) -> gtk::ScrolledWindow {
@@ -160,18 +174,20 @@ pub fn build(
         });
     }
 
-    // The Library section stays fixed; Albums and Folders share one scrollable
-    // region below it, so a long album list can never push the folders off
-    // screen and both scroll together as one list.
+    // The Library section stays fixed. Albums and Folders headings are kept
+    // outside their row scrollers so each behaves like a sticky section header
+    // while its rows scroll underneath it.
     let sections_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     sections_box.set_hexpand(true);
     let sections_scroll = gtk::ScrolledWindow::new();
     sections_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     sections_scroll.set_hexpand(true);
-    sections_scroll.set_vexpand(true);
+    sections_scroll.set_vexpand(false);
+    sections_scroll.set_propagate_natural_height(true);
+    sections_scroll.set_max_content_height(220);
     sections_scroll.set_child(Some(&sections_box));
 
-    // ALBUMS: collapsible rows inside the shared scroll region.
+    // ALBUMS: sticky heading plus bounded scrolling album rows.
     let (album_heading, album_indicator) = collapsible_heading(
         "Albums",
         Some(on_create_album.clone()),
@@ -182,15 +198,18 @@ pub fn build(
             Rc::new(move || on_filter(SidebarFilter::Albums))
         }),
     );
-    sections_box.append(&album_heading);
+    album_heading.add_css_class("sidebar-sticky-heading");
 
     let album_list = section_list();
     connect_filter_list(&album_list, on_filter.clone(), filter_syncing.clone());
+    sections_box.append(&album_list);
+
     let album_revealer = gtk::Revealer::new();
     album_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     album_revealer.set_reveal_child(true);
-    album_revealer.set_child(Some(&album_list));
-    sections_box.append(&album_revealer);
+    album_revealer.set_hexpand(true);
+    album_revealer.set_vexpand(false);
+    album_revealer.set_child(Some(&sections_scroll));
 
     {
         let state = state.clone();
@@ -233,7 +252,7 @@ pub fn build(
         album_heading.add_controller(double_click);
     }
 
-    // FOLDERS: heading plus the folder tree, all inside the shared scroll.
+    // FOLDERS: sticky heading plus an independently scrollable folder tree.
     let (folder_heading, folder_indicator) = collapsible_heading(
         "Folders",
         Some(on_import_folder.clone()),
@@ -241,6 +260,7 @@ pub fn build(
         true,
         None,
     );
+    folder_heading.add_css_class("sidebar-sticky-heading");
 
     let folder_mode_toggle = gtk::Button::from_icon_name(match folder_display_mode {
         FolderDisplayMode::Tree => "folder-symbolic",
@@ -254,17 +274,26 @@ pub fn build(
     // button. It changes presentation only; scanner/database scope is untouched.
     folder_heading.insert_child_after(&folder_mode_toggle, Some(&folder_indicator));
 
-    sections_box.append(&folder_heading);
+    root.append(&album_heading);
+    root.append(&album_revealer);
+    root.append(&folder_heading);
 
     let folder_list = section_list();
     connect_filter_list(&folder_list, on_filter, filter_syncing.clone());
+
+    let folder_scroll = gtk::ScrolledWindow::new();
+    folder_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    folder_scroll.set_hexpand(true);
+    folder_scroll.set_vexpand(true);
+    folder_scroll.set_child(Some(&folder_list));
 
     let folder_revealer = gtk::Revealer::new();
     folder_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     folder_revealer.set_reveal_child(true);
     folder_revealer.set_hexpand(true);
-    folder_revealer.set_child(Some(&folder_list));
-    sections_box.append(&folder_revealer);
+    folder_revealer.set_vexpand(true);
+    folder_revealer.set_child(Some(&folder_scroll));
+    root.append(&folder_revealer);
 
     {
         let state = state.clone();
@@ -306,8 +335,6 @@ pub fn build(
         folder_heading.add_controller(double_click);
     }
 
-    root.append(&sections_scroll);
-
     {
         let list = folder_list.clone();
         let state = state.clone();
@@ -328,6 +355,16 @@ pub fn build(
         });
     }
 
+    // Folder rows install their context menu while they are created, so these
+    // callbacks must be available on the ListBox before populate_folders().
+    unsafe {
+        folder_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder);
+        folder_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics);
+        folder_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder);
+        folder_list.set_data(FOLDER_FAVORITE_KEY, on_folder_favorite);
+        folder_list.set_data(FOLDER_WATCH_KEY, on_folder_watch);
+    }
+
     populate_albums(&album_list, albums, &on_delete_album);
     populate_folders(&folder_list, folders, &state, &on_unavailable);
 
@@ -337,10 +374,6 @@ pub fn build(
     // refresh() and append_folder() can update only the relevant sections
     // without changing any caller-facing API.
     unsafe {
-        folder_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder);
-        folder_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics);
-        folder_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder);
-        folder_list.set_data(FOLDER_FAVORITE_KEY, on_folder_favorite);
         outer.set_data(STATE_KEY, state);
         outer.set_data(LIBRARY_LIST_KEY, library_list);
         outer.set_data(LIBRARY_REVEALER_KEY, library_revealer);
@@ -349,9 +382,11 @@ pub fn build(
         outer.set_data(ALBUM_REVEALER_KEY, album_revealer);
         outer.set_data(ALBUM_INDICATOR_KEY, album_indicator);
         outer.set_data(FOLDER_LIST_KEY, folder_list);
-        outer.set_data(FOLDER_SCROLL_KEY, sections_scroll);
+        outer.set_data(FOLDER_SCROLL_KEY, folder_scroll);
         outer.set_data(FOLDER_REVEALER_KEY, folder_revealer);
         outer.set_data(FOLDER_INDICATOR_KEY, folder_indicator);
+        outer.set_data(FOLDER_MODE_TOGGLE_KEY, folder_mode_toggle);
+        outer.set_data(FOLDER_MODE_CHANGED_KEY, on_folder_display_mode_changed);
         outer.set_data(FILTER_SYNCING_KEY, filter_syncing);
     }
 
@@ -789,27 +824,28 @@ fn apply_scroll_location(scrolled: &gtk::ScrolledWindow) {
     };
     let mode = state.borrow().folder_display_mode;
     let display_id = match mode {
-        FolderDisplayMode::Tree => folder_id,
-        FolderDisplayMode::ImportedOnly => imported_root_for_folder(&folders, folder_id)
-            .unwrap_or(folder_id),
+        FolderDisplayMode::Tree => {
+            // Passive scroll-follow must never expand/rebuild the sidebar. If
+            // the exact child row is hidden under a collapsed ancestor, mark
+            // the nearest ancestor that is already rendered instead.
+            if row_for_filter(&list, SidebarFilter::Folder(folder_id)).is_some() {
+                Some(folder_id)
+            } else {
+                folder_ancestor_ids(&folders, folder_id)
+                    .into_iter()
+                    .find(|ancestor_id| {
+                        row_for_filter(&list, SidebarFilter::Folder(*ancestor_id)).is_some()
+                    })
+            }
+        }
+        FolderDisplayMode::ImportedOnly => {
+            Some(imported_root_for_folder(&folders, folder_id).unwrap_or(folder_id))
+        }
     };
 
-    if mode == FolderDisplayMode::Tree {
-        let ancestors = folder_ancestor_ids(&folders, folder_id);
-        let changed = {
-            let mut state = state.borrow_mut();
-            let before = state.expanded_folders.len();
-            state.expanded_folders.extend(ancestors);
-            state.expanded_folders.len() != before
-        };
-        if changed {
-            rebuild_folder_list_from_rows(&list, &state);
-            let scrolled = scrolled.clone();
-            glib::idle_add_local_once(move || apply_scroll_location(&scrolled));
-            return;
-        }
-    }
-
+    let Some(display_id) = display_id else {
+        return;
+    };
     let Some(row) = row_for_filter(&list, SidebarFilter::Folder(display_id)) else {
         return;
     };
@@ -879,7 +915,8 @@ fn folder_ancestor_ids(folders: &[Folder], folder_id: i64) -> Vec<i64> {
 }
 
 fn scroll_folder_row_into_view(scrolled: &gtk::ScrolledWindow, row: &gtk::ListBoxRow) {
-    let Some(folder_scroll) = stored_widget::<gtk::ScrolledWindow>(scrolled, FOLDER_SCROLL_KEY) else {
+    let Some(folder_scroll) = stored_widget::<gtk::ScrolledWindow>(scrolled, FOLDER_SCROLL_KEY)
+    else {
         return;
     };
     let row = row.clone();
@@ -935,6 +972,32 @@ pub fn visible_folder_ids(scrolled: &gtk::ScrolledWindow) -> Vec<i64> {
         child = next;
     }
     ids
+}
+
+pub fn set_folder_display_mode(scrolled: &gtk::ScrolledWindow, mode: FolderDisplayMode) -> bool {
+    let Some(state) = sidebar_state(scrolled) else {
+        return false;
+    };
+    if state.borrow().folder_display_mode == mode {
+        return false;
+    }
+
+    state.borrow_mut().folder_display_mode = mode;
+    if let Some(toggle) = stored_widget::<gtk::Button>(scrolled, FOLDER_MODE_TOGGLE_KEY) {
+        set_folder_mode_toggle_presentation(&toggle, mode);
+    }
+    if let Some(list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) {
+        rebuild_folder_list_from_rows(&list, &state);
+    }
+    let callback = unsafe {
+        scrolled
+            .data::<Rc<dyn Fn(FolderDisplayMode)>>(FOLDER_MODE_CHANGED_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
+    if let Some(callback) = callback {
+        callback(mode);
+    }
+    true
 }
 
 pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) {
@@ -1019,6 +1082,18 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
         return;
     };
 
+    // A navigation request should reveal the exact folder row, not only an
+    // imported parent/root. Force Tree mode for Open in Folder/search reveals
+    // so the full ancestor path exists in the sidebar, then continue scrolling
+    // after the rebuilt rows have been allocated.
+    if set_folder_display_mode(scrolled, FolderDisplayMode::Tree) {
+        let scrolled = scrolled.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
+            scroll_to_folder(&scrolled, folder_id);
+        });
+        return;
+    }
+
     // A navigation request must make the target row visible even when the
     // user previously collapsed the entire Folders section.
     state.borrow_mut().folders_expanded = true;
@@ -1083,6 +1158,7 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
                     syncing.set(true);
                 }
                 select_matching_row(scrolled, FOLDER_LIST_KEY, SidebarFilter::Folder(folder_id));
+                row.grab_focus();
                 if let Some(syncing) = syncing {
                     syncing.set(false);
                 }
@@ -1363,10 +1439,18 @@ fn populate_folders(
     }
 
     let roots = children.get(&None).cloned().unwrap_or_default();
-    if std::env::var_os("PICASA_TRACE").is_some() {
+    if std::env::var_os("PICASA_TRACE_VERBOSE").is_some() {
+        let imported_roots = folders.iter().filter(|folder| folder.imported_root).count();
         eprintln!(
-            "FOLDER TRACE sidebar folders={} roots={:?} relationships={:?}",
+            "FOLDER TRACE sidebar folders={} root_count={} imported_roots={}",
             folders.len(),
+            roots.len(),
+            imported_roots
+        );
+    }
+    if std::env::var_os("PICASA_TRACE_VERBOSE").is_some() {
+        eprintln!(
+            "FOLDER TRACE sidebar_detail roots={:?} relationships={:?}",
             roots,
             folders
                 .iter()
@@ -1594,6 +1678,10 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
         list.data::<Rc<dyn Fn(Folder, bool)>>(FOLDER_FAVORITE_KEY)
             .map(|callback| callback.as_ref().clone())
     };
+    let watch = unsafe {
+        list.data::<Rc<dyn Fn(Folder, bool)>>(FOLDER_WATCH_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
     let Some(refresh) = refresh else {
         return;
     };
@@ -1606,9 +1694,13 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
     let Some(favorite) = favorite else {
         return;
     };
+    let Some(watch) = watch else {
+        return;
+    };
 
     let folder_for_menu = folder.clone();
     let row_for_menu = row.clone();
+    let list_for_refresh_gate = list.downgrade();
     let right_click = gtk::GestureClick::new();
     right_click.set_button(3);
     right_click.connect_pressed(move |gesture, _, _, _| {
@@ -1624,6 +1716,17 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
         let refresh_item = gtk::Button::with_label("Refresh folder");
         refresh_item.add_css_class("flat");
         refresh_item.set_sensitive(folder_for_menu.imported_root);
+        if folder_for_menu.imported_root {
+            let gate = list_for_refresh_gate.upgrade().and_then(|list| unsafe {
+                list.data::<glib::WeakRef<gtk::Button>>(REFRESH_GATE_KEY)
+                    .and_then(|gate| gate.as_ref().upgrade())
+            });
+            if let Some(gate) = gate {
+                gate.bind_property("sensitive", &refresh_item, "sensitive")
+                    .sync_create()
+                    .build();
+            }
+        }
         if !folder_for_menu.imported_root {
             refresh_item
                 .set_tooltip_text(Some("Only explicitly imported folders can be refreshed"));
@@ -1659,6 +1762,25 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
             remove(folder.clone());
         });
         menu.append(&remove_item);
+
+        let watch_item = gtk::Button::with_label(if folder_for_menu.watched {
+            "Stop watching folder"
+        } else {
+            "Watch folder for changes"
+        });
+        watch_item.add_css_class("flat");
+        watch_item.set_sensitive(folder_for_menu.imported_root);
+        if !folder_for_menu.imported_root {
+            watch_item.set_tooltip_text(Some("Only explicitly imported folders can be watched"));
+        }
+        let folder = folder_for_menu.clone();
+        let watch = watch.clone();
+        let popover_for_watch = popover.clone();
+        watch_item.connect_clicked(move |_| {
+            popover_for_watch.popdown();
+            watch(folder.clone(), !folder.watched);
+        });
+        menu.append(&watch_item);
 
         let add_favorites = gtk::Button::with_label("Add all photos to Favourites");
         add_favorites.add_css_class("flat");

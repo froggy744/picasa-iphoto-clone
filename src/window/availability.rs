@@ -2,6 +2,23 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 static AVAILABILITY_GENERATION: AtomicU64 = AtomicU64::new(0);
 
+fn changed_folder_availability(
+    previous: &std::collections::HashMap<i64, bool>,
+    folders: &[db::Folder],
+) -> Vec<(i64, bool)> {
+    folders
+        .iter()
+        .filter_map(|folder| {
+            (previous.get(&folder.id).copied().unwrap_or(true) != folder.available)
+                .then_some((folder.id, folder.available))
+        })
+        .collect()
+}
+
+fn invalidate_availability_refreshes() {
+    AVAILABILITY_GENERATION.fetch_add(1, AtomicOrdering::Relaxed);
+}
+
 #[derive(Default)]
 struct ReconnectedSources {
     mounted: std::collections::HashSet<String>,
@@ -91,6 +108,33 @@ mod reconnect_tests {
         assert_eq!(sources.pending, roots(&["file:///media/two"]));
         sources.update(roots(&[]));
         assert!(sources.pending.is_empty());
+    }
+
+    #[test]
+    fn availability_refresh_only_updates_folders_whose_state_changed() {
+        let previous = std::collections::HashMap::from([(1, true), (2, true), (3, false)]);
+        let folders = vec![
+            folder(1, true),
+            folder(2, false),
+            folder(3, false),
+            folder(4, true),
+        ];
+
+        assert_eq!(changed_folder_availability(&previous, &folders), vec![(2, false)]);
+    }
+
+    fn folder(id: i64, available: bool) -> db::Folder {
+        db::Folder {
+            id,
+            path: format!("/photos/{id}"),
+            name: id.to_string(),
+            parent_id: None,
+            imported_root: true,
+            watched: false,
+            photo_count: 0,
+            subfolder_count: 0,
+            available,
+        }
     }
 }
 
@@ -213,6 +257,7 @@ fn show_unavailable_dialog(
 
 fn refresh_availability_ui(
     connection: &Rc<RefCell<Connection>>,
+    folder_cache: &Rc<RefCell<Vec<db::Folder>>>,
     gallery: &Rc<RefCell<Weak<grid::Gallery>>>,
     sidebar: &Rc<RefCell<Option<gtk::ScrolledWindow>>>,
     availability_refresh_slot: &Rc<RefCell<Option<Rc<dyn Fn()>>>>,
@@ -220,53 +265,71 @@ fn refresh_availability_ui(
     import_folder: Rc<dyn Fn()>,
     delete_album: Rc<dyn Fn(i64)>,
 ) {
-    crate::source::refresh_availability();
-
+    let _ = connection;
     let generation = AVAILABILITY_GENERATION.fetch_add(1, AtomicOrdering::Relaxed) + 1;
-    if let Some(gallery) = gallery.borrow().upgrade() {
-        let snapshot = gallery.availability_snapshot();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let updates = snapshot
-                .into_iter()
-                .map(|(id, path)| (id, crate::source::cached_file_available(&path)))
-                .collect::<Vec<_>>();
-            let _ = sender.send((generation, updates));
+    let gallery_for_result = gallery.borrow().upgrade();
+    let previous_folder_availability = folder_cache
+        .borrow()
+        .iter()
+        .map(|folder| (folder.id, folder.available))
+        .collect::<std::collections::HashMap<_, _>>();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        crate::source::refresh_availability();
+        let sidebar_data = db::open_default().and_then(|connection| {
+            let folders = db::folders(&connection)?;
+            let gallery_updates = changed_folder_availability(&previous_folder_availability, &folders);
+            Ok((
+                gallery_updates,
+                folders,
+                db::albums(&connection)?,
+                db::sidebar_counts(&connection)?,
+            ))
         });
+        let _ = sender.send((generation, sidebar_data));
+    });
 
-        let gallery_for_result = gallery.clone();
-        glib::timeout_add_local(Duration::from_millis(50), move || {
-            match receiver.try_recv() {
-                Ok((result_generation, updates)) => {
-                    if result_generation == AVAILABILITY_GENERATION.load(AtomicOrdering::Relaxed) {
-                        gallery_for_result.apply_availability(&updates);
+    let sidebar = sidebar.clone();
+    let folder_cache = folder_cache.clone();
+    let availability_refresh_slot = availability_refresh_slot.clone();
+    glib::timeout_add_local(Duration::from_millis(50), move || match receiver.try_recv() {
+        Ok((result_generation, sidebar_data)) => {
+            if result_generation == AVAILABILITY_GENERATION.load(AtomicOrdering::Relaxed) {
+                match sidebar_data {
+                    Ok((gallery_updates, folders, albums, counts)) => {
+                        folder_cache.replace(folders.clone());
+                        if let Some(gallery) = gallery_for_result.as_ref() {
+                            gallery.apply_folder_availability(
+                                &gallery_updates,
+                                move || {
+                                    AVAILABILITY_GENERATION.load(AtomicOrdering::Relaxed)
+                                        == result_generation
+                                },
+                            );
+                        }
+                        if let Some(sidebar) = sidebar.borrow().as_ref() {
+                            if let Some(on_unavailable) =
+                                availability_refresh_slot.borrow().as_ref().cloned()
+                            {
+                                sidebar::refresh(
+                                    sidebar,
+                                    &folders,
+                                    &albums,
+                                    counts,
+                                    create_album.clone(),
+                                    import_folder.clone(),
+                                    delete_album.clone(),
+                                    on_unavailable,
+                                );
+                            }
+                        }
                     }
-                    glib::ControlFlow::Break
+                    Err(error) => eprintln!("Could not refresh availability UI: {error}"),
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
             }
-        });
-    }
-
-    if let (Ok(folders), Ok(albums), Ok(counts)) = (
-        db::folders(&connection.borrow()),
-        db::albums(&connection.borrow()),
-        db::sidebar_counts(&connection.borrow()),
-    ) {
-        if let Some(sidebar) = sidebar.borrow().as_ref() {
-            if let Some(on_unavailable) = availability_refresh_slot.borrow().as_ref().cloned() {
-                sidebar::refresh(
-                    sidebar,
-                    &folders,
-                    &albums,
-                    counts,
-                    create_album,
-                    import_folder,
-                    delete_album,
-                    on_unavailable,
-                );
-            }
+            glib::ControlFlow::Break
         }
-    }
+        Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+    });
 }

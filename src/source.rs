@@ -7,9 +7,28 @@ use anyhow::{Context, Result};
 use gio::prelude::*;
 
 static AVAILABILITY_CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+static FOLDER_AVAILABILITY: OnceLock<Mutex<HashMap<i64, bool>>> = OnceLock::new();
 
 fn availability_cache() -> &'static Mutex<HashMap<String, bool>> {
     AVAILABILITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn folder_availability() -> &'static Mutex<HashMap<i64, bool>> {
+    FOLDER_AVAILABILITY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Replace the current imported-source state. This is intentionally keyed by
+/// folder, never by photo: every photo in a folder inherits one source result.
+pub fn replace_folder_availability(availability: HashMap<i64, bool>) {
+    *folder_availability().lock().unwrap() = availability;
+}
+
+/// A photo without a registered folder keeps the historical online default.
+/// Registered photos are online only when their imported source is available.
+pub fn folder_available(folder_id: Option<i64>) -> bool {
+    folder_id
+        .and_then(|id| folder_availability().lock().unwrap().get(&id).copied())
+        .unwrap_or(true)
 }
 
 fn query_exists(reference: &str, directory: bool) -> bool {

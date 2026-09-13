@@ -1,6 +1,8 @@
 # Albums Bookshelf + Cover Overlay — Implementation Guide
 
-Status: **not started**. This is a self-contained guide so work can resume later.
+Status: **superseded**. The bookshelf and cover-frame work described here is
+implemented; see `docs/superpowers/specs/2026-09-11-theme-asset-hierarchy-design.md`
+for the shipped asset hierarchy and behavior. The notes below are kept for history only.
 
 ## Goal
 

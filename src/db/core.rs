@@ -142,18 +142,28 @@ fn is_descendant_path(candidate: &str, ancestor: &str) -> bool {
 }
 
 fn migrate_album_schema(connection: &Connection) -> Result<()> {
-    let has_created_at = {
+    let columns = {
         let mut statement = connection.prepare("PRAGMA table_info(albums)")?;
         let columns = statement
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        columns.iter().any(|column| column == "created_at")
+        columns
     };
-    if !has_created_at {
+    if !columns.iter().any(|column| column == "created_at") {
         connection.execute_batch(
             "ALTER TABLE albums ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
              UPDATE albums SET created_at = CAST(strftime('%s', 'now') AS INTEGER)
              WHERE created_at = 0;",
+        )?;
+    }
+    if !columns.iter().any(|column| column == "cover_frame") {
+        connection.execute("ALTER TABLE albums ADD COLUMN cover_frame TEXT", [])?;
+    }
+    if !columns.iter().any(|column| column == "cover_photo_id") {
+        connection.execute(
+            "ALTER TABLE albums ADD COLUMN cover_photo_id INTEGER
+             REFERENCES photos(id) ON DELETE SET NULL",
+            [],
         )?;
     }
 

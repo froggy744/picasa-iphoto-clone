@@ -126,6 +126,27 @@ mod tests {
     }
 
     #[test]
+    fn renaming_an_album_trims_its_name_and_preserves_uniqueness() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let holiday = create_album(&connection, "Holiday").unwrap();
+        create_album(&connection, "Work").unwrap();
+
+        rename_album(&connection, holiday.id, "  Summer  ").unwrap();
+        assert_eq!(
+            albums(&connection)
+                .unwrap()
+                .into_iter()
+                .find(|album| album.id == holiday.id)
+                .unwrap()
+                .name,
+            "Summer"
+        );
+        assert!(rename_album(&connection, holiday.id, "work").is_err());
+        assert!(rename_album(&connection, holiday.id, " ").is_err());
+    }
+
+    #[test]
     fn album_membership_survives_reopening_database() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -165,6 +186,96 @@ mod tests {
     }
 
     #[test]
+    fn album_cover_frame_selection_is_persisted() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let album = create_album(&connection, "Styled").unwrap();
+        assert_eq!(album.cover_frame.as_deref(), None);
+
+        set_album_cover_frame(&connection, album.id, "vintage/blue-frame.png").unwrap();
+
+        let album = albums(&connection).unwrap().remove(0);
+        assert_eq!(album.cover_frame.as_deref(), Some("vintage/blue-frame.png"));
+
+        clear_album_cover_frame(&connection, album.id).unwrap();
+
+        let album = albums(&connection).unwrap().remove(0);
+        assert_eq!(album.cover_frame, None);
+    }
+
+    #[test]
+    fn every_album_cover_frame_can_be_cleared_at_once() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let first = create_album(&connection, "First").unwrap();
+        let second = create_album(&connection, "Second").unwrap();
+        let _ = create_album(&connection, "Untouched").unwrap();
+        set_album_cover_frame(&connection, first.id, "vintage/blue-frame.png").unwrap();
+        set_album_cover_frame(&connection, second.id, "pink/pink-frame.png").unwrap();
+
+        assert_eq!(clear_all_album_cover_frames(&connection).unwrap(), 2);
+
+        for album in albums(&connection).unwrap() {
+            assert_eq!(
+                album.cover_frame, None,
+                "album {} kept its cover",
+                album.name
+            );
+        }
+        assert_eq!(clear_all_album_cover_frames(&connection).unwrap(), 0);
+    }
+
+    #[test]
+    fn album_cover_photo_selection_is_persisted() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let album = create_album(&connection, "Styled").unwrap();
+        assert_eq!(album.cover_photo_id, None);
+        connection
+            .execute_batch(
+                "INSERT INTO photos (id, path) VALUES (7, '/tmp/seven.jpg');
+                 INSERT INTO photos (id, path) VALUES (8, '/tmp/eight.jpg');",
+            )
+            .unwrap();
+
+        set_album_cover_photo(&connection, album.id, 7).unwrap();
+        assert_eq!(
+            albums(&connection).unwrap().remove(0).cover_photo_id,
+            Some(7)
+        );
+
+        // Only albums that had a chosen photo are counted.
+        set_album_cover_photo(&connection, album.id, 8).unwrap();
+        assert_eq!(clear_all_album_cover_photos(&connection).unwrap(), 1);
+        assert_eq!(albums(&connection).unwrap().remove(0).cover_photo_id, None);
+        assert_eq!(clear_all_album_cover_photos(&connection).unwrap(), 0);
+
+        set_album_cover_photo(&connection, album.id, 7).unwrap();
+        clear_album_cover_photo(&connection, album.id).unwrap();
+        assert_eq!(albums(&connection).unwrap().remove(0).cover_photo_id, None);
+    }
+
+    #[test]
+    fn deleting_a_photo_clears_the_albums_that_used_it_as_cover() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        let album = create_album(&connection, "Styled").unwrap();
+        connection
+            .execute_batch("INSERT INTO photos (id, path) VALUES (7, '/tmp/seven.jpg');")
+            .unwrap();
+        set_album_cover_photo(&connection, album.id, 7).unwrap();
+
+        connection
+            .execute("DELETE FROM photos WHERE id = 7", [])
+            .unwrap();
+
+        assert_eq!(albums(&connection).unwrap().remove(0).cover_photo_id, None);
+    }
+
+    #[test]
     fn existing_album_tables_gain_timestamps_and_cascades() {
         let connection = Connection::open_in_memory().unwrap();
         connection
@@ -192,6 +303,17 @@ mod tests {
             })
             .unwrap();
         assert!(created_at > 0);
+        let album_columns = connection
+            .prepare("PRAGMA table_info(albums)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(album_columns.iter().any(|column| column == "cover_frame"));
+        assert!(album_columns
+            .iter()
+            .any(|column| column == "cover_photo_id"));
         connection
             .execute("DELETE FROM albums WHERE id = 1", [])
             .unwrap();
@@ -211,14 +333,13 @@ mod tests {
         connection.execute_batch(SCHEMA).unwrap();
 
         let root = mark_import_root(&connection, "/mnt/steam/Wickus").unwrap();
-        assert_eq!(mark_import_root(&connection, "/mnt/steam/Wickus").unwrap(), root);
+        assert_eq!(
+            mark_import_root(&connection, "/mnt/steam/Wickus").unwrap(),
+            root
+        );
         let dcim = insert_discovered_folder(&connection, "/mnt/steam/Wickus/DCIM", root).unwrap();
-        let leaf = insert_discovered_folder(
-            &connection,
-            "/mnt/steam/Wickus/DCIM/104NCZ_5",
-            dcim,
-        )
-        .unwrap();
+        let leaf =
+            insert_discovered_folder(&connection, "/mnt/steam/Wickus/DCIM/104NCZ_5", dcim).unwrap();
 
         let folders_by_path = folders(&connection)
             .unwrap()
@@ -228,8 +349,14 @@ mod tests {
         assert_eq!(folders_by_path.len(), 4);
         assert!(!folders_by_path["/mnt/steam"].imported_root);
         assert!(folders_by_path["/mnt/steam/Wickus"].imported_root);
-        assert_eq!(folders_by_path["/mnt/steam/Wickus/DCIM"].parent_id, Some(root));
-        assert_eq!(folders_by_path["/mnt/steam/Wickus/DCIM/104NCZ_5"].parent_id, Some(dcim));
+        assert_eq!(
+            folders_by_path["/mnt/steam/Wickus/DCIM"].parent_id,
+            Some(root)
+        );
+        assert_eq!(
+            folders_by_path["/mnt/steam/Wickus/DCIM/104NCZ_5"].parent_id,
+            Some(dcim)
+        );
         assert!(!folders_by_path["/mnt/steam/Wickus/DCIM/104NCZ_5"].imported_root);
         assert_eq!(leaf, folders_by_path["/mnt/steam/Wickus/DCIM/104NCZ_5"].id);
     }
@@ -283,14 +410,13 @@ mod tests {
 
         let root = insert_folder(&connection, "/mnt/steam/Wickus").unwrap();
         let dcim = insert_discovered_folder(&connection, "/mnt/steam/Wickus/DCIM", root).unwrap();
-        let leaf = insert_discovered_folder(
-            &connection,
-            "/mnt/steam/Wickus/DCIM/104NCZ_5",
-            dcim,
-        )
-        .unwrap();
+        let leaf =
+            insert_discovered_folder(&connection, "/mnt/steam/Wickus/DCIM/104NCZ_5", dcim).unwrap();
 
-        assert_eq!(insert_folder(&connection, "/mnt/steam/Wickus/DCIM/104NCZ_5").unwrap(), leaf);
+        assert_eq!(
+            insert_folder(&connection, "/mnt/steam/Wickus/DCIM/104NCZ_5").unwrap(),
+            leaf
+        );
         let refreshed = folders(&connection)
             .unwrap()
             .into_iter()
@@ -346,17 +472,11 @@ mod tests {
         connection.execute_batch(SCHEMA).unwrap();
 
         let root = insert_folder(&connection, "/mnt/steam/Tatiana Pics/Camera").unwrap();
-        let year = insert_discovered_folder(
-            &connection,
-            "/mnt/steam/Tatiana Pics/Camera/2026",
-            root,
-        )
-        .unwrap();
-        let empty = insert_folder(
-            &connection,
-            "/mnt/steam/Tatiana Pics/Camera/2026/2026-Test",
-        )
-        .unwrap();
+        let year =
+            insert_discovered_folder(&connection, "/mnt/steam/Tatiana Pics/Camera/2026", root)
+                .unwrap();
+        let empty =
+            insert_folder(&connection, "/mnt/steam/Tatiana Pics/Camera/2026/2026-Test").unwrap();
 
         let folder = folders(&connection)
             .unwrap()
@@ -373,15 +493,29 @@ mod tests {
         connection.execute_batch(SCHEMA).unwrap();
         let root = insert_folder(&connection, "/photos/root").unwrap();
         let child = insert_discovered_folder(&connection, "/photos/root/child", root).unwrap();
-        let grandchild = insert_discovered_folder(
+        let grandchild =
+            insert_discovered_folder(&connection, "/photos/root/child/grandchild", child).unwrap();
+        upsert_photo(
             &connection,
-            "/photos/root/child/grandchild",
-            child,
+            Path::new("/photos/root/a.jpg"),
+            Some(root),
+            &PhotoMetadata::default(),
         )
         .unwrap();
-        upsert_photo(&connection, Path::new("/photos/root/a.jpg"), Some(root), &PhotoMetadata::default()).unwrap();
-        upsert_photo(&connection, Path::new("/photos/root/child/b.jpg"), Some(child), &PhotoMetadata::default()).unwrap();
-        upsert_photo(&connection, Path::new("/photos/root/child/grandchild/c.jpg"), Some(grandchild), &PhotoMetadata::default()).unwrap();
+        upsert_photo(
+            &connection,
+            Path::new("/photos/root/child/b.jpg"),
+            Some(child),
+            &PhotoMetadata::default(),
+        )
+        .unwrap();
+        upsert_photo(
+            &connection,
+            Path::new("/photos/root/child/grandchild/c.jpg"),
+            Some(grandchild),
+            &PhotoMetadata::default(),
+        )
+        .unwrap();
 
         let folders_by_id = folders(&connection)
             .unwrap()
@@ -391,8 +525,75 @@ mod tests {
         assert_eq!(folders_by_id[&root].photo_count, 3);
         assert_eq!(folders_by_id[&child].photo_count, 2);
         assert_eq!(folders_by_id[&grandchild].photo_count, 1);
-        assert_eq!(photos(&connection, Some(root), false, None).unwrap().len(), 3);
-        assert_eq!(photos(&connection, Some(child), false, None).unwrap().len(), 2);
-        assert_eq!(photos(&connection, Some(grandchild), false, None).unwrap().len(), 1);
+        assert_eq!(
+            photos(&connection, Some(root), false, None).unwrap().len(),
+            3
+        );
+        assert_eq!(
+            photos(&connection, Some(child), false, None).unwrap().len(),
+            2
+        );
+        assert_eq!(
+            photos(&connection, Some(grandchild), false, None)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn imported_root_availability_is_inherited_by_descendant_folders() {
+        let folders = vec![
+            Folder {
+                id: 10,
+                path: "/run/media/peet/USB/Photos".to_string(),
+                name: "Photos".to_string(),
+                parent_id: None,
+                imported_root: true,
+                watched: false,
+                photo_count: 5_000,
+                subfolder_count: 1,
+                available: true,
+            },
+            Folder {
+                id: 11,
+                path: "/run/media/peet/USB/Photos/2026".to_string(),
+                name: "2026".to_string(),
+                parent_id: Some(10),
+                imported_root: false,
+                watched: false,
+                photo_count: 5_000,
+                subfolder_count: 0,
+                available: true,
+            },
+            Folder {
+                id: 20,
+                path: "/home/peet/Pictures".to_string(),
+                name: "Pictures".to_string(),
+                parent_id: None,
+                imported_root: true,
+                watched: false,
+                photo_count: 1,
+                subfolder_count: 0,
+                available: true,
+            },
+        ];
+        let checked = std::cell::RefCell::new(Vec::new());
+
+        let availability = folder_availability_by_id(&folders, |path| {
+            checked.borrow_mut().push(path.to_string());
+            path != "/run/media/peet/USB/Photos"
+        });
+
+        assert_eq!(availability[&10], false);
+        assert_eq!(availability[&11], false);
+        assert_eq!(availability[&20], true);
+        assert_eq!(
+            checked.into_inner(),
+            vec![
+                "/run/media/peet/USB/Photos".to_string(),
+                "/home/peet/Pictures".to_string(),
+            ]
+        );
     }
 }

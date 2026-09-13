@@ -1,41 +1,721 @@
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::SystemTime;
 
-use gtk::prelude::*;
 use gtk4 as gtk;
+use libadwaita as adw;
+use libadwaita::prelude::*;
 use rusqlite::Connection;
 
 use crate::db::{self, Album};
+use crate::settings::{self, AlbumAppearance};
 
 const DEFAULT_THUMBNAIL_WIDTH: i32 = 136;
 const DEFAULT_THUMBNAIL_HEIGHT: i32 = 91;
+const BOOKSHELF_ROW_HEIGHT: i32 = 288;
+const BOOKSHELF_SURFACE_Y: i32 = 235;
+const BOOKSHELF_COUNT_CSS: &str = ".albums-bookshelf-photo-count { color: #3a210f; }";
+const ALBUM_COVER_THEME_DIRECTORY: &str = "images/theme/album-covers";
+const BOOKSHELF_THEME_DIRECTORY: &str = "images/theme/bookshelf";
+const BOOKSHELF_MAX_COLUMNS: usize = 5;
+const BOOKSHELF_MIN_ROWS: usize = 3;
+const BOOKSHELF_COLUMN_GAP: i32 = 28;
+const BOOKSHELF_SIDE_PADDING: i32 = 28;
+const BOOKSHELF_MIN_CARD_WIDTH: i32 = 220;
+const BOOKSHELF_MAX_CARD_WIDTH: i32 = 280;
+const BOOKSHELF_CARD_FILL_RATIO: f64 = 0.78;
+const BOOKSHELF_RUNTIME_KEY: &str = "picasa-bookshelf-runtime";
+const ALBUM_SIZE_KEY: &str = "albums-index-size";
+const ALBUM_SORT_KEY: &str = "albums-index-sort";
+const FRAME_OPENING_KEY: &str = "picasa-album-frame-opening";
+const STANDARD_CSS: &str = "
+    .albums-index-title { font-size: 24px; font-weight: 700; text-shadow: none; }
+    .albums-standard .album-cover { border-radius: 8px; border: 1px solid alpha(@theme_fg_color, 0.14); background: alpha(@theme_fg_color, 0.045); box-shadow: none; }
+    .albums-standard .thumbnail { border-radius: 7px; }
+    .albums-standard > flowboxchild { padding: 0; margin: 0; min-height: 0; background: transparent; box-shadow: none; }
+    .albums-standard button.album-card { color: inherit; min-width: 0; padding: 0; margin: 0; border: none; border-radius: 8px; background: transparent; background-image: none; box-shadow: none; }
+    .albums-standard button.album-card:hover .album-cover { border-color: alpha(@accent_bg_color, 0.65); }
+    .albums-standard button.album-card:hover { background: alpha(@theme_fg_color, 0.035); }
+    .albums-standard button.album-card:focus-visible { outline: 2px solid @accent_bg_color; outline-offset: 3px; }
+    .albums-standard .album-name { font-weight: 600; font-size: 14px; }
+    .albums-standard .album-photo-count { font-size: 12px; }
+";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BookshelfThemeKind {
+    /// A folder-backed theme containing one image that represents exactly one shelf row.
+    Row,
+    /// Compatibility mode for the older page-sized *-bookshelf.png/jpg assets.
+    Legacy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BookshelfTheme {
+    id: String,
+    image_path: PathBuf,
+    kind: BookshelfThemeKind,
+    row_height: i32,
+    surface_y: i32,
+}
+
+#[derive(Clone)]
+struct BookshelfRuntime {
+    rows: gtk::Box,
+    last_columns: Rc<Cell<usize>>,
+    last_card_width: Rc<Cell<i32>>,
+    selected_theme: Rc<RefCell<Option<BookshelfTheme>>>,
+    standard_width: Rc<Cell<i32>>,
+    last_standard_width: Rc<Cell<i32>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AlbumAppearanceAction {
+    ToggleBookshelf,
+    NextBackground,
+    ToggleCovers,
+    NextCovers,
+    DisableAll,
+    OpenThemeSettings,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AlbumContextMenuItem {
+    label: &'static str,
+    action: AlbumAppearanceAction,
+    checked: Option<bool>,
+    sensitive: bool,
+}
+
+fn album_context_menu_items(appearance: AlbumAppearance) -> Vec<AlbumContextMenuItem> {
+    vec![
+        AlbumContextMenuItem {
+            label: "Bookshelf",
+            action: AlbumAppearanceAction::ToggleBookshelf,
+            checked: Some(appearance.bookshelf_enabled),
+            sensitive: true,
+        },
+        AlbumContextMenuItem {
+            label: "Next Background",
+            action: AlbumAppearanceAction::NextBackground,
+            checked: None,
+            sensitive: true,
+        },
+        AlbumContextMenuItem {
+            label: "Album Covers",
+            action: AlbumAppearanceAction::ToggleCovers,
+            checked: Some(appearance.covers_enabled),
+            sensitive: true,
+        },
+        AlbumContextMenuItem {
+            label: "Next Album Covers",
+            action: AlbumAppearanceAction::NextCovers,
+            checked: None,
+            sensitive: true,
+        },
+        AlbumContextMenuItem {
+            label: "Disable All Themes",
+            action: AlbumAppearanceAction::DisableAll,
+            checked: None,
+            sensitive: appearance.bookshelf_enabled || appearance.covers_enabled,
+        },
+        AlbumContextMenuItem {
+            label: "Theme Settings…",
+            action: AlbumAppearanceAction::OpenThemeSettings,
+            checked: None,
+            sensitive: true,
+        },
+    ]
+}
+
+// Alpha below this value counts as part of a frame's transparent opening.
+const OPENING_ALPHA_THRESHOLD: u8 = 32;
+// An opening smaller than this fraction of either axis is treated as noise.
+const MIN_OPENING_FRACTION: f64 = 0.05;
+
+/// The rectangular window a frame leaves transparent for the cover photo,
+/// normalized against the frame's own size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PhotoOpening {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+impl PhotoOpening {
+    /// Used when a frame's alpha channel has no readable opening (for example a
+    /// JPEG without transparency). Matches the original supplied skins.
+    const FALLBACK: Self = Self {
+        x: 0.18,
+        y: 53.0 / 500.0,
+        width: 0.64,
+        height: 273.0 / 500.0,
+    };
+}
+
+/// A discovered cover frame with its decoded art and the opening that art
+/// exposes, so every design keeps its own photo geometry.
+struct FrameAsset {
+    path: PathBuf,
+    texture: gtk::gdk::Texture,
+    opening: PhotoOpening,
+}
+
+thread_local! {
+    static OPENING_CACHE: RefCell<HashMap<(PathBuf, Option<SystemTime>), PhotoOpening>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Find the transparent opening enclosed by the frame's opaque pixels.
+///
+/// Scanning out from the centre avoids the transparent margins around the
+/// artwork, which also reach the image border.
+fn opening_from_alpha(
+    alpha: &[u8],
+    width: usize,
+    height: usize,
+    threshold: u8,
+) -> Option<PhotoOpening> {
+    if width == 0 || height == 0 || alpha.len() < width * height {
+        return None;
+    }
+    let at = |x: usize, y: usize| alpha[y * width + x];
+    for (fx, fy) in [
+        (0.5, 0.5),
+        (0.5, 0.35),
+        (0.5, 0.65),
+        (0.35, 0.5),
+        (0.65, 0.5),
+    ] {
+        let cx = ((width as f64 * fx) as usize).min(width - 1);
+        let cy = ((height as f64 * fy) as usize).min(height - 1);
+        if at(cx, cy) >= threshold {
+            continue;
+        }
+        let mut top = cy;
+        while top > 0 && at(cx, top - 1) < threshold {
+            top -= 1;
+        }
+        let mut bottom = cy;
+        while bottom + 1 < height && at(cx, bottom + 1) < threshold {
+            bottom += 1;
+        }
+        let row = (top + bottom) / 2;
+        let mut left = cx;
+        while left > 0 && at(left - 1, row) < threshold {
+            left -= 1;
+        }
+        let mut right = cx;
+        while right + 1 < width && at(right + 1, row) < threshold {
+            right += 1;
+        }
+        let opening = PhotoOpening {
+            x: left as f64 / width as f64,
+            y: top as f64 / height as f64,
+            width: (right - left + 1) as f64 / width as f64,
+            height: (bottom - top + 1) as f64 / height as f64,
+        };
+        let enclosed = opening.x > 0.0
+            && opening.y > 0.0
+            && opening.x + opening.width < 1.0
+            && opening.y + opening.height < 1.0;
+        if enclosed
+            && opening.width >= MIN_OPENING_FRACTION
+            && opening.height >= MIN_OPENING_FRACTION
+        {
+            return Some(opening);
+        }
+    }
+    None
+}
+
+fn detect_photo_opening(path: &Path) -> Option<PhotoOpening> {
+    let decoded = image::open(path).ok()?.to_rgba8();
+    let (width, height) = decoded.dimensions();
+    let alpha: Vec<u8> = decoded.pixels().map(|pixel| pixel.0[3]).collect();
+    opening_from_alpha(
+        &alpha,
+        width as usize,
+        height as usize,
+        OPENING_ALPHA_THRESHOLD,
+    )
+}
+
+/// Decoding every frame is only worth doing once per file revision, because
+/// the album view repopulates whenever the library or the theme changes.
+fn frame_photo_opening(path: &Path) -> PhotoOpening {
+    let modified = std::fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok());
+    let key = (path.to_path_buf(), modified);
+    if let Some(cached) = OPENING_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+        return cached;
+    }
+    let opening = detect_photo_opening(path).unwrap_or(PhotoOpening::FALLBACK);
+    OPENING_CACHE.with(|cache| {
+        cache.borrow_mut().insert(key, opening);
+    });
+    opening
+}
+
+fn album_frame_paths_for_appearance(directory: &Path, appearance: AlbumAppearance) -> Vec<PathBuf> {
+    if !appearance.covers_enabled {
+        Vec::new()
+    } else {
+        album_frame_paths_in(directory)
+    }
+}
+
+fn bookshelf_theme_image_in(directory: &Path) -> Option<PathBuf> {
+    let preferred = [
+        "row.png",
+        "row.jpg",
+        "bookshelf.png",
+        "bookshelf.jpg",
+        "single-row-bookshelf.png",
+        "single-row-bookshelf.jpg",
+    ];
+    for name in preferred {
+        let path = directory.join(name);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let mut images = png_or_jpg_paths_matching(directory, |_| true);
+    images.sort();
+    images.into_iter().next()
+}
+
+fn bookshelf_theme_geometry(directory: &Path) -> (i32, i32) {
+    let config = directory.join("theme.conf");
+    let Ok(text) = std::fs::read_to_string(config) else {
+        return (BOOKSHELF_ROW_HEIGHT, BOOKSHELF_SURFACE_Y);
+    };
+    let mut row_height = BOOKSHELF_ROW_HEIGHT;
+    let mut surface_y = BOOKSHELF_SURFACE_Y;
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Ok(value) = value.trim().parse::<i32>() else {
+            continue;
+        };
+        match key.trim() {
+            "row_height" if value > 0 => row_height = value,
+            "surface_y" if value >= 0 => surface_y = value,
+            _ => {}
+        }
+    }
+    surface_y = surface_y.clamp(0, row_height);
+    (row_height, surface_y)
+}
+
+fn bookshelf_themes_in(directory: &Path) -> Vec<BookshelfTheme> {
+    let mut themes = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(directory) {
+        for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
+            if path.is_dir() {
+                if let Some(image_path) = bookshelf_theme_image_in(&path) {
+                    let id = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("bookshelf")
+                        .to_string();
+                    let (row_height, surface_y) = bookshelf_theme_geometry(&path);
+                    themes.push(BookshelfTheme {
+                        id,
+                        image_path,
+                        kind: BookshelfThemeKind::Row,
+                        row_height,
+                        surface_y,
+                    });
+                }
+            } else if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.ends_with("-bookshelf.png") || name.ends_with("-bookshelf.jpg")
+                })
+            {
+                let id = path
+                    .file_stem()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("bookshelf")
+                    .to_string();
+                themes.push(BookshelfTheme {
+                    id,
+                    image_path: path,
+                    kind: BookshelfThemeKind::Legacy,
+                    row_height: BOOKSHELF_ROW_HEIGHT,
+                    surface_y: BOOKSHELF_SURFACE_Y,
+                });
+            }
+        }
+    }
+
+    themes.sort_by_key(|theme| {
+        (
+            theme.kind != BookshelfThemeKind::Row,
+            theme.id != "single",
+            theme.id.to_ascii_lowercase(),
+        )
+    });
+    themes
+}
+
+fn bookshelf_theme_for_appearance(appearance: AlbumAppearance) -> Option<BookshelfTheme> {
+    if !appearance.bookshelf_enabled {
+        return None;
+    }
+    let themes = bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY));
+    (!themes.is_empty()).then(|| themes[appearance.background_index % themes.len()].clone())
+}
+
+fn bookshelf_background_path(directory: &Path, index: usize) -> Option<PathBuf> {
+    let themes = bookshelf_themes_in(directory);
+    (!themes.is_empty()).then(|| themes[index % themes.len()].image_path.clone())
+}
+
+fn bookshelf_card_margin_top(surface_y: i32, cover_height: i32) -> i32 {
+    (surface_y - cover_height).max(0)
+}
+
+fn bookshelf_background_rules(directory: &Path) -> String {
+    bookshelf_themes_in(directory)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, theme)| {
+            (theme.kind == BookshelfThemeKind::Legacy).then(|| {
+                let uri = gio::File::for_path(theme.image_path).uri();
+                format!(
+                    ".albums-bookshelf-{index} {{ background-image: url(\"{uri}\"); \
+                     background-size: 100% auto; background-repeat: repeat-y; \
+                     background-position: center top; }}"
+                )
+            })
+        })
+        .collect()
+}
+
+fn bookshelf_background_css_class(appearance: AlbumAppearance) -> Option<String> {
+    let themes = bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY));
+    if !appearance.bookshelf_enabled || themes.is_empty() {
+        return None;
+    }
+    let index = appearance.background_index % themes.len();
+    (themes[index].kind == BookshelfThemeKind::Legacy).then(|| format!("albums-bookshelf-{index}"))
+}
+
+fn bookshelf_columns_for_width(width: i32, _card_width: i32) -> usize {
+    if width <= 0 {
+        return BOOKSHELF_MAX_COLUMNS;
+    }
+
+    let usable_width = (width - BOOKSHELF_SIDE_PADDING * 2).max(BOOKSHELF_MIN_CARD_WIDTH);
+    let per_card = BOOKSHELF_MIN_CARD_WIDTH + BOOKSHELF_COLUMN_GAP;
+    ((usable_width + BOOKSHELF_COLUMN_GAP) / per_card).clamp(1, BOOKSHELF_MAX_COLUMNS as i32)
+        as usize
+}
+
+fn bookshelf_target_card_width(width: i32, columns: usize) -> i32 {
+    if width <= 0 || columns == 0 {
+        return BOOKSHELF_MIN_CARD_WIDTH;
+    }
+
+    let usable_width = (width - BOOKSHELF_SIDE_PADDING * 2).max(BOOKSHELF_MIN_CARD_WIDTH);
+    let slot_width = usable_width / columns as i32;
+    ((slot_width as f64 * BOOKSHELF_CARD_FILL_RATIO).round() as i32)
+        .clamp(BOOKSHELF_MIN_CARD_WIDTH, BOOKSHELF_MAX_CARD_WIDTH)
+}
+
+fn album_frame_paths_in(directory: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(directory) {
+        for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
+            if path.is_dir() {
+                collect_matching_files(&path, &mut paths, &|name| name.ends_with("-frame.png"));
+            }
+        }
+    }
+    paths.sort();
+    paths
+}
+
+pub(crate) fn album_cover_theme_count() -> usize {
+    let root = Path::new(ALBUM_COVER_THEME_DIRECTORY);
+    cover_themes(root, &album_frame_paths_in(root)).len()
+}
+
+fn collect_matching_files(
+    directory: &Path,
+    paths: &mut Vec<PathBuf>,
+    matches: &impl Fn(&str) -> bool,
+) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_matching_files(&path, paths, matches);
+        } else if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(matches)
+        {
+            paths.push(path);
+        }
+    }
+}
+
+pub(crate) fn bookshelf_background_count() -> usize {
+    bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY)).len()
+}
+
+fn png_or_jpg_paths_matching(directory: &Path, matches: impl Fn(&str) -> bool) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<_> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(&matches)
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// Cover frames grouped by theme folder: the top-level directory under
+/// `images/theme/album-covers`. A theme is one design family and may ship
+/// several colour variants, so `Next Album Cover` walks folders, not files.
+struct CoverTheme {
+    name: String,
+    frames: Vec<PathBuf>,
+}
+
+impl CoverTheme {
+    /// The frame this album uses inside the theme.
+    ///
+    /// A theme with a single file always shows it; a theme with several variants
+    /// gives the album a stable one chosen by hashing its id and name, so the
+    /// page still draws only this theme.
+    fn frame_for(&self, album: &Album) -> Option<&PathBuf> {
+        self.frames
+            .get(hash_slot(album, b"variant", self.frames.len()))
+    }
+}
+
+fn cover_theme_name(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let component = relative.components().next()?;
+    Some(component.as_os_str().to_string_lossy().into_owned())
+}
+
+/// `frames` arrives path-sorted, so themes come out alphabetically and every
+/// theme's variants stay sorted too.
+fn cover_themes(root: &Path, frames: &[PathBuf]) -> Vec<CoverTheme> {
+    let mut themes: Vec<CoverTheme> = Vec::new();
+    for path in frames {
+        let Some(name) = cover_theme_name(root, path) else {
+            continue;
+        };
+        match themes.iter_mut().find(|theme| theme.name == name) {
+            Some(theme) => theme.frames.push(path.clone()),
+            None => themes.push(CoverTheme {
+                name,
+                frames: vec![path.clone()],
+            }),
+        }
+    }
+    themes
+}
+
+/// A defined hash rather than a process-seeded or unspecified hasher, so an
+/// album's design is stable across runs.
+fn album_hash(album: &Album, salt: &[u8]) -> u64 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&album.id.to_le_bytes());
+    hasher.update(album.name.as_bytes());
+    hasher.update(salt);
+    let hash = hasher.finalize();
+    u64::from_le_bytes(hash.as_bytes()[..8].try_into().unwrap())
+}
+
+fn hash_slot(album: &Album, salt: &[u8], count: usize) -> usize {
+    debug_assert!(count > 0);
+    (album_hash(album, salt) % count as u64) as usize
+}
+
+/// Albums that never picked a frame of their own follow the page's single
+/// selected theme, so one page never mixes two themes. Only the variant inside
+/// that theme differs between albums, and it stays stable across refreshes.
+fn automatic_frame<'a>(
+    album: &Album,
+    themes: &'a [CoverTheme],
+    cover_index: usize,
+) -> Option<&'a PathBuf> {
+    if themes.is_empty() {
+        return None;
+    }
+    themes.get(cover_index % themes.len())?.frame_for(album)
+}
+
+fn frame_identifier(root: &Path, path: &Path) -> Option<String> {
+    path.strip_prefix(root)
+        .ok()
+        .map(|relative| relative.to_string_lossy().into_owned())
+}
+
+/// The frame an album shows: its own choice while that file still exists,
+/// otherwise the automatic theme assignment.
+fn selected_frame_path(
+    album: &Album,
+    root: &Path,
+    themes: &[CoverTheme],
+    cover_index: usize,
+) -> Option<PathBuf> {
+    if let Some(selected) = album.cover_frame.as_deref() {
+        let chosen = themes
+            .iter()
+            .flat_map(|theme| theme.frames.iter())
+            .find(|path| frame_identifier(root, path).as_deref() == Some(selected));
+        if let Some(path) = chosen {
+            return Some(path.clone());
+        }
+    }
+    automatic_frame(album, themes, cover_index).cloned()
+}
+
+fn selected_frame_index(
+    album: &Album,
+    root: &Path,
+    frames: &[PathBuf],
+    cover_index: usize,
+) -> Option<usize> {
+    if frames.is_empty() {
+        return None;
+    }
+    let themes = cover_themes(root, frames);
+    let selected = selected_frame_path(album, root, &themes, cover_index)?;
+    frames.iter().position(|path| path == &selected)
+}
+
+/// `Next Album Cover` steps to the next theme folder while keeping the
+/// album's stable variant inside it, so five themes cycle in five steps.
+fn next_theme_identifier(
+    album: &Album,
+    root: &Path,
+    frames: &[PathBuf],
+    cover_index: usize,
+) -> Option<String> {
+    let themes = cover_themes(root, frames);
+    let current = selected_frame_path(album, root, &themes, cover_index)?;
+    let current_theme = themes
+        .iter()
+        .position(|theme| theme.frames.contains(&current))?;
+    let next_theme = themes.get((current_theme + 1) % themes.len())?;
+    frame_identifier(root, next_theme.frame_for(album)?)
+}
+
+fn change_to_next_album_cover(
+    connection: &Connection,
+    album: &Album,
+    root: &Path,
+    frames: &[PathBuf],
+    cover_index: usize,
+) -> anyhow::Result<Option<String>> {
+    let Some(next) = next_theme_identifier(album, root, frames, cover_index) else {
+        return Ok(None);
+    };
+    db::set_album_cover_frame(connection, album.id, &next)?;
+    Ok(Some(next))
+}
 
 pub fn build(
     albums: &[Album],
-    connection: &Connection,
+    connection: Rc<RefCell<Connection>>,
     thumbnail_width: i32,
     on_album: Rc<dyn Fn(i64)>,
+    on_appearance_changed: Rc<dyn Fn()>,
+    open_theme_settings: Rc<dyn Fn()>,
 ) -> gtk::ScrolledWindow {
     let scrolled = gtk::ScrolledWindow::new();
     scrolled.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scrolled.set_hexpand(true);
     scrolled.set_vexpand(true);
 
+    let background = gtk::CssProvider::new();
+    let background_rules = bookshelf_background_rules(Path::new(BOOKSHELF_THEME_DIRECTORY));
+    background.load_from_string(&background_rules);
+    scrolled
+        .style_context()
+        .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+
     let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
-    content.set_margin_start(28);
-    content.set_margin_end(28);
-    content.set_margin_top(24);
-    content.set_margin_bottom(28);
+    content.set_margin_start(32);
+    content.set_margin_end(32);
+    content.set_margin_top(28);
+    content.set_margin_bottom(32);
+
+    let style = gtk::CssProvider::new();
+    style.load_from_string(STANDARD_CSS);
+    gtk::style_context_add_provider_for_display(
+        &scrolled.display(),
+        &style,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 3,
+    );
+
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let heading = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    heading.set_hexpand(true);
 
     let title = gtk::Label::new(Some("Albums"));
     title.set_xalign(0.0);
-    title.add_css_class("section-heading");
-    content.append(&title);
+    title.add_css_class("albums-index-title");
+    heading.append(&title);
 
     let count = gtk::Label::new(None);
     count.set_xalign(0.0);
     count.add_css_class("dim-label");
     count.add_css_class("albums-home-count");
-    content.append(&count);
+    heading.append(&count);
+    header.append(&heading);
+
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let sort =
+        gtk::DropDown::from_strings(&["Name A–Z", "Name Z–A", "Newest first", "Most photos"]);
+    sort.add_css_class("albums-sort");
+    sort.set_tooltip_text(Some("Sort albums"));
+    sort.set_selected(index_setting(&connection.borrow(), ALBUM_SORT_KEY, 0, 3));
+    let sort_label = gtk::Label::new(Some("Sort"));
+    sort_label.set_mnemonic_widget(Some(&sort));
+    controls.append(&sort_label);
+    controls.append(&sort);
+    let size = gtk::DropDown::from_strings(&["Compact", "Comfortable", "Large"]);
+    size.add_css_class("albums-size");
+    size.set_tooltip_text(Some("Album cover size"));
+    size.set_selected(index_setting(&connection.borrow(), ALBUM_SIZE_KEY, 1, 2));
+    let size_label = gtk::Label::new(Some("Cover size"));
+    size_label.add_css_class("albums-size-label");
+    size_label.set_mnemonic_widget(Some(&size));
+    controls.append(&size_label);
+    controls.append(&size);
+    header.append(&controls);
+
+    let create = gtk::Button::with_label("New Album");
+    create.add_css_class("suggested-action");
+    create.add_css_class("albums-create");
+    header.append(&create);
+    content.append(&header);
 
     let cards = gtk::FlowBox::new();
     cards.set_selection_mode(gtk::SelectionMode::None);
@@ -48,29 +728,497 @@ pub fn build(
     cards.set_vexpand(false);
     cards.set_valign(gtk::Align::Start);
     cards.add_css_class("albums-home-grid");
+    cards
+        .style_context()
+        .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+
+    let bookshelf_rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    bookshelf_rows.set_hexpand(true);
+    bookshelf_rows.set_vexpand(false);
+    bookshelf_rows.set_valign(gtk::Align::Start);
+    bookshelf_rows.set_visible(false);
+    bookshelf_rows.add_css_class("albums-bookshelf-rows");
+
+    let bookshelf_runtime = BookshelfRuntime {
+        rows: bookshelf_rows.clone(),
+        last_columns: Rc::new(Cell::new(0)),
+        last_card_width: Rc::new(Cell::new(0)),
+        selected_theme: Rc::new(RefCell::new(None)),
+        standard_width: Rc::new(Cell::new(0)),
+        last_standard_width: Rc::new(Cell::new(0)),
+    };
+    unsafe {
+        scrolled.set_data(BOOKSHELF_RUNTIME_KEY, bookshelf_runtime.clone());
+    }
 
     content.append(&cards);
+    content.append(&bookshelf_rows);
     scrolled.set_child(Some(&content));
+    for (control, key) in [(sort, ALBUM_SORT_KEY), (size, ALBUM_SIZE_KEY)] {
+        let weak_view = scrolled.downgrade();
+        let connection = connection.clone();
+        let on_album = on_album.clone();
+        let changed = on_appearance_changed.clone();
+        control.connect_selected_notify(move |control| {
+            if let Err(error) =
+                db::set_setting(&connection.borrow(), key, &control.selected().to_string())
+            {
+                eprintln!("Could not save album presentation: {error}");
+                return;
+            }
+            if let Some(view) = weak_view.upgrade() {
+                let albums = db::albums(&connection.borrow()).unwrap_or_default();
+                refresh(
+                    &view,
+                    &albums,
+                    connection.clone(),
+                    thumbnail_width,
+                    on_album.clone(),
+                    changed.clone(),
+                );
+            }
+        });
+    }
+    refresh_presentation(&scrolled, &connection.borrow());
 
     populate(
         &cards,
+        &bookshelf_runtime,
         &count,
         albums,
-        connection,
+        connection.clone(),
         thumbnail_width,
-        on_album,
+        on_album.clone(),
+        on_appearance_changed.clone(),
+    );
+
+    let runtime_for_resize = bookshelf_runtime.clone();
+    let standard_cards = cards.clone();
+    scrolled.add_tick_callback(move |_, _| {
+        let preferred = runtime_for_resize.standard_width.get();
+        if preferred > 0 && standard_cards.width() > 0 {
+            let width = standard_cards.width();
+            if width != runtime_for_resize.last_standard_width.get() {
+                resize_standard_cards(&standard_cards, width, preferred);
+                runtime_for_resize.last_standard_width.set(width);
+            }
+        }
+        if !runtime_for_resize.rows.is_visible() {
+            return glib::ControlFlow::Continue;
+        }
+        let Some(theme) = runtime_for_resize.selected_theme.borrow().clone() else {
+            return glib::ControlFlow::Continue;
+        };
+        let width = runtime_for_resize.rows.width();
+        if width <= 0 {
+            return glib::ControlFlow::Continue;
+        }
+
+        let columns = bookshelf_columns_for_width(width, BOOKSHELF_MIN_CARD_WIDTH);
+        if columns != runtime_for_resize.last_columns.get() {
+            reflow_bookshelf_rows(&runtime_for_resize, columns, &theme);
+        }
+
+        let target_card_width = bookshelf_target_card_width(width, columns);
+        if target_card_width != runtime_for_resize.last_card_width.get() {
+            resize_bookshelf_cards(&runtime_for_resize.rows, target_card_width, &theme);
+            runtime_for_resize.last_card_width.set(target_card_width);
+
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "ALBUM SHELF SIZE TRACE theme={} width={} columns={} card_width={}",
+                    theme.id, width, columns, target_card_width
+                );
+            }
+        }
+
+        glib::ControlFlow::Continue
+    });
+
+    install_context_menu(
+        &scrolled,
+        connection,
+        on_appearance_changed,
+        open_theme_settings,
     );
 
     scrolled
 }
 
+pub fn connect_create_album(scrolled: &gtk::ScrolledWindow, create_album: Rc<dyn Fn()>) {
+    if let Some(button) = find_descendant_with_css_class(scrolled.upcast_ref(), "albums-create")
+        .and_then(|widget| widget.downcast::<gtk::Button>().ok())
+    {
+        button.connect_clicked(move |_| create_album());
+    }
+}
+
+fn index_setting(connection: &Connection, key: &str, default: u32, max: u32) -> u32 {
+    db::setting(connection, key)
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value <= max)
+        .unwrap_or(default)
+}
+
+fn resize_standard_cards(grid: &gtk::FlowBox, available: i32, preferred: i32) {
+    let gap = if preferred == 180 { 8 } else { 24 };
+    let columns = ((available + gap) / (preferred + gap)).max(1);
+    let width = ((available - (columns - 1) * gap) / columns)
+        .min(preferred + 24)
+        .max(1);
+    grid.set_max_children_per_line(columns as u32);
+    let mut cards = Vec::new();
+    collect_bookshelf_cards(grid.upcast_ref(), &mut cards);
+    for card in cards {
+        card.set_width_request(width);
+        if let Some(content) = card.child() {
+            content.set_width_request(width);
+        }
+        if let Some(cover) = find_descendant_with_css_class(card.upcast_ref(), "album-cover") {
+            cover.set_size_request(width, width * 2 / 3);
+        }
+        // The overlay and FlowBox wrapper must shrink along with the cover.
+        if let Some(tile) = card.parent() {
+            tile.set_width_request(width);
+            if let Some(slot) = tile.parent() {
+                slot.set_width_request(width);
+            }
+        }
+    }
+}
+
+fn install_context_menu(
+    scrolled: &gtk::ScrolledWindow,
+    connection: Rc<RefCell<Connection>>,
+    on_appearance_changed: Rc<dyn Fn()>,
+    open_theme_settings: Rc<dyn Fn()>,
+) {
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    click.set_propagation_phase(gtk::PropagationPhase::Bubble);
+    let anchor = scrolled.clone();
+    click.connect_pressed(move |_, _, x, y| {
+        show_context_menu(
+            &anchor,
+            x,
+            y,
+            connection.clone(),
+            on_appearance_changed.clone(),
+            open_theme_settings.clone(),
+        );
+    });
+    scrolled.add_controller(click);
+}
+
+fn install_album_context_menu(
+    card: &gtk::Button,
+    connection: Rc<RefCell<Connection>>,
+    album: Album,
+    on_appearance_changed: Rc<dyn Fn()>,
+) {
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_SECONDARY);
+    let anchor = card.clone();
+    click.connect_pressed(move |gesture, _, x, y| {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        show_album_context_menu(
+            &anchor,
+            x,
+            y,
+            connection.clone(),
+            album.clone(),
+            on_appearance_changed.clone(),
+        );
+    });
+    card.add_controller(click);
+}
+
+fn show_album_context_menu(
+    anchor: &gtk::Button,
+    x: f64,
+    y: f64,
+    connection: Rc<RefCell<Connection>>,
+    album: Album,
+    on_appearance_changed: Rc<dyn Fn()>,
+) {
+    let frame_root = Path::new(ALBUM_COVER_THEME_DIRECTORY);
+    let frames = album_frame_paths_in(frame_root);
+    let popover = gtk::Popover::new();
+    popover.set_autohide(true);
+    popover.set_has_arrow(false);
+    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+        x.round() as i32,
+        y.round() as i32,
+        1,
+        1,
+    )));
+
+    let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    menu.set_margin_top(6);
+    menu.set_margin_bottom(6);
+    menu.set_margin_start(6);
+    menu.set_margin_end(6);
+    let heading = gtk::Label::new(Some(&album.name));
+    heading.set_xalign(0.0);
+    heading.set_margin_start(8);
+    heading.set_margin_end(8);
+    heading.set_margin_top(4);
+    heading.set_margin_bottom(4);
+    heading.add_css_class("heading");
+    menu.append(&heading);
+
+    let rename = gtk::Button::with_label("Rename Album…");
+    rename.set_halign(gtk::Align::Fill);
+    rename.add_css_class("flat");
+    rename.add_css_class("rename-album-action");
+    let popover_for_rename = popover.clone();
+    let rename_connection = connection.clone();
+    let rename_album = album.clone();
+    let rename_changed = on_appearance_changed.clone();
+    let rename_anchor = anchor.clone();
+    rename.connect_clicked(move |_| {
+        popover_for_rename.popdown();
+        show_rename_album_dialog(
+            &rename_anchor,
+            rename_connection.clone(),
+            rename_album.clone(),
+            rename_changed.clone(),
+        );
+    });
+    menu.append(&rename);
+    menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+    let next_frame = gtk::Button::with_label("Next Album Cover");
+    next_frame.set_halign(gtk::Align::Fill);
+    next_frame.set_sensitive(!frames.is_empty());
+    next_frame.add_css_class("flat");
+    next_frame.add_css_class("next-album-frame-action");
+    let popover_for_action = popover.clone();
+    let reset_connection = connection.clone();
+    let reset_album = album.clone();
+    let reset_appearance_changed = on_appearance_changed.clone();
+    let album_has_own_cover = album.cover_frame.is_some() || album.cover_photo_id.is_some();
+    next_frame.connect_clicked(move |_| {
+        popover_for_action.popdown();
+        let result = (|| {
+            settings::set_covers_enabled(&connection.borrow(), true)?;
+            let cover_index = settings::album_appearance(&connection.borrow()).cover_index;
+            change_to_next_album_cover(
+                &connection.borrow(),
+                &album,
+                frame_root,
+                &frames,
+                cover_index,
+            )?;
+            anyhow::Ok(())
+        })();
+        if let Err(error) = result {
+            eprintln!("Could not change album cover: {error}");
+            return;
+        }
+        on_appearance_changed();
+    });
+    menu.append(&next_frame);
+
+    // Only an album with a cover of its own can lose one, so the reset stays
+    // disabled for albums that already follow the page-wide design and its
+    // automatic thumbnail.
+    let reset_frame = gtk::Button::with_label("Reset Album Cover");
+    reset_frame.set_halign(gtk::Align::Fill);
+    reset_frame.set_sensitive(album_has_own_cover);
+    reset_frame.add_css_class("flat");
+    reset_frame.add_css_class("reset-album-frame-action");
+    let popover_for_reset = popover.clone();
+    reset_frame.connect_clicked(move |_| {
+        popover_for_reset.popdown();
+        let result = (|| {
+            let connection = reset_connection.borrow();
+            db::clear_album_cover_frame(&connection, reset_album.id)?;
+            db::clear_album_cover_photo(&connection, reset_album.id)?;
+            anyhow::Ok(())
+        })();
+        if let Err(error) = result {
+            eprintln!("Could not reset album cover: {error}");
+            return;
+        }
+        reset_appearance_changed();
+    });
+    menu.append(&reset_frame);
+
+    popover.set_child(Some(&menu));
+    popover.set_parent(anchor);
+    popover.connect_closed(|popover| popover.unparent());
+    popover.popup();
+}
+
+fn show_rename_album_dialog(
+    parent: &gtk::Button,
+    connection: Rc<RefCell<Connection>>,
+    album: Album,
+    on_changed: Rc<dyn Fn()>,
+) {
+    let entry = gtk::Entry::new();
+    entry.set_text(&album.name);
+    entry.set_activates_default(true);
+    entry.select_region(0, -1);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.append(&gtk::Label::new(Some("Enter a new album name:")));
+    content.append(&entry);
+    let dialog = adw::AlertDialog::builder()
+        .heading("Rename Album")
+        .extra_child(&content)
+        .close_response("cancel")
+        .default_response("rename")
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("rename", "Rename");
+    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+    let parent_for_response = parent.clone();
+    let entry_for_response = entry.clone();
+    dialog.connect_response(Some("rename"), move |dialog, _| {
+        if let Err(error) = db::rename_album(
+            &connection.borrow(),
+            album.id,
+            entry_for_response.text().as_str(),
+        ) {
+            let error_dialog = adw::AlertDialog::builder()
+                .heading("Could not rename album")
+                .body(error.to_string())
+                .close_response("close")
+                .build();
+            error_dialog.add_response("close", "Close");
+            error_dialog.present(Some(&parent_for_response));
+            return;
+        }
+        dialog.close();
+        on_changed();
+    });
+    dialog.present(Some(parent));
+    entry.grab_focus();
+}
+
+fn show_context_menu(
+    anchor: &gtk::ScrolledWindow,
+    x: f64,
+    y: f64,
+    connection: Rc<RefCell<Connection>>,
+    on_appearance_changed: Rc<dyn Fn()>,
+    open_theme_settings: Rc<dyn Fn()>,
+) {
+    let appearance = settings::album_appearance(&connection.borrow());
+    let popover = gtk::Popover::new();
+    popover.set_autohide(true);
+    popover.set_has_arrow(false);
+    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+        x.round() as i32,
+        y.round() as i32,
+        1,
+        1,
+    )));
+
+    let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    menu.set_margin_top(6);
+    menu.set_margin_bottom(6);
+    menu.set_margin_start(6);
+    menu.set_margin_end(6);
+
+    let heading = gtk::Label::new(Some("Album Appearance"));
+    heading.set_xalign(0.0);
+    heading.set_margin_start(8);
+    heading.set_margin_end(8);
+    heading.set_margin_top(4);
+    heading.set_margin_bottom(4);
+    heading.add_css_class("heading");
+    menu.append(&heading);
+
+    for item in album_context_menu_items(appearance) {
+        if matches!(
+            item.action,
+            AlbumAppearanceAction::DisableAll | AlbumAppearanceAction::OpenThemeSettings
+        ) {
+            menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        }
+        let button = gtk::Button::new();
+        button.set_halign(gtk::Align::Fill);
+        button.set_sensitive(item.sensitive);
+        button.add_css_class("flat");
+
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        if let Some(checked) = item.checked {
+            let mark = gtk::Image::from_icon_name("object-select-symbolic");
+            mark.set_visible(checked);
+            mark.set_size_request(16, 16);
+            row.append(&mark);
+        } else {
+            let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            spacer.set_size_request(16, 16);
+            row.append(&spacer);
+        }
+        let label = gtk::Label::new(Some(item.label));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        row.append(&label);
+        button.set_child(Some(&row));
+
+        let popover_for_action = popover.clone();
+        let connection = connection.clone();
+        let on_appearance_changed = on_appearance_changed.clone();
+        let open_theme_settings = open_theme_settings.clone();
+        button.connect_clicked(move |_| {
+            popover_for_action.popdown();
+            if item.action == AlbumAppearanceAction::OpenThemeSettings {
+                open_theme_settings();
+                return;
+            }
+            let result = match item.action {
+                AlbumAppearanceAction::ToggleBookshelf => settings::set_bookshelf_enabled(
+                    &connection.borrow(),
+                    !settings::album_appearance(&connection.borrow()).bookshelf_enabled,
+                ),
+                AlbumAppearanceAction::NextBackground => settings::next_bookshelf_background(
+                    &connection.borrow(),
+                    bookshelf_background_count(),
+                )
+                .map(|_| ()),
+                AlbumAppearanceAction::ToggleCovers => settings::set_covers_enabled(
+                    &connection.borrow(),
+                    !settings::album_appearance(&connection.borrow()).covers_enabled,
+                ),
+                AlbumAppearanceAction::NextCovers => {
+                    settings::next_album_covers(&connection.borrow(), album_cover_theme_count())
+                        .map(|_| ())
+                }
+                AlbumAppearanceAction::DisableAll => {
+                    settings::disable_all_album_themes(&connection.borrow())
+                }
+                AlbumAppearanceAction::OpenThemeSettings => unreachable!(),
+            };
+            if let Err(error) = result {
+                eprintln!("Could not update album appearance: {error}");
+                return;
+            }
+            on_appearance_changed();
+        });
+        menu.append(&button);
+    }
+
+    popover.set_child(Some(&menu));
+    popover.set_parent(anchor);
+    popover.connect_closed(|popover| popover.unparent());
+    popover.popup();
+}
+
 pub fn refresh(
     scrolled: &gtk::ScrolledWindow,
     albums: &[Album],
-    connection: &Connection,
+    connection: Rc<RefCell<Connection>>,
     thumbnail_width: i32,
     on_album: Rc<dyn Fn(i64)>,
+    on_appearance_changed: Rc<dyn Fn()>,
 ) {
+    refresh_presentation(scrolled, &connection.borrow());
     // The ScrolledWindow may expose a GTK viewport around its content. Find
     // the existing widgets by their local CSS markers instead of assuming
     // that the content box is the direct child.
@@ -85,15 +1233,58 @@ pub fn refresh(
     else {
         return;
     };
+    let Some(runtime) = (unsafe { scrolled.data::<BookshelfRuntime>(BOOKSHELF_RUNTIME_KEY) })
+        .map(|runtime| unsafe { runtime.as_ref() }.clone())
+    else {
+        return;
+    };
 
     populate(
         &cards,
+        &runtime,
         &count,
         albums,
         connection,
         thumbnail_width,
         on_album,
+        on_appearance_changed,
     );
+}
+
+pub fn refresh_presentation(scrolled: &gtk::ScrolledWindow, connection: &Connection) {
+    let appearance = settings::album_appearance(connection);
+    for class in ["albums-size", "albums-size-label"] {
+        if let Some(widget) = find_descendant_with_css_class(scrolled.upcast_ref(), class) {
+            widget.set_visible(!appearance.bookshelf_enabled && !appearance.covers_enabled);
+        }
+    }
+    remove_bookshelf_background_classes(scrolled.upcast_ref());
+    if let Some(cards) = find_descendant_with_css_class(scrolled.upcast_ref(), "albums-home-grid") {
+        remove_bookshelf_background_classes(&cards);
+    }
+
+    let has_theme = appearance.bookshelf_enabled && bookshelf_background_count() > 0;
+    if has_theme {
+        scrolled.add_css_class("albums-bookshelf");
+    } else {
+        scrolled.remove_css_class("albums-bookshelf");
+    }
+
+    // Folder-backed row themes are rendered by real ShelfRow widgets. Only
+    // older root-level bookshelf images remain page-sized CSS backgrounds.
+    if let Some(background_class) = bookshelf_background_css_class(appearance) {
+        scrolled.add_css_class(&background_class);
+    }
+}
+
+fn remove_bookshelf_background_classes(widget: &gtk::Widget) {
+    for class_name in widget
+        .css_classes()
+        .into_iter()
+        .filter(|name| name.starts_with("albums-bookshelf-"))
+    {
+        widget.remove_css_class(&class_name);
+    }
 }
 
 fn find_descendant_with_css_class(root: &gtk::Widget, class_name: &str) -> Option<gtk::Widget> {
@@ -115,15 +1306,21 @@ fn find_descendant_with_css_class(root: &gtk::Widget, class_name: &str) -> Optio
 
 fn populate(
     cards: &gtk::FlowBox,
+    bookshelf_runtime: &BookshelfRuntime,
     count: &gtk::Label,
     albums: &[Album],
-    connection: &Connection,
+    connection: Rc<RefCell<Connection>>,
     thumbnail_width: i32,
     on_album: Rc<dyn Fn(i64)>,
+    on_appearance_changed: Rc<dyn Fn()>,
 ) {
     while let Some(child) = cards.first_child() {
         cards.remove(&child);
     }
+    clear_box(&bookshelf_runtime.rows);
+    bookshelf_runtime.last_columns.set(0);
+    bookshelf_runtime.last_card_width.set(0);
+    bookshelf_runtime.selected_theme.replace(None);
 
     count.set_text(&format!(
         "{} album{}",
@@ -140,23 +1337,356 @@ fn populate(
         );
     }
 
+    let appearance = settings::album_appearance(&connection.borrow());
+    let bookshelf_theme = bookshelf_theme_for_appearance(appearance);
+    let row_theme = bookshelf_theme
+        .as_ref()
+        .filter(|theme| theme.kind == BookshelfThemeKind::Row)
+        .cloned();
+    let responsive_bookshelf = row_theme.is_some();
+    let standard = !appearance.bookshelf_enabled && !appearance.covers_enabled;
+    let preferred_width =
+        [180, 240, 280][index_setting(&connection.borrow(), ALBUM_SIZE_KEY, 1, 2) as usize];
+    bookshelf_runtime
+        .standard_width
+        .set(if standard { preferred_width } else { 0 });
+    bookshelf_runtime.last_standard_width.set(0);
+    cards.set_homogeneous(standard);
+    cards.set_max_children_per_line(if standard { 20 } else { 6 });
+    if standard {
+        cards.add_css_class("albums-standard");
+    } else {
+        cards.remove_css_class("albums-standard");
+    }
+    let mut albums = albums.to_vec();
+    let sort = index_setting(&connection.borrow(), ALBUM_SORT_KEY, 0, 3);
+    albums.sort_by(|a, b| {
+        let names = || {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then(a.id.cmp(&b.id))
+        };
+        match sort {
+            1 => names().reverse(),
+            2 => b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)),
+            3 => b.photo_count.cmp(&a.photo_count).then_with(names),
+            _ => names(),
+        }
+    });
+
+    cards.set_visible(!responsive_bookshelf);
+    cards.set_vexpand(false);
+    cards.set_valign(gtk::Align::Start);
+    bookshelf_runtime.rows.set_visible(responsive_bookshelf);
+    bookshelf_runtime.selected_theme.replace(row_theme.clone());
+
+    let frames: Vec<FrameAsset> =
+        album_frame_paths_for_appearance(Path::new(ALBUM_COVER_THEME_DIRECTORY), appearance)
+            .into_iter()
+            .filter_map(|path| {
+                gtk::gdk::Texture::from_filename(&path).ok().map(|texture| {
+                    let opening = frame_photo_opening(&path);
+                    FrameAsset {
+                        path,
+                        texture,
+                        opening,
+                    }
+                })
+            })
+            .collect();
+    let framed = !frames.is_empty();
+    cards.set_row_spacing(if standard {
+        32
+    } else if framed {
+        28
+    } else {
+        20
+    });
+    cards.set_column_spacing(if standard {
+        if preferred_width == 180 {
+            8
+        } else {
+            24
+        }
+    } else if framed {
+        24
+    } else {
+        20
+    });
+
     if albums.is_empty() {
         let empty = gtk::Label::new(Some(
-            "No albums yet\nCreate an album with the + button in the sidebar.",
+            "Your albums start here\nChoose New Album to organise your photos into a collection.",
         ));
         empty.set_xalign(0.0);
         empty.add_css_class("dim-label");
-        insert_child(cards, &empty, None);
+        if let Some(theme) = row_theme {
+            let row = bookshelf_row(&theme);
+            let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            holder.set_margin_top(24);
+            holder.set_margin_start(24);
+            holder.append(&empty);
+            row.add_overlay(&holder);
+            bookshelf_runtime.rows.append(&row);
+        } else {
+            insert_child(cards, &empty, None, None);
+        }
         return;
     }
 
-    for album in albums {
-        let card = album_card(album, connection, thumbnail_width, on_album.clone());
-        insert_child(cards, &card, Some(cover_width(thumbnail_width)));
+    let thumbnail_width = if standard {
+        preferred_width
+    } else if framed {
+        thumbnail_width.clamp(220, 300)
+    } else {
+        thumbnail_width
+    };
+    let frame_height = (thumbnail_width as f64 * 500.0 / 805.0).round() as i32;
+    let card_width = frames
+        .iter()
+        .map(|frame| {
+            (frame_height as f64 * frame.texture.width() as f64 / frame.texture.height() as f64)
+                .round() as i32
+        })
+        .max()
+        .unwrap_or_else(|| cover_width(thumbnail_width));
+    let frame_paths: Vec<_> = frames.iter().map(|frame| frame.path.clone()).collect();
+    let mut bookshelf_cards = Vec::with_capacity(albums.len());
+
+    for album in &albums {
+        let frame = selected_frame_index(
+            album,
+            Path::new(ALBUM_COVER_THEME_DIRECTORY),
+            &frame_paths,
+            appearance.cover_index,
+        )
+        .map(|index| &frames[index]);
+        let actual_cover_height = if frame.is_some() {
+            frame_height
+        } else {
+            cover_height(thumbnail_width)
+        };
+        let card = album_card(
+            album,
+            &connection.borrow(),
+            thumbnail_width,
+            on_album.clone(),
+            frame,
+            responsive_bookshelf,
+            connection.clone(),
+            on_appearance_changed.clone(),
+        );
+        if framed {
+            card.set_width_request(card_width);
+        }
+
+        if let Some(theme) = row_theme.as_ref() {
+            card.set_margin_top(bookshelf_card_margin_top(
+                theme.surface_y,
+                actual_cover_height,
+            ));
+            card.set_halign(gtk::Align::Center);
+            bookshelf_cards.push(card);
+        } else if standard {
+            if let Some(cover) = find_descendant_with_css_class(card.upcast_ref(), "album-cover") {
+                cover.set_height_request(thumbnail_width * 2 / 3);
+            }
+            let tile = gtk::Overlay::new();
+            tile.set_child(Some(&card));
+            insert_child(cards, &tile, Some(card_width), None);
+        } else {
+            insert_child(cards, &card, Some(card_width), None);
+        }
+    }
+
+    if let Some(theme) = row_theme {
+        let width = bookshelf_runtime.rows.width();
+        let columns = bookshelf_columns_for_width(width, card_width);
+        build_bookshelf_rows(&bookshelf_runtime.rows, &bookshelf_cards, columns, &theme);
+        bookshelf_runtime.last_columns.set(columns);
+
+        if width > 0 {
+            let target_card_width = bookshelf_target_card_width(width, columns);
+            resize_bookshelf_cards(&bookshelf_runtime.rows, target_card_width, &theme);
+            bookshelf_runtime.last_card_width.set(target_card_width);
+        }
     }
 }
 
-fn insert_child(cards: &gtk::FlowBox, child: &impl IsA<gtk::Widget>, width: Option<i32>) {
+fn clear_box(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
+}
+
+fn bookshelf_row(theme: &BookshelfTheme) -> gtk::Overlay {
+    let row = gtk::Overlay::new();
+    row.set_hexpand(true);
+    row.set_vexpand(false);
+    row.set_height_request(theme.row_height);
+    row.set_size_request(-1, theme.row_height);
+    row.set_overflow(gtk::Overflow::Hidden);
+    row.add_css_class("albums-bookshelf-row");
+
+    let background = gtk::Picture::new();
+    background.set_filename(Some(&theme.image_path));
+    background.set_content_fit(gtk::ContentFit::Fill);
+    background.set_can_shrink(true);
+    background.set_hexpand(true);
+    background.set_vexpand(true);
+    background.set_halign(gtk::Align::Fill);
+    background.set_valign(gtk::Align::Fill);
+    background.set_can_target(false);
+    row.set_child(Some(&background));
+    row
+}
+
+fn bookshelf_row_count(card_count: usize, columns: usize) -> usize {
+    let columns = columns.max(1);
+    let required = card_count.div_ceil(columns);
+    required.max(BOOKSHELF_MIN_ROWS)
+}
+
+fn build_bookshelf_rows(
+    rows: &gtk::Box,
+    cards: &[gtk::Button],
+    columns: usize,
+    theme: &BookshelfTheme,
+) {
+    clear_box(rows);
+    let columns = columns.clamp(1, BOOKSHELF_MAX_COLUMNS);
+    let row_count = bookshelf_row_count(cards.len(), columns);
+
+    for row_index in 0..row_count {
+        let start = (row_index * columns).min(cards.len());
+        let end = (start + columns).min(cards.len());
+        let chunk = &cards[start..end];
+
+        let row = bookshelf_row(theme);
+        let slots = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        slots.set_homogeneous(true);
+        slots.set_hexpand(true);
+        slots.set_vexpand(false);
+        slots.set_halign(gtk::Align::Fill);
+        slots.set_valign(gtk::Align::Start);
+        slots.set_height_request(theme.row_height);
+
+        for index in 0..columns {
+            let slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            slot.set_hexpand(true);
+            slot.set_vexpand(false);
+            slot.set_halign(gtk::Align::Fill);
+            slot.set_valign(gtk::Align::Start);
+            if let Some(card) = chunk.get(index) {
+                slot.append(card);
+            }
+            slots.append(&slot);
+        }
+
+        row.add_overlay(&slots);
+        rows.append(&row);
+    }
+}
+
+fn collect_bookshelf_cards(root: &gtk::Widget, cards: &mut Vec<gtk::Button>) {
+    if let Some(button) = root.downcast_ref::<gtk::Button>() {
+        if button.has_css_class("album-card") {
+            cards.push(button.clone());
+            return;
+        }
+    }
+    let mut child = root.first_child();
+    while let Some(current) = child {
+        collect_bookshelf_cards(&current, cards);
+        child = current.next_sibling();
+    }
+}
+
+fn resize_bookshelf_cards(rows: &gtk::Box, target_width: i32, theme: &BookshelfTheme) {
+    let mut cards = Vec::new();
+    collect_bookshelf_cards(rows.upcast_ref(), &mut cards);
+
+    for card in cards {
+        let Some(cover) = find_descendant_with_css_class(card.upcast_ref(), "album-cover")
+            .and_then(|widget| widget.downcast::<gtk::Overlay>().ok())
+        else {
+            continue;
+        };
+
+        let current_width = cover.width_request();
+        let current_height = cover.height_request();
+        if current_width <= 0 || current_height <= 0 || current_width == target_width {
+            continue;
+        }
+
+        let scale_x = target_width as f64 / current_width as f64;
+        let target_height =
+            ((current_height as f64 * scale_x).round() as i32).clamp(1, theme.surface_y.max(1));
+
+        if let Some(picture) = find_descendant_with_css_class(cover.upcast_ref(), "thumbnail") {
+            // Recompute from the original opening instead of rescaling rounded
+            // margins, which can drift by a pixel after each resize.
+            if let Some(opening) = unsafe { cover.data::<PhotoOpening>(FRAME_OPENING_KEY) }
+                .map(|opening| unsafe { *opening.as_ref() })
+            {
+                let (left, top, right, bottom) =
+                    photo_margins(opening, target_width, target_height);
+                picture.set_margin_start(left);
+                picture.set_margin_top(top);
+                picture.set_margin_end(right);
+                picture.set_margin_bottom(bottom);
+            }
+        }
+
+        cover.set_width_request(target_width);
+        cover.set_height_request(target_height);
+        cover.set_size_request(target_width, target_height);
+
+        card.set_width_request(target_width);
+        card.set_margin_top(bookshelf_card_margin_top(theme.surface_y, target_height));
+
+        if let Some(content) = card.child() {
+            content.set_width_request(target_width);
+            content.set_size_request(target_width, -1);
+        }
+    }
+}
+
+fn reflow_bookshelf_rows(runtime: &BookshelfRuntime, columns: usize, theme: &BookshelfTheme) {
+    let mut cards = Vec::new();
+    collect_bookshelf_cards(runtime.rows.upcast_ref(), &mut cards);
+    if cards.is_empty() {
+        runtime.last_columns.set(columns);
+        return;
+    }
+
+    // Keep strong references while detaching cards from their old slot boxes.
+    for card in &cards {
+        if let Some(parent) = card.parent().and_downcast::<gtk::Box>() {
+            parent.remove(card);
+        }
+    }
+    build_bookshelf_rows(&runtime.rows, &cards, columns, theme);
+    runtime.last_columns.set(columns);
+
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "ALBUM SHELF TRACE theme={} columns={} rows={} cards={}",
+            theme.id,
+            columns,
+            (cards.len() + columns - 1) / columns,
+            cards.len()
+        );
+    }
+}
+
+fn insert_child(
+    cards: &gtk::FlowBox,
+    child: &impl IsA<gtk::Widget>,
+    width: Option<i32>,
+    height: Option<i32>,
+) {
     cards.insert(child, -1);
 
     // GtkFlowBox automatically wraps every inserted widget in a
@@ -167,6 +1697,9 @@ fn insert_child(cards: &gtk::FlowBox, child: &impl IsA<gtk::Widget>, width: Opti
     {
         if let Some(width) = width {
             flow_child.set_width_request(width);
+        }
+        if let Some(height) = height {
+            flow_child.set_height_request(height);
         }
         flow_child.set_hexpand(false);
         flow_child.set_vexpand(false);
@@ -186,11 +1719,44 @@ fn cover_height(thumbnail_width: i32) -> i32 {
         .max(1.0)) as i32
 }
 
+/// The photo an album draws on its card. A cover chosen from the thumbnail
+/// menu wins even when that photo is not a member of the album; otherwise the
+/// album keeps its automatic first-thumbnail pick.
+fn album_cover_photo(
+    connection: &Connection,
+    album: &Album,
+    photos: &[db::Photo],
+) -> Option<db::Photo> {
+    if let Some(id) = album.cover_photo_id {
+        let chosen = photos
+            .iter()
+            .find(|photo| photo.id == id)
+            .cloned()
+            .or_else(|| db::photo(connection, id).ok().flatten());
+        if chosen.is_some() {
+            return chosen;
+        }
+    }
+    photos
+        .iter()
+        .find(|photo| {
+            crate::thumbnail::existing_cache_path(&photo.path, photo.mtime, photo.size_bytes)
+                .ok()
+                .flatten()
+                .is_some()
+        })
+        .cloned()
+}
+
 fn album_card(
     album: &Album,
     connection: &Connection,
     thumbnail_width: i32,
     on_album: Rc<dyn Fn(i64)>,
+    frame: Option<&FrameAsset>,
+    responsive_bookshelf: bool,
+    menu_connection: Rc<RefCell<Connection>>,
+    on_appearance_changed: Rc<dyn Fn()>,
 ) -> gtk::Button {
     let card = gtk::Button::new();
     card.set_has_frame(false);
@@ -200,14 +1766,35 @@ fn album_card(
     card.set_valign(gtk::Align::Start);
     card.add_css_class("album-card");
 
-    let width = cover_width(thumbnail_width);
-    let height = cover_height(thumbnail_width);
+    let height = if frame.is_some() {
+        (thumbnail_width as f64 * 500.0 / 805.0).round() as i32
+    } else {
+        cover_height(thumbnail_width)
+    };
+    let width = frame
+        .map(|frame| {
+            (height as f64 * frame.texture.width() as f64 / frame.texture.height() as f64).round()
+                as i32
+        })
+        .unwrap_or_else(|| cover_width(thumbnail_width));
     card.set_width_request(width);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 7);
     content.set_size_request(width, -1);
+    content.set_width_request(width);
+    content.set_overflow(gtk::Overflow::Hidden);
     content.set_hexpand(false);
     content.set_vexpand(false);
     content.set_halign(gtk::Align::Start);
+    if frame.is_some() {
+        content.set_halign(gtk::Align::Center);
+        let style = gtk::CssProvider::new();
+        style.load_from_string(
+            "button.album-card { color: #302014; transition: opacity 120ms ease; } \
+             button.album-card:hover { opacity: 0.90; }",
+        );
+        card.style_context()
+            .add_provider(&style, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+    }
 
     // Match the normal photo-grid thumbnail allocation.
     let cover = gtk::Overlay::new();
@@ -220,8 +1807,10 @@ fn album_card(
     cover.set_valign(gtk::Align::Start);
     cover.set_overflow(gtk::Overflow::Hidden);
     cover.add_css_class("album-cover");
-    cover.add_css_class("photo-frame");
-    cover.add_css_class("photo-tile");
+    if frame.is_none() {
+        cover.add_css_class("photo-frame");
+        cover.add_css_class("photo-tile");
+    }
 
     let picture = gtk::Picture::new();
 
@@ -238,13 +1827,14 @@ fn album_card(
     picture.add_css_class("thumbnail");
 
     let photos = db::photos_in_album(connection, album.id, None).unwrap_or_default();
-
-    // Use the first album photo that already has a cached thumbnail.
-    let cover_photo = photos.iter().find_map(|photo| {
-        crate::thumbnail::existing_cache_path(&photo.path, photo.mtime, photo.size_bytes)
-            .ok()
-            .flatten()
-            .map(|path| (photo, path))
+    // The chosen cover wins over the automatic pick, even before its cached
+    // thumbnail exists.
+    let cover_photo = album_cover_photo(connection, album, &photos).map(|photo| {
+        let cached =
+            crate::thumbnail::existing_cache_path(&photo.path, photo.mtime, photo.size_bytes)
+                .ok()
+                .flatten();
+        (photo, cached)
     });
 
     if std::env::var_os("PICASA_TRACE").is_some() {
@@ -253,14 +1843,20 @@ fn album_card(
             album.id,
             album.name,
             photos.len(),
-            cover_photo
-                .as_ref()
-                .map(|(_, path)| path.to_string_lossy().into_owned())
+            cover_photo.as_ref().map(|(photo, path)| path
+                .as_deref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| photo.path.clone()))
         );
     }
 
-    if let Some((photo, path)) = cover_photo.as_ref() {
-        let path_string = path.to_string_lossy();
+    if let Some((photo, cached)) = cover_photo.as_ref() {
+        // A cover without a cached thumbnail yet still draws from its original
+        // file, so a fresh choice is visible straight away.
+        let source = cached
+            .as_deref()
+            .unwrap_or_else(|| Path::new(photo.path.as_str()));
+        let path_string = source.to_string_lossy();
 
         // Use the same RAW/NEF crop as the normal gallery. Some embedded RAW
         // previews contain side bars that GTK's Cover mode cannot remove.
@@ -289,23 +1885,67 @@ fn album_card(
     placeholder.set_visible(cover_photo.is_none());
     cover.add_overlay(&placeholder);
 
-    // GtkPicture's natural size must not determine the album card height.
-    // SquareTile manually allocates the cover to the same fixed rectangle as
-    // the normal photo grid, even when the cached image is portrait.
-    let cover_tile = crate::grid::SquareTile::new(width, height, &cover);
-    cover_tile.set_hexpand(false);
-    cover_tile.set_vexpand(false);
-    cover_tile.set_halign(gtk::Align::Start);
-    cover_tile.set_valign(gtk::Align::Start);
-    content.append(&cover_tile);
+    if frame.is_none() && !responsive_bookshelf && cover_photo.is_none() {
+        let empty_label = gtk::Label::new(Some(if photos.is_empty() {
+            "No photos yet"
+        } else {
+            "Preview unavailable"
+        }));
+        empty_label.add_css_class("dim-label");
+        empty_label.set_halign(gtk::Align::Center);
+        empty_label.set_valign(gtk::Align::Center);
+        empty_label.set_margin_top(80);
+        cover.add_overlay(&empty_label);
+    }
+
+    if let Some(frame) = frame {
+        // The cached photo stays below the transparent opening; the PNG is the top layer.
+        unsafe {
+            cover.set_data(FRAME_OPENING_KEY, frame.opening);
+        }
+        let (left, top, right, bottom) = photo_margins(frame.opening, width, height);
+        for widget in [
+            picture.upcast_ref::<gtk::Widget>(),
+            placeholder.upcast_ref(),
+        ] {
+            widget.set_margin_start(left);
+            widget.set_margin_top(top);
+            widget.set_margin_end(right);
+            widget.set_margin_bottom(bottom);
+        }
+        placeholder.set_halign(gtk::Align::Fill);
+        placeholder.set_valign(gtk::Align::Fill);
+        placeholder.set_pixel_size(24);
+        let skin = gtk::Picture::for_paintable(&frame.texture);
+        skin.set_content_fit(gtk::ContentFit::Contain);
+        skin.set_can_shrink(true);
+        skin.set_size_request(1, 1);
+        skin.set_halign(gtk::Align::Fill);
+        skin.set_valign(gtk::Align::Fill);
+        skin.set_can_target(false);
+        skin.add_css_class("album-skin");
+        cover.add_overlay(&skin);
+    }
+
+    // Album covers are rectangular and need to grow with the bookshelf.
+    // Keep the cover itself in normal GTK layout instead of wrapping it in the
+    // photo-grid tile widget, whose fixed allocation prevents responsive growth.
+    content.append(&cover);
 
     // Album name below cover.
     let name = gtk::Label::new(Some(&album.name));
+    name.add_css_class("album-name");
     name.set_xalign(0.0);
-    name.set_width_chars(1);
-    name.set_max_width_chars(24);
+    name.set_width_request(width);
+    name.set_size_request(width, -1);
+    name.set_hexpand(false);
+    name.set_overflow(gtk::Overflow::Hidden);
+    name.set_max_width_chars(20);
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     name.set_tooltip_text(Some(&album.name));
+    if frame.is_some() {
+        name.set_xalign(0.5);
+    }
     content.append(&name);
 
     // Photo count below album name.
@@ -316,11 +1956,24 @@ fn album_card(
     };
 
     let photo_count = gtk::Label::new(Some(&count_text));
+    photo_count.add_css_class("album-photo-count");
     photo_count.set_xalign(0.0);
     photo_count.add_css_class("dim-label");
+    if responsive_bookshelf {
+        photo_count.add_css_class("albums-bookshelf-photo-count");
+        let style = gtk::CssProvider::new();
+        style.load_from_string(BOOKSHELF_COUNT_CSS);
+        photo_count
+            .style_context()
+            .add_provider(&style, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+    }
+    if frame.is_some() {
+        photo_count.set_xalign(0.5);
+    }
     content.append(&photo_count);
 
     card.set_child(Some(&content));
+    install_album_context_menu(&card, menu_connection, album.clone(), on_appearance_changed);
 
     if std::env::var_os("PICASA_TRACE").is_some() {
         let cover_for_trace = cover.clone();
@@ -349,4 +2002,1567 @@ fn album_card(
     });
 
     card
+}
+
+fn photo_margins(opening: PhotoOpening, width: i32, height: i32) -> (i32, i32, i32, i32) {
+    // Round outward and add a pixel of underlap, so a frame's antialiased
+    // opening edge cannot show a seam around the photo.
+    (
+        ((width as f64 * opening.x).floor() as i32 - 1).max(0),
+        ((height as f64 * opening.y).floor() as i32 - 1).max(0),
+        ((width as f64 * (1.0 - opening.x - opening.width)).floor() as i32 - 1).max(0),
+        ((height as f64 * (1.0 - opening.y - opening.height)).floor() as i32 - 1).max(0),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settle_gtk_layout() {
+        let main_loop = gtk::glib::MainLoop::new(None, false);
+        let loop_to_quit = main_loop.clone();
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+            loop_to_quit.quit();
+        });
+        main_loop.run();
+    }
+
+    fn album(id: i64) -> Album {
+        Album {
+            id,
+            name: format!("Album {id}"),
+            created_at: 0,
+            photo_count: 0,
+            cover_frame: None,
+            cover_photo_id: None,
+        }
+    }
+
+    fn alpha_with_opening(
+        width: usize,
+        height: usize,
+        opening: (usize, usize, usize, usize),
+    ) -> Vec<u8> {
+        let (x, y, opening_width, opening_height) = opening;
+        let mut alpha = vec![255u8; width * height];
+        for row in y..y + opening_height {
+            for column in x..x + opening_width {
+                alpha[row * width + column] = 0;
+            }
+        }
+        alpha
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn standard_index_controls_preserve_size_and_sort_after_refresh() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-index-controls-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        db::create_album(&connection.borrow(), "Zebra").unwrap();
+        db::create_album(&connection.borrow(), "Alps").unwrap();
+        for name in [
+            "Family",
+            "Garden",
+            "Summer holiday with a long album title",
+            "Weekend",
+        ] {
+            db::create_album(&connection.borrow(), name).unwrap();
+        }
+        let albums = db::albums(&connection.borrow()).unwrap();
+        let view = build(
+            &albums,
+            connection.clone(),
+            100,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+        );
+        let cover_before = find_descendant_with_css_class(view.upcast_ref(), "album-cover")
+            .unwrap()
+            .width_request();
+        assert!(
+            cover_before >= 220,
+            "album covers should have their own larger default size"
+        );
+        refresh(
+            &view,
+            &albums,
+            connection.clone(),
+            300,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+        );
+        assert_eq!(
+            find_descendant_with_css_class(view.upcast_ref(), "album-cover")
+                .unwrap()
+                .width_request(),
+            cover_before
+        );
+        let sort = find_descendant_with_css_class(view.upcast_ref(), "albums-sort")
+            .unwrap()
+            .downcast::<gtk::DropDown>()
+            .unwrap();
+        sort.set_selected(1);
+        let first = find_descendant_with_css_class(view.upcast_ref(), "album-name")
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap();
+        assert_eq!(first.text(), "Zebra");
+        refresh(
+            &view,
+            &albums,
+            connection.clone(),
+            136,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+        );
+        assert_eq!(
+            find_descendant_with_css_class(view.upcast_ref(), "album-name")
+                .unwrap()
+                .downcast::<gtk::Label>()
+                .unwrap()
+                .text(),
+            "Zebra"
+        );
+        let size = find_descendant_with_css_class(view.upcast_ref(), "albums-size")
+            .unwrap()
+            .downcast::<gtk::DropDown>()
+            .unwrap();
+        size.set_selected(2);
+        assert!(
+            find_descendant_with_css_class(view.upcast_ref(), "album-cover")
+                .unwrap()
+                .width_request()
+                > cover_before
+        );
+        let created = Rc::new(Cell::new(false));
+        let created_callback = created.clone();
+        connect_create_album(&view, Rc::new(move || created_callback.set(true)));
+        find_descendant_with_css_class(view.upcast_ref(), "albums-create")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap()
+            .emit_clicked();
+        assert!(created.get());
+
+        let window = gtk::Window::builder()
+            .default_width(1000)
+            .default_height(760)
+            .child(&view)
+            .build();
+        window.present();
+        settle_gtk_layout();
+        settle_gtk_layout();
+        let sort_bounds = find_descendant_with_css_class(view.upcast_ref(), "albums-sort")
+            .unwrap()
+            .compute_bounds(&view)
+            .unwrap();
+        let size_bounds = find_descendant_with_css_class(view.upcast_ref(), "albums-size")
+            .unwrap()
+            .compute_bounds(&view)
+            .unwrap();
+        let create_bounds = find_descendant_with_css_class(view.upcast_ref(), "albums-create")
+            .unwrap()
+            .compute_bounds(&view)
+            .unwrap();
+        assert_eq!(sort_bounds.y(), create_bounds.y());
+        assert_eq!(size_bounds.y(), create_bounds.y());
+        assert!(sort_bounds.x() < size_bounds.x() && size_bounds.x() < create_bounds.x());
+        let size = find_descendant_with_css_class(view.upcast_ref(), "albums-size")
+            .unwrap()
+            .downcast::<gtk::DropDown>()
+            .unwrap();
+        size.set_selected(0);
+        settle_gtk_layout();
+        let compact_grid = find_descendant_with_css_class(view.upcast_ref(), "albums-home-grid")
+            .unwrap()
+            .downcast::<gtk::FlowBox>()
+            .unwrap();
+        assert!(
+            compact_grid.max_children_per_line() >= 5,
+            "compact layout should reveal another column"
+        );
+        let mut compact_cards = Vec::new();
+        collect_bookshelf_cards(compact_grid.upcast_ref(), &mut compact_cards);
+        for card in &compact_cards {
+            let cover = find_descendant_with_css_class(card.upcast_ref(), "album-cover").unwrap();
+            assert_eq!(
+                card.allocated_width(),
+                cover.width_request(),
+                "compact album card must not grow beyond its cover"
+            );
+        }
+        let compact_columns = compact_grid.max_children_per_line();
+        window.set_default_size(1400, 760);
+        settle_gtk_layout();
+        settle_gtk_layout();
+        assert!(
+            compact_grid.max_children_per_line() > compact_columns,
+            "compact layout should add columns as the app grows"
+        );
+        size.set_selected(2);
+        settle_gtk_layout();
+        let grid = find_descendant_with_css_class(view.upcast_ref(), "albums-home-grid")
+            .unwrap()
+            .downcast::<gtk::FlowBox>()
+            .unwrap();
+        let wide_columns = grid.max_children_per_line();
+        assert!(wide_columns >= 3);
+        let mut cards = Vec::new();
+        collect_bookshelf_cards(grid.upcast_ref(), &mut cards);
+        assert_eq!(cards.len(), 6);
+        assert_eq!(
+            cards[0].compute_bounds(&view).unwrap().y(),
+            cards[2].compute_bounds(&view).unwrap().y(),
+            "three covers should fit in the first row at this width"
+        );
+        for card in &cards {
+            let cover = find_descendant_with_css_class(card.upcast_ref(), "album-cover").unwrap();
+            assert_eq!(cover.width_request(), cards[0].width_request());
+            assert_eq!(cover.height_request(), cover.width_request() * 2 / 3);
+            assert_eq!(
+                card.allocated_width(),
+                cover.width_request(),
+                "album card must not grow beyond its cover"
+            );
+        }
+        assert!(find_descendant_with_css_class(view.upcast_ref(), "album-cover-action").is_none());
+        show_album_context_menu(
+            &cards[0],
+            12.0,
+            12.0,
+            connection.clone(),
+            albums[0].clone(),
+            Rc::new(|| {}),
+        );
+        settle_gtk_layout();
+        assert!(
+            find_descendant_with_css_class(cards[0].upcast_ref(), "rename-album-action").is_some()
+        );
+        if let Some(popover) = cards[0].last_child().and_downcast::<gtk::Popover>() {
+            popover.popdown();
+        }
+        settle_gtk_layout();
+        if let Some(path) = std::env::var_os("PICASA_ALBUM_SCREENSHOT") {
+            let snapshot = gtk::Snapshot::new();
+            gtk::WidgetPaintable::new(Some(&window)).snapshot(
+                &snapshot,
+                window.width() as f64,
+                window.height() as f64,
+            );
+            let node = snapshot.to_node().unwrap();
+            window
+                .renderer()
+                .unwrap()
+                .render_texture(&node, None)
+                .save_to_png(path)
+                .unwrap();
+        }
+        window.set_default_size(520, 760);
+        settle_gtk_layout();
+        settle_gtk_layout();
+        assert!(
+            grid.max_children_per_line() < wide_columns,
+            "grid should reflow on narrower windows"
+        );
+        assert!(
+            view.hadjustment().upper() <= view.hadjustment().page_size() + 1.0,
+            "album page must not overflow horizontally"
+        );
+        window.close();
+        drop(view);
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn discovers_cover_frames_recursively_across_theme_folders() {
+        let directory = std::env::temp_dir().join(format!(
+            "pic-album-skins-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(album_frame_paths_in(&directory).is_empty());
+        std::fs::create_dir(&directory).unwrap();
+        assert!(album_frame_paths_in(&directory).is_empty());
+        let standard = directory.join("standard");
+        let vintage = directory.join("vintage");
+        std::fs::create_dir(&standard).unwrap();
+        std::fs::create_dir(&vintage).unwrap();
+        for path in [
+            standard.join("default-frame.png"),
+            vintage.join("blue-frame.png"),
+            vintage.join("green-frame.png"),
+            vintage.join("green-frame.jpg"),
+            vintage.join("notes.txt"),
+            directory.join("loose-frame.png"),
+        ] {
+            std::fs::write(path, []).unwrap();
+        }
+        std::fs::create_dir(vintage.join("directory-frame.png")).unwrap();
+        let expected = vec![
+            standard.join("default-frame.png"),
+            vintage.join("blue-frame.png"),
+            vintage.join("green-frame.png"),
+        ];
+        assert_eq!(album_frame_paths_in(&directory), expected);
+
+        std::fs::write(standard.join("new-frame.png"), []).unwrap();
+        let mut expected = expected;
+        expected.push(standard.join("new-frame.png"));
+        expected.sort();
+        assert_eq!(album_frame_paths_in(&directory), expected);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn discovers_folder_backed_row_themes_before_legacy_backgrounds() {
+        let directory = std::env::temp_dir().join(format!(
+            "pic-bookshelf-backgrounds-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let single = directory.join("single");
+        let walnut = directory.join("walnut");
+        std::fs::create_dir(&single).unwrap();
+        std::fs::create_dir(&walnut).unwrap();
+        std::fs::write(single.join("single-row-bookshelf.png"), []).unwrap();
+        std::fs::write(walnut.join("row.jpg"), []).unwrap();
+        std::fs::write(directory.join("three-panel-bookshelf.jpg"), []).unwrap();
+        std::fs::write(directory.join("bookshelf.png"), []).unwrap();
+
+        let themes = bookshelf_themes_in(&directory);
+        assert_eq!(themes.len(), 3);
+        assert_eq!(themes[0].id, "single");
+        assert_eq!(themes[0].kind, BookshelfThemeKind::Row);
+        assert_eq!(
+            themes[0].image_path,
+            single.join("single-row-bookshelf.png")
+        );
+        assert_eq!(themes[1].id, "walnut");
+        assert_eq!(themes[1].kind, BookshelfThemeKind::Row);
+        assert_eq!(themes[2].kind, BookshelfThemeKind::Legacy);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn row_theme_geometry_defaults_and_can_be_overridden() {
+        let directory = std::env::temp_dir().join(format!(
+            "pic-bookshelf-geometry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        assert_eq!(
+            bookshelf_theme_geometry(&directory),
+            (BOOKSHELF_ROW_HEIGHT, BOOKSHELF_SURFACE_Y)
+        );
+        std::fs::write(
+            directory.join("theme.conf"),
+            "row_height=300\nsurface_y=246\n",
+        )
+        .unwrap();
+        assert_eq!(bookshelf_theme_geometry(&directory), (300, 246));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn zero_skins_have_no_selection() {
+        let root = Path::new("images/theme/album-covers");
+        assert_eq!(selected_frame_index(&album(1), root, &[], 0), None);
+    }
+
+    #[test]
+    fn album_cover_prefers_the_photo_chosen_from_the_menu() {
+        let directory = std::env::temp_dir().join(format!(
+            "pic-album-cover-photo-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = db::open(&directory.join("library.db")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO photos (id, path) VALUES
+                   (1, '/tmp/one.jpg'),
+                   (2, '/tmp/two.jpg'),
+                   (3, '/tmp/three.jpg');",
+            )
+            .unwrap();
+        let album = db::create_album(&connection, "Holiday").unwrap();
+        let photos: Vec<_> = [1, 2]
+            .into_iter()
+            .filter_map(|id| db::photo(&connection, id).unwrap())
+            .collect();
+
+        // Nothing is cached in this test, so the automatic pick stays empty.
+        assert_eq!(
+            album_cover_photo(&connection, &album, &photos).map(|photo| photo.id),
+            None
+        );
+
+        db::set_album_cover_photo(&connection, album.id, 2).unwrap();
+        let album = db::albums(&connection).unwrap().remove(0);
+        assert_eq!(
+            album_cover_photo(&connection, &album, &photos).map(|photo| photo.id),
+            Some(2)
+        );
+
+        // A chosen photo still resolves when it is not an album member.
+        db::set_album_cover_photo(&connection, album.id, 3).unwrap();
+        let album = db::albums(&connection).unwrap().remove(0);
+        assert_eq!(
+            album_cover_photo(&connection, &album, &photos).map(|photo| photo.id),
+            Some(3)
+        );
+
+        // Deleting the photo clears the choice through the schema's
+        // ON DELETE SET NULL, so nothing points at a missing photo.
+        connection
+            .execute("DELETE FROM photos WHERE id = 3", [])
+            .unwrap();
+        let album = db::albums(&connection).unwrap().remove(0);
+        assert_eq!(album.cover_photo_id, None);
+        assert_eq!(
+            album_cover_photo(&connection, &album, &photos).map(|photo| photo.id),
+            None
+        );
+
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn persisted_frame_is_selected_and_next_theme_wraps() {
+        let root = Path::new("images/theme/album-covers");
+        let frames = vec![
+            root.join("standard/standard-frame.png"),
+            root.join("vintage/blue-frame.png"),
+            root.join("vintage/green-frame.png"),
+        ];
+        let mut album = album(7);
+        album.cover_frame = Some("vintage/green-frame.png".to_string());
+
+        assert_eq!(selected_frame_index(&album, root, &frames, 0), Some(2));
+        // Themes are ordered alphabetically, so the last one wraps to the first.
+        assert_eq!(
+            next_theme_identifier(&album, root, &frames, 0).as_deref(),
+            Some("standard/standard-frame.png")
+        );
+    }
+
+    #[test]
+    fn missing_persisted_frame_falls_back_to_stable_assignment() {
+        let root = Path::new("images/theme/album-covers");
+        let frames = vec![
+            root.join("standard/standard-frame.png"),
+            root.join("vintage/blue-frame.png"),
+        ];
+        let mut album = album(11);
+        album.cover_frame = Some("removed/missing-frame.png".to_string());
+        let mut without_stored_frame = album.clone();
+        without_stored_frame.cover_frame = None;
+
+        let selected = selected_frame_index(&album, root, &frames, 0);
+        assert!(selected.is_some());
+        // The disappeared frame leaves the album on the automatic design.
+        assert_eq!(
+            selected,
+            selected_frame_index(&without_stored_frame, root, &frames, 0)
+        );
+    }
+
+    #[test]
+    fn changing_an_album_cover_persists_only_that_albums_next_theme() {
+        let directory = std::env::temp_dir().join(format!(
+            "pic-next-album-frame-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = db::open(&directory.join("library.db")).unwrap();
+        let first = db::create_album(&connection, "First").unwrap();
+        let second = db::create_album(&connection, "Second").unwrap();
+        db::set_album_cover_frame(&connection, first.id, "vintage/green-frame.png").unwrap();
+        let first = db::albums(&connection).unwrap().remove(0);
+        let root = Path::new("images/theme/album-covers");
+        let frames = vec![
+            root.join("standard/standard-frame.png"),
+            root.join("vintage/blue-frame.png"),
+            root.join("vintage/green-frame.png"),
+        ];
+
+        assert_eq!(
+            change_to_next_album_cover(&connection, &first, root, &frames, 0)
+                .unwrap()
+                .as_deref(),
+            Some("standard/standard-frame.png")
+        );
+        let albums = db::albums(&connection).unwrap();
+        assert_eq!(
+            albums
+                .iter()
+                .find(|album| album.id == first.id)
+                .unwrap()
+                .cover_frame
+                .as_deref(),
+            Some("standard/standard-frame.png")
+        );
+        assert_eq!(
+            albums
+                .iter()
+                .find(|album| album.id == second.id)
+                .unwrap()
+                .cover_frame,
+            None
+        );
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn all_cover_theme_folders_are_available_with_or_without_a_bookshelf() {
+        let directory = Path::new("images/theme/album-covers");
+        let with_bookshelf = album_frame_paths_for_appearance(
+            directory,
+            AlbumAppearance {
+                bookshelf_enabled: true,
+                covers_enabled: true,
+                background_index: 0,
+                cover_index: 0,
+            },
+        );
+        let without_bookshelf = album_frame_paths_for_appearance(
+            directory,
+            AlbumAppearance {
+                bookshelf_enabled: false,
+                covers_enabled: true,
+                background_index: 0,
+                cover_index: 0,
+            },
+        );
+
+        assert_eq!(with_bookshelf, without_bookshelf);
+        assert!(with_bookshelf.contains(&directory.join("pink/pink-frame.png")));
+        assert!(with_bookshelf.contains(&directory.join("vintage/blue-frame.png")));
+        assert!(with_bookshelf.contains(&directory.join("wedding/wedding-frame.png")));
+    }
+
+    #[test]
+    fn independent_appearance_selects_background_and_cover_assets() {
+        use crate::settings::AlbumAppearance;
+
+        let directory = std::env::temp_dir().join(format!(
+            "pic-album-appearance-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let standard = directory.join("standard");
+        let vintage = directory.join("vintage");
+        std::fs::create_dir(&standard).unwrap();
+        std::fs::create_dir(&vintage).unwrap();
+        std::fs::write(standard.join("white-frame.png"), []).unwrap();
+        std::fs::write(vintage.join("blue-frame.png"), []).unwrap();
+
+        let bookshelf = AlbumAppearance {
+            bookshelf_enabled: true,
+            covers_enabled: true,
+            background_index: 0,
+            cover_index: 0,
+        };
+        assert_eq!(
+            album_frame_paths_for_appearance(&directory, bookshelf),
+            vec![
+                standard.join("white-frame.png"),
+                vintage.join("blue-frame.png")
+            ]
+        );
+
+        let plain_covers = AlbumAppearance {
+            bookshelf_enabled: false,
+            covers_enabled: true,
+            background_index: 1,
+            cover_index: 0,
+        };
+        assert_eq!(
+            album_frame_paths_for_appearance(&directory, plain_covers),
+            vec![
+                standard.join("white-frame.png"),
+                vintage.join("blue-frame.png")
+            ]
+        );
+
+        let disabled = AlbumAppearance {
+            bookshelf_enabled: true,
+            covers_enabled: false,
+            background_index: 0,
+            cover_index: 0,
+        };
+        assert!(album_frame_paths_for_appearance(&directory, disabled).is_empty());
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn page_cover_index_selects_one_theme_for_every_album() {
+        let root = Path::new("images/theme/album-covers");
+        let frames = album_frame_paths_in(root);
+        let themes = cover_themes(root, &frames);
+        assert!(themes.len() > 1);
+        let albums: Vec<_> = (0..5).map(album).collect();
+
+        let theme_for = |album: &Album, cover_index: usize| {
+            let index = selected_frame_index(album, root, &frames, cover_index).unwrap();
+            cover_theme_name(root, &frames[index]).unwrap()
+        };
+        for cover_index in 0..themes.len() + 1 {
+            let names: std::collections::HashSet<_> = albums
+                .iter()
+                .map(|album| theme_for(album, cover_index))
+                .collect();
+            // One page shows one theme, no matter which albums it contains.
+            assert_eq!(
+                names.len(),
+                1,
+                "page mixed themes at cover index {cover_index}"
+            );
+            assert!(names.contains(&themes[cover_index % themes.len()].name));
+        }
+
+        let first_album = &albums[0];
+        // A full turn of the page action restores the same theme and variant.
+        assert_eq!(
+            theme_for(first_album, themes.len()),
+            theme_for(first_album, 0)
+        );
+        assert_eq!(
+            selected_frame_index(first_album, root, &frames, themes.len()).unwrap(),
+            selected_frame_index(first_album, root, &frames, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn next_album_cover_steps_between_theme_folders() {
+        let root = Path::new("images/theme/album-covers");
+        let frames = album_frame_paths_in(root);
+        let names: Vec<_> = cover_themes(root, &frames)
+            .into_iter()
+            .map(|theme| theme.name)
+            .collect();
+        assert!(names.len() > 1);
+        let album = album(7);
+
+        let current = selected_frame_index(&album, root, &frames, 0).unwrap();
+        let current_theme = cover_theme_name(root, &frames[current]).unwrap();
+        let expected = names[(names
+            .iter()
+            .position(|name| name == &current_theme)
+            .unwrap()
+            + 1)
+            % names.len()]
+        .clone();
+
+        let next = next_theme_identifier(&album, root, &frames, 0).unwrap();
+        assert_eq!(cover_theme_name(root, &root.join(&next)).unwrap(), expected);
+        // The album keeps the same variant whenever it returns to that theme.
+        assert_eq!(
+            next_theme_identifier(&album, root, &frames, 0),
+            Some(next.clone())
+        );
+        // Clicking again moves on to the theme after that one.
+        let mut chosen = album.clone();
+        chosen.cover_frame = Some(next);
+        let following = next_theme_identifier(&chosen, root, &frames, 0).unwrap();
+        assert_ne!(
+            cover_theme_name(root, &root.join(&following)).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn responsive_bookshelf_geometry_keeps_cover_bottoms_on_the_surface() {
+        for (cover_height, expected_top) in [(91, 144), (137, 98), (186, 49)] {
+            let top = bookshelf_card_margin_top(235, cover_height);
+            assert_eq!(top, expected_top);
+            assert_eq!(top + cover_height, 235);
+        }
+
+        assert_eq!(BOOKSHELF_ROW_HEIGHT, 288);
+        assert!(BOOKSHELF_SURFACE_Y < BOOKSHELF_ROW_HEIGHT);
+    }
+
+    #[test]
+    fn bookshelf_keeps_at_least_three_visible_rows() {
+        assert_eq!(bookshelf_row_count(0, 5), 3);
+        assert_eq!(bookshelf_row_count(1, 5), 3);
+        assert_eq!(bookshelf_row_count(10, 5), 3);
+        assert_eq!(bookshelf_row_count(10, 4), 3);
+        assert_eq!(bookshelf_row_count(10, 3), 4);
+        assert_eq!(bookshelf_row_count(20, 5), 4);
+    }
+
+    #[test]
+    fn responsive_bookshelf_columns_follow_available_width() {
+        assert_eq!(bookshelf_columns_for_width(2000, 220), 5);
+        assert_eq!(bookshelf_columns_for_width(1400, 220), 5);
+        assert_eq!(bookshelf_columns_for_width(1120, 220), 4);
+        assert_eq!(bookshelf_columns_for_width(850, 220), 3);
+        assert_eq!(bookshelf_columns_for_width(300, 220), 1);
+        assert_eq!(bookshelf_columns_for_width(0, 220), 5);
+    }
+
+    #[test]
+    fn responsive_bookshelf_cards_grow_on_wide_windows() {
+        assert_eq!(bookshelf_target_card_width(850, 3), 220);
+        assert_eq!(bookshelf_target_card_width(1120, 4), 220);
+        assert_eq!(bookshelf_target_card_width(1400, 5), 220);
+        assert!(bookshelf_target_card_width(1760, 5) > 240);
+        assert!(bookshelf_target_card_width(1760, 5) > 196);
+        assert_eq!(bookshelf_target_card_width(2200, 5), 280);
+    }
+
+    #[test]
+    fn folder_row_themes_do_not_become_page_backgrounds() {
+        let directory = std::env::temp_dir().join(format!(
+            "pic-bookshelf-css-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let single = directory.join("single");
+        std::fs::create_dir(&single).unwrap();
+        std::fs::write(single.join("row.png"), []).unwrap();
+        std::fs::write(directory.join("three-panel-bookshelf.jpg"), []).unwrap();
+
+        assert_eq!(
+            bookshelf_background_path(&directory, 0),
+            Some(single.join("row.png"))
+        );
+        let rules = bookshelf_background_rules(&directory);
+        assert!(!rules.contains(".albums-bookshelf-0 {"));
+        assert!(rules.contains(".albums-bookshelf-1 {"));
+        assert!(rules.contains("background-size: 100% auto"));
+        assert!(BOOKSHELF_COUNT_CSS.contains(".albums-bookshelf-photo-count"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn context_menu_model_exposes_theme_controls_and_current_state() {
+        use crate::settings::AlbumAppearance;
+
+        let items = album_context_menu_items(AlbumAppearance {
+            bookshelf_enabled: true,
+            covers_enabled: false,
+            background_index: 1,
+            cover_index: 0,
+        });
+
+        assert_eq!(
+            items,
+            vec![
+                AlbumContextMenuItem {
+                    label: "Bookshelf",
+                    action: AlbumAppearanceAction::ToggleBookshelf,
+                    checked: Some(true),
+                    sensitive: true,
+                },
+                AlbumContextMenuItem {
+                    label: "Next Background",
+                    action: AlbumAppearanceAction::NextBackground,
+                    checked: None,
+                    sensitive: true,
+                },
+                AlbumContextMenuItem {
+                    label: "Album Covers",
+                    action: AlbumAppearanceAction::ToggleCovers,
+                    checked: Some(false),
+                    sensitive: true,
+                },
+                AlbumContextMenuItem {
+                    label: "Next Album Covers",
+                    action: AlbumAppearanceAction::NextCovers,
+                    checked: None,
+                    sensitive: true,
+                },
+                AlbumContextMenuItem {
+                    label: "Disable All Themes",
+                    action: AlbumAppearanceAction::DisableAll,
+                    checked: None,
+                    sensitive: true,
+                },
+                AlbumContextMenuItem {
+                    label: "Theme Settings…",
+                    action: AlbumAppearanceAction::OpenThemeSettings,
+                    checked: None,
+                    sensitive: true,
+                },
+            ]
+        );
+
+        let disabled = album_context_menu_items(AlbumAppearance::default());
+        assert!(
+            !disabled
+                .iter()
+                .find(|item| item.action == AlbumAppearanceAction::DisableAll)
+                .unwrap()
+                .sensitive
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn context_menu_renders_and_applies_the_next_background_action() {
+        fn find_buttons(widget: &gtk::Widget, buttons: &mut Vec<gtk::Button>) {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+                buttons.push(button.clone());
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                find_buttons(&widget, buttons);
+                child = widget.next_sibling();
+            }
+        }
+
+        gtk::init().unwrap();
+        let connection = Rc::new(RefCell::new(Connection::open_in_memory().unwrap()));
+        connection
+            .borrow()
+            .execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            .unwrap();
+        let changed = Rc::new(std::cell::Cell::new(0));
+        let changed_for_callback = changed.clone();
+        let view = gtk::ScrolledWindow::new();
+        let window = gtk::Window::new();
+        window.set_child(Some(&view));
+        window.present();
+
+        show_context_menu(
+            &view,
+            20.0,
+            20.0,
+            connection.clone(),
+            Rc::new(move || changed_for_callback.set(changed_for_callback.get() + 1)),
+            Rc::new(|| {}),
+        );
+        let mut buttons = Vec::new();
+        find_buttons(view.upcast_ref(), &mut buttons);
+        assert_eq!(buttons.len(), 6);
+        buttons[1].emit_clicked();
+        assert_eq!(changed.get(), 1);
+        assert_eq!(
+            settings::album_appearance(&connection.borrow()),
+            AlbumAppearance {
+                bookshelf_enabled: true,
+                covers_enabled: false,
+                background_index: 1,
+                cover_index: 0,
+            }
+        );
+
+        buttons[3].emit_clicked();
+        assert_eq!(changed.get(), 2);
+        assert_eq!(
+            settings::album_appearance(&connection.borrow()),
+            AlbumAppearance {
+                bookshelf_enabled: true,
+                covers_enabled: true,
+                background_index: 1,
+                cover_index: 1,
+            }
+        );
+
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn album_context_menu_changes_and_persists_that_albums_frame() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-album-frame-menu-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        let album = db::create_album(&connection.borrow(), "Menu Album").unwrap();
+        let changed = Rc::new(std::cell::Cell::new(0));
+        let changed_for_callback = changed.clone();
+        let anchor = gtk::Button::new();
+        let window = gtk::Window::builder().child(&anchor).build();
+        window.present();
+
+        show_album_context_menu(
+            &anchor,
+            10.0,
+            10.0,
+            connection.clone(),
+            album.clone(),
+            Rc::new(move || changed_for_callback.set(changed_for_callback.get() + 1)),
+        );
+        let action = find_descendant_with_css_class(anchor.upcast_ref(), "next-album-frame-action")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        // The album has no frame of its own yet, so there is nothing to reset.
+        let reset = find_descendant_with_css_class(anchor.upcast_ref(), "reset-album-frame-action")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        assert!(!reset.is_sensitive());
+        action.emit_clicked();
+
+        assert_eq!(changed.get(), 1);
+        assert!(settings::album_appearance(&connection.borrow()).covers_enabled);
+        assert!(db::albums(&connection.borrow()).unwrap()[0]
+            .cover_frame
+            .is_some());
+
+        window.close();
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn resetting_an_album_cover_restores_the_automatic_design() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-reset-album-frame-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        let album = db::create_album(&connection.borrow(), "Styled").unwrap();
+        db::set_album_cover_frame(&connection.borrow(), album.id, "vintage/blue-frame.png")
+            .unwrap();
+        connection
+            .borrow()
+            .execute_batch("INSERT INTO photos (id, path) VALUES (7, '/tmp/seven.jpg');")
+            .unwrap();
+        db::set_album_cover_photo(&connection.borrow(), album.id, 7).unwrap();
+        let album = db::albums(&connection.borrow()).unwrap().remove(0);
+        let changed = Rc::new(std::cell::Cell::new(0));
+        let changed_for_callback = changed.clone();
+        let anchor = gtk::Button::new();
+        let window = gtk::Window::builder().child(&anchor).build();
+        window.present();
+
+        show_album_context_menu(
+            &anchor,
+            10.0,
+            10.0,
+            connection.clone(),
+            album,
+            Rc::new(move || changed_for_callback.set(changed_for_callback.get() + 1)),
+        );
+        let reset = find_descendant_with_css_class(anchor.upcast_ref(), "reset-album-frame-action")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        assert!(reset.is_sensitive());
+        reset.emit_clicked();
+
+        assert_eq!(changed.get(), 1);
+        let album = db::albums(&connection.borrow()).unwrap().remove(0);
+        assert_eq!(album.cover_frame, None);
+        assert_eq!(album.cover_photo_id, None);
+
+        window.close();
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn album_card_draws_the_photo_chosen_as_its_cover() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-chosen-cover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        let album = db::create_album(&connection.borrow(), "Holiday").unwrap();
+        connection
+            .borrow()
+            .execute_batch(
+                "INSERT INTO photos (id, path) VALUES
+                   (1, 'samples/01-Start Up.jpg'),
+                   (2, 'samples/Single Photo.jpg');",
+            )
+            .unwrap();
+        // Photo 2 is only the chosen cover; it never joined the album.
+        db::set_album_cover_photo(&connection.borrow(), album.id, 2).unwrap();
+
+        let albums = db::albums(&connection.borrow()).unwrap();
+        let view = build(
+            &albums,
+            connection.clone(),
+            136,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+        );
+        let window = gtk::Window::builder()
+            .default_width(900)
+            .default_height(800)
+            .child(&view)
+            .build();
+        window.present();
+        settle_gtk_layout();
+
+        let card = find_descendant_with_css_class(view.upcast_ref(), "album-card").unwrap();
+        let picture = find_descendant_with_css_class(card.upcast_ref(), "thumbnail")
+            .unwrap()
+            .downcast::<gtk::Picture>()
+            .unwrap();
+        let drawn = picture.file().and_then(|file| file.path()).unwrap();
+        assert!(
+            drawn.ends_with("samples/Single Photo.jpg"),
+            "card drew {drawn:?}"
+        );
+
+        window.close();
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn framed_album_photo_uses_its_skin_opening() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-frame-opening-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        let album = db::create_album(&connection.borrow(), "Holiday").unwrap();
+        settings::set_bookshelf_enabled(&connection.borrow(), true).unwrap();
+        settings::set_covers_enabled(&connection.borrow(), true).unwrap();
+
+        let mut selections = Vec::new();
+        for skin in [
+            "vintage/blue-frame.png",
+            "white-panel/white-panel-frame.png",
+        ] {
+            db::set_album_cover_frame(&connection.borrow(), album.id, skin).unwrap();
+            let albums = db::albums(&connection.borrow()).unwrap();
+            let view = build(
+                &albums,
+                connection.clone(),
+                136,
+                Rc::new(|_| {}),
+                Rc::new(|| {}),
+                Rc::new(|| {}),
+            );
+            let window = gtk::Window::builder()
+                .default_width(900)
+                .default_height(800)
+                .child(&view)
+                .build();
+            window.present();
+            settle_gtk_layout();
+
+            let button = find_descendant_with_css_class(view.upcast_ref(), "album-card")
+                .unwrap()
+                .downcast::<gtk::Button>()
+                .unwrap();
+            let cover = find_descendant_with_css_class(button.upcast_ref(), "album-cover").unwrap();
+            let picture = find_descendant_with_css_class(cover.upcast_ref(), "thumbnail").unwrap();
+            let opening = frame_photo_opening(&Path::new(ALBUM_COVER_THEME_DIRECTORY).join(skin));
+            let expected = photo_margins(opening, cover.width_request(), cover.height_request());
+            assert_eq!(
+                (
+                    picture.margin_start(),
+                    picture.margin_top(),
+                    picture.margin_end(),
+                    picture.margin_bottom(),
+                ),
+                expected,
+                "{skin}"
+            );
+            selections.push(expected);
+            window.close();
+        }
+
+        assert_ne!(
+            selections[0], selections[1],
+            "different frame designs must not share one shared opening"
+        );
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn detects_the_transparent_opening_inside_a_frame() {
+        let alpha = alpha_with_opening(100, 100, (35, 27, 33, 43));
+        assert_eq!(
+            opening_from_alpha(&alpha, 100, 100, 32),
+            Some(PhotoOpening {
+                x: 0.35,
+                y: 0.27,
+                width: 0.33,
+                height: 0.43,
+            })
+        );
+    }
+
+    #[test]
+    fn ignores_transparency_that_leaves_the_frame_border() {
+        // A transparent band along the border is the margin around the album,
+        // not the opening that shows the cover photo.
+        let mut border_band = vec![255u8; 100 * 100];
+        for row in 0..100 {
+            for column in 0..20 {
+                border_band[row * 100 + column] = 0;
+            }
+        }
+        assert_eq!(opening_from_alpha(&border_band, 100, 100, 32), None);
+
+        // A photo opening must be enclosed by the opaque frame on all sides.
+        let mut open_around = vec![0u8; 100 * 100];
+        for row in 30..70 {
+            for column in 30..70 {
+                open_around[row * 100 + column] = 255;
+            }
+        }
+        assert_eq!(opening_from_alpha(&open_around, 100, 100, 32), None);
+    }
+
+    #[test]
+    fn shipped_frames_report_their_own_photo_openings() {
+        let root = Path::new("images/theme/album-covers");
+        let expected = [
+            (
+                "standard/standard-frame.png",
+                (0.3569, 0.2715, 0.3157, 0.4160),
+            ),
+            ("vintage/blue-frame.png", (0.3569, 0.2715, 0.3157, 0.4160)),
+            (
+                "wedding/wedding-frame.png",
+                (0.2524, 0.2461, 0.5269, 0.4775),
+            ),
+            (
+                "white-panel/white-panel-frame.png",
+                (0.1826, 0.1060, 0.6273, 0.5400),
+            ),
+            ("pink/pink-frame.png", (0.1995, 0.1060, 0.6167, 0.5460)),
+        ];
+        for (relative, (x, y, width, height)) in expected {
+            let opening = frame_photo_opening(&root.join(relative));
+            assert!(
+                (opening.x - x).abs() < 0.002,
+                "{relative} left {}",
+                opening.x
+            );
+            assert!(
+                (opening.y - y).abs() < 0.002,
+                "{relative} top {}",
+                opening.y
+            );
+            assert!(
+                (opening.width - width).abs() < 0.002,
+                "{relative} width {}",
+                opening.width
+            );
+            assert!(
+                (opening.height - height).abs() < 0.002,
+                "{relative} height {}",
+                opening.height
+            );
+        }
+    }
+
+    #[test]
+    fn photo_margins_fill_the_opening_of_every_frame_family() {
+        let root = Path::new("images/theme/album-covers");
+        for relative in [
+            "standard/standard-frame.png",
+            "wedding/wedding-frame.png",
+            "white-panel/white-panel-frame.png",
+            "pink/pink-frame.png",
+        ] {
+            let opening = frame_photo_opening(&root.join(relative));
+            for width in [100, 136, 220, 300] {
+                let height = (width as f64 * 500.0 / 805.0).round() as i32;
+                let (left, top, right, bottom) = photo_margins(opening, width, height);
+                assert!(
+                    left >= 0 && top >= 0 && right >= 0 && bottom >= 0,
+                    "{relative}"
+                );
+                assert!(left + right < width && top + bottom < height, "{relative}");
+
+                // The photo rect must cover the opening without spilling over
+                // the opaque frame by more than a rounding pixel.
+                let opening_left = (opening.x * width as f64).floor() as i32;
+                let opening_top = (opening.y * height as f64).floor() as i32;
+                let opening_right = (width as f64 * (opening.x + opening.width)).ceil() as i32;
+                let opening_bottom = (height as f64 * (opening.y + opening.height)).ceil() as i32;
+                assert!(
+                    left <= opening_left && top <= opening_top,
+                    "{relative} at {width}"
+                );
+                assert!(width - right >= opening_right, "{relative} at {width}");
+                assert!(height - bottom >= opening_bottom, "{relative} at {width}");
+                assert!(
+                    opening_left - left <= 1 && opening_top - top <= 1,
+                    "{relative} at {width}"
+                );
+                assert!(
+                    width - right - opening_right <= 1 && height - bottom - opening_bottom <= 1,
+                    "{relative} at {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn album_view_modes_preserve_albums_and_click_navigation() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-bookshelf-modes-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        let album = db::create_album(&connection.borrow(), "Holiday").unwrap();
+        let albums = db::albums(&connection.borrow()).unwrap();
+        let opened = Rc::new(std::cell::Cell::new(None));
+        let opened_for_callback = opened.clone();
+        let on_album: Rc<dyn Fn(i64)> = Rc::new(move |id| opened_for_callback.set(Some(id)));
+        let view = build(
+            &albums,
+            connection.clone(),
+            136,
+            on_album.clone(),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+        );
+        let window = gtk::Window::builder()
+            .default_width(900)
+            .default_height(800)
+            .child(&view)
+            .build();
+        window.present();
+        settle_gtk_layout();
+        assert!(!view.has_css_class("albums-bookshelf"));
+        for (style, background, skin) in [
+            ("default", false, false),
+            ("bookshelf", true, true),
+            ("album-covers", false, true),
+            ("default", false, false),
+        ] {
+            db::set_setting(
+                &connection.borrow(),
+                crate::settings::ALBUM_VIEW_STYLE_SETTING_KEY,
+                style,
+            )
+            .unwrap();
+            refresh(
+                &view,
+                &albums,
+                connection.clone(),
+                136,
+                on_album.clone(),
+                Rc::new(|| {}),
+            );
+            settle_gtk_layout();
+            assert_eq!(view.has_css_class("albums-bookshelf"), background);
+            assert_eq!(
+                find_descendant_with_css_class(view.upcast_ref(), "album-skin").is_some(),
+                skin,
+            );
+            let cards = find_descendant_with_css_class(view.upcast_ref(), "albums-home-grid")
+                .unwrap()
+                .downcast::<gtk::FlowBox>()
+                .unwrap();
+            let flow_child = cards
+                .first_child()
+                .and_then(|child| child.downcast::<gtk::FlowBoxChild>().ok());
+            assert_eq!(db::albums(&connection.borrow()).unwrap(), albums);
+            let button = find_descendant_with_css_class(view.upcast_ref(), "album-card")
+                .unwrap()
+                .downcast::<gtk::Button>()
+                .unwrap();
+            if background {
+                let cover =
+                    find_descendant_with_css_class(button.upcast_ref(), "album-cover").unwrap();
+                let rows =
+                    find_descendant_with_css_class(view.upcast_ref(), "albums-bookshelf-rows")
+                        .unwrap();
+                assert!(!cards.is_visible());
+                assert!(rows.is_visible());
+                assert!(rows.height() >= BOOKSHELF_ROW_HEIGHT);
+                let photo_count = find_descendant_with_css_class(
+                    button.upcast_ref(),
+                    "albums-bookshelf-photo-count",
+                )
+                .unwrap()
+                .downcast::<gtk::Label>()
+                .unwrap();
+                let count_color = photo_count.style_context().color();
+                assert!((count_color.red() - 58.0 / 255.0).abs() < 0.01);
+                assert!((count_color.green() - 33.0 / 255.0).abs() < 0.01);
+                assert!((count_color.blue() - 15.0 / 255.0).abs() < 0.01);
+                let theme = bookshelf_theme_for_appearance(settings::album_appearance(
+                    &connection.borrow(),
+                ))
+                .unwrap();
+                assert_eq!(
+                    button.margin_top() + cover.height_request(),
+                    theme.surface_y
+                );
+            } else if style == "default" {
+                assert_eq!(cards.row_spacing(), 32);
+                assert!(!cards.vexpands());
+                assert_eq!(cards.valign(), gtk::Align::Start);
+                assert!(!cards.has_css_class("albums-bookshelf-0"));
+                assert_eq!(flow_child.unwrap().height_request(), -1);
+                assert_eq!(button.margin_top(), 0);
+            }
+            if skin {
+                // The cover photo must sit inside the selected frame's own
+                // transparent opening, not a single shared rectangle.
+                let root = Path::new(ALBUM_COVER_THEME_DIRECTORY);
+                let frame_paths = album_frame_paths_in(root);
+                let index = selected_frame_index(&album, root, &frame_paths, 0).unwrap();
+                let opening = frame_photo_opening(&frame_paths[index]);
+                let cover =
+                    find_descendant_with_css_class(button.upcast_ref(), "album-cover").unwrap();
+                let (left, top, right, bottom) =
+                    photo_margins(opening, cover.width_request(), cover.height_request());
+                let picture =
+                    find_descendant_with_css_class(cover.upcast_ref(), "thumbnail").unwrap();
+                let actual = [
+                    picture.margin_start(),
+                    picture.margin_top(),
+                    picture.margin_end(),
+                    picture.margin_bottom(),
+                ];
+                for (actual, expected) in actual.into_iter().zip([left, top, right, bottom]) {
+                    assert_eq!(actual, expected, "{}", frame_paths[index].display());
+                }
+            }
+            opened.set(None);
+            button.emit_clicked();
+            assert_eq!(opened.get(), Some(album.id));
+        }
+
+        settings::set_bookshelf_enabled(&connection.borrow(), true).unwrap();
+        settings::set_covers_enabled(&connection.borrow(), false).unwrap();
+        db::set_setting(
+            &connection.borrow(),
+            crate::settings::ALBUM_BOOKSHELF_BACKGROUND_SETTING_KEY,
+            "0",
+        )
+        .unwrap();
+        refresh(
+            &view,
+            &albums,
+            connection.clone(),
+            136,
+            on_album.clone(),
+            Rc::new(|| {}),
+        );
+        settle_gtk_layout();
+        let unframed_cards = find_descendant_with_css_class(view.upcast_ref(), "albums-home-grid")
+            .unwrap()
+            .downcast::<gtk::FlowBox>()
+            .unwrap();
+        assert!(!unframed_cards.is_visible());
+        assert!(
+            find_descendant_with_css_class(view.upcast_ref(), "albums-bookshelf-rows")
+                .unwrap()
+                .is_visible()
+        );
+        assert!(find_descendant_with_css_class(view.upcast_ref(), "album-skin").is_none());
+
+        refresh(
+            &view,
+            &[],
+            connection.clone(),
+            136,
+            on_album,
+            Rc::new(|| {}),
+        );
+        settle_gtk_layout();
+        let empty_cards = find_descendant_with_css_class(view.upcast_ref(), "albums-home-grid")
+            .unwrap()
+            .downcast::<gtk::FlowBox>()
+            .unwrap();
+        assert!(!empty_cards.is_visible());
+        assert!(
+            find_descendant_with_css_class(view.upcast_ref(), "albums-bookshelf-rows")
+                .unwrap()
+                .is_visible()
+        );
+
+        let legacy_index = bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY))
+            .iter()
+            .position(|theme| theme.kind == BookshelfThemeKind::Legacy)
+            .unwrap();
+        db::set_setting(
+            &connection.borrow(),
+            crate::settings::ALBUM_BOOKSHELF_BACKGROUND_SETTING_KEY,
+            &legacy_index.to_string(),
+        )
+        .unwrap();
+        refresh(
+            &view,
+            &[],
+            connection.clone(),
+            136,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+        );
+        settle_gtk_layout();
+        assert!(!empty_cards.vexpands());
+        assert_eq!(empty_cards.valign(), gtk::Align::Start);
+        assert!(empty_cards.is_visible());
+        assert!(view.has_css_class(&format!("albums-bookshelf-{legacy_index}")));
+
+        settings::disable_all_album_themes(&connection.borrow()).unwrap();
+        refresh(
+            &view,
+            &[],
+            connection.clone(),
+            136,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+        );
+        settle_gtk_layout();
+        assert!(!empty_cards.vexpands());
+        assert_eq!(empty_cards.valign(), gtk::Align::Start);
+        assert_eq!(empty_cards.row_spacing(), 32);
+        assert!(!view.has_css_class("albums-bookshelf"));
+
+        window.close();
+        drop(view);
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn one_skin_always_selects_zero() {
+        let root = Path::new("images/theme/album-covers");
+        let frames = vec![root.join("only/only-frame.png")];
+        for id in 0..100 {
+            assert_eq!(selected_frame_index(&album(id), root, &frames, 0), Some(0));
+        }
+    }
+
+    #[test]
+    fn selection_is_stable_when_album_contents_change() {
+        let root = Path::new("images/theme/album-covers");
+        let frames = vec![
+            root.join("pink/pink-frame.png"),
+            root.join("standard/standard-frame.png"),
+            root.join("vintage/blue-frame.png"),
+            root.join("vintage/green-frame.png"),
+        ];
+        let mut album = album(42);
+        let selected = selected_frame_index(&album, root, &frames, 0);
+        for _ in 0..100 {
+            assert_eq!(selected_frame_index(&album, root, &frames, 0), selected);
+        }
+        album.photo_count = 83;
+        album.created_at = 12345;
+        assert_eq!(selected_frame_index(&album, root, &frames, 0), selected);
+    }
+
+    #[test]
+    fn theme_variants_stay_inside_the_theme() {
+        let root = Path::new("images/theme/album-covers");
+        // A theme with one file always shows that file.
+        let single = CoverTheme {
+            name: "pink".to_string(),
+            frames: vec![root.join("pink/pink-frame.png")],
+        };
+        for id in -100..100 {
+            assert_eq!(
+                single.frame_for(&album(id)),
+                Some(&root.join("pink/pink-frame.png"))
+            );
+        }
+
+        // A theme with several files spreads them over the albums, but the
+        // chosen file always belongs to that theme.
+        let variants = CoverTheme {
+            name: "vintage".to_string(),
+            frames: (0..6)
+                .map(|variant| root.join(format!("vintage/{variant}-frame.png")))
+                .collect(),
+        };
+        let mut selected = std::collections::HashSet::new();
+        for id in -100..100 {
+            let frame = variants.frame_for(&album(id)).unwrap();
+            let index = variants
+                .frames
+                .iter()
+                .position(|path| path == frame)
+                .unwrap();
+            assert_eq!(cover_theme_name(root, frame).as_deref(), Some("vintage"));
+            selected.insert(index);
+        }
+        assert!(selected.len() > 1);
+    }
 }

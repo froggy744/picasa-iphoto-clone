@@ -5,6 +5,7 @@ use crate::photo_object::PhotoObject;
 #[derive(Clone, Debug)]
 pub struct CollagePhoto {
     pub id: i64,
+    pub folder_id: Option<i64>,
     pub path: String,
     pub filename: String,
     pub thumbnail_path: Option<String>,
@@ -22,7 +23,11 @@ fn photo_aspect_ratio(photo: &PhotoObject) -> f32 {
     let recipe = crate::edit::EditRecipe::decode(&photo.edit_recipe());
     let (width, height) = crate::edit::render::estimated_output_dimensions(width, height, &recipe);
     let ratio = width as f32 / height.max(1) as f32;
-    if ratio.is_finite() && ratio > 0.0 { ratio } else { 1.5 }
+    if ratio.is_finite() && ratio > 0.0 {
+        ratio
+    } else {
+        1.5
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +119,7 @@ impl CollageProject {
                 .map(|(z, photo)| CollageItem {
                     photo: CollagePhoto {
                         id: photo.id(),
+                        folder_id: Some(photo.folder_id()),
                         path: photo.path(),
                         filename: photo.filename(),
                         thumbnail_path: photo.cached_thumbnail_path(),
@@ -169,6 +175,7 @@ impl CollageProject {
                 .map(|(index, photo)| CollageItem {
                     photo: CollagePhoto {
                         id: photo.id(),
+                        folder_id: Some(photo.folder_id()),
                         path: photo.path(),
                         filename: photo.filename(),
                         thumbnail_path: photo.cached_thumbnail_path(),
@@ -206,6 +213,7 @@ impl CollageProject {
                     .unwrap_or_else(|| CollageItem {
                         photo: CollagePhoto {
                             id: photo.id(),
+                            folder_id: Some(photo.folder_id()),
                             path: photo.path(),
                             filename: photo.filename(),
                             thumbnail_path: photo.cached_thumbnail_path(),

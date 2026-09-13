@@ -72,7 +72,10 @@ pub fn export(project: &CollageProject, destination: &Path) -> Result<()> {
             item.photo.library_rotation,
         );
         let recipe = crate::edit::EditRecipe::decode(&item.photo.edit_recipe);
-        let source = DynamicImage::ImageRgba8(crate::edit::render::apply_recipe(source.to_rgba8(), &recipe));
+        let source = DynamicImage::ImageRgba8(crate::edit::render::apply_recipe(
+            source.to_rgba8(),
+            &recipe,
+        ));
         let contain = matches!(
             project.layout,
             super::model::LayoutKind::Mosaic | super::model::LayoutKind::SmartMosaic
