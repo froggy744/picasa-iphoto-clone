@@ -124,6 +124,14 @@ const STANDARD_GTK4_CSS: &str = r#"
     .one-to-one-btn:checked { color: @accent_fg_color; background: @accent_bg_color; }
     .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; }
     .section-count { font-size: 13px; }
+    .scroll-scrub-date {
+        padding: 7px 10px;
+        border-radius: 8px;
+        background: alpha(@window_bg_color, 0.88);
+        color: @theme_fg_color;
+        font-weight: 700;
+        box-shadow: 0 1px 4px alpha(black, 0.22);
+    }
     .navigation-sidebar row { color: @theme_fg_color; }
     .navigation-sidebar row:hover { background: alpha(@theme_fg_color, 0.06); }
     .navigation-sidebar .sidebar-section-heading { margin-top: 8px; padding-top: 0; }

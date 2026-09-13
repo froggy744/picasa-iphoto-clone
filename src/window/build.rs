@@ -1544,6 +1544,84 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // are ordinary ListView rows, so they move away naturally with the photos.
     folder_scroll.set_child(Some(&gallery.folder_root));
 
+    // A temporary date bubble makes a long chronological All Photos scrollbar
+    // usable like a timeline. It is deliberately attached only to the GridView
+    // scrollbar: Folder mode is not globally date-sorted.
+    let scrub_date_label = gtk::Label::new(None);
+    scrub_date_label.set_halign(gtk::Align::End);
+    scrub_date_label.set_valign(gtk::Align::Center);
+    scrub_date_label.set_margin_end(34);
+    scrub_date_label.set_can_target(false);
+    scrub_date_label.set_visible(false);
+    scrub_date_label.add_css_class("scroll-scrub-date");
+    let scrub_dragging = Rc::new(Cell::new(false));
+    let scrub_hide_generation = Rc::new(Cell::new(0_u64));
+    let update_scrub_date: Rc<dyn Fn(f64)> = Rc::new({
+        let gallery = gallery.clone();
+        let filter = filter.clone();
+        let sort = sort.clone();
+        let label = scrub_date_label.clone();
+        move |scroll_y: f64| {
+            let date = match sort.get().field {
+                SortField::DateTaken => grid::GroupDate::Taken,
+                SortField::DateAdded => grid::GroupDate::Added,
+                _ => {
+                    label.set_visible(false);
+                    return;
+                }
+            };
+            if filter.get() != sidebar::SidebarFilter::All {
+                label.set_visible(false);
+                return;
+            }
+            label.set_text(&gallery.month_label_for_scroll_position(scroll_y, date));
+            label.set_visible(true);
+        }
+    });
+    let scrollbar = grid_scroll.vscrollbar();
+    let scrub_press = gtk::GestureClick::new();
+    scrub_press.set_button(0);
+    {
+        let dragging = scrub_dragging.clone();
+        let hide_generation = scrub_hide_generation.clone();
+        let adjustment = grid_scroll.vadjustment();
+        let update = update_scrub_date.clone();
+        scrub_press.connect_pressed(move |_, _, _, _| {
+            hide_generation.set(hide_generation.get().wrapping_add(1));
+            dragging.set(true);
+            update(adjustment.value());
+        });
+    }
+    {
+        let dragging = scrub_dragging.clone();
+        let hide_generation = scrub_hide_generation.clone();
+        let label = scrub_date_label.clone();
+        scrub_press.connect_released(move |_, _, _, _| {
+            if !dragging.replace(false) {
+                return;
+            }
+            let generation = hide_generation.get().wrapping_add(1);
+            hide_generation.set(generation);
+            let label = label.clone();
+            let hide_generation = hide_generation.clone();
+            glib::timeout_add_local_once(Duration::from_millis(550), move || {
+                if hide_generation.get() == generation {
+                    label.set_visible(false);
+                }
+            });
+        });
+    }
+    scrollbar.add_controller(scrub_press);
+    {
+        let dragging = scrub_dragging.clone();
+        let update = update_scrub_date.clone();
+        grid_scroll.vadjustment().connect_value_changed(move |adjustment| {
+            if dragging.get() {
+                update(adjustment.value());
+            }
+        });
+    }
+
     let gallery_scroll_stack = gtk::Stack::new();
     gallery_scroll_stack.set_hexpand(true);
     gallery_scroll_stack.set_vexpand(true);
@@ -2189,6 +2267,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     grid_overlay.set_hexpand(true);
     grid_overlay.set_vexpand(true);
     grid_overlay.set_child(Some(&grid_surface));
+    grid_overlay.add_overlay(&scrub_date_label);
     grid_overlay.add_overlay(&lightbox.root);
     context_menu_host.borrow_mut().replace(grid_overlay.downgrade());
 

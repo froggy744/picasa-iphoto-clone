@@ -2238,6 +2238,17 @@ impl Gallery {
             .cloned()
     }
 
+    /// Month and year for the photo nearest a GridView scroll position. This
+    /// intentionally bypasses grouping, so a scrub indicator can be useful
+    /// even when the regular sticky date heading is disabled.
+    pub fn month_label_for_scroll_position(&self, scroll_y: f64, date: GroupDate) -> String {
+        self.current_photos
+            .borrow()
+            .get(self.index_for_scroll_position(scroll_y))
+            .map(|photo| group_label(photo, GroupMode::Month, date))
+            .unwrap_or_else(|| "Unknown Date".to_string())
+    }
+
     fn index_for_scroll_position(&self, scroll_y: f64) -> usize {
         // Grid item padding is 6px on each edge in window.rs. The top grid
         // margin is 20px. Keep this calculation shared with the sticky heading.
