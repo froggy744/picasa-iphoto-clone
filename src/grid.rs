@@ -1,8 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::{Local, TimeZone};
 
@@ -36,11 +35,6 @@ const RAW_THUMBNAIL_CACHE_CAPACITY: usize = 256;
 // the user scrolls through nearby photos. Motion prefetch fills this cache off
 // the GTK thread; the ListView bind itself remains RAM-only.
 const FOLDER_THUMBNAIL_CACHE_CAPACITY: usize = 512;
-const FOLDER_THUMBNAIL_ASYNC_PREFETCH_MAX_IN_FLIGHT: usize = 8;
-const FOLDER_THUMBNAIL_ASYNC_VISIBLE_MAX_IN_FLIGHT: usize = 16;
-
-static FOLDER_THUMBNAIL_ASYNC_IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-
 thread_local! {
     static RAW_THUMBNAIL_CACHE: RefCell<VecDeque<(String, i32, String, gtk::gdk::Paintable)>> =
         const { RefCell::new(VecDeque::new()) };
@@ -56,6 +50,15 @@ thread_local! {
     static THUMB_LOAD_FS_MS: Cell<u128> = const { Cell::new(0) };
     static THUMB_LOAD_APPLY_MS: Cell<u128> = const { Cell::new(0) };
     static THUMB_LOAD_SEEN: RefCell<HashSet<i64>> = RefCell::new(HashSet::new());
+    static GRID_SCRUB_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(crate) fn set_grid_scrub_active(active: bool) {
+    GRID_SCRUB_ACTIVE.with(|flag| flag.set(active));
+}
+
+fn grid_scrub_active() -> bool {
+    GRID_SCRUB_ACTIVE.with(Cell::get)
 }
 
 fn folder_thumbnail_cache_get(path: &str) -> Option<gtk::gdk::Paintable> {
@@ -82,35 +85,52 @@ fn folder_thumbnail_cache_insert(path: String, paintable: gtk::gdk::Paintable) {
     });
 }
 
-fn claim_folder_thumbnail_async(path: &str, visible_priority: bool) -> bool {
-    let in_flight = FOLDER_THUMBNAIL_ASYNC_IN_FLIGHT.get_or_init(|| Mutex::new(HashSet::new()));
-    let Ok(mut in_flight) = in_flight.lock() else {
-        return false;
-    };
-    let limit = if visible_priority {
-        FOLDER_THUMBNAIL_ASYNC_VISIBLE_MAX_IN_FLIGHT
-    } else {
-        FOLDER_THUMBNAIL_ASYNC_PREFETCH_MAX_IN_FLIGHT
-    };
-    if in_flight.contains(path) || in_flight.len() >= limit {
-        return false;
-    }
-    in_flight.insert(path.to_string());
-    true
+fn folder_thumbnail_cache_remove(key: &str) {
+    FOLDER_THUMBNAIL_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .retain(|(cached_key, _)| cached_key != key);
+    });
 }
 
-fn release_folder_thumbnail_async(path: &str) {
-    if let Some(in_flight) = FOLDER_THUMBNAIL_ASYNC_IN_FLIGHT.get() {
-        if let Ok(mut in_flight) = in_flight.lock() {
-            in_flight.remove(path);
-        }
-    }
+fn photo_presentation_key(photo: &PhotoObject) -> Option<String> {
+    let cached = photo.cached_thumbnail_path()?;
+    Some(crate::thumbnail_display::presentation_key(
+        &cached,
+        &photo.path(),
+        photo.rotation(),
+        &photo.edit_recipe(),
+        photo.width(),
+        photo.height(),
+    ))
 }
 
-enum FolderThumbnailAsyncResult {
-    Loaded { width: i32, height: i32, pixels: Vec<u8> },
-    Missing,
-    Failed,
+fn photo_presentation_request(
+    photo: &PhotoObject,
+    visible_priority: bool,
+) -> Option<crate::thumbnail_display::DisplayRequest> {
+    let cached = photo.cached_thumbnail_path()?;
+    Some(crate::thumbnail_display::request_for(
+        cached,
+        photo.path(),
+        photo.mtime(),
+        photo.size_bytes(),
+        photo.rotation(),
+        photo.edit_recipe(),
+        photo.width(),
+        photo.height(),
+        visible_priority,
+    ))
+}
+
+fn queue_photo_presentation_async(photo: &PhotoObject, visible_priority: bool) -> bool {
+    let Some(request) = photo_presentation_request(photo, visible_priority) else {
+        return false;
+    };
+    if folder_thumbnail_cache_get(&request.key).is_some() {
+        return false;
+    }
+    crate::thumbnail_display::submit(request)
 }
 
 pub(crate) fn take_scroll_probe_stats() -> (u64, u128, u128) {
@@ -167,6 +187,10 @@ mod square_tile {
         pub favorite_indicators_visible: Cell<bool>,
         pub photo: RefCell<Option<PhotoObject>>,
         pub visual_loaded: Cell<bool>,
+        // Folder mode stores the backing photo index on each realized tile so
+        // prefetch can warm the photo model ahead of the viewport rather than
+        // being limited to GTK's currently realized widget pool.
+        pub photo_index: Cell<Option<usize>>,
         // Stored so the offline badge can be created lazily on first use
         // (folder tiles no longer build it eagerly).
         pub unavailable: RefCell<Option<Rc<dyn Fn(PhotoObject, gtk::Widget)>>>,
@@ -319,104 +343,173 @@ impl SquareTile {
         self.imp().photo.replace(Some(photo.clone()));
     }
 
+    fn apply_presentation_paintable(
+        &self,
+        expected_key: &str,
+        paintable: &gtk::gdk::Paintable,
+    ) -> bool {
+        let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
+            return false;
+        };
+        if photo_presentation_key(&photo).as_deref() != Some(expected_key) {
+            return false;
+        }
+        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+            return false;
+        };
+        let Some(picture) = frame.child().and_downcast::<gtk::Picture>() else {
+            return false;
+        };
+        picture.set_paintable(Some(paintable));
+        if picture.has_css_class("missing-thumbnail") {
+            picture.remove_css_class("missing-thumbnail");
+        }
+        if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
+            if placeholder.is_visible() {
+                placeholder.set_visible(false);
+            }
+        }
+        photo.set_thumbnail_available(true);
+        self.imp().visual_loaded.set(true);
+        true
+    }
+
+    fn mark_presentation_missing(&self, expected_key: &str) -> bool {
+        let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
+            return false;
+        };
+        if photo_presentation_key(&photo).as_deref() != Some(expected_key) {
+            return false;
+        }
+        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+            return false;
+        };
+        let Some(picture) = frame.child().and_downcast::<gtk::Picture>() else {
+            return false;
+        };
+        picture.set_paintable(gtk::gdk::Paintable::NONE);
+        if !picture.has_css_class("missing-thumbnail") {
+            picture.add_css_class("missing-thumbnail");
+        }
+        if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
+            if !placeholder.is_visible() {
+                placeholder.set_visible(true);
+            }
+        }
+        photo.set_thumbnail_available(false);
+        // The presentation worker has already requested background regeneration.
+        // Treat the placeholder as the current settled state so a frame pump does
+        // not requeue the same missing cache file continuously. A targeted
+        // ThumbnailCreated/priority completion invalidates this state.
+        self.imp().visual_loaded.set(true);
+        true
+    }
+
+    fn refresh_badges_from_model(&self) {
+        let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
+            return;
+        };
+        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+
+        let unavailable = !photo.original_available();
+        if unavailable {
+            let badge = self.ensure_offline_badge(&frame);
+            if !badge.is_visible() {
+                badge.set_visible(true);
+            }
+        } else if let Some(child) = find_overlay_child(&frame, "offline-badge") {
+            if child.is_visible() {
+                child.set_visible(false);
+            }
+        }
+
+        let favorite = self.imp().favorite_indicators_visible.get() && photo.favorite();
+        if favorite {
+            ensure_favorite_badge(&frame).set_visible(true);
+        } else if let Some(child) = find_overlay_child(&frame, "favorite-badge") {
+            child.set_visible(false);
+        }
+
+        let edited = !crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default();
+        if edited {
+            ensure_edited_badge(&frame).set_visible(true);
+        } else if let Some(child) = find_overlay_child(&frame, "edited-badge") {
+            child.set_visible(false);
+        }
+    }
+
+    fn queue_presentation_visual_async(&self, visible_priority: bool) -> bool {
+        let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
+            return false;
+        };
+        let Some(request) = photo_presentation_request(&photo, visible_priority) else {
+            return false;
+        };
+
+        if let Some(paintable) = folder_thumbnail_cache_get(&request.key) {
+            self.apply_presentation_paintable(&request.key, &paintable);
+            return true;
+        }
+
+        // During a direct scrollbar scrub GTK can recycle the same handful of
+        // GridView cells hundreds of times per second. Keep the previous
+        // paintable as a transient visual backstop instead of flashing the
+        // empty template on every rebind. The correct thumbnail replaces it
+        // atomically when the worker completion arrives. Once scrubbing
+        // settles, refresh_visible_grid_tiles() clears any unresolved stale
+        // image and restores the normal placeholder behavior.
+        if !grid_scrub_active() {
+            if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
+                if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
+                    picture.set_paintable(gtk::gdk::Paintable::NONE);
+                    if !picture.has_css_class("missing-thumbnail") {
+                        picture.add_css_class("missing-thumbnail");
+                    }
+                    if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
+                        if !placeholder.is_visible() {
+                            placeholder.set_visible(true);
+                        }
+                    }
+                }
+            }
+        }
+
+        crate::thumbnail_display::submit(request)
+    }
+
     fn load_visual(&self) {
         if self.imp().visual_loaded.get() {
             return;
         }
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let load_started = trace.then(Instant::now);
         let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
             return;
         };
-        let fs_started = trace.then(Instant::now);
-        // The original may live on a spun-down or disconnected drive. Stat it
-        // off the GTK thread; the offline badge updates when the async probe
-        // completes. Measured: a synchronous stat here froze a scroll frame for
-        // 4484 ms (load_visual fs_ms=4484, scroll-baseline3.log).
-        schedule_availability_probe(self, &photo);
-        let mut cache_hit = false;
-        let mut request_priority = false;
-        if let Some(path) = photo.cached_thumbnail_path() {
-            let available = std::path::Path::new(&path).is_file();
-            photo.set_thumbnail_available(available);
-            cache_hit = available;
-            if !available {
-                request_priority = true;
-                if std::env::var_os("PICASA_TRACE_VERBOSE").is_some() {
-                    eprintln!(
-                        "THUMB PRIORITY visible_missing thread=main id={} path={} cache={}",
-                        photo.id(),
-                        photo.path(),
-                        path
-                    );
-                }
+        self.refresh_badges_from_model();
+        let cache_hit = if let Some(key) = photo_presentation_key(&photo) {
+            if let Some(paintable) = folder_thumbnail_cache_get(&key) {
+                self.apply_presentation_paintable(&key, &paintable);
+                true
+            } else {
+                false
             }
+        } else {
+            false
+        };
+        if !cache_hit {
+            self.queue_presentation_visual_async(true);
         }
-        let fs_ms = fs_started
-            .map(|started| started.elapsed().as_millis())
-            .unwrap_or(0);
-        let priority_started = trace.then(Instant::now);
-        if request_priority {
-            crate::thumbnail::request_priority(
-                photo.path(),
-                Some(photo.mtime()),
-                Some(photo.size_bytes()),
-            );
-        }
-        let priority_ms = priority_started
-            .map(|started| started.elapsed().as_millis())
-            .unwrap_or(0);
-        crate::diagnostics::visible_thumbnail(photo.thumbnail_available());
-        let apply_started = trace.then(Instant::now);
-        self.refresh_thumbnail_with_probe(false);
-        let apply_ms = apply_started
-            .map(|started| started.elapsed().as_millis())
-            .unwrap_or(0);
-        self.imp().visual_loaded.set(true);
-        if let Some(started) = load_started {
-            let total_ms = started.elapsed().as_millis();
-            record_thumb_load(photo.id(), total_ms, fs_ms, apply_ms);
-            // Per-tile tracing can dominate the GTK main thread during a large
-            // ListView jump. Keep the aggregate counters above, but emit an
-            // individual line only when this bind is itself slow enough to be
-            // diagnostically useful.
-            if total_ms >= 12 {
-                let raw =
-                    crate::image_format::uses(&photo.path(), crate::image_format::DecoderKind::Raw);
-                let rotation = photo.rotation().rem_euclid(360);
-                let edited = !crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default();
-                let apply_kind = if raw && rotation == 0 && !edited {
-                    "filename"
-                } else if raw {
-                    "raw_transform"
-                } else if rotation != 0 || edited {
-                    "edited_transform"
-                } else {
-                    "filename"
-                };
-                eprintln!(
-                    "UI PERF load_visual_slow id={} fs_ms={} priority_ms={} apply_ms={} total_ms={} cache={} kind={} raw={} rotation={} edited={} path={}",
-                    photo.id(),
-                    fs_ms,
-                    priority_ms,
-                    apply_ms,
-                    total_ms,
-                    if cache_hit { "hit" } else { "miss" },
-                    apply_kind,
-                    raw,
-                    rotation,
-                    edited,
-                    photo.path()
-                );
-            }
-        }
+        crate::diagnostics::visible_thumbnail(cache_hit);
     }
 
     fn unload_visual(&self) {
         self.imp().visual_loaded.set(false);
-        if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
-            if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
-                picture.set_paintable(gtk::gdk::Paintable::NONE);
+        if !grid_scrub_active() {
+            if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
+                if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
+                    picture.set_paintable(gtk::gdk::Paintable::NONE);
+                }
             }
         }
         // Deliberately no per-tile trace here. GtkListView can unbind
@@ -447,7 +540,7 @@ impl SquareTile {
     /// scrollbar jump. Do not stat files, probe originals, request thumbnail
     /// generation, or render RAW/edit transforms here. Those operations turn
     /// harmless widget recycling into synchronous main-thread work.
-    fn bind_photo_folder_fast(&self, photo: &PhotoObject) {
+    fn bind_photo_folder_fast(&self, photo: &PhotoObject, photo_index: usize) {
         // Folder bind immediately paints the correct paintable, so replace the
         // photo in place instead of running the full unload path. The old path
         // cleared the paintable and toggled CSS on every recycled tile, which
@@ -462,6 +555,7 @@ impl SquareTile {
         if !same_photo {
             self.imp().photo.replace(Some(photo.clone()));
         }
+        self.imp().photo_index.set(Some(photo_index));
 
         let Some(bound) = self.imp().photo.borrow().as_ref().cloned() else {
             return;
@@ -477,8 +571,7 @@ impl SquareTile {
         // but reuse a paintable that the settled-viewport loader has already
         // decoded. This keeps nearby thumbnails visible during wheel scrolling
         // without restoring the old per-bind I/O/RAW/edit work.
-        let memory_hit = bound
-            .cached_thumbnail_path()
+        let memory_hit = photo_presentation_key(&bound)
             .as_deref()
             .and_then(folder_thumbnail_cache_get);
         if let Some(paintable) = memory_hit.as_ref() {
@@ -487,9 +580,24 @@ impl SquareTile {
                 picture.remove_css_class("missing-thumbnail");
             }
         } else {
-            picture.set_paintable(gtk::gdk::Paintable::NONE);
-            if !picture.has_css_class("missing-thumbnail") {
-                picture.add_css_class("missing-thumbnail");
+            // Do not blank a recycled Folder tile just because the destination
+            // thumbnail is not in RAM yet. Keep the previous paintable as a
+            // temporary visual backstop and immediately submit the *current*
+            // photo to the async presentation queue. The completion drain
+            // validates the presentation key before replacing the paintable, so
+            // a tile that gets recycled again cannot receive the wrong image.
+            //
+            // This is intentionally different from the old Folder design,
+            // which displayed an empty template here and waited for a later
+            // viewport pump to rediscover the tile. During Page Up/Down and
+            // scrollbar scrubbing that rediscovery can lag several frames.
+            if picture.paintable().is_none() {
+                if !picture.has_css_class("missing-thumbnail") {
+                    picture.add_css_class("missing-thumbnail");
+                }
+            }
+            if let Some(request) = photo_presentation_request(&bound, true) {
+                crate::thumbnail_display::submit_latest_visible(request);
             }
         }
 
@@ -524,7 +632,10 @@ impl SquareTile {
             child.set_visible(false);
         }
         if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
-            let visible = memory_hit.is_none();
+            // Only show the empty template when there is genuinely no paintable
+            // to keep on screen. A recycled tile with an old paintable stays
+            // visually populated until its correct async result arrives.
+            let visible = memory_hit.is_none() && picture.paintable().is_none();
             if placeholder.is_visible() != visible {
                 placeholder.set_visible(visible);
             }
@@ -539,138 +650,15 @@ impl SquareTile {
     /// reading, and decoding happen on a bounded worker set here. The result is
     /// applied only if this recycled tile still represents the same photo.
     fn queue_folder_cached_visual_async(&self, visible_priority: bool) -> bool {
-        let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
-            return false;
-        };
-        if self.imp().visual_loaded.get() {
-            return false;
-        }
-        let Some(cached_path) = photo.cached_thumbnail_path() else {
-            return false;
-        };
-
-        if let Some(paintable) = folder_thumbnail_cache_get(&cached_path) {
-            let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
-                return false;
-            };
-            let Some(picture) = frame.child().and_downcast::<gtk::Picture>() else {
-                return false;
-            };
-            picture.set_paintable(Some(&paintable));
-            picture.remove_css_class("missing-thumbnail");
-            if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
-                placeholder.set_visible(false);
-            }
-            self.imp().visual_loaded.set(true);
-            return true;
-        }
-
-        if !claim_folder_thumbnail_async(&cached_path, visible_priority) {
-            return false;
-        }
-
-        let photo_id = photo.id();
-        let source_path = photo.path();
-        let mtime = photo.mtime();
-        let size_bytes = photo.size_bytes();
-        let worker_path = cached_path.clone();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let result = if !std::path::Path::new(&worker_path).is_file() {
-                FolderThumbnailAsyncResult::Missing
-            } else {
-                match image::open(&worker_path) {
-                    Ok(image) => {
-                        let image = image.to_rgba8();
-                        FolderThumbnailAsyncResult::Loaded {
-                            width: image.width() as i32,
-                            height: image.height() as i32,
-                            pixels: image.into_raw(),
-                        }
-                    }
-                    Err(_) => FolderThumbnailAsyncResult::Failed,
-                }
-            };
-            release_folder_thumbnail_async(&worker_path);
-            let _ = sender.send(result);
-        });
-
-        let tile = self.clone();
-        glib::timeout_add_local(Duration::from_millis(8), move || {
-            let Ok(result) = receiver.try_recv() else {
-                return glib::ControlFlow::Continue;
-            };
-
-            let still_bound = tile
-                .imp()
-                .photo
-                .borrow()
-                .as_ref()
-                .is_some_and(|current| current.id() == photo_id);
-
-            match result {
-                FolderThumbnailAsyncResult::Loaded { width, height, pixels } => {
-                    let bytes = glib::Bytes::from_owned(pixels);
-                    let texture = gtk::gdk::MemoryTexture::new(
-                        width,
-                        height,
-                        gtk::gdk::MemoryFormat::R8g8b8a8,
-                        &bytes,
-                        width as usize * 4,
-                    );
-                    let paintable: gtk::gdk::Paintable = texture.upcast();
-                    folder_thumbnail_cache_insert(cached_path.clone(), paintable.clone());
-                    if still_bound {
-                        if let Some(bound) = tile.imp().photo.borrow().as_ref() {
-                            bound.set_thumbnail_available(true);
-                        }
-                        if let Some(frame) = tile.first_child().and_downcast::<gtk::Overlay>() {
-                            if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
-                                picture.set_paintable(Some(&paintable));
-                                picture.remove_css_class("missing-thumbnail");
-                                if let Some(placeholder) =
-                                    picture.next_sibling().and_downcast::<gtk::Image>()
-                                {
-                                    placeholder.set_visible(false);
-                                }
-                            }
-                        }
-                        tile.imp().visual_loaded.set(true);
-                    }
-                }
-                FolderThumbnailAsyncResult::Missing => {
-                    if still_bound {
-                        if let Some(bound) = tile.imp().photo.borrow().as_ref() {
-                            bound.set_thumbnail_available(false);
-                        }
-                        tile.imp().visual_loaded.set(true);
-                    }
-                    crate::thumbnail::request_priority(
-                        source_path.clone(),
-                        Some(mtime),
-                        Some(size_bytes),
-                    );
-                }
-                FolderThumbnailAsyncResult::Failed => {
-                    if still_bound {
-                        tile.imp().visual_loaded.set(true);
-                    }
-                }
-            }
-            glib::ControlFlow::Break
-        });
-
-        true
+        self.queue_presentation_visual_async(visible_priority)
     }
 
     /// Load the final viewport thumbnail after Folder scrolling settles.
     ///
-    /// Cache probing and priority generation are allowed here because this is
-    /// called for only the small near-viewport set, never for every ListView
-    /// bind. Pixel transforms remain forbidden on the GTK thread.
+    /// Even after motion settles, thumbnail cache probing, decoding and visual
+    /// transforms stay on the shared worker queue. The GTK thread only updates
+    /// tooltip/badge state and submits a request when RAM has no paintable.
     fn load_folder_cached_visual(&self) {
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let started = trace.then(Instant::now);
         let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
             return;
         };
@@ -680,85 +668,26 @@ impl SquareTile {
         let Some(picture) = frame.child().and_downcast::<gtk::Picture>() else {
             return;
         };
-        // Tooltip setup is deceptively expensive in GTK (it can trigger widget
-        // picking and CSS work), so it is deliberately kept out of the
-        // per-scroll bind path and applied once the viewport settles. Tooltips
-        // are only useful when the pointer can hover, which means scrolling has
-        // stopped.
+
+        // Tooltip work stays out of the high-frequency bind path. Once motion
+        // settles this is presentation-only and does not touch the original or
+        // thumbnail file.
         let filename = photo.filename();
         if picture.tooltip_text().as_deref() != Some(filename.as_str()) {
             picture.set_tooltip_text(Some(&filename));
         }
-        if self.imp().visual_loaded.get() {
-            return;
-        }
 
-        if let Some(path) = photo.cached_thumbnail_path() {
-            if let Some(paintable) = folder_thumbnail_cache_get(&path) {
-                picture.set_paintable(Some(&paintable));
-                picture.remove_css_class("missing-thumbnail");
-                if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
-                    placeholder.set_visible(false);
-                }
-                self.imp().visual_loaded.set(true);
-                return;
-            }
-        }
-
-        schedule_availability_probe(self, &photo);
-        let fs_started = trace.then(Instant::now);
-        let cached = photo.cached_thumbnail_path();
-        let existing = cached
-            .as_deref()
-            .filter(|path| std::path::Path::new(path).is_file());
-        photo.set_thumbnail_available(existing.is_some());
-        let fs_ms = fs_started
-            .map(|value| value.elapsed().as_millis())
-            .unwrap_or(0);
-
-        if let Some(path) = existing {
-            // The cached JPEG is already EXIF-oriented. Folder scrolling uses
-            // the base cache immediately; RAW/edit refinements must never run
-            // from ListView recycling.
-            picture.set_filename(Some(path));
-            picture.remove_css_class("missing-thumbnail");
-            if let Some(paintable) = picture.paintable() {
-                folder_thumbnail_cache_insert(path.to_string(), paintable);
-            }
-        } else {
-            picture.set_paintable(gtk::gdk::Paintable::NONE);
-            picture.add_css_class("missing-thumbnail");
-            crate::thumbnail::request_priority(
-                photo.path(),
-                Some(photo.mtime()),
-                Some(photo.size_bytes()),
-            );
-        }
-
-        if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
-            placeholder.set_visible(existing.is_none());
-        }
-        self.imp().visual_loaded.set(true);
-
-        if let Some(started) = started {
-            let total_ms = started.elapsed().as_millis();
-            record_thumb_load(photo.id(), total_ms, fs_ms, total_ms.saturating_sub(fs_ms));
-            if total_ms >= 12 {
-                eprintln!(
-                    "UI PERF folder_cached_load_slow id={} total_ms={} fs_ms={} cache={} path={}",
-                    photo.id(),
-                    total_ms,
-                    fs_ms,
-                    if existing.is_some() { "hit" } else { "miss" },
-                    photo.path()
-                );
-            }
+        // Scrolling never probes originals. Offline state comes from the
+        // folder/mount snapshot plus explicit background availability refreshes.
+        if !self.imp().visual_loaded.get() {
+            self.queue_presentation_visual_async(true);
         }
     }
 
     fn clear_photo(&self) {
         self.unload_visual();
         self.imp().photo.take();
+        self.imp().photo_index.set(None);
         if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
             if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
                 picture.set_paintable(gtk::gdk::Paintable::NONE);
@@ -829,117 +758,17 @@ impl SquareTile {
         }
     }
 
-    fn refresh_thumbnail_with_probe(&self, probe_thumbnail: bool) {
+    fn refresh_thumbnail_with_probe(&self, _probe_thumbnail: bool) {
         let Some(photo) = self.imp().photo.borrow().clone() else {
             return;
         };
-        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
-            return;
-        };
-        let Some(picture) = frame.child().and_downcast::<gtk::Picture>() else {
-            return;
-        };
-        let placeholder = picture.next_sibling().and_downcast::<gtk::Image>();
-        let cached = photo.cached_thumbnail_path();
-        let thumbnail_available = if probe_thumbnail {
-            // This is an explicit refresh (for example after thumbnail
-            // generation or clearing the cache), not a per-bind probe.
-            let available = cached
-                .as_deref()
-                .map(|path| std::path::Path::new(path).is_file())
-                .unwrap_or(false);
-            photo.set_thumbnail_available(available);
-            available
-        } else {
-            photo.thumbnail_available()
-        };
-        let existing = cached.as_deref().filter(|_| thumbnail_available);
-
-        if let Some(path) = existing {
-            // RAW correction requires decoding and cropping pixels. Do not do
-            // that synchronously while GtkGridView binds a tile; the cached
-            // file is already a usable thumbnail and keeps startup/scrolling
-            // responsive.
-            if crate::image_format::uses(&photo.path(), crate::image_format::DecoderKind::Raw)
-                && photo.rotation().rem_euclid(360) == 0
-                && crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default()
-            {
-                picture.set_filename(Some(path));
-            } else if let Some(cropped) = raw_cached_thumbnail(&photo, path) {
-                picture.set_paintable(Some(&cropped));
-            } else if let Some(rotated) =
-                crate::photo_texture::edited_thumbnail(path, photo.rotation(), &photo.edit_recipe())
-            {
-                picture.set_paintable(Some(&rotated));
-            } else {
-                picture.set_filename(Some(path));
-            }
-        } else {
-            picture.set_paintable(gtk::gdk::Paintable::NONE);
+        if let Some(key) = photo_presentation_key(&photo) {
+            folder_thumbnail_cache_remove(&key);
         }
-        picture.set_tooltip_text(Some(&photo.filename()));
-        let unavailable = !photo.original_available();
-        if unavailable {
-            let badge = self.ensure_offline_badge(&frame);
-            badge.set_visible(true);
-            badge.set_tooltip_text(Some("Original photo unavailable"));
-        } else if let Some(child) = find_overlay_child(&frame, "offline-badge") {
-            child.set_visible(false);
-        }
-        if self.imp().favorite_indicators_visible.get() && photo.favorite() {
-            ensure_favorite_badge(&frame).set_visible(true);
-        } else if let Some(child) = find_overlay_child(&frame, "favorite-badge") {
-            child.set_visible(false);
-        }
-        let edited = !crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default();
-        if edited {
-            let badge = ensure_edited_badge(&frame);
-            badge.set_visible(true);
-            badge.set_tooltip_text(Some("Edited"));
-        } else if let Some(child) = find_overlay_child(&frame, "edited-badge") {
-            child.set_visible(false);
-        }
-        if let Some(placeholder) = placeholder {
-            placeholder.set_visible(existing.is_none());
-        }
-        if existing.is_some() {
-            picture.remove_css_class("missing-thumbnail");
-        } else {
-            picture.add_css_class("missing-thumbnail");
-        }
+        self.imp().visual_loaded.set(false);
+        self.refresh_badges_from_model();
+        self.queue_presentation_visual_async(true);
     }
-}
-
-/// Probe an original file's availability without blocking the GTK main thread.
-///
-/// `gio` runs the stat on a worker thread and delivers the callback back to the
-/// thread-default main context. The result is stored on the shared
-/// `PhotoObject`, so other tiles bound to the same photo see it immediately.
-fn schedule_availability_probe(tile: &SquareTile, photo: &PhotoObject) {
-    // Re-probe on rebind once the previous result is older than the TTL, so a
-    // drive/file that goes offline without a mount event still updates its
-    // badge. The probe itself stays off the GTK thread.
-    const AVAILABILITY_REPROBE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
-    let now = Instant::now();
-    if let Some(checked_at) = photo.original_checked_at() {
-        if now.duration_since(checked_at) < AVAILABILITY_REPROBE_TTL {
-            return;
-        }
-    }
-    photo.set_original_checked_at(Some(now));
-    let file = crate::source::file(&photo.path());
-    let photo = photo.clone();
-    let tile = tile.clone();
-    file.query_info_async(
-        gio::FILE_ATTRIBUTE_STANDARD_TYPE,
-        gio::FileQueryInfoFlags::NONE,
-        glib::Priority::DEFAULT_IDLE,
-        gio::Cancellable::NONE,
-        move |result| {
-            photo.set_original_available(result.is_ok());
-            tile.refresh_availability();
-        },
-    );
 }
 
 fn find_overlay_child(frame: &gtk::Overlay, css_class: &str) -> Option<gtk::Widget> {
@@ -1550,6 +1379,9 @@ impl Gallery {
             let Some(tile) = list_item.child().and_downcast::<SquareTile>() else {
                 return;
             };
+            tile.imp()
+                .photo_index
+                .set(Some(list_item.position() as usize));
             tile.bind_photo(&photo);
         });
 
@@ -1922,7 +1754,7 @@ impl Gallery {
                             if !tile.can_target() {
                                 tile.set_can_target(true);
                             }
-                            tile.bind_photo_folder_fast(photo);
+                            tile.bind_photo_folder_fast(photo, data.start + slot);
                             tile.set_manual_selected(
                                 selected_ids_for_folder_bind.borrow().contains(&photo.id()),
                             );
@@ -2741,9 +2573,9 @@ impl Gallery {
     /// close to the actual viewport. GtkListView keeps a much larger recycled
     /// widget pool than the visible rows, so loading every bound tile causes
     /// thousands of unnecessary thumbnail operations during scrollbar jumps.
-    pub fn refresh_visible_folder_tiles(&self) {
+    pub fn refresh_visible_folder_tiles(&self) -> usize {
         if self.group_mode.get() != GroupMode::Folder || self.folder_root.height() <= 0 {
-            return;
+            return 0;
         }
 
         let trace = std::env::var_os("PICASA_TRACE").is_some();
@@ -2786,6 +2618,234 @@ impl Gallery {
                 );
             }
         }
+
+        loaded
+    }
+
+    /// Replace stale GridView visible requests with the thumbnails GTK is
+    /// painting in the current frame. This is the non-Folder equivalent of the
+    /// Folder motion pump and prevents fast scrollbar movement from filling the
+    /// worker queue with viewports the user has already passed.
+    pub fn queue_visible_grid_cached_tiles_async(&self, budget: usize) -> usize {
+        if budget == 0 || self.group_mode.get() == GroupMode::Folder || self.root.height() <= 0 {
+            return 0;
+        }
+
+        let viewport = self.root.height() as f32;
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        let mut candidates: Vec<(f32, SquareTile)> = Vec::new();
+
+        for tile in tiles {
+            if !tile.is_mapped() || tile.height() <= 0 || tile.imp().visual_loaded.get() {
+                continue;
+            }
+            let Some(bounds) = tile.compute_bounds(&self.root) else {
+                continue;
+            };
+            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
+                continue;
+            }
+            let center = bounds.y() + bounds.height() * 0.5;
+            candidates.push(((center - viewport * 0.5).abs(), tile));
+        }
+
+        candidates.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let mut requests = Vec::new();
+        for (_, tile) in candidates.into_iter().take(budget) {
+            let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+                continue;
+            };
+            let Some(request) = photo_presentation_request(&photo, true) else {
+                continue;
+            };
+            if let Some(paintable) = folder_thumbnail_cache_get(&request.key) {
+                tile.apply_presentation_paintable(&request.key, &paintable);
+            } else {
+                requests.push(request);
+            }
+        }
+
+        crate::thumbnail_display::replace_visible_requests(requests)
+    }
+
+    /// Queue the photo-model range that a large GridView scrollbar jump is
+    /// moving toward, without waiting for GTK to realize/rebind those tiles.
+    ///
+    /// Scrollbar scrubbing can move by thousands of rows in one adjustment
+    /// update. During that interval `collect_tiles()` still describes the old
+    /// viewport for one or more frames, so widget-based visible detection is
+    /// too late. This method derives the target rows directly from scroll
+    /// position and queues only that viewport as visible-priority work.
+    pub fn queue_grid_scroll_target_cached_tiles_async(
+        &self,
+        scroll_y: f64,
+        viewport_height: f64,
+        budget: usize,
+    ) -> usize {
+        if budget == 0 || self.group_mode.get() == GroupMode::Folder {
+            return 0;
+        }
+
+        const ITEM_PADDING: f64 = 6.0;
+        let columns = self.current_columns.get().max(1) as usize;
+        let row_pitch = self.tile_height.get().max(1) as f64 + ITEM_PADDING * 2.0;
+        let first = self.index_for_scroll_position(scroll_y);
+        let visible_rows =
+            ((viewport_height.max(row_pitch) / row_pitch).ceil() as usize).saturating_add(2);
+        let wanted = visible_rows.saturating_mul(columns).min(budget);
+
+        let photos = self.current_photos.borrow();
+        if photos.is_empty() || first >= photos.len() {
+            return 0;
+        }
+        let end = first.saturating_add(wanted).min(photos.len());
+        let center = first + (end - first) / 2;
+        let mut indexes = Vec::with_capacity(end - first);
+        // Centre-out ordering makes the viewport useful as quickly as possible
+        // after a teleport while still warming every tile on screen.
+        for distance in 0..=(end - first) {
+            let right = center.saturating_add(distance);
+            if right < end {
+                indexes.push(right);
+            }
+            if distance > 0 {
+                let left = center.saturating_sub(distance);
+                if left >= first && left < center {
+                    indexes.push(left);
+                }
+            }
+            if indexes.len() >= end - first {
+                break;
+            }
+        }
+
+        let mut requests = Vec::with_capacity(indexes.len());
+        for index in indexes {
+            let Some(photo) = photos.get(index) else {
+                continue;
+            };
+            let Some(request) = photo_presentation_request(photo, true) else {
+                continue;
+            };
+            if folder_thumbnail_cache_get(&request.key).is_none() {
+                requests.push(request);
+            }
+        }
+        drop(photos);
+
+        crate::thumbnail_display::replace_visible_requests(requests)
+    }
+
+    fn visible_grid_photo_index_span(&self) -> Option<(usize, usize)> {
+        if self.group_mode.get() == GroupMode::Folder || self.root.height() <= 0 {
+            return None;
+        }
+        let viewport = self.root.height() as f32;
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        let mut first = usize::MAX;
+        let mut last = 0usize;
+        let mut found = false;
+        for tile in tiles {
+            if !tile.is_mapped() || tile.height() <= 0 {
+                continue;
+            }
+            let Some(index) = tile.imp().photo_index.get() else {
+                continue;
+            };
+            let Some(bounds) = tile.compute_bounds(&self.root) else {
+                continue;
+            };
+            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
+                continue;
+            }
+            first = first.min(index);
+            last = last.max(index);
+            found = true;
+        }
+        found.then_some((first, last))
+    }
+
+    /// Reconcile the actually visible GridView cells after direct scrollbar
+    /// scrubbing stops. During the scrub cells intentionally retain their last
+    /// paintable to avoid a wall of empty templates; this pass either applies
+    /// the correct RAM-cached thumbnail or restores the normal placeholder and
+    /// queues the correct visible thumbnail.
+    pub fn refresh_visible_grid_tiles(&self) -> usize {
+        if self.group_mode.get() == GroupMode::Folder || self.root.height() <= 0 {
+            return 0;
+        }
+
+        let viewport = self.root.height() as f32;
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        let mut refreshed = 0usize;
+        for tile in tiles {
+            if !tile.is_mapped() || tile.height() <= 0 {
+                continue;
+            }
+            let Some(bounds) = tile.compute_bounds(&self.root) else {
+                continue;
+            };
+            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
+                continue;
+            }
+            tile.unload_visual();
+            tile.load_visual();
+            refreshed += 1;
+        }
+        refreshed
+    }
+
+    /// Warm several screens of GridView thumbnails from the photo model so
+    /// Library/Favourites/Albums/Search can scroll into already-decoded RAM
+    /// paintables just like Folder mode.
+    pub fn prefetch_grid_cached_tiles(&self, budget: usize, direction: f64) -> usize {
+        if budget == 0 || self.group_mode.get() == GroupMode::Folder {
+            return 0;
+        }
+        let Some((first_visible, last_visible)) = self.visible_grid_photo_index_span() else {
+            return 0;
+        };
+        let photos = self.current_photos.borrow();
+        if photos.is_empty() {
+            return 0;
+        }
+
+        let visible_count = last_visible
+            .saturating_sub(first_visible)
+            .saturating_add(1)
+            .max(self.current_columns.get() as usize);
+        let ahead = visible_count.saturating_mul(5);
+        let behind = visible_count;
+        let mut indexes = Vec::with_capacity((ahead + behind).min(photos.len()));
+
+        if direction < 0.0 {
+            let ahead_start = first_visible.saturating_sub(ahead);
+            indexes.extend((ahead_start..first_visible).rev());
+            let behind_end = (last_visible + 1 + behind).min(photos.len());
+            indexes.extend((last_visible + 1)..behind_end);
+        } else {
+            let ahead_end = (last_visible + 1 + ahead).min(photos.len());
+            indexes.extend((last_visible + 1)..ahead_end);
+            let behind_start = first_visible.saturating_sub(behind);
+            indexes.extend((behind_start..first_visible).rev());
+        }
+
+        let mut queued = 0usize;
+        for index in indexes {
+            if queued >= budget {
+                break;
+            }
+            let Some(photo) = photos.get(index) else {
+                continue;
+            };
+            if queue_photo_presentation_async(photo, false) {
+                queued += 1;
+            }
+        }
+        queued
     }
 
     /// Queue cached thumbnails for the tiles that are actually visible now.
@@ -2833,6 +2893,119 @@ impl Gallery {
         queued
     }
 
+    /// Queue the Folder destination directly from virtual-row geometry.
+    ///
+    /// Unlike `queue_visible_folder_cached_tiles_async`, this does not depend on
+    /// GtkListView having already recycled and allocated the destination row
+    /// widgets. That makes it suitable for Page Up/Down and direct scrollbar
+    /// jumps, where the adjustment can move many rows before GTK has realized
+    /// the new viewport.
+    pub fn queue_folder_scroll_target_cached_tiles_async(
+        &self,
+        scroll_y: f64,
+        viewport_height: f64,
+        budget: usize,
+    ) -> usize {
+        if budget == 0 || self.group_mode.get() != GroupMode::Folder {
+            return 0;
+        }
+
+        let photos = self.current_photos.borrow();
+        let ranges = self.group_ranges.borrow();
+        if photos.is_empty() || ranges.is_empty() {
+            return 0;
+        }
+
+        let columns = self.current_columns.get().max(1) as usize;
+        let line_height = folder_line_height(self.tile_height.get()).max(1) as f64;
+        let view_start = scroll_y.max(0.0);
+        let view_end = view_start + viewport_height.max(line_height);
+        // Include one photo line on either side so a page jump paints the edge
+        // rows too, without wasting decode work on several speculative screens.
+        let target_start = (view_start - line_height).max(0.0);
+        let target_end = view_end + line_height;
+
+        let mut y = 0.0_f64;
+        let mut indexes = Vec::<usize>::new();
+
+        for range in ranges.iter() {
+            let photo_count = range.end.saturating_sub(range.start);
+            let photo_rows = photo_count.div_ceil(columns);
+            let section_height = FOLDER_HEADER_HEIGHT as f64 + photo_rows as f64 * line_height;
+            let section_end = y + section_height;
+
+            if section_end < target_start {
+                y = section_end;
+                continue;
+            }
+            if y > target_end {
+                break;
+            }
+
+            let photo_rows_y = y + FOLDER_HEADER_HEIGHT as f64;
+            for row in 0..photo_rows {
+                let row_top = photo_rows_y + row as f64 * line_height;
+                let row_bottom = row_top + line_height;
+                if row_bottom < target_start {
+                    continue;
+                }
+                if row_top > target_end {
+                    break;
+                }
+
+                let start = range.start + row * columns;
+                let end = (start + columns).min(range.end).min(photos.len());
+                indexes.extend(start..end);
+                if indexes.len() >= budget {
+                    break;
+                }
+            }
+            if indexes.len() >= budget {
+                break;
+            }
+            y = section_end;
+        }
+
+        if indexes.is_empty() {
+            return 0;
+        }
+
+        // Queue centre-out so the middle of the viewport becomes useful first.
+        let midpoint = indexes.len() / 2;
+        let mut ordered = Vec::with_capacity(indexes.len());
+        for distance in 0..=indexes.len() {
+            if midpoint >= distance {
+                ordered.push(indexes[midpoint - distance]);
+            }
+            if distance != 0 && midpoint + distance < indexes.len() {
+                ordered.push(indexes[midpoint + distance]);
+            }
+            if ordered.len() >= indexes.len() {
+                break;
+            }
+        }
+
+        let mut requests = Vec::with_capacity(ordered.len().min(budget));
+        for index in ordered.into_iter().take(budget) {
+            let Some(photo) = photos.get(index) else {
+                continue;
+            };
+            let Some(request) = photo_presentation_request(photo, true) else {
+                continue;
+            };
+            if folder_thumbnail_cache_get(&request.key).is_some() {
+                continue;
+            }
+            requests.push(request);
+        }
+        drop(ranges);
+        drop(photos);
+
+        let queued = requests.len();
+        crate::thumbnail_display::replace_visible_requests(requests);
+        queued
+    }
+
     /// Warm a RAM thumbnail buffer around the Folder viewport.
     ///
     /// `direction` is the current scroll direction (negative = up, positive =
@@ -2843,76 +3016,168 @@ impl Gallery {
     /// Cache-file I/O and JPEG decode are queued on bounded worker threads;
     /// only texture creation/application returns to GTK. The hot ListView bind
     /// path stays strictly RAM-only.
-    pub fn prefetch_folder_cached_tiles(&self, budget: usize, direction: f64) -> usize {
-        if budget == 0
-            || self.group_mode.get() != GroupMode::Folder
-            || self.folder_root.height() <= 0
-        {
-            return 0;
+    fn visible_folder_photo_index_span(&self) -> Option<(usize, usize)> {
+        if self.group_mode.get() != GroupMode::Folder || self.folder_root.height() <= 0 {
+            return None;
         }
-
         let viewport = self.folder_root.height() as f32;
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let started = trace.then(Instant::now);
         let mut tiles = Vec::new();
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        let realized = tiles.len();
-        let mut candidates: Vec<(f32, SquareTile)> = Vec::new();
-
+        let mut first = usize::MAX;
+        let mut last = 0usize;
+        let mut found = false;
         for tile in tiles {
-            // Deliberately do NOT require is_mapped(): GtkListView recycles a
-            // large pool of realized-but-offscreen rows, and those are exactly
-            // the ones about to scroll into view. Warm them ahead of time so the
-            // bind finds a RAM hit instead of showing a blank tile. Bounds are
-            // still checked against a bounded window below.
-            if tile.height() <= 0 || tile.imp().visual_loaded.get() {
+            if tile.height() <= 0 {
                 continue;
             }
+            let Some(index) = tile.imp().photo_index.get() else {
+                continue;
+            };
             let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
                 continue;
             };
-            let below = bounds.y();
-            let above_end = bounds.y() + bounds.height();
-            // Keep a generous rolling buffer around the viewport. Warming is
-            // bounded per slice, so a wide window is cheap and gives fast
-            // scrolling more time to reach the warmed tiles.
-            if above_end < -viewport * 4.0 || below > viewport * 5.0 {
+            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
                 continue;
             }
+            first = first.min(index);
+            last = last.max(index);
+            found = true;
+        }
+        found.then_some((first, last))
+    }
 
-            let base = if above_end < 0.0 {
-                -above_end
-            } else if below > viewport {
-                below - viewport
-            } else {
-                0.0
-            };
-            // Penalise tiles behind the direction of travel so request order
-            // follows the user rather than filling both sides equally.
-            let behind =
-                (direction >= 0.0 && above_end < 0.0) || (direction < 0.0 && below > viewport);
-            let distance = if behind { base + viewport * 4.0 } else { base };
-            candidates.push((distance, tile));
+    /// Warm decoded presentation thumbnails from the photo model, not just from
+    /// GTK's realized row pool. That gives a scrollbar jump several screens of
+    /// cache runway even before GtkListView has created/rebound those widgets.
+    pub fn prefetch_folder_cached_tiles(&self, budget: usize, direction: f64) -> usize {
+        if budget == 0 || self.group_mode.get() != GroupMode::Folder {
+            return 0;
+        }
+        let Some((first_visible, last_visible)) = self.visible_folder_photo_index_span() else {
+            return 0;
+        };
+        let photos = self.current_photos.borrow();
+        if photos.is_empty() {
+            return 0;
         }
 
-        candidates.sort_by(|left, right| left.0.total_cmp(&right.0));
-        let candidate_count = candidates.len();
-        let mut loaded = 0usize;
-        for (_, tile) in candidates.into_iter().take(budget) {
-            if tile.queue_folder_cached_visual_async(false) {
-                loaded += 1;
+        let visible_count = last_visible
+            .saturating_sub(first_visible)
+            .saturating_add(1)
+            .max(self.current_columns.get() as usize);
+        let ahead = visible_count.saturating_mul(6);
+        let behind = visible_count.saturating_mul(2);
+        let mut indexes = Vec::with_capacity((ahead + behind).min(photos.len()));
+
+        if direction < 0.0 {
+            let ahead_start = first_visible.saturating_sub(ahead);
+            indexes.extend((ahead_start..first_visible).rev());
+            let behind_end = (last_visible + 1 + behind).min(photos.len());
+            indexes.extend((last_visible + 1)..behind_end);
+        } else {
+            let ahead_end = (last_visible + 1 + ahead).min(photos.len());
+            indexes.extend((last_visible + 1)..ahead_end);
+            let behind_start = first_visible.saturating_sub(behind);
+            indexes.extend((behind_start..first_visible).rev());
+        }
+
+        let trace = std::env::var_os("PICASA_TRACE").is_some();
+        let started = trace.then(Instant::now);
+        let candidate_count = indexes.len();
+        let mut queued = 0usize;
+        for index in indexes {
+            if queued >= budget {
+                break;
+            }
+            let Some(photo) = photos.get(index) else {
+                continue;
+            };
+            if queue_photo_presentation_async(photo, false) {
+                queued += 1;
             }
         }
         if let Some(started) = started {
             let ms = started.elapsed().as_millis();
             if ms >= 8 {
                 eprintln!(
-                    "UI PERF folder_prefetch_slow realized={} candidates={} loaded={} ms={}",
-                    realized, candidate_count, loaded, ms
+                    "UI PERF folder_model_prefetch_slow visible={}..{} candidates={} queued={} pending={} ms={}",
+                    first_visible,
+                    last_visible,
+                    candidate_count,
+                    queued,
+                    crate::thumbnail_display::pending_count(),
+                    ms
                 );
             }
         }
-        loaded
+        queued
+    }
+
+    pub fn thumbnail_display_work_pending(&self) -> bool {
+        crate::thumbnail_display::pending_count() > 0
+    }
+
+    /// Drain worker completions once per frame. Disk I/O and image transforms
+    /// have already happened on background workers; GTK only creates textures,
+    /// updates the RAM LRU, and repaints currently realized matching tiles.
+    pub fn drain_thumbnail_display_completions(&self) -> usize {
+        let completions = crate::thumbnail_display::take_completions();
+        if completions.is_empty() {
+            return 0;
+        }
+
+        let mut loaded = HashMap::<String, gtk::gdk::Paintable>::new();
+        let mut missing = HashSet::<String>::new();
+        for completion in completions {
+            match completion.outcome {
+                crate::thumbnail_display::DisplayOutcome::Loaded {
+                    width,
+                    height,
+                    pixels,
+                } => {
+                    let bytes = glib::Bytes::from_owned(pixels);
+                    let texture = gtk::gdk::MemoryTexture::new(
+                        width,
+                        height,
+                        gtk::gdk::MemoryFormat::R8g8b8a8,
+                        &bytes,
+                        width as usize * 4,
+                    );
+                    let paintable: gtk::gdk::Paintable = texture.upcast();
+                    folder_thumbnail_cache_insert(completion.key.clone(), paintable.clone());
+                    loaded.insert(completion.key, paintable);
+                }
+                crate::thumbnail_display::DisplayOutcome::Missing
+                | crate::thumbnail_display::DisplayOutcome::Failed => {
+                    missing.insert(completion.key);
+                }
+            }
+        }
+
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
+                continue;
+            };
+            let Some(key) = photo_presentation_key(&photo) else {
+                continue;
+            };
+            if let Some(paintable) = loaded.get(&key) {
+                tile.apply_presentation_paintable(&key, paintable);
+                if let Some(frame) = tile.first_child().and_downcast::<gtk::Overlay>() {
+                    if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
+                        if picture.tooltip_text().is_none() && tile.is_mapped() {
+                            picture.set_tooltip_text(Some(&photo.filename()));
+                        }
+                    }
+                }
+            } else if missing.contains(&key) {
+                tile.mark_presentation_missing(&key);
+            }
+        }
+        loaded.len() + missing.len()
     }
 
     pub fn refresh_thumbnails(&self) {
@@ -3063,18 +3328,15 @@ impl Gallery {
     }
 
     pub fn refresh_availability(&self) {
-        let updates = self
-            .current_photos
-            .borrow()
-            .iter()
-            .map(|photo| {
-                (
-                    photo.id(),
-                    crate::source::cached_file_available(&photo.path()),
-                )
-            })
-            .collect::<Vec<_>>();
-        self.apply_availability(&updates);
+        // State-only repaint. Actual source probing belongs to
+        // window::refresh_availability_ui, which performs it on a worker thread
+        // and feeds the result back through apply_availability().
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            tile.refresh_availability();
+        }
     }
 
     pub fn availability_snapshot(&self) -> Vec<(i64, String)> {
@@ -4860,7 +5122,13 @@ mod folder_stream_tests {
 
         gtk::init().unwrap();
         let gallery = Gallery::new(
-            &[], 148, |_| {}, |_, _| {}, |_, _, _, _| {}, |_, _| {}, |_| {},
+            &[],
+            148,
+            |_| {},
+            |_, _| {},
+            |_, _, _, _| {},
+            |_, _| {},
+            |_| {},
         );
         gallery.group_mode.set(GroupMode::Folder);
         gallery.current_photos.replace(
@@ -4899,11 +5167,13 @@ mod folder_stream_tests {
             gallery.update_width(width);
             settle();
             assert_eq!(
-                scroll.vadjustment().value(), y,
+                scroll.vadjustment().value(),
+                y,
                 "sidebar width {width} scrolled"
             );
             assert_eq!(
-                gallery.zoom_anchor.get(), Some(before),
+                gallery.zoom_anchor.get(),
+                Some(before),
                 "width-only resize consumed zoom anchor"
             );
             assert_eq!(gallery.photo_for_visible_folder_row().unwrap().id(), before);
@@ -4937,7 +5207,10 @@ mod folder_stream_tests {
         gallery.update_width(1440);
         window.set_default_size(1440, 600);
         settle();
-        assert_eq!(gallery.photo_for_visible_folder_row().unwrap().id(), scrolled);
+        assert_eq!(
+            gallery.photo_for_visible_folder_row().unwrap().id(),
+            scrolled
+        );
 
         // A second column change can arrive before GTK has allocated the first
         // rebuild. Its adjustment may transiently reset to zero (as in the
@@ -4948,7 +5221,8 @@ mod folder_stream_tests {
         window.set_default_size(970, 600);
         settle();
         assert_eq!(
-            gallery.photo_for_visible_folder_row().unwrap().id(), scrolled,
+            gallery.photo_for_visible_folder_row().unwrap().id(),
+            scrolled,
             "overlapping column changes lost the original anchor"
         );
         window.close();
@@ -4957,11 +5231,31 @@ mod folder_stream_tests {
     #[test]
     fn exact_folder_row_offset_uses_fixed_model_heights() {
         let rows = vec![
-            FolderVirtualRow { kind: FolderRowKind::Header, start: 0, end: 0 },
-            FolderVirtualRow { kind: FolderRowKind::Photos, start: 0, end: 5 },
-            FolderVirtualRow { kind: FolderRowKind::Photos, start: 5, end: 10 },
-            FolderVirtualRow { kind: FolderRowKind::Header, start: 10, end: 10 },
-            FolderVirtualRow { kind: FolderRowKind::Photos, start: 10, end: 15 },
+            FolderVirtualRow {
+                kind: FolderRowKind::Header,
+                start: 0,
+                end: 0,
+            },
+            FolderVirtualRow {
+                kind: FolderRowKind::Photos,
+                start: 0,
+                end: 5,
+            },
+            FolderVirtualRow {
+                kind: FolderRowKind::Photos,
+                start: 5,
+                end: 10,
+            },
+            FolderVirtualRow {
+                kind: FolderRowKind::Header,
+                start: 10,
+                end: 10,
+            },
+            FolderVirtualRow {
+                kind: FolderRowKind::Photos,
+                start: 10,
+                end: 15,
+            },
         ];
 
         // Header 58 + two 100px photo lines + header 58.
