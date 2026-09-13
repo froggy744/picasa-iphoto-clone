@@ -4,6 +4,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+ORIGINAL_ARGS=("$@")
 CACHE_ROOT="${PIC_BUILD_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/pic-linux-build}"
 TOOLS_DIR="$CACHE_ROOT/tools"
 GITHUB_CACHE="$CACHE_ROOT/github-source"
@@ -12,7 +13,8 @@ DIST_DIR="${PIC_DIST_DIR:-$SCRIPT_DIR/dist}"
 REPO_URL="${PIC_REPO_URL:-https://github.com/froggy744/picasa-iphoto-clone.git}"
 DEFAULT_BRANCH="${PIC_BRANCH:-main}"
 APP_ID="${PIC_APP_ID:-io.github.you.PicasaRs}"
-BIN_NAME="${PIC_BIN_NAME:-picasa-rs}"
+BIN_NAME_OVERRIDE="${PIC_BIN_NAME:-}"
+BIN_NAME=""
 GNOME_RUNTIME="${PIC_GNOME_RUNTIME:-50}"
 FDO_RUST_RUNTIME="${PIC_FDO_RUST_RUNTIME:-25.08}"
 MODE=""
@@ -20,6 +22,11 @@ PROJECT_DIR=""
 BRANCH="$DEFAULT_BRANCH"
 ONLINE=0
 SKIP_TESTS="${PIC_SKIP_TESTS:-0}"
+STRICT_TESTS="${PIC_STRICT_TESTS:-0}"
+LOG_DIR="${PIC_BUILD_LOG_DIR:-$SCRIPT_DIR/build-logs}"
+LOG_FILE=""
+BUILD_STARTED_AT=""
+CANCEL_SIGNAL=""
 
 log()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 ok()   { printf '\033[1;32mOK:\033[0m %s\n' "$*"; }
@@ -53,14 +60,19 @@ Options:
   --project PATH      local project folder (default: folder containing this script)
   --branch NAME       GitHub branch (default: main)
   --dist PATH         output folder (default: ./dist beside this script)
+  --log-dir PATH      build log folder (default: ./build-logs beside this script)
+  --strict-tests      stop packaging if cargo test fails
+  --skip-tests        do not run cargo test
   -h, --help          show this help
 
 Useful environment overrides:
   PIC_SKIP_TESTS=1             skip cargo test
+  PIC_STRICT_TESTS=1           make test failures fatal
   PIC_GNOME_RUNTIME=50         Flatpak GNOME runtime branch
   PIC_FDO_RUST_RUNTIME=25.08   Flatpak Rust SDK-extension branch
   PIC_APP_ID=...               application/Flatpak ID
   PIC_BUILD_CACHE=...          build cache location
+  PIC_BUILD_LOG_DIR=...        build log folder
 
 Offline rule:
   'local' mode never uses git fetch/pull/clone, curl, wget, or Flatpak downloads.
@@ -86,12 +98,92 @@ while (($#)); do
         --dist)
             [[ $# -ge 2 ]] || die "--dist needs a path"
             DIST_DIR="$2"; shift 2 ;;
+        --log-dir)
+            [[ $# -ge 2 ]] || die "--log-dir needs a path"
+            LOG_DIR="$2"; shift 2 ;;
+        --strict-tests)
+            STRICT_TESTS=1; shift ;;
+        --skip-tests)
+            SKIP_TESTS=1; shift ;;
         -h|--help)
             usage; exit 0 ;;
         *)
             die "Unknown argument: $1 (use --help)" ;;
     esac
 done
+
+start_logging() {
+    mkdir -p "$LOG_DIR"
+    LOG_DIR="$(cd -- "$LOG_DIR" && pwd -P)"
+    local stamp
+    stamp="$(date '+%Y-%m-%d-%H%M%S')"
+    LOG_FILE="$LOG_DIR/build-${stamp}-$$.log"
+    : > "$LOG_FILE"
+
+    # Stream all subsequent stdout/stderr to both the terminal and the log.
+    # The file is written continuously, so it remains useful if the build is
+    # interrupted before AppImage/Flatpak packaging finishes.
+    # Keep the logger alive through Ctrl+C/TERM so the cancellation footer can
+    # still be written. It exits naturally when this script closes the pipe.
+    exec > >(trap '' INT TERM HUP; exec tee -a "$LOG_FILE") 2>&1
+
+    BUILD_STARTED_AT="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+    printf '%s\n' '============================================================'
+    printf '%s\n' 'PIC Linux Packager build log'
+    printf 'Started: %s\n' "$BUILD_STARTED_AT"
+    printf 'PID:     %s\n' "$$"
+    printf 'Script:  %s\n' "$0"
+    printf 'Command:'
+    printf ' %q' "$0" "${ORIGINAL_ARGS[@]}"
+    printf '\n'
+    printf '%s\n' '============================================================'
+}
+
+handle_signal() {
+    local signal="$1" code="$2"
+    CANCEL_SIGNAL="$signal"
+    printf '\n%s\n' '============================================================'
+    printf '%s\n' 'BUILD CANCELLED'
+    printf 'Signal: %s\n' "$signal"
+    printf 'Time:   %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+    printf '%s\n' '============================================================'
+    exit "$code"
+}
+
+finish_logging() {
+    local status=$?
+    trap - EXIT
+    local finished outcome
+    finished="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+
+    if [[ -n "$CANCEL_SIGNAL" ]]; then
+        outcome="CANCELLED"
+    elif ((status == 130)); then
+        CANCEL_SIGNAL="INT"
+        outcome="CANCELLED"
+    elif ((status == 143)); then
+        CANCEL_SIGNAL="TERM"
+        outcome="CANCELLED"
+    elif ((status == 0)); then
+        outcome="SUCCESS"
+    else
+        outcome="FAILED"
+    fi
+
+    printf '\n%s\n' '============================================================'
+    printf 'Build session: %s\n' "$outcome"
+    printf 'Finished:      %s\n' "$finished"
+    printf 'Exit code:     %s\n' "$status"
+    [[ -z "$CANCEL_SIGNAL" ]] || printf 'Signal:        %s\n' "$CANCEL_SIGNAL"
+    printf 'Build log: %s\n' "$LOG_FILE"
+    printf '%s\n' '============================================================'
+    return "$status"
+}
+
+start_logging
+trap 'handle_signal INT 130' INT
+trap 'handle_signal TERM 143' TERM
+trap finish_logging EXIT
 
 interactive_menu() {
     printf '\nPIC Linux Packager\n'
@@ -158,8 +250,6 @@ validate_project() {
     [[ -d "$dir" ]] || die "Project directory does not exist: $dir"
     [[ -f "$dir/Cargo.toml" ]] || die "Cargo.toml not found in: $dir"
     [[ -f "$dir/Cargo.lock" ]] || die "Cargo.lock not found. Commit/generate Cargo.lock first for repeatable offline builds."
-    grep -Eq '^name[[:space:]]*=[[:space:]]*"picasa-rs"' "$dir/Cargo.toml" \
-        || warn "Cargo package name is not picasa-rs; set PIC_BIN_NAME if the executable was renamed."
 }
 
 prepare_local_source() {
@@ -274,6 +364,32 @@ ensure_flatpak_runtime() {
     fi
 }
 
+project_binary_name() {
+    # Prefer the first explicit [[bin]] name. If Cargo.toml has no [[bin]],
+    # Cargo uses the [package] name for src/main.rs.
+    local explicit package
+    explicit="$(awk '
+        /^\[\[bin\]\]/ { in_bin=1; next }
+        /^\[/ { if (in_bin) exit }
+        in_bin && /^[[:space:]]*name[[:space:]]*=/ {
+            line=$0; sub(/^[^"]*"/, "", line); sub(/".*$/, "", line); print line; exit
+        }
+    ' "$SOURCE_DIR/Cargo.toml")"
+    if [[ -n "$explicit" ]]; then
+        printf '%s\n' "$explicit"
+        return
+    fi
+    package="$(awk '
+        /^\[package\]/ { in_package=1; next }
+        /^\[/ { if (in_package) exit }
+        in_package && /^[[:space:]]*name[[:space:]]*=/ {
+            line=$0; sub(/^[^"]*"/, "", line); sub(/".*$/, "", line); print line; exit
+        }
+    ' "$SOURCE_DIR/Cargo.toml")"
+    [[ -n "$package" ]] || die "Could not determine the Cargo binary name. Set PIC_BIN_NAME manually."
+    printf '%s\n' "$package"
+}
+
 project_version() {
     awk -F'"' '/^[[:space:]]*version[[:space:]]*=/ {print $2; exit}' "$SOURCE_DIR/Cargo.toml"
 }
@@ -356,9 +472,14 @@ copy_source_tree() {
 build_native() {
     log "Testing/building Rust release binary OFFLINE"
     if [[ "$SKIP_TESTS" != 1 ]]; then
-        (cd "$SOURCE_DIR" && cargo test --locked --offline)
+        if ! (cd "$SOURCE_DIR" && cargo test --locked --offline); then
+            if [[ "$STRICT_TESTS" == 1 ]]; then
+                die "cargo test failed and strict test mode is enabled."
+            fi
+            warn "cargo test failed. Packaging will continue; use --strict-tests if you want test failures to stop the build."
+        fi
     else
-        warn "PIC_SKIP_TESTS=1: tests skipped"
+        warn "Tests skipped (--skip-tests / PIC_SKIP_TESTS=1)."
     fi
     (cd "$SOURCE_DIR" && cargo build --release --locked --offline)
     NATIVE_BIN="$SOURCE_DIR/target/release/$BIN_NAME"
@@ -522,6 +643,7 @@ else
     prepare_github_source
 fi
 
+BIN_NAME="${BIN_NAME_OVERRIDE:-$(project_binary_name)}"
 VERSION="$(project_version)"
 VERSION="${VERSION:-0.0.0}"
 REVISION="$(project_revision)"
@@ -539,8 +661,10 @@ printf 'Mode:       %s\n' "$MODE"
 printf 'Source:     %s\n' "$SOURCE_DIR"
 printf 'Version:    %s\n' "$VERSION"
 printf 'Revision:   %s\n' "${REVISION:-local-uncommitted}"
+printf 'Binary:     %s\n' "$BIN_NAME"
 printf 'App ID:     %s\n' "$APP_ID"
 printf 'Output:     %s\n' "$DIST_DIR"
+printf 'Build log:  %s\n' "$LOG_FILE"
 printf 'Flatpak:    GNOME %s + Rust extension %s\n' "$GNOME_RUNTIME" "$FDO_RUST_RUNTIME"
 
 build_native
@@ -564,8 +688,10 @@ printf '============================================================\n'
 ((appimage_ok)) && printf 'AppImage: %s\n' "$APPIMAGE_OUTPUT" || printf 'AppImage: FAILED\n'
 ((flatpak_ok)) && printf 'Flatpak:  %s\n' "$FLATPAK_OUTPUT" || printf 'Flatpak:  FAILED\n'
 printf 'Source:   %s (%s)\n' "$SOURCE_DIR" "$MODE"
+printf 'Log:      %s\n' "$LOG_FILE"
 printf '============================================================\n'
 
 if (( ! appimage_ok || ! flatpak_ok )); then
     exit 1
 fi
+
