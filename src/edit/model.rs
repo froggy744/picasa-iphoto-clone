@@ -75,6 +75,7 @@ pub struct EditRecipe {
     pub crop: CropRect,
     pub straighten: f32,
     pub exposure: f32,
+    pub contrast: f32,
     pub fill_light: f32,
     pub highlights: f32,
     pub shadows: f32,
@@ -93,6 +94,7 @@ impl Default for EditRecipe {
             crop: CropRect::default(),
             straighten: 0.0,
             exposure: 0.0,
+            contrast: 0.0,
             fill_light: 0.0,
             highlights: 0.0,
             shadows: 0.0,
@@ -137,6 +139,7 @@ impl EditRecipe {
                 }
                 "straighten" => recipe.straighten = number().unwrap_or(0.0).clamp(-10.0, 10.0),
                 "exposure" => recipe.exposure = number().unwrap_or(0.0).clamp(-2.0, 2.0),
+                "contrast" => recipe.contrast = number().unwrap_or(0.0).clamp(-1.0, 1.0),
                 "fill" => recipe.fill_light = number().unwrap_or(0.0).clamp(-1.0, 1.0),
                 "highlights" => recipe.highlights = number().unwrap_or(0.0).clamp(-1.0, 1.0),
                 "shadows" => recipe.shadows = number().unwrap_or(0.0).clamp(-1.0, 1.0),
@@ -158,13 +161,14 @@ impl EditRecipe {
             return String::new();
         }
         format!(
-            "v=1|crop={:.5},{:.5},{:.5},{:.5}|straighten={:.4}|exposure={:.4}|fill={:.4}|highlights={:.4}|shadows={:.4}|temp={:.4}|sat={:.4}|autocontrast={}|autocolor={}|bw={}|sepia={}|sharpen={:.4}",
+            "v=1|crop={:.5},{:.5},{:.5},{:.5}|straighten={:.4}|exposure={:.4}|contrast={:.4}|fill={:.4}|highlights={:.4}|shadows={:.4}|temp={:.4}|sat={:.4}|autocontrast={}|autocolor={}|bw={}|sepia={}|sharpen={:.4}",
             self.crop.left,
             self.crop.top,
             self.crop.right,
             self.crop.bottom,
             self.straighten,
             self.exposure,
+            self.contrast,
             self.fill_light,
             self.highlights,
             self.shadows,
@@ -182,6 +186,7 @@ impl EditRecipe {
         self.crop.is_full()
             && self.straighten.abs() < 0.0001
             && self.exposure.abs() < 0.0001
+            && self.contrast.abs() < 0.0001
             && self.fill_light.abs() < 0.0001
             && self.highlights.abs() < 0.0001
             && self.shadows.abs() < 0.0001
@@ -306,15 +311,26 @@ mod tests {
             bottom: 0.9,
         };
         recipe.exposure = 0.7;
+        recipe.contrast = 0.45;
         recipe.auto_color = true;
         recipe.sepia = true;
         recipe.sharpen = 0.4;
         let decoded = EditRecipe::decode(&recipe.encode());
         assert!((decoded.crop.left - 0.1).abs() < 0.001);
         assert!((decoded.exposure - 0.7).abs() < 0.001);
+        assert!((decoded.contrast - 0.45).abs() < 0.001);
         assert!(decoded.auto_color);
         assert!(decoded.sepia);
         assert!((decoded.sharpen - 0.4).abs() < 0.001);
+    }
+
+    #[test]
+    fn old_recipe_without_contrast_defaults_to_zero() {
+        let decoded = EditRecipe::decode("v=1|exposure=0.2500|sat=0.1000|bw=1");
+        assert!((decoded.exposure - 0.25).abs() < 0.001);
+        assert!(decoded.contrast.abs() < 0.001);
+        assert!((decoded.saturation - 0.1).abs() < 0.001);
+        assert!(decoded.black_white);
     }
 
     #[test]

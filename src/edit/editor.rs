@@ -44,6 +44,7 @@ impl EditEditor {
 struct Controls {
     straighten: gtk::Scale,
     exposure: gtk::Scale,
+    contrast: gtk::Scale,
     fill_light: gtk::Scale,
     highlights: gtk::Scale,
     shadows: gtk::Scale,
@@ -60,6 +61,7 @@ impl Controls {
     fn sync(&self, recipe: &EditRecipe) {
         self.straighten.set_value(recipe.straighten as f64);
         self.exposure.set_value(recipe.exposure as f64);
+        self.contrast.set_value(recipe.contrast as f64);
         self.fill_light.set_value(recipe.fill_light as f64);
         self.highlights.set_value(recipe.highlights as f64);
         self.shadows.set_value(recipe.shadows as f64);
@@ -201,7 +203,13 @@ pub fn build(
     status.add_css_class("dim-label");
     preview_area.add_overlay(&status);
 
-    let recipe = EditRecipe::decode(&photo.edit_recipe());
+    let mut recipe = EditRecipe::decode(&photo.edit_recipe());
+    // Sepia is already a warm monochrome treatment, so presenting B&W and
+    // Sepia as simultaneously active is misleading. Preserve old recipes by
+    // letting Sepia win when both legacy flags are present.
+    if recipe.sepia {
+        recipe.black_white = false;
+    }
     let session = Rc::new(RefCell::new(EditSession::new(recipe)));
     let syncing = Rc::new(Cell::new(false));
     let pending_crop = Rc::new(RefCell::new(CropRect::default()));
@@ -302,6 +310,7 @@ pub fn build(
 
     add_section_label(&tools_box, "Tuning");
     let exposure = add_slider(&tools_box, "Exposure", -2.0, 2.0, 0.05, 2);
+    let contrast = add_slider(&tools_box, "Contrast", -1.0, 1.0, 0.02, 2);
     let fill_light = add_slider(&tools_box, "Fill Light", -1.0, 1.0, 0.02, 2);
     let highlights = add_slider(&tools_box, "Highlights", -1.0, 1.0, 0.02, 2);
     let shadows = add_slider(&tools_box, "Shadows", -1.0, 1.0, 0.02, 2);
@@ -312,6 +321,7 @@ pub fn build(
     let controls = Controls {
         straighten,
         exposure,
+        contrast,
         fill_light,
         highlights,
         shadows,
@@ -331,6 +341,7 @@ pub fn build(
     for scale in [
         &controls.straighten,
         &controls.exposure,
+        &controls.contrast,
         &controls.fill_light,
         &controls.highlights,
         &controls.shadows,
@@ -494,6 +505,14 @@ pub fn build(
         |r, v| r.exposure = v,
     );
     connect_scale(
+        &controls.contrast,
+        session.clone(),
+        syncing.clone(),
+        queue_preview.clone(),
+        update_history_buttons.clone(),
+        |r, v| r.contrast = v,
+    );
+    connect_scale(
         &controls.fill_light,
         session.clone(),
         syncing.clone(),
@@ -558,22 +577,58 @@ pub fn build(
         update_history_buttons.clone(),
         |r, v| r.auto_color = v,
     );
-    connect_toggle(
-        &controls.black_white,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.black_white = v,
-    );
-    connect_toggle(
-        &controls.sepia,
-        session.clone(),
-        syncing.clone(),
-        queue_preview.clone(),
-        update_history_buttons.clone(),
-        |r, v| r.sepia = v,
-    );
+    {
+        let session = session.clone();
+        let syncing = syncing.clone();
+        let sepia = controls.sepia.clone();
+        let queue_preview = queue_preview.clone();
+        let update_history_buttons = update_history_buttons.clone();
+        controls.black_white.connect_toggled(move |button| {
+            if syncing.get() {
+                return;
+            }
+            let active = button.is_active();
+            if active {
+                syncing.set(true);
+                sepia.set_active(false);
+                syncing.set(false);
+            }
+            session.borrow_mut().mutate(|recipe| {
+                recipe.black_white = active;
+                if active {
+                    recipe.sepia = false;
+                }
+            });
+            update_history_buttons();
+            queue_preview();
+        });
+    }
+    {
+        let session = session.clone();
+        let syncing = syncing.clone();
+        let black_white = controls.black_white.clone();
+        let queue_preview = queue_preview.clone();
+        let update_history_buttons = update_history_buttons.clone();
+        controls.sepia.connect_toggled(move |button| {
+            if syncing.get() {
+                return;
+            }
+            let active = button.is_active();
+            if active {
+                syncing.set(true);
+                black_white.set_active(false);
+                syncing.set(false);
+            }
+            session.borrow_mut().mutate(|recipe| {
+                recipe.sepia = active;
+                if active {
+                    recipe.black_white = false;
+                }
+            });
+            update_history_buttons();
+            queue_preview();
+        });
+    }
 
     let sync_controls: Rc<dyn Fn()> = {
         let controls = controls.clone();

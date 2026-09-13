@@ -156,19 +156,26 @@ fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
         g = gray + (g - gray) * saturation;
         b = gray + (b - gray) * saturation;
 
+        if recipe.contrast.abs() > 0.0001 {
+            r = apply_contrast_curve(r, recipe.contrast);
+            g = apply_contrast_curve(g, recipe.contrast);
+            b = apply_contrast_curve(b, recipe.contrast);
+        }
+
         if recipe.black_white {
-            let y = (0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0);
+            let y = rgb_luma(r, g, b).clamp(0.0, 1.0);
             r = y;
             g = y;
             b = y;
         }
         if recipe.sepia {
-            let sr = (r * 0.393 + g * 0.769 + b * 0.189).clamp(0.0, 1.0);
-            let sg = (r * 0.349 + g * 0.686 + b * 0.168).clamp(0.0, 1.0);
-            let sb = (r * 0.272 + g * 0.534 + b * 0.131).clamp(0.0, 1.0);
-            r = sr;
-            g = sg;
-            b = sb;
+            // Photographic sepia is a toned monochrome print, not a full-strength
+            // RGB matrix. Preserve luminance, then add a restrained warm tint.
+            let y = rgb_luma(r, g, b).clamp(0.0, 1.0);
+            let strength = 0.75 * (1.0 - 0.20 * (2.0 * y - 1.0).abs());
+            r = y * (1.0 + 0.080 * strength);
+            g = y * (1.0 - 0.006 * strength);
+            b = y * (1.0 - 0.180 * strength);
         }
         *pixel = Rgba([
             (r.clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -194,27 +201,64 @@ fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
     image
 }
 
+fn rgb_luma(r: f32, g: f32, b: f32) -> f32 {
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+fn apply_contrast_curve(value: f32, contrast: f32) -> f32 {
+    let x = value.clamp(0.0, 1.0);
+    // Keep the visible slider range expressive without letting +1.0 collapse
+    // ordinary near-black/near-white detail to pure clipping.
+    let amount = contrast.clamp(-1.0, 1.0) * 0.55;
+    // Smooth S-curve with fixed black, midpoint and white anchors. Positive
+    // values deepen shadows and lift highlights; negative values compress them.
+    let curve = 4.0 * (x - 0.5) * x * (1.0 - x);
+    (x + amount * curve).clamp(0.0, 1.0)
+}
+
 fn apply_auto_color(image: &mut RgbaImage) {
     let mut sums = [0.0f64; 3];
     let mut count = 0.0f64;
     let step = ((image.width() as u64 * image.height() as u64) / 200_000).max(1) as usize;
     for pixel in image.pixels().step_by(step) {
-        sums[0] += pixel[0] as f64;
-        sums[1] += pixel[1] as f64;
-        sums[2] += pixel[2] as f64;
+        if pixel[3] < 16 {
+            continue;
+        }
+        let r = pixel[0] as f64;
+        let g = pixel[1] as f64;
+        let b = pixel[2] as f64;
+        let luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
+        if !(0.06..=0.94).contains(&luma) {
+            continue;
+        }
+        sums[0] += r;
+        sums[1] += g;
+        sums[2] += b;
         count += 1.0;
     }
     if count <= 0.0 {
         return;
     }
+
     let means = [sums[0] / count, sums[1] / count, sums[2] / count];
     let gray = (means[0] + means[1] + means[2]) / 3.0;
+    let raw_gains = [
+        (gray / means[0].max(1.0)).clamp(0.80, 1.20),
+        (gray / means[1].max(1.0)).clamp(0.80, 1.20),
+        (gray / means[2].max(1.0)).clamp(0.80, 1.20),
+    ];
+    // Blend only part-way toward gray-world neutrality. This removes obvious
+    // casts without erasing deliberate warm/cool lighting.
+    let strength = 0.35;
     let gains = [
-        (gray / means[0].max(1.0)).clamp(0.75, 1.25),
-        (gray / means[1].max(1.0)).clamp(0.75, 1.25),
-        (gray / means[2].max(1.0)).clamp(0.75, 1.25),
+        1.0 + (raw_gains[0] - 1.0) * strength,
+        1.0 + (raw_gains[1] - 1.0) * strength,
+        1.0 + (raw_gains[2] - 1.0) * strength,
     ];
     for pixel in image.pixels_mut() {
+        if pixel[3] < 16 {
+            continue;
+        }
         for channel in 0..3 {
             pixel[channel] = (pixel[channel] as f64 * gains[channel])
                 .clamp(0.0, 255.0)
@@ -224,23 +268,75 @@ fn apply_auto_color(image: &mut RgbaImage) {
 }
 
 fn apply_auto_contrast(image: &mut RgbaImage) {
-    let mut low = [255u8; 3];
-    let mut high = [0u8; 3];
+    let mut histogram = [0u64; 256];
     let step = ((image.width() as u64 * image.height() as u64) / 250_000).max(1) as usize;
+    let mut samples = 0u64;
     for pixel in image.pixels().step_by(step) {
-        for channel in 0..3 {
-            low[channel] = low[channel].min(pixel[channel]);
-            high[channel] = high[channel].max(pixel[channel]);
+        if pixel[3] < 16 {
+            continue;
+        }
+        let luma = rgb_luma(
+            pixel[0] as f32 / 255.0,
+            pixel[1] as f32 / 255.0,
+            pixel[2] as f32 / 255.0,
+        );
+        let bucket = (luma.clamp(0.0, 1.0) * 255.0).round() as usize;
+        histogram[bucket] += 1;
+        samples += 1;
+    }
+    if samples == 0 {
+        return;
+    }
+
+    // Ignore roughly the outer 1% of luminance samples so a single specular
+    // highlight or black pixel does not determine the entire correction.
+    let clip = if samples >= 100 {
+        ((samples as f64 * 0.01).round() as u64).max(1)
+    } else {
+        0
+    };
+    let mut cumulative = 0u64;
+    let mut low = 0usize;
+    for (index, count) in histogram.iter().enumerate() {
+        cumulative += *count;
+        if cumulative > clip {
+            low = index;
+            break;
         }
     }
-    for pixel in image.pixels_mut() {
-        for channel in 0..3 {
-            let range = high[channel].saturating_sub(low[channel]).max(1) as f32;
-            pixel[channel] = (((pixel[channel].saturating_sub(low[channel])) as f32 / range)
-                * 255.0)
-                .clamp(0.0, 255.0)
-                .round() as u8;
+    cumulative = 0;
+    let mut high = 255usize;
+    for (index, count) in histogram.iter().enumerate().rev() {
+        cumulative += *count;
+        if cumulative > clip {
+            high = index;
+            break;
         }
+    }
+    if high <= low + 6 {
+        return;
+    }
+
+    let low = low as f32 / 255.0;
+    let high = high as f32 / 255.0;
+    let range = high - low;
+    for pixel in image.pixels_mut() {
+        if pixel[3] < 16 {
+            continue;
+        }
+        let r = pixel[0] as f32 / 255.0;
+        let g = pixel[1] as f32 / 255.0;
+        let b = pixel[2] as f32 / 255.0;
+        let original_luma = rgb_luma(r, g, b);
+        // Preserve a small amount of headroom at both ends instead of forcing
+        // the selected percentile range to absolute black and white.
+        let normalized = ((original_luma - low) / range).clamp(0.0, 1.0);
+        let stretched = 0.02 + normalized * 0.96;
+        let target_luma = original_luma + (stretched - original_luma) * 0.80;
+        let delta = target_luma - original_luma;
+        pixel[0] = ((r + delta).clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[1] = ((g + delta).clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[2] = ((b + delta).clamp(0.0, 1.0) * 255.0).round() as u8;
     }
 }
 
@@ -368,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn black_white_and_sepia_combine() {
+    fn sepia_is_warm_monochrome_and_bw_plus_sepia_is_equivalent() {
         let source = RgbaImage::from_pixel(2, 2, Rgba([200, 100, 50, 255]));
         let mut combined_recipe = EditRecipe::default();
         combined_recipe.black_white = true;
@@ -383,7 +479,59 @@ mod tests {
         sepia_recipe.sepia = true;
         let sepia = apply_recipe(source, &sepia_recipe);
 
-        assert_ne!(combined.as_raw(), black_white.as_raw());
-        assert_ne!(combined.as_raw(), sepia.as_raw());
+        assert_ne!(sepia.as_raw(), black_white.as_raw());
+        assert_eq!(combined.as_raw(), sepia.as_raw());
+        let pixel = sepia.get_pixel(0, 0);
+        assert!(pixel[0] > pixel[1] && pixel[1] > pixel[2]);
+    }
+
+    #[test]
+    fn positive_contrast_expands_midtones() {
+        let mut source = RgbaImage::new(2, 1);
+        source.put_pixel(0, 0, Rgba([96, 96, 96, 255]));
+        source.put_pixel(1, 0, Rgba([160, 160, 160, 255]));
+        let mut recipe = EditRecipe::default();
+        recipe.contrast = 0.75;
+        let output = apply_recipe(source, &recipe);
+        let delta = output.get_pixel(1, 0)[0] as i16 - output.get_pixel(0, 0)[0] as i16;
+        assert!(delta > 64);
+    }
+
+    #[test]
+    fn sepia_preserves_midtone_luminance() {
+        let source = RgbaImage::from_pixel(1, 1, Rgba([128, 128, 128, 255]));
+        let mut recipe = EditRecipe::default();
+        recipe.sepia = true;
+        let output = apply_recipe(source, &recipe);
+        let pixel = output.get_pixel(0, 0);
+        let luma = 0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32;
+        assert!((luma - 128.0).abs() < 12.0);
+    }
+
+    #[test]
+    fn auto_contrast_ignores_single_black_and_white_outliers() {
+        let mut source = RgbaImage::new(100, 1);
+        source.put_pixel(0, 0, Rgba([0, 0, 0, 255]));
+        source.put_pixel(99, 0, Rgba([255, 255, 255, 255]));
+        for x in 1..99 {
+            let value = if x % 2 == 0 { 100 } else { 120 };
+            source.put_pixel(x, 0, Rgba([value, value, value, 255]));
+        }
+        let mut recipe = EditRecipe::default();
+        recipe.auto_contrast = true;
+        let output = apply_recipe(source, &recipe);
+        let dark = output.get_pixel(2, 0)[0] as i16;
+        let light = output.get_pixel(1, 0)[0] as i16;
+        assert!(light - dark > 80);
+    }
+
+    #[test]
+    fn auto_color_keeps_intentional_warmth() {
+        let source = RgbaImage::from_pixel(20, 20, Rgba([160, 120, 90, 255]));
+        let mut recipe = EditRecipe::default();
+        recipe.auto_color = true;
+        let output = apply_recipe(source, &recipe);
+        let pixel = output.get_pixel(0, 0);
+        assert!(pixel[0] > pixel[1] && pixel[1] > pixel[2]);
     }
 }
