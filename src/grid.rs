@@ -3458,24 +3458,57 @@ impl Gallery {
     }
 
     pub fn apply_availability(&self, updates: &[(i64, bool)]) {
-        for (id, available) in updates {
-            if let Some(photo) = self
-                .current_photos
-                .borrow()
-                .iter()
-                .find(|photo| photo.id() == *id)
-            {
-                photo.set_original_available(*available);
-                photo.set_original_checked_at(Some(Instant::now()));
+        // Index once: searching the whole gallery for every result made this
+        // O(N²) (over two billion comparisons for a 66k-photo library).
+        let updates = updates
+            .iter()
+            .copied()
+            .collect::<std::collections::HashMap<_, _>>();
+        let photos = self.current_photos.borrow().clone();
+        let generation = self.replace_generation.get();
+        let current_generation = self.replace_generation.clone();
+        let root = self.root.downgrade();
+        let folder_root = self.folder_root.downgrade();
+        let mut offset = 0;
+        glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+            // Navigation/replacement must not paint an obsolete gallery.
+            if current_generation.get() != generation {
+                return glib::ControlFlow::Break;
             }
-        }
-
-        let mut tiles = Vec::new();
-        collect_tiles(self.root.upcast_ref(), &mut tiles);
-        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        for tile in tiles {
-            tile.refresh_availability();
-        }
+            let started = Instant::now();
+            let end = (offset + 128).min(photos.len());
+            for photo in &photos[offset..end] {
+                if let Some(available) = updates.get(&photo.id()) {
+                    if photo.original_available() != *available {
+                        photo.set_original_available(*available);
+                    }
+                    photo.set_original_checked_at(Some(Instant::now()));
+                }
+            }
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "REFRESH availability_batch count={} remaining={} elapsed_ms={}",
+                    end - offset,
+                    photos.len() - end,
+                    started.elapsed().as_millis()
+                );
+            }
+            offset = end;
+            if offset < photos.len() {
+                return glib::ControlFlow::Continue;
+            }
+            let mut tiles = Vec::new();
+            if let Some(root) = root.upgrade() {
+                collect_tiles(root.upcast_ref(), &mut tiles);
+            }
+            if let Some(root) = folder_root.upgrade() {
+                collect_tiles(root.upcast_ref(), &mut tiles);
+            }
+            for tile in tiles {
+                tile.refresh_availability();
+            }
+            glib::ControlFlow::Break
+        });
     }
 
     pub fn replace(&self, photos: &[Photo]) {

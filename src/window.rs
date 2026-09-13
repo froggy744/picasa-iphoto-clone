@@ -280,6 +280,7 @@ fn grid_thumbnail_size_from_setting(connection: &Connection) -> i32 {
 enum ScanJobKind {
     Import,
     Refresh,
+    FolderRefresh,
     Maintenance,
 }
 
@@ -287,6 +288,21 @@ enum ScanJobKind {
 struct ScanUiEvent {
     generation: u64,
     event: scanner::ScanEvent,
+}
+
+#[derive(Debug)]
+enum RefreshPrepareEvent {
+    LibraryReady {
+        generation: u64,
+        folders: Result<Vec<db::Folder>, String>,
+        elapsed_ms: u128,
+    },
+    FolderReady {
+        generation: u64,
+        path: String,
+        imported_root: Result<bool, String>,
+        elapsed_ms: u128,
+    },
 }
 
 #[derive(Default)]
@@ -297,6 +313,7 @@ struct ScanJobState {
     active: Option<scanner::ScanControl>,
     imported_total: usize,
     failed_total: usize,
+    stop_requested: bool,
 }
 
 fn spawn_tagged_scan(

@@ -80,6 +80,16 @@ const FOLDER_INDICATOR_KEY: &str = "picasa-sidebar-folder-indicator";
 const CURRENT_FILTER_KEY: &str = "picasa-sidebar-current-filter";
 const FILTER_SYNCING_KEY: &str = "picasa-sidebar-filter-syncing";
 const FOLDER_REFRESH_KEY: &str = "picasa-sidebar-folder-refresh";
+const REFRESH_GATE_KEY: &str = "picasa-sidebar-refresh-gate";
+
+/// Share the window's refresh sensitivity with existing and future menus.
+pub fn bind_refresh_gate(scrolled: &gtk::ScrolledWindow, gate: &gtk::Button) {
+    if let Some(list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) {
+        unsafe {
+            list.set_data(REFRESH_GATE_KEY, gate.downgrade());
+        }
+    }
+}
 const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
 const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
@@ -1690,6 +1700,7 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
 
     let folder_for_menu = folder.clone();
     let row_for_menu = row.clone();
+    let list_for_refresh_gate = list.downgrade();
     let right_click = gtk::GestureClick::new();
     right_click.set_button(3);
     right_click.connect_pressed(move |gesture, _, _, _| {
@@ -1705,6 +1716,17 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
         let refresh_item = gtk::Button::with_label("Refresh folder");
         refresh_item.add_css_class("flat");
         refresh_item.set_sensitive(folder_for_menu.imported_root);
+        if folder_for_menu.imported_root {
+            let gate = list_for_refresh_gate.upgrade().and_then(|list| unsafe {
+                list.data::<glib::WeakRef<gtk::Button>>(REFRESH_GATE_KEY)
+                    .and_then(|gate| gate.as_ref().upgrade())
+            });
+            if let Some(gate) = gate {
+                gate.bind_property("sensitive", &refresh_item, "sensitive")
+                    .sync_create()
+                    .build();
+            }
+        }
         if !folder_for_menu.imported_root {
             refresh_item
                 .set_tooltip_text(Some("Only explicitly imported folders can be refreshed"));

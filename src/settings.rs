@@ -575,57 +575,73 @@ fn schedule_availability_stats(
 }
 
 /// Refresh cached availability values after an import or refresh without
-/// requiring the Settings window to be open. Work is paginated so the GTK
-/// loop remains responsive for large libraries and network shares.
-pub fn refresh_library_availability_stats(connection: Rc<RefCell<Connection>>) {
-    const PAGE_SIZE: usize = 256;
-    let mut offset = 0usize;
-    let mut available = 0i64;
-    let mut unavailable = 0i64;
-    glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-        let page = match crate::db::photo_availability_page(&connection.borrow(), PAGE_SIZE, offset)
-        {
-            Ok(page) => page,
+/// requiring the Settings window to be open. Filesystem/GIO probing is done on
+/// a worker thread; doing even paginated existence checks on GTK can hang when
+/// removable or network sources are slow.
+pub fn refresh_library_availability_stats(_connection: Rc<RefCell<Connection>>) {
+    std::thread::spawn(move || {
+        const PAGE_SIZE: usize = 512;
+        let started = std::time::Instant::now();
+        let connection = match crate::db::open_default() {
+            Ok(connection) => connection,
             Err(error) => {
-                eprintln!("Could not refresh library availability stats: {error}");
-                return glib::ControlFlow::Break;
+                eprintln!("Could not open database for library availability stats: {error}");
+                return;
             }
         };
-        if page.is_empty() {
-            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-            if let Err(error) = crate::db::set_setting(
-                &connection.borrow(),
-                crate::db::LIBRARY_AVAILABLE_SETTING_KEY,
-                &available.to_string(),
-            ) {
-                eprintln!("Could not save available library stat: {error}");
+        let mut offset = 0usize;
+        let mut available = 0i64;
+        let mut unavailable = 0i64;
+        loop {
+            let page = match crate::db::photo_availability_page(&connection, PAGE_SIZE, offset) {
+                Ok(page) => page,
+                Err(error) => {
+                    eprintln!("Could not refresh library availability stats: {error}");
+                    return;
+                }
+            };
+            if page.is_empty() {
+                break;
             }
-            if let Err(error) = crate::db::set_setting(
-                &connection.borrow(),
-                crate::db::LIBRARY_UNAVAILABLE_SETTING_KEY,
-                &unavailable.to_string(),
-            ) {
-                eprintln!("Could not save unavailable library stat: {error}");
+            for (path, _folder_path) in &page {
+                if crate::source::cached_file_available(path) {
+                    available += 1;
+                } else {
+                    unavailable += 1;
+                }
             }
-            if let Err(error) = crate::db::set_setting(
-                &connection.borrow(),
-                crate::db::LIBRARY_STATS_UPDATED_SETTING_KEY,
-                &timestamp,
-            ) {
-                eprintln!("Could not save library stats timestamp: {error}");
-            }
-            return glib::ControlFlow::Break;
+            offset += page.len();
         }
-        for (path, _folder_path) in &page {
-            let is_available = crate::source::cached_file_available(path);
-            if is_available {
-                available += 1;
-            } else {
-                unavailable += 1;
-            }
+        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+        if let Err(error) = crate::db::set_setting(
+            &connection,
+            crate::db::LIBRARY_AVAILABLE_SETTING_KEY,
+            &available.to_string(),
+        ) {
+            eprintln!("Could not save available library stat: {error}");
         }
-        offset += page.len();
-        glib::ControlFlow::Continue
+        if let Err(error) = crate::db::set_setting(
+            &connection,
+            crate::db::LIBRARY_UNAVAILABLE_SETTING_KEY,
+            &unavailable.to_string(),
+        ) {
+            eprintln!("Could not save unavailable library stat: {error}");
+        }
+        if let Err(error) = crate::db::set_setting(
+            &connection,
+            crate::db::LIBRARY_STATS_UPDATED_SETTING_KEY,
+            &timestamp,
+        ) {
+            eprintln!("Could not save library stats timestamp: {error}");
+        }
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "REFRESH availability_stats_worker_done available={} unavailable={} elapsed_ms={}",
+                available,
+                unavailable,
+                started.elapsed().as_millis()
+            );
+        }
     });
 }
 
