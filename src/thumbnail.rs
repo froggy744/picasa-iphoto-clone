@@ -236,6 +236,7 @@ pub fn wait_for_priority_requests() {
 
 // Structural split only: included files remain in this module scope.
 include!("thumbnail/cache.rs");
+include!("thumbnail/maintenance.rs");
 include!("thumbnail/recovery.rs");
 include!("thumbnail/viewer.rs");
 include!("thumbnail/nef.rs");

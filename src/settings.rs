@@ -243,8 +243,6 @@ fn library_page(
         Some(recent_limit.upcast_ref()),
     );
     let counts = crate::db::library_counts(&connection.borrow()).unwrap_or_default();
-    let thumbnail_count = crate::thumbnail::cache_count().unwrap_or_default();
-    let cache_size = crate::thumbnail::cache_size().unwrap_or_default();
     let database_size = crate::db::database_size(&connection.borrow()).unwrap_or_default();
     let available = crate::db::setting(
         &connection.borrow(),
@@ -271,20 +269,38 @@ fn library_page(
     );
     updated.set_xalign(1.0);
 
-    for (name, value) in [
-        ("Total photos", counts.photos.to_string()),
-        ("Total thumbnails", thumbnail_count.to_string()),
-        ("Total albums", counts.albums.to_string()),
-        ("Total library folders", counts.folders.to_string()),
-        ("Thumbnail cache size", format_bytes(cache_size)),
-        ("Database size", format_bytes(database_size)),
-    ] {
-        append_row(&list, name, Some(&value), None);
-    }
+    append_row(
+        &list,
+        "Total photos",
+        Some(&format_count(counts.photos.max(0) as u64)),
+        None,
+    );
     let available_label = append_row(&list, "Originals available", Some(&available), None)
         .expect("availability value row has a value label");
     let unavailable_label = append_row(&list, "Originals unavailable", Some(&unavailable), None)
         .expect("availability value row has a value label");
+    let cached_label = stat_row(&list, "Cached thumbnails");
+    let required_label = stat_row(&list, "Required thumbnails");
+    let unused_label = stat_row(&list, "Unused thumbnails");
+    let cache_size_label = stat_row(&list, "Thumbnail cache size");
+    append_row(
+        &list,
+        "Database size",
+        Some(&format_bytes(database_size)),
+        None,
+    );
+    append_row(
+        &list,
+        "Total albums",
+        Some(&format_count(counts.albums.max(0) as u64)),
+        None,
+    );
+    append_row(
+        &list,
+        "Total library folders",
+        Some(&format_count(counts.folders.max(0) as u64)),
+        None,
+    );
     let update_button = gtk::Button::with_label("Update now");
     update_button.set_valign(gtk::Align::Center);
     let updated_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -296,7 +312,33 @@ fn library_page(
         Some("Values are read from the database. Update only when needed."),
         Some(updated_row.upcast_ref()),
     );
+
+    let clean_button = gtk::Button::with_label("Clean Thumbnail Cache");
+    clean_button.set_valign(gtk::Align::Center);
+    append_row(
+        &list,
+        "Thumbnail maintenance",
+        Some(
+            "Deletes cached thumbnails that no longer match any current photo. \
+             Offline photos keep their thumbnails, and subdirectories and originals are never touched.",
+        ),
+        Some(clean_button.upcast_ref()),
+    );
     content.append(&list);
+
+    let clean_status = gtk::Label::new(None);
+    clean_status.set_xalign(0.0);
+    clean_status.set_wrap(true);
+    clean_status.add_css_class("dim-label");
+    content.append(&clean_status);
+
+    refresh_thumbnail_cache_stats(
+        connection.clone(),
+        cached_label.clone(),
+        required_label.clone(),
+        unused_label.clone(),
+        cache_size_label.clone(),
+    );
 
     let stats_running = Rc::new(Cell::new(false));
     let connection_for_update = connection.clone();
@@ -320,7 +362,148 @@ fn library_page(
             stats_running_for_update.clone(),
         );
     });
+
+    let cleanup_running = Rc::new(Cell::new(false));
+    {
+        let connection = connection.clone();
+        let cached_label = cached_label.clone();
+        let required_label = required_label.clone();
+        let unused_label = unused_label.clone();
+        let cache_size_label = cache_size_label.clone();
+        let clean_status = clean_status.clone();
+        let button_for_cleanup = clean_button.clone();
+        let cleanup_running = cleanup_running.clone();
+        clean_button.connect_clicked(move |_| {
+            if cleanup_running.replace(true) {
+                return;
+            }
+            button_for_cleanup.set_sensitive(false);
+            clean_status.set_text("Cleaning thumbnail cache…");
+            // The database connection is main-thread only, so build the
+            // expected key set here and let a worker do the file work.
+            let valid = match crate::thumbnail::valid_cache_paths(&connection.borrow()) {
+                Ok(valid) => valid,
+                Err(error) => {
+                    eprintln!("Could not collect thumbnail cache keys: {error:#}");
+                    clean_status.set_text("Could not clean the thumbnail cache.");
+                    button_for_cleanup.set_sensitive(true);
+                    cleanup_running.set(false);
+                    return;
+                }
+            };
+            let (sender, receiver) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = crate::thumbnail::cleanup_cache(&valid).and_then(|cleanup| {
+                    let stats = crate::thumbnail::cache_stats(&valid)?;
+                    Ok((cleanup, stats))
+                });
+                let _ = sender.send(result);
+            });
+            // The clicked handler may run again, so the polling closure gets
+            // its own clones instead of moving the captured widgets out.
+            let poll_cached = cached_label.clone();
+            let poll_required = required_label.clone();
+            let poll_unused = unused_label.clone();
+            let poll_size = cache_size_label.clone();
+            let poll_status = clean_status.clone();
+            let poll_button = button_for_cleanup.clone();
+            let poll_running = cleanup_running.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(50), move || match receiver
+                .try_recv()
+            {
+                Ok(Ok((cleanup, stats))) => {
+                    poll_status.set_text(&cleanup_result_text(&cleanup));
+                    poll_cached.set_text(&format_count(stats.cached));
+                    poll_required.set_text(&format_count(stats.required));
+                    poll_unused.set_text(&format_count(stats.unused()));
+                    poll_size.set_text(&format_bytes(stats.bytes));
+                    poll_button.set_sensitive(true);
+                    poll_running.set(false);
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(error)) => {
+                    eprintln!("Could not clean thumbnail cache: {error:#}");
+                    poll_status.set_text("Could not clean the thumbnail cache.");
+                    poll_button.set_sensitive(true);
+                    poll_running.set(false);
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    poll_status.set_text("Could not clean the thumbnail cache.");
+                    poll_button.set_sensitive(true);
+                    poll_running.set(false);
+                    glib::ControlFlow::Break
+                }
+            });
+        });
+    }
     scroll_page(content)
+}
+
+/// Load the thumbnail cache statistics in the background and fill the Library
+/// page labels when the measurement finishes. The key set is built on the main
+/// thread (the database connection is not `Send`); the directory scan and byte
+/// counting run on a worker so a large cache never blocks the UI.
+fn refresh_thumbnail_cache_stats(
+    connection: Rc<RefCell<Connection>>,
+    cached: gtk::Label,
+    required: gtk::Label,
+    unused: gtk::Label,
+    size: gtk::Label,
+) {
+    let valid = match crate::thumbnail::valid_cache_paths(&connection.borrow()) {
+        Ok(valid) => valid,
+        Err(error) => {
+            eprintln!("Could not collect thumbnail cache keys: {error:#}");
+            for label in [&cached, &required, &unused, &size] {
+                label.set_text("Unavailable");
+            }
+            return;
+        }
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(crate::thumbnail::cache_stats(&valid));
+    });
+    glib::timeout_add_local(
+        std::time::Duration::from_millis(50),
+        move || match receiver.try_recv() {
+            Ok(Ok(stats)) => {
+                cached.set_text(&format_count(stats.cached));
+                required.set_text(&format_count(stats.required));
+                unused.set_text(&format_count(stats.unused()));
+                size.set_text(&format_bytes(stats.bytes));
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                eprintln!("Could not measure thumbnail cache: {error:#}");
+                for label in [&cached, &required, &unused, &size] {
+                    label.set_text("Unavailable");
+                }
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        },
+    );
+}
+
+fn cleanup_result_text(cleanup: &crate::thumbnail::CacheCleanup) -> String {
+    let removed = if cleanup.removed == 0 {
+        "No unused thumbnails".to_string()
+    } else {
+        format!(
+            "Removed {} unused thumbnail{}",
+            format_count(cleanup.removed as u64),
+            if cleanup.removed == 1 { "" } else { "s" }
+        )
+    };
+    if cleanup.bytes_freed > 0 {
+        format!("{removed} · Freed {}", format_bytes(cleanup.bytes_freed))
+    } else {
+        removed
+    }
 }
 
 fn schedule_availability_stats(
@@ -876,6 +1059,12 @@ fn append_empty_state(list: &gtk::ListBox, message: &str, empty: bool) {
     }
 }
 
+/// A statistics row whose value starts as "…" and is filled in once the
+/// measurement behind it finishes.
+fn stat_row(list: &gtk::ListBox, name: &str) -> gtk::Label {
+    append_row(list, name, Some("…"), None).expect("statistic value row has a value label")
+}
+
 fn scroll_page(content: gtk::Box) -> gtk::ScrolledWindow {
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -898,14 +1087,65 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+fn format_count(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.bytes().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(digit as char);
+    }
+    grouped
+}
+
 #[cfg(test)]
 mod tests {
-    use super::format_bytes;
+    use super::{cleanup_result_text, format_bytes, format_count};
 
     #[test]
     fn byte_sizes_are_human_readable() {
         assert_eq!(format_bytes(0), "0 B");
         assert_eq!(format_bytes(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn counts_use_thousands_separators() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1_000), "1,000");
+        assert_eq!(format_count(66_037), "66,037");
+        assert_eq!(format_count(71_867_123), "71,867,123");
+    }
+
+    #[test]
+    fn cleanup_results_are_reported_as_a_receipt() {
+        use crate::thumbnail::CacheCleanup;
+
+        assert_eq!(
+            cleanup_result_text(&CacheCleanup {
+                valid: 66_037,
+                removed: 5_830,
+                bytes_freed: 84_300_000,
+            }),
+            "Removed 5,830 unused thumbnails · Freed 80.4 MB"
+        );
+        assert_eq!(
+            cleanup_result_text(&CacheCleanup {
+                valid: 1,
+                removed: 1,
+                bytes_freed: 1_048_576,
+            }),
+            "Removed 1 unused thumbnail · Freed 1.0 MB"
+        );
+        assert_eq!(
+            cleanup_result_text(&CacheCleanup {
+                valid: 66_037,
+                removed: 0,
+                bytes_freed: 0,
+            }),
+            "No unused thumbnails"
+        );
     }
 
     #[test]

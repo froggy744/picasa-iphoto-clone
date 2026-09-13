@@ -17,38 +17,15 @@ pub fn cache_dir() -> Result<PathBuf> {
     Ok(directory)
 }
 
-pub fn cache_size() -> Result<u64> {
-    let directory = cache_dir()?;
-    let Ok(entries) = fs::read_dir(directory) else {
-        return Ok(0);
-    };
-    Ok(entries
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.metadata().ok())
-        .filter(|metadata| metadata.is_file())
-        .map(|metadata| metadata.len())
-        .sum())
-}
-
-pub fn cache_count() -> Result<u64> {
-    let directory = cache_dir()?;
-    let Ok(entries) = fs::read_dir(directory) else {
-        return Ok(0);
-    };
-    Ok(entries
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "jpg")
-        })
-        .filter_map(|entry| entry.file_type().ok())
-        .filter(|file_type| file_type.is_file())
-        .count() as u64)
-}
-
 pub fn cache_path(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result<PathBuf> {
+    Ok(cache_dir()?.join(cache_file_name(path, mtime, size_bytes)))
+}
+
+/// The cache file name for a photo's current fingerprint: pure hashing with no
+/// filesystem access, so maintenance code can compute expected keys for any
+/// cache directory. The key inputs (path, cache version, mtime, size) are the
+/// original ones and must not change.
+pub fn cache_file_name(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(path.as_bytes());
     let cache_version = if is_dng(path) {
@@ -66,7 +43,7 @@ pub fn cache_path(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Re
     hasher.update(mtime.unwrap_or_default().to_string().as_bytes());
     hasher.update(b"\0");
     hasher.update(size_bytes.unwrap_or_default().to_string().as_bytes());
-    Ok(cache_dir()?.join(format!("{}.jpg", hasher.finalize().to_hex())))
+    format!("{}.jpg", hasher.finalize().to_hex())
 }
 
 pub fn existing_cache_path(
