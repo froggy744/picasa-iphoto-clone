@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PIC - Picasa iPhoto Clone Linux packager
-# Builds AppImage + Flatpak from either local files (fully offline) or latest GitHub source.
+# Builds AppImage and/or Flatpak from either local files (fully offline) or latest GitHub source.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -23,6 +23,7 @@ BRANCH="$DEFAULT_BRANCH"
 ONLINE=0
 SKIP_TESTS="${PIC_SKIP_TESTS:-0}"
 STRICT_TESTS="${PIC_STRICT_TESTS:-0}"
+BUILD_TARGET="${PIC_BUILD_TARGET:-}"
 LOG_DIR="${PIC_BUILD_LOG_DIR:-$SCRIPT_DIR/build-logs}"
 LOG_FILE=""
 BUILD_STARTED_AT=""
@@ -37,9 +38,10 @@ usage() {
     cat <<'HELP'
 PIC Linux build script
 
-Builds BOTH:
-  • AppImage
-  • Flatpak bundle (.flatpak)
+Build targets:
+  • Both AppImage + Flatpak (default)
+  • AppImage only
+  • Flatpak only
 
 Source modes:
   local    Build the files already on this PC. OFFLINE: no fetch, pull or download.
@@ -54,6 +56,9 @@ Direct commands:
   ./build-linux.sh github
   ./build-linux.sh github --branch main
   ./build-linux.sh github --branch editing.phase1
+  ./build-linux.sh local --appimage-only
+  ./build-linux.sh local --flatpak-only
+  ./build-linux.sh local --target appimage
 
 Options:
   --source MODE       local or github
@@ -61,6 +66,9 @@ Options:
   --branch NAME       GitHub branch (default: main)
   --dist PATH         output folder (default: ./dist beside this script)
   --log-dir PATH      build log folder (default: ./build-logs beside this script)
+  --target TARGET     both, appimage, or flatpak (default: both)
+  --appimage-only     build only the AppImage
+  --flatpak-only      build only the Flatpak bundle
   --strict-tests      stop packaging if cargo test fails
   --skip-tests        do not run cargo test
   -h, --help          show this help
@@ -73,6 +81,7 @@ Useful environment overrides:
   PIC_APP_ID=...               application/Flatpak ID
   PIC_BUILD_CACHE=...          build cache location
   PIC_BUILD_LOG_DIR=...        build log folder
+  PIC_BUILD_TARGET=...         both, appimage, or flatpak
 
 Offline rule:
   'local' mode never uses git fetch/pull/clone, curl, wget, or Flatpak downloads.
@@ -101,6 +110,16 @@ while (($#)); do
         --log-dir)
             [[ $# -ge 2 ]] || die "--log-dir needs a path"
             LOG_DIR="$2"; shift 2 ;;
+        --target)
+            [[ $# -ge 2 ]] || die "--target needs both, appimage, or flatpak"
+            [[ -z "$BUILD_TARGET" ]] || die "Build target specified more than once."
+            BUILD_TARGET="$2"; shift 2 ;;
+        --appimage-only)
+            [[ -z "$BUILD_TARGET" ]] || die "Build target specified more than once."
+            BUILD_TARGET=appimage; shift ;;
+        --flatpak-only)
+            [[ -z "$BUILD_TARGET" ]] || die "Build target specified more than once."
+            BUILD_TARGET=flatpak; shift ;;
         --strict-tests)
             STRICT_TESTS=1; shift ;;
         --skip-tests)
@@ -205,10 +224,26 @@ interactive_menu() {
         3) exit 0 ;;
         *) die "Invalid choice." ;;
     esac
+
+    if [[ -z "$BUILD_TARGET" ]]; then
+        printf '\nWhat do you want to build?\n'
+        printf '  1) Both AppImage + Flatpak\n'
+        printf '  2) AppImage only\n'
+        printf '  3) Flatpak only\n\n'
+        read -r -p 'Choose [1-3]: ' target_choice
+        case "$target_choice" in
+            1|'') BUILD_TARGET=both ;;
+            2) BUILD_TARGET=appimage ;;
+            3) BUILD_TARGET=flatpak ;;
+            *) die "Invalid build target." ;;
+        esac
+    fi
 }
 
 [[ -n "$MODE" ]] || interactive_menu
 [[ "$MODE" == local || "$MODE" == github ]] || die "Source mode must be local or github."
+BUILD_TARGET="${BUILD_TARGET:-both}"
+[[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == appimage || "$BUILD_TARGET" == flatpak ]] || \n    die "Build target must be both, appimage, or flatpak."
 
 mkdir -p "$CACHE_ROOT" "$TOOLS_DIR" "$WORK_ROOT" "$DIST_DIR"
 
@@ -219,7 +254,7 @@ fedora_hint() {
 
 On Fedora, the usual build prerequisites are:
   sudo dnf install -y cargo rust git gtk4-devel libadwaita-devel flatpak flatpak-builder \
-      cmake gcc gcc-c++ make pkgconf-pkg-config file patchelf nasm curl tar
+      cmake gcc gcc-c++ make pkgconf-pkg-config file patchelf nasm curl tar ImageMagick
 
 Then run this script again.
 HINT
@@ -227,7 +262,10 @@ HINT
 
 check_host_tools() {
     local missing=()
-    local commands=(cargo rustc pkg-config cmake cc make file tar flatpak flatpak-builder)
+    local commands=(cargo rustc pkg-config cmake cc make file tar)
+    if [[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == flatpak ]]; then
+        commands+=(flatpak flatpak-builder)
+    fi
     [[ "$MODE" == github ]] && commands+=(git)
     for cmd in "${commands[@]}"; do
         have "$cmd" || missing+=("$cmd")
@@ -315,8 +353,9 @@ linuxdeploy_path() {
         x86_64|amd64) arch_url=x86_64 ;;
         i386|i486|i586|i686) arch_url=i386 ;;
         *)
-            if have linuxdeploy; then command -v linuxdeploy; return; fi
-            die "Automatic linuxdeploy download supports x86_64/i386 here. Install linuxdeploy manually for $machine."
+            if have linuxdeploy; then command -v linuxdeploy; return 0; fi
+            warn "AppImage skipped: automatic linuxdeploy download supports x86_64/i386 here. Install linuxdeploy manually for $machine."
+            return 1
             ;;
     esac
 
@@ -324,15 +363,19 @@ linuxdeploy_path() {
     if [[ ! -x "$tool" ]]; then
         if ((ONLINE)); then
             log "Caching linuxdeploy (one-time online setup)"
-            download_file \
+            if ! download_file \
                 "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${arch_url}.AppImage" \
-                "$tool"
+                "$tool"; then
+                warn "AppImage skipped: linuxdeploy could not be downloaded."
+                return 1
+            fi
             chmod +x "$tool"
         elif have linuxdeploy; then
             command -v linuxdeploy
-            return
+            return 0
         else
-            die "linuxdeploy is not cached. Run '$0 github --branch $BRANCH' once while online, then local builds can use it offline."
+            warn "AppImage skipped: linuxdeploy is not cached. Run '$0 github --branch $BRANCH' once while online, then local builds can use it offline."
+            return 1
         fi
     fi
     printf '%s\n' "$tool"
@@ -400,6 +443,22 @@ project_revision() {
     fi
 }
 
+normalize_png_icon() {
+    local icon="$1" tmp
+    tmp="${icon}.resize-tmp.png"
+
+    if have magick; then
+        magick "$icon" -resize '256x256' -background none -gravity center -extent '256x256' "$tmp"
+    elif have convert; then
+        convert "$icon" -resize '256x256' -background none -gravity center -extent '256x256' "$tmp"
+    else
+        warn "PNG application icon needs ImageMagick so it can be staged at 256x256. Install it with: sudo dnf install ImageMagick"
+        return 1
+    fi
+
+    mv -f "$tmp" "$icon"
+}
+
 find_or_make_icon() {
     local out_dir="$1" candidate
     local candidates=(
@@ -411,9 +470,13 @@ find_or_make_icon() {
     for candidate in "${candidates[@]}"; do
         if [[ -f "$candidate" ]]; then
             ICON_EXT="${candidate##*.}"
+            ICON_EXT="${ICON_EXT,,}"
             ICON_FILE="$out_dir/$APP_ID.$ICON_EXT"
             cp -f "$candidate" "$ICON_FILE"
-            return
+            if [[ "$ICON_EXT" == png ]]; then
+                normalize_png_icon "$ICON_FILE" || return 1
+            fi
+            return 0
         fi
     done
 
@@ -421,10 +484,14 @@ find_or_make_icon() {
         ! -path '*/target/*' ! -path '*/samples/*' | head -n 1 || true)"
     if [[ -n "$candidate" ]]; then
         ICON_EXT="${candidate##*.}"
+        ICON_EXT="${ICON_EXT,,}"
         ICON_FILE="$out_dir/$APP_ID.$ICON_EXT"
         cp -f "$candidate" "$ICON_FILE"
+        if [[ "$ICON_EXT" == png ]]; then
+            normalize_png_icon "$ICON_FILE" || return 1
+        fi
         warn "Expected icon/pic-icon.png was not found; using $candidate"
-        return
+        return 0
     fi
 
     ICON_EXT=svg
@@ -439,6 +506,42 @@ find_or_make_icon() {
 </svg>
 SVG
     warn "No project icon found; generated a temporary PIC camera icon."
+}
+
+write_runtime_launcher() {
+    local path="$1"
+    cat > "$path" <<EOF_LAUNCHER
+#!/bin/sh
+set -eu
+
+# AppImage launches this script through the top-level AppRun symlink. In that
+# case \$0 points at AppRun, not usr/bin/$BIN_NAME, so derive the prefix from
+# APPDIR (set by the AppImage runtime). Flatpak launches /app/bin/$BIN_NAME
+# directly and does not set APPDIR, so keep the normal bin-directory fallback.
+if [ -n "\${APPDIR:-}" ] && [ -d "\$APPDIR/usr/share/$BIN_NAME" ]; then
+    PREFIX="\$APPDIR/usr"
+else
+    BIN_DIR="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
+    PREFIX="\$(dirname -- "\$BIN_DIR")"
+fi
+
+cd "\$PREFIX/share/$BIN_NAME"
+exec "\$PREFIX/libexec/$BIN_NAME" "\$@"
+EOF_LAUNCHER
+    chmod +x "$path"
+}
+
+copy_runtime_images() {
+    local resource_root="$1"
+    if [[ ! -d "$SOURCE_DIR/images" ]]; then
+        warn "Runtime images folder not found: $SOURCE_DIR/images"
+        return 0
+    fi
+
+    mkdir -p "$resource_root"
+    rm -rf "$resource_root/images"
+    cp -a "$SOURCE_DIR/images" "$resource_root/images"
+    ok "Bundled runtime images: $resource_root/images"
 }
 
 write_desktop_file() {
@@ -488,8 +591,15 @@ build_native() {
 }
 
 build_appimage() {
-    local linuxdeploy app_work appdir desktop staging_icon output_name
-    linuxdeploy="$(linuxdeploy_path)"
+    local linuxdeploy app_work appdir desktop staging_icon output_name deployed_bin real_bin resource_root
+    if ! linuxdeploy="$(linuxdeploy_path)"; then
+        return 1
+    fi
+    [[ -n "$linuxdeploy" && -x "$linuxdeploy" ]] || {
+        warn "AppImage skipped: linuxdeploy is unavailable or not executable."
+        return 1
+    }
+
     app_work="$WORK_ROOT/appimage"
     appdir="$app_work/AppDir"
     rm -rf "$app_work"
@@ -497,7 +607,7 @@ build_appimage() {
 
     desktop="$app_work/$APP_ID.desktop"
     write_desktop_file "$desktop"
-    find_or_make_icon "$app_work"
+    find_or_make_icon "$app_work" || return 1
     staging_icon="$ICON_FILE"
     output_name="PIC-${BUILD_LABEL}-${ARCH_NAME}.AppImage"
     rm -f "$DIST_DIR/$output_name"
@@ -508,6 +618,23 @@ build_appimage() {
         --executable "$NATIVE_BIN" \
         --desktop-file "$desktop" \
         --icon-file "$staging_icon"
+
+    # Keep the real executable separate and put a launcher at usr/bin/pic-rs.
+    # The launcher changes into usr/share/pic-rs before starting PIC so existing
+    # relative paths such as images/theme/... continue to work in the AppImage.
+    deployed_bin="$appdir/usr/bin/$BIN_NAME"
+    if [[ ! -f "$deployed_bin" ]]; then
+        warn "AppImage staging did not contain the expected executable: $deployed_bin"
+        return 1
+    fi
+    mkdir -p "$appdir/usr/libexec"
+    real_bin="$appdir/usr/libexec/$BIN_NAME"
+    mv -f "$deployed_bin" "$real_bin"
+    chmod +x "$real_bin"
+    write_runtime_launcher "$deployed_bin"
+
+    resource_root="$appdir/usr/share/$BIN_NAME"
+    copy_runtime_images "$resource_root"
 
     # GTK4/libadwaita applications rely on GLib schemas and Adwaita symbolic icons.
     # linuxdeploy follows shared libraries; these data files are added explicitly.
@@ -543,7 +670,7 @@ build_appimage() {
 }
 
 build_flatpak() {
-    local fp_work fp_src fp_build fp_repo manifest desktop_rel icon_rel bundle_name vendor_dir
+    local fp_work fp_src fp_build fp_repo manifest desktop_rel icon_rel bundle_name vendor_dir launcher_rel
     ensure_flatpak_runtime || return 1
 
     fp_work="$WORK_ROOT/flatpak"
@@ -557,9 +684,11 @@ build_flatpak() {
 
     mkdir -p "$fp_src/packaging-generated" "$fp_src/.cargo"
     write_desktop_file "$fp_src/packaging-generated/$APP_ID.desktop"
-    find_or_make_icon "$fp_src/packaging-generated"
+    write_runtime_launcher "$fp_src/packaging-generated/$BIN_NAME-launcher"
+    find_or_make_icon "$fp_src/packaging-generated" || return 1
     icon_rel="packaging-generated/$APP_ID.$ICON_EXT"
     desktop_rel="packaging-generated/$APP_ID.desktop"
+    launcher_rel="packaging-generated/$BIN_NAME-launcher"
     if [[ "$ICON_EXT" == svg ]]; then
         FLATPAK_ICON_DEST="/app/share/icons/hicolor/scalable/apps/$APP_ID.svg"
     else
@@ -608,7 +737,10 @@ EOF_CARGO
       "buildsystem": "simple",
       "build-commands": [
         "cargo build --release --locked --offline",
-        "install -Dm755 target/release/$BIN_NAME /app/bin/$BIN_NAME",
+        "install -Dm755 target/release/$BIN_NAME /app/libexec/$BIN_NAME",
+        "install -Dm755 $launcher_rel /app/bin/$BIN_NAME",
+        "install -d /app/share/$BIN_NAME",
+        "cp -a images /app/share/$BIN_NAME/",
         "install -Dm644 $desktop_rel /app/share/applications/$APP_ID.desktop",
         "install -Dm644 $icon_rel $FLATPAK_ICON_DEST"
       ],
@@ -665,33 +797,61 @@ printf 'Binary:     %s\n' "$BIN_NAME"
 printf 'App ID:     %s\n' "$APP_ID"
 printf 'Output:     %s\n' "$DIST_DIR"
 printf 'Build log:  %s\n' "$LOG_FILE"
-printf 'Flatpak:    GNOME %s + Rust extension %s\n' "$GNOME_RUNTIME" "$FDO_RUST_RUNTIME"
+printf 'Target:     %s\n' "$BUILD_TARGET"
+if [[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == flatpak ]]; then
+    printf 'Flatpak:    GNOME %s + Rust extension %s\n' "$GNOME_RUNTIME" "$FDO_RUST_RUNTIME"
+fi
 
 build_native
 
 appimage_ok=0
 flatpak_ok=0
-if build_appimage; then
-    appimage_ok=1
-else
-    warn "AppImage build failed; continuing so the Flatpak build still gets a chance."
+appimage_selected=0
+flatpak_selected=0
+
+if [[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == appimage ]]; then
+    appimage_selected=1
+    if build_appimage; then
+        appimage_ok=1
+    else
+        if [[ "$BUILD_TARGET" == both ]]; then
+            warn "AppImage build failed; continuing so the Flatpak build still gets a chance."
+        else
+            warn "AppImage build failed."
+        fi
+    fi
 fi
-if build_flatpak; then
-    flatpak_ok=1
-else
-    warn "Flatpak build failed."
+
+if [[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == flatpak ]]; then
+    flatpak_selected=1
+    if build_flatpak; then
+        flatpak_ok=1
+    else
+        warn "Flatpak build failed."
+    fi
 fi
 
 printf '\n============================================================\n'
 printf 'PIC Linux packaging finished\n'
 printf '============================================================\n'
-((appimage_ok)) && printf 'AppImage: %s\n' "$APPIMAGE_OUTPUT" || printf 'AppImage: FAILED\n'
-((flatpak_ok)) && printf 'Flatpak:  %s\n' "$FLATPAK_OUTPUT" || printf 'Flatpak:  FAILED\n'
+if ((appimage_selected)); then
+    ((appimage_ok)) && printf 'AppImage: %s\n' "$APPIMAGE_OUTPUT" || printf 'AppImage: FAILED\n'
+else
+    printf 'AppImage: SKIPPED\n'
+fi
+if ((flatpak_selected)); then
+    ((flatpak_ok)) && printf 'Flatpak:  %s\n' "$FLATPAK_OUTPUT" || printf 'Flatpak:  FAILED\n'
+else
+    printf 'Flatpak:  SKIPPED\n'
+fi
 printf 'Source:   %s (%s)\n' "$SOURCE_DIR" "$MODE"
 printf 'Log:      %s\n' "$LOG_FILE"
 printf '============================================================\n'
 
-if (( ! appimage_ok || ! flatpak_ok )); then
+if ((appimage_selected && ! appimage_ok)); then
+    exit 1
+fi
+if ((flatpak_selected && ! flatpak_ok)); then
     exit 1
 fi
 
