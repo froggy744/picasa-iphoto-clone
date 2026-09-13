@@ -342,6 +342,7 @@ mod tests {
             .map(|i| CollageItem {
                 photo: CollagePhoto {
                     id: i as i64,
+                    folder_id: None,
                     path: String::new(),
                     filename: String::new(),
                     thumbnail_path: None,

@@ -540,4 +540,60 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn imported_root_availability_is_inherited_by_descendant_folders() {
+        let folders = vec![
+            Folder {
+                id: 10,
+                path: "/run/media/peet/USB/Photos".to_string(),
+                name: "Photos".to_string(),
+                parent_id: None,
+                imported_root: true,
+                watched: false,
+                photo_count: 5_000,
+                subfolder_count: 1,
+                available: true,
+            },
+            Folder {
+                id: 11,
+                path: "/run/media/peet/USB/Photos/2026".to_string(),
+                name: "2026".to_string(),
+                parent_id: Some(10),
+                imported_root: false,
+                watched: false,
+                photo_count: 5_000,
+                subfolder_count: 0,
+                available: true,
+            },
+            Folder {
+                id: 20,
+                path: "/home/peet/Pictures".to_string(),
+                name: "Pictures".to_string(),
+                parent_id: None,
+                imported_root: true,
+                watched: false,
+                photo_count: 1,
+                subfolder_count: 0,
+                available: true,
+            },
+        ];
+        let checked = std::cell::RefCell::new(Vec::new());
+
+        let availability = folder_availability_by_id(&folders, |path| {
+            checked.borrow_mut().push(path.to_string());
+            path != "/run/media/peet/USB/Photos"
+        });
+
+        assert_eq!(availability[&10], false);
+        assert_eq!(availability[&11], false);
+        assert_eq!(availability[&20], true);
+        assert_eq!(
+            checked.into_inner(),
+            vec![
+                "/run/media/peet/USB/Photos".to_string(),
+                "/home/peet/Pictures".to_string(),
+            ]
+        );
+    }
 }

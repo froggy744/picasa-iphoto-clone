@@ -746,11 +746,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let import_folder = import_folder.clone();
         let delete_album = delete_album.clone();
         Rc::new(move || {
-            if let Ok(folders) = db::folders(&connection.borrow()) {
-                folder_cache.replace(folders);
-            }
             refresh_availability_ui(
                 &connection,
+                &folder_cache,
                 &gallery,
                 &sidebar,
                 &slot,
@@ -3069,17 +3067,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let schedule_mount_refresh: Rc<dyn Fn()> = {
         let availability_refresh = availability_refresh.clone();
         let pending = mount_refresh_pending.clone();
-        let reconnected_sources = reconnected_sources.clone();
         Rc::new(move || {
             if pending.replace(true) {
                 return;
             }
             let availability_refresh = availability_refresh.clone();
             let pending = pending.clone();
-            let reconnected_sources = reconnected_sources.clone();
             glib::timeout_add_local_once(Duration::from_millis(250), move || {
                 pending.set(false);
-                reconnected_sources.borrow_mut().update(mounted_source_roots());
+                // Mount changes only re-evaluate folder availability for the
+                // offline badge. Cached thumbnails stay usable; do not start
+                // thumbnail recovery, scanning, or per-photo file checks.
                 availability_refresh();
             });
         })

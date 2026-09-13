@@ -5,6 +5,7 @@ use crate::photo_object::PhotoObject;
 #[derive(Clone, Debug)]
 pub struct CollagePhoto {
     pub id: i64,
+    pub folder_id: Option<i64>,
     pub path: String,
     pub filename: String,
     pub thumbnail_path: Option<String>,
@@ -118,6 +119,7 @@ impl CollageProject {
                 .map(|(z, photo)| CollageItem {
                     photo: CollagePhoto {
                         id: photo.id(),
+                        folder_id: Some(photo.folder_id()),
                         path: photo.path(),
                         filename: photo.filename(),
                         thumbnail_path: photo.cached_thumbnail_path(),
@@ -173,6 +175,7 @@ impl CollageProject {
                 .map(|(index, photo)| CollageItem {
                     photo: CollagePhoto {
                         id: photo.id(),
+                        folder_id: Some(photo.folder_id()),
                         path: photo.path(),
                         filename: photo.filename(),
                         thumbnail_path: photo.cached_thumbnail_path(),
@@ -210,6 +213,7 @@ impl CollageProject {
                     .unwrap_or_else(|| CollageItem {
                         photo: CollagePhoto {
                             id: photo.id(),
+                            folder_id: Some(photo.folder_id()),
                             path: photo.path(),
                             filename: photo.filename(),
                             thumbnail_path: photo.cached_thumbnail_path(),

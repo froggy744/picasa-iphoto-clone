@@ -70,6 +70,11 @@ fn refresh_grid_inner(
             return;
         };
 
+        // Prime folder-only availability before constructing PhotoObjects on
+        // the GTK thread. This checks imported roots once and never checks an
+        // individual original photo path.
+        let _ = db::folders(&connection);
+
         let folder_stream = search.is_empty()
             && matches!(filter, sidebar::SidebarFilter::Folder(_));
         let mut photos = if !search.is_empty() {

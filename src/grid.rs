@@ -3449,36 +3449,65 @@ impl Gallery {
         }
     }
 
-    pub fn availability_snapshot(&self) -> Vec<(i64, String)> {
-        self.current_photos
-            .borrow()
-            .iter()
-            .map(|photo| (photo.id(), photo.path()))
-            .collect()
-    }
-
-    pub fn apply_availability(&self, updates: &[(i64, bool)]) {
-        // Index once: searching the whole gallery for every result made this
-        // O(N²) (over two billion comparisons for a 66k-photo library).
+    pub fn apply_folder_availability(
+        &self,
+        updates: &[(i64, bool)],
+        is_current: impl Fn() -> bool + 'static,
+    ) {
+        if updates.is_empty() {
+            return;
+        }
+        // Folder state is the availability unit. Filter the loaded photo
+        // objects once, then update only the objects belonging to folders
+        // whose mounted state actually changed.
         let updates = updates
             .iter()
             .copied()
             .collect::<std::collections::HashMap<_, _>>();
-        let photos = self.current_photos.borrow().clone();
+        let mut photos = self
+            .current_photos
+            .borrow()
+            .iter()
+            .filter_map(|photo| {
+                updates
+                    .get(&photo.folder_id())
+                    .is_some_and(|available| photo.original_available() != *available)
+                    .then(|| photo.clone())
+            })
+            .collect::<Vec<_>>();
+        // Folder mode keeps its own stream so re-entering it does not rebuild
+        // tens of thousands of objects. Keep that inactive stream in sync as
+        // well; otherwise it can retain badges from before a drive remount.
+        // These are model updates only: availability was already determined
+        // from registered folders above, with no original-file access.
+        if self.group_mode.get() != GroupMode::Folder {
+            if let Some(cache) = self.folder_cache.borrow().as_ref() {
+                photos.extend(cache.photos.iter().filter_map(|photo| {
+                    updates
+                        .get(&photo.folder_id())
+                        .is_some_and(|available| photo.original_available() != *available)
+                        .then(|| photo.clone())
+                }));
+            }
+        }
+        if photos.is_empty() {
+            return;
+        }
         let generation = self.replace_generation.get();
         let current_generation = self.replace_generation.clone();
+        let is_current = Rc::new(is_current);
         let root = self.root.downgrade();
         let folder_root = self.folder_root.downgrade();
         let mut offset = 0;
         glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
             // Navigation/replacement must not paint an obsolete gallery.
-            if current_generation.get() != generation {
+            if current_generation.get() != generation || !is_current() {
                 return glib::ControlFlow::Break;
             }
             let started = Instant::now();
             let end = (offset + 128).min(photos.len());
             for photo in &photos[offset..end] {
-                if let Some(available) = updates.get(&photo.id()) {
+                if let Some(available) = updates.get(&photo.folder_id()) {
                     if photo.original_available() != *available {
                         photo.set_original_available(*available);
                     }

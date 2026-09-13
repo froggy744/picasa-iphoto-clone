@@ -116,10 +116,11 @@ impl PhotoObject {
         imp.favorite.set(photo.favorite);
         imp.folder_id.set(photo.folder_id.unwrap_or_default());
         *imp.folder_path.borrow_mut() = photo.folder_path.clone();
-        // Availability is probed asynchronously when a tile is bound, and
-        // re-probed after a TTL. Probing every original while constructing a
-        // library-sized model, or synchronously while scrolling, blocks GTK.
-        imp.original_available.set(true);
+        // Offline is source-folder state, not an individual-file check. The
+        // folder map is prepared once per registered imported root, so creating
+        // a large library model never stats photo originals.
+        imp.original_available
+            .set(crate::source::folder_available(photo.folder_id));
         *imp.cached_thumbnail_path.borrow_mut() =
             thumbnail::cache_path(&photo.path, photo.mtime, photo.size_bytes)
                 .ok()

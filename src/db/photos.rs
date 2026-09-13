@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 fn ensure_parent_folder(connection: &Connection, path: &str) -> Result<Option<i64>> {
     let Some(parent) = Path::new(path).parent().and_then(|parent| parent.to_str()) else {
@@ -216,10 +216,78 @@ pub fn folders(connection: &Connection) -> Result<Vec<Folder>> {
             watched: row.get(5)?,
             photo_count: row.get(6)?,
             subfolder_count: row.get(7)?,
-            available: crate::source::cached_source_available(&row.get::<_, String>(1)?),
+            // Availability is resolved below from imported roots so a USB
+            // library checks its one registered source, not every descendant.
+            available: true,
         })
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut folders = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let availability = folder_availability_by_id(&folders, |path| {
+        crate::source::cached_source_available(path)
+    });
+    for folder in &mut folders {
+        folder.available = availability.get(&folder.id).copied().unwrap_or(true);
+    }
+    crate::source::replace_folder_availability(availability);
+    Ok(folders)
+}
+
+/// Resolve every indexed folder to the availability of its imported source
+/// root. Only imported roots touch the filesystem; discovered descendants
+/// inherit their root's state.
+pub fn folder_availability_by_id(
+    folders: &[Folder],
+    mut source_available: impl FnMut(&str) -> bool,
+) -> HashMap<i64, bool> {
+    let by_id = folders
+        .iter()
+        .map(|folder| (folder.id, folder))
+        .collect::<HashMap<_, _>>();
+    let mut root_availability = HashMap::new();
+    for folder in folders.iter().filter(|folder| folder.imported_root) {
+        root_availability.insert(folder.id, source_available(&folder.path));
+    }
+
+    fn resolve(
+        folder_id: i64,
+        by_id: &HashMap<i64, &Folder>,
+        root_availability: &HashMap<i64, bool>,
+        resolved: &mut HashMap<i64, bool>,
+        visiting: &mut HashSet<i64>,
+    ) -> bool {
+        if let Some(available) = resolved.get(&folder_id) {
+            return *available;
+        }
+        if !visiting.insert(folder_id) {
+            return true;
+        }
+        let available = by_id.get(&folder_id).map_or(true, |folder| {
+            if folder.imported_root {
+                root_availability.get(&folder.id).copied().unwrap_or(true)
+            } else {
+                folder
+                    .parent_id
+                    .map(|parent_id| resolve(parent_id, by_id, root_availability, resolved, visiting))
+                    .unwrap_or(true)
+            }
+        });
+        visiting.remove(&folder_id);
+        resolved.insert(folder_id, available);
+        available
+    }
+
+    let mut resolved = HashMap::with_capacity(folders.len());
+    let mut visiting = HashSet::new();
+    for folder in folders {
+        resolve(
+            folder.id,
+            &by_id,
+            &root_availability,
+            &mut resolved,
+            &mut visiting,
+        );
+    }
+    resolved
 }
 
 pub fn set_folder_watched(connection: &Connection, folder_id: i64, watched: bool) -> Result<()> {
