@@ -358,6 +358,47 @@ struct PhotoActionContext {
 
 include!("window/build.rs");
 
+/// Folder scrollbar-scrub sampling state.
+///
+/// A direct scrub samples its decode target immediately in the frame the jump
+/// happens, then at most once per 50 ms while the drag continues, and never
+/// after it ends. GtkListView emits tiny ±1 px anchor corrections during
+/// drags; coalescing samples keeps the decode queue owned by one destination
+/// at a time instead of one per correction.
+#[derive(Default)]
+struct FolderScrollbarScrub {
+    active: bool,
+    last_sample: Option<Instant>,
+}
+
+impl FolderScrollbarScrub {
+    const SAMPLE_INTERVAL: Duration = Duration::from_millis(50);
+
+    fn begin(&mut self) {
+        self.active = true;
+    }
+
+    fn end(&mut self) {
+        self.active = false;
+        self.last_sample = None;
+    }
+
+    /// Returns true (and records the sample time) when a new scrub sample
+    /// should be queued now.
+    fn sample_due(&mut self, now: Instant) -> bool {
+        if !self.active {
+            return false;
+        }
+        let due = self.last_sample.map_or(true, |last| {
+            now.duration_since(last) >= Self::SAMPLE_INTERVAL
+        });
+        if due {
+            self.last_sample = Some(now);
+        }
+        due
+    }
+}
+
 #[cfg(test)]
 mod folder_scroll_tests {
     use super::{Duration, FolderScrollbarScrub, Instant};

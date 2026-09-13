@@ -146,6 +146,29 @@ fn install_smooth_gallery_scroll(
                 if animated.is_finite() && (value - animated).abs() <= threshold {
                     return;
                 }
+                // Folder ListView path: a mid-animation jump larger than the
+                // tolerance but under ~2 viewports is an anchor re-correction
+                // (row-estimate drift, recycled-row range change). Shift the
+                // destination by the same delta so the spring keeps
+                // converging on the same visual target instead of being
+                // cancelled mid-notch and restarted by the next wheel click.
+                // Genuine programmatic navigation (zoom anchor restore, model
+                // swap) is far larger and still cancels below.
+                if quantize_to_pixels
+                    && animated.is_finite()
+                    && (value - animated).abs() <= adjustment.page_size() * 2.0
+                {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!(
+                            "UI PERF smooth_scroll_rebase delta={:.2} target={:.2}",
+                            value - animated,
+                            target.get() + (value - animated)
+                        );
+                    }
+                    target.set(target.get() + (value - animated));
+                    last_animation_value.set(value);
+                    return;
+                }
                 if std::env::var_os("PICASA_TRACE").is_some() {
                     eprintln!(
                         "UI PERF smooth_scroll_external_cancel value={:.2} animated={:.2} threshold={:.2}",
@@ -207,6 +230,12 @@ fn install_smooth_gallery_scroll(
                 return glib::ControlFlow::Continue;
             }
 
+            // Folder ListView path pins were previously detected here by
+            // distance alone; that fired mid-approach (speed ~134 px/s at the
+            // 12 px boundary) and truncated every wheel run with an abrupt
+            // halt. Pin detection now lives in the stall guard below, which
+            // requires the error to actually stop shrinking first.
+
             // Critically damped spring: smooth acceleration into the movement
             // and smooth deceleration at the target. Clamp overshoot explicitly:
             // GtkListView can quantize/anchor-correct folder scrolling, and a
@@ -265,6 +294,15 @@ fn install_smooth_gallery_scroll(
             // absolute error stops shrinking and the spring oscillates without
             // converging. Detect that and finish deterministically instead of
             // leaving the view stuck until the next click/scroll.
+            //
+            // A pin with only a few pixels of residual error (observed 2-12 px
+            // on the folder ListView and ~7 px on the GridView) is confirmed
+            // after just two frames, and finishes by *accepting* the pinned
+            // value with no write-back: snapping to the destination at that
+            // point reads as a small jump at the end of a wheel run. Distance
+            // alone must never trigger this - during a normal approach the
+            // spring legitimately passes through small errors at high speed -
+            // only a value that refuses to move further while close counts.
             let error_abs = error.abs();
             let progressed = error_abs < last_error_abs.get() - 0.05;
             last_error_abs.set(error_abs);
@@ -273,15 +311,26 @@ fn install_smooth_gallery_scroll(
             } else {
                 let stalled = stall_frames.get().saturating_add(1);
                 stall_frames.set(stalled);
-                if stalled >= 8 {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "UI PERF smooth_scroll_stall destination={:.2} current={:.2} error={:.2}",
-                            destination, current, error_abs
-                        );
+                let near_pin = error_abs <= 12.0;
+                if stalled >= if near_pin { 2 } else { 8 } {
+                    if near_pin {
+                        if std::env::var_os("PICASA_TRACE").is_some() {
+                            eprintln!(
+                                "UI PERF smooth_scroll_pinned destination={:.2} accepted={:.2} error={:.2}",
+                                destination, current, error_abs
+                            );
+                        }
+                        last_animation_value.set(current);
+                    } else {
+                        if std::env::var_os("PICASA_TRACE").is_some() {
+                            eprintln!(
+                                "UI PERF smooth_scroll_stall destination={:.2} current={:.2} error={:.2}",
+                                destination, current, error_abs
+                            );
+                        }
+                        last_animation_value.set(destination);
+                        adjustment.set_value(destination);
                     }
-                    last_animation_value.set(destination);
-                    adjustment.set_value(destination);
                     velocity.set(0.0);
                     active.set(false);
                     stall_frames.set(0);
@@ -1737,9 +1786,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let folder_thumbnail_prefetch: Rc<RefCell<Option<glib::SourceId>>> =
         Rc::new(RefCell::new(None));
     let folder_thumbnail_prefetch_for_event = folder_thumbnail_prefetch.clone();
-    let folder_target_sample: Rc<RefCell<Option<glib::SourceId>>> =
-        Rc::new(RefCell::new(None));
-    let folder_target_sample_for_event = folder_target_sample.clone();
+    // Coalesces scrub-target sampling: one sample in the jump frame itself,
+    // then at most once per 50 ms while the drag continues. Frame-driven from
+    // the motion tick below, not from a wall-clock timeout.
+    let folder_scrub_sampler = Rc::new(RefCell::new(FolderScrollbarScrub::default()));
+    let folder_scrub_sampler_for_event = folder_scrub_sampler.clone();
+    let folder_scrub_sampler_for_tick = folder_scrub_sampler.clone();
+    let latest_folder_scroll_y_for_tick = latest_folder_scroll_y.clone();
+    let folder_vadjustment = folder_scroll.vadjustment();
     // True only for a real multi-page Folder scrollbar scrub. Page Up/Down is
     // deliberately excluded: Folder row bind now submits its own async visible
     // request, so page navigation must not repeatedly replace the queue.
@@ -1789,6 +1843,34 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 gallery_for_thumbnail_motion_tick.queue_visible_folder_cached_tiles_async(96);
         }
 
+        // Scrub decode targets are frame-driven: the first sample fires in the
+        // jump frame itself (not a wall-clock interval later), then at most
+        // every 50 ms while the drag continues. Coalescing keeps the decode
+        // queue owned by one destination instead of one per ±1 px anchor
+        // correction GtkListView emits during drags.
+        let scrub_target_queued = if folder_direct_scrub_active_for_tick.get()
+            && folder_scrub_sampler_for_tick
+                .borrow_mut()
+                .sample_due(Instant::now())
+        {
+            let page = folder_vadjustment.page_size().max(1.0);
+            let queued = gallery_for_thumbnail_motion_tick
+                .queue_folder_scroll_target_cached_tiles_async(
+                    latest_folder_scroll_y_for_tick.get(),
+                    page,
+                    192,
+                );
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "UI PERF folder_scrub_target queued={} page={:.0}",
+                    queued, page
+                );
+            }
+            queued
+        } else {
+            0
+        };
+
         // Warming ahead is useful, but doing the larger offscreen scan on every
         // frame is unnecessary. Run it every third pump frame so visible work
         // remains dominant and GTK has plenty of time to render.
@@ -1831,7 +1913,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 scroll_handler_calls_for_event
                     .set(scroll_handler_calls_for_event.get().wrapping_add(1));
             }
-            let scroll_y = adjustment.value();
+            let raw_scroll_y = adjustment.value();
+            // GtkListView keeps its scroll anchor on device-pixel boundaries
+            // (same reason the wheel path quantizes in
+            // install_smooth_gallery_scroll). Fractional scrollbar-drag values
+            // make GTK immediately write a rounded value back, which reads as
+            // a tiny bounce at drag end. Snap to whole pixels instead; the
+            // re-entrant value_changed sees an integral value and no-ops.
+            let scroll_y = raw_scroll_y.round();
+            if scroll_y != raw_scroll_y {
+                adjustment.set_value(scroll_y);
+            }
             let previous_y = latest_folder_scroll_y.replace(scroll_y);
             let direction = scroll_y - previous_y;
             if direction != 0.0 {
@@ -1856,27 +1948,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 // rebound faster than thumbnail decodes can land. The folder
                 // settle callback clears it again.
                 crate::grid::set_grid_scrub_active(true);
-                if folder_target_sample_for_event.borrow().is_none() {
-                    let gallery = gallery_for_folder_scroll.clone();
-                    let latest_y = latest_folder_scroll_y.clone();
-                    let slot = folder_target_sample_for_event.clone();
-                    let source = glib::timeout_add_local(Duration::from_millis(80), move || {
-                        slot.borrow_mut().take();
-                        let queued = gallery.queue_folder_scroll_target_cached_tiles_async(
-                            latest_y.get(),
-                            page_size,
-                            192,
-                        );
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!(
-                                "UI PERF folder_scrub_target queued={} page={:.0}",
-                                queued, page_size
-                            );
-                        }
-                        glib::ControlFlow::Break
-                    });
-                    folder_target_sample_for_event.replace(Some(source));
-                }
+                // First target sample fires in the next frame tick; further
+                // samples are coalesced to one per 50 ms by the sampler.
+                folder_scrub_sampler_for_event.borrow_mut().begin();
             }
 
             // Keep only the cheap position bookkeeping in the raw adjustment
@@ -1911,9 +1985,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let final_scroll_y = latest_folder_scroll_y.clone();
             let final_page_size = adjustment.page_size().max(1.0);
             let direct_scrub_active_for_settle = folder_direct_scrub_active_for_event.clone();
+            let folder_scrub_sampler_for_settle = folder_scrub_sampler_for_event.clone();
             let source = glib::timeout_add_local(Duration::from_millis(110), move || {
                 debounce_slot.borrow_mut().take();
                 direct_scrub_active_for_settle.set(false);
+                folder_scrub_sampler_for_settle.borrow_mut().end();
                 // End the shared scrub window before the visible refresh so
                 // tiles that never received their thumbnail drop the stale
                 // backstop image and return to the normal placeholder state.
@@ -1923,13 +1999,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     final_page_size,
                     192,
                 );
-                let refreshed = gallery_for_visible.refresh_visible_folder_tiles();
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "UI PERF folder_scroll_settled target_queued={} refreshed={}",
-                        final_queued, refreshed
-                    );
-                }
+                // Defer the visible refresh to the next main-loop pass so GTK
+                // can finish this frame's post-jump anchor/allocation work
+                // before tiles drop their stale backstop paintables. Unloading
+                // in the same callback interleaves with the ListView's row
+                // re-positioning and reads as a small bounce at drag end.
+                // Queueing decodes stays inline; it does not touch widgets.
+                let gallery_for_settle_refresh = gallery_for_visible.clone();
+                glib::timeout_add_local_once(Duration::ZERO, move || {
+                    let refreshed = gallery_for_settle_refresh.refresh_visible_folder_tiles();
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!(
+                            "UI PERF folder_scroll_settled target_queued={} refreshed={}",
+                            final_queued, refreshed
+                        );
+                    }
+                });
 
                 // GtkListView can realize the last destination row a few frames
                 // *after* the settle callback above. Give those newly-created

@@ -87,7 +87,9 @@ fn folder_thumbnail_cache_insert(path: String, paintable: gtk::gdk::Paintable) {
 
 fn folder_thumbnail_cache_remove(key: &str) {
     FOLDER_THUMBNAIL_CACHE.with(|cache| {
-        cache.borrow_mut().retain(|(cached_key, _)| cached_key != key);
+        cache
+            .borrow_mut()
+            .retain(|(cached_key, _)| cached_key != key);
     });
 }
 
@@ -1010,7 +1012,15 @@ enum FolderRowKind {
 /// One Folder model photo row is exactly one visual line. This keeps row
 /// geometry stable and lets GtkListView own virtualization without a nested
 /// FlowBox wrapping a variable number of internal rows.
-const FOLDER_HEADER_HEIGHT: i32 = 58;
+///
+/// This must exceed the header widget's *natural* height (margin_top 26 +
+/// title line ~20 + separator 7+1 + margin_bottom 8 ~= 62). A height_request
+/// is only a minimum, so a smaller constant lets realized header rows measure
+/// taller than the estimator assumes; the cumulative drift over hundreds of
+/// folder headers produced >1000 px anchor corrections that cancelled the
+/// smooth-scroll spring mid-animation. 70 keeps every row at exactly this
+/// height (minimum dominates natural) so position estimates are exact.
+const FOLDER_HEADER_HEIGHT: i32 = 70;
 
 fn folder_chunk_size(columns: u32) -> usize {
     columns.max(1) as usize
@@ -1387,7 +1397,9 @@ impl Gallery {
             let Some(tile) = list_item.child().and_downcast::<SquareTile>() else {
                 return;
             };
-            tile.imp().photo_index.set(Some(list_item.position() as usize));
+            tile.imp()
+                .photo_index
+                .set(Some(list_item.position() as usize));
             tile.bind_photo(&photo);
         });
 
@@ -2741,8 +2753,8 @@ impl Gallery {
         let columns = self.current_columns.get().max(1) as usize;
         let row_pitch = self.tile_height.get().max(1) as f64 + ITEM_PADDING * 2.0;
         let first = self.index_for_scroll_position(scroll_y);
-        let visible_rows = ((viewport_height.max(row_pitch) / row_pitch).ceil() as usize)
-            .saturating_add(2);
+        let visible_rows =
+            ((viewport_height.max(row_pitch) / row_pitch).ceil() as usize).saturating_add(2);
         let wanted = visible_rows.saturating_mul(columns).min(budget);
 
         let photos = self.current_photos.borrow();
@@ -3217,7 +3229,11 @@ impl Gallery {
         let mut missing = HashSet::<String>::new();
         for completion in completions {
             match completion.outcome {
-                crate::thumbnail_display::DisplayOutcome::Loaded { width, height, pixels } => {
+                crate::thumbnail_display::DisplayOutcome::Loaded {
+                    width,
+                    height,
+                    pixels,
+                } => {
                     let bytes = glib::Bytes::from_owned(pixels);
                     let texture = gtk::gdk::MemoryTexture::new(
                         width,
@@ -5206,7 +5222,13 @@ mod folder_stream_tests {
 
         gtk::init().unwrap();
         let gallery = Gallery::new(
-            &[], 148, |_| {}, |_, _| {}, |_, _, _, _| {}, |_, _| {}, |_| {},
+            &[],
+            148,
+            |_| {},
+            |_, _| {},
+            |_, _, _, _| {},
+            |_, _| {},
+            |_| {},
         );
         gallery.group_mode.set(GroupMode::Folder);
         gallery.current_photos.replace(
@@ -5245,11 +5267,13 @@ mod folder_stream_tests {
             gallery.update_width(width);
             settle();
             assert_eq!(
-                scroll.vadjustment().value(), y,
+                scroll.vadjustment().value(),
+                y,
                 "sidebar width {width} scrolled"
             );
             assert_eq!(
-                gallery.zoom_anchor.get(), Some(before),
+                gallery.zoom_anchor.get(),
+                Some(before),
                 "width-only resize consumed zoom anchor"
             );
             assert_eq!(gallery.photo_for_visible_folder_row().unwrap().id(), before);
@@ -5283,7 +5307,10 @@ mod folder_stream_tests {
         gallery.update_width(1440);
         window.set_default_size(1440, 600);
         settle();
-        assert_eq!(gallery.photo_for_visible_folder_row().unwrap().id(), scrolled);
+        assert_eq!(
+            gallery.photo_for_visible_folder_row().unwrap().id(),
+            scrolled
+        );
 
         // A second column change can arrive before GTK has allocated the first
         // rebuild. Its adjustment may transiently reset to zero (as in the
@@ -5294,7 +5321,8 @@ mod folder_stream_tests {
         window.set_default_size(970, 600);
         settle();
         assert_eq!(
-            gallery.photo_for_visible_folder_row().unwrap().id(), scrolled,
+            gallery.photo_for_visible_folder_row().unwrap().id(),
+            scrolled,
             "overlapping column changes lost the original anchor"
         );
         window.close();
@@ -5303,15 +5331,35 @@ mod folder_stream_tests {
     #[test]
     fn exact_folder_row_offset_uses_fixed_model_heights() {
         let rows = vec![
-            FolderVirtualRow { kind: FolderRowKind::Header, start: 0, end: 0 },
-            FolderVirtualRow { kind: FolderRowKind::Photos, start: 0, end: 5 },
-            FolderVirtualRow { kind: FolderRowKind::Photos, start: 5, end: 10 },
-            FolderVirtualRow { kind: FolderRowKind::Header, start: 10, end: 10 },
-            FolderVirtualRow { kind: FolderRowKind::Photos, start: 10, end: 15 },
+            FolderVirtualRow {
+                kind: FolderRowKind::Header,
+                start: 0,
+                end: 0,
+            },
+            FolderVirtualRow {
+                kind: FolderRowKind::Photos,
+                start: 0,
+                end: 5,
+            },
+            FolderVirtualRow {
+                kind: FolderRowKind::Photos,
+                start: 5,
+                end: 10,
+            },
+            FolderVirtualRow {
+                kind: FolderRowKind::Header,
+                start: 10,
+                end: 10,
+            },
+            FolderVirtualRow {
+                kind: FolderRowKind::Photos,
+                start: 10,
+                end: 15,
+            },
         ];
 
-        // Header 58 + two 100px photo lines + header 58.
-        assert_eq!(super::folder_row_offset(&rows, 4, 88), 316.0);
+        // Header 70 + two 100px photo lines + header 70.
+        assert_eq!(super::folder_row_offset(&rows, 4, 88), 340.0);
     }
 
     fn sample_ranges() -> Vec<GroupRange> {
