@@ -112,5 +112,4 @@ mod tests {
         assert!(!super::should_observe_width(true, false));
         assert!(super::should_observe_width(false, false));
     }
-
 }
