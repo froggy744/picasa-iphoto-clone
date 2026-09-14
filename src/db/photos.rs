@@ -193,6 +193,64 @@ pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: 
     Ok(id)
 }
 
+pub fn search_folders(
+    connection: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<FolderSearchResult>> {
+    let query = query.trim();
+    if query.chars().count() < 2 || limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut statement = connection.prepare(
+        "SELECT f.id, f.path, COALESCE(f.name, f.path)
+         FROM folders f
+         WHERE (instr(lower(COALESCE(f.name, f.path)), lower(?1)) > 0
+            OR instr(lower(f.path), lower(?1)) > 0)
+           AND EXISTS (
+             WITH RECURSIVE descendants(id) AS (
+               SELECT f.id
+               UNION ALL
+               SELECT child.id
+               FROM folders child
+               JOIN descendants ON child.parent_id = descendants.id
+             )
+             SELECT 1
+             FROM photos p
+             WHERE p.trashed = 0
+               AND p.folder_id IN (SELECT id FROM descendants)
+           )
+         ORDER BY
+           CASE
+             WHEN lower(COALESCE(f.name, f.path)) = lower(?1) THEN 0
+             WHEN instr(lower(COALESCE(f.name, f.path)), lower(?1)) = 1 THEN 1
+             ELSE 2
+           END,
+           COALESCE(f.name, f.path) COLLATE NOCASE,
+           f.path COLLATE NOCASE
+         LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![query, limit as i64], |row| {
+        Ok(FolderSearchResult {
+            id: row.get(0)?,
+            path: row.get(1)?,
+            name: row.get(2)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn folder_path_by_id(connection: &Connection, folder_id: i64) -> Result<Option<String>> {
+    Ok(connection
+        .query_row(
+            "SELECT path FROM folders WHERE id = ?1",
+            [folder_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
 pub fn folders(connection: &Connection) -> Result<Vec<Folder>> {
     let mut statement = connection.prepare(
         "SELECT f.id, f.path, COALESCE(f.name, f.path), f.parent_id, f.imported_root, f.watched,

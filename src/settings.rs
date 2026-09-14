@@ -154,10 +154,9 @@ fn folders_page(
         let connection = connection.clone();
         let folder_watch_changed = folder_watch_changed.clone();
         automatic.connect_active_notify(move |toggle| {
-            if let Err(error) = crate::db::set_folder_watching_enabled(
-                &connection.borrow(),
-                toggle.is_active(),
-            ) {
+            if let Err(error) =
+                crate::db::set_folder_watching_enabled(&connection.borrow(), toggle.is_active())
+            {
                 eprintln!("Could not save automatic folder watching setting: {error}");
                 return;
             }
@@ -189,15 +188,12 @@ fn folders_page(
         let connection = connection.clone();
         let folder_watch_changed = folder_watch_changed.clone();
         toggle.connect_active_notify(move |toggle| {
-            match crate::db::set_folder_watched(
-                &connection.borrow(),
-                folder_id,
-                toggle.is_active(),
-            ) {
+            match crate::db::set_folder_watched(&connection.borrow(), folder_id, toggle.is_active())
+            {
                 Ok(true) => folder_watch_changed(),
-                Ok(false) => eprintln!(
-                    "Could not change watch state for missing folder {folder_id}"
-                ),
+                Ok(false) => {
+                    eprintln!("Could not change watch state for missing folder {folder_id}")
+                }
                 Err(error) => {
                     eprintln!("Could not change folder watch state: {error}");
                 }

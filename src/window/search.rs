@@ -258,7 +258,7 @@ fn connect_search_popup_dismissal(
 fn update_folder_suggestions(
     popover: &gtk::Popover,
     list: &gtk::ListBox,
-    folders: &[db::Folder],
+    folders: &[db::FolderSearchResult],
     query: &str,
     on_folder: Rc<dyn Fn(i64)>,
 ) {

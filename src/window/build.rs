@@ -464,6 +464,8 @@ enum FolderDestinationPlan {
     RefreshWithoutFolderScroll,
 }
 
+const SEARCH_DEBOUNCE_MS: u64 = 120;
+
 fn folder_destination_plan(
     exact_photo_target: bool,
     reuse_folder_stream: bool,
@@ -477,10 +479,47 @@ fn folder_destination_plan(
     }
 }
 
+fn can_reuse_folder_stream_for_destination(
+    has_folder_target: bool,
+    folder_cache_available: bool,
+) -> bool {
+    has_folder_target && folder_cache_available
+}
+
+fn search_folder_focus_should_stop(
+    still_on_target: bool,
+    search_is_clear: bool,
+    building: bool,
+    pending: bool,
+    focused: bool,
+    attempt: u32,
+) -> bool {
+    if !still_on_target || !search_is_clear {
+        return true;
+    }
+    if !pending {
+        return true;
+    }
+    if building {
+        return attempt >= 1200;
+    }
+    focused || attempt >= 240
+}
+
+fn should_ignore_cleared_search_event(
+    suppressed: bool,
+    cleared_query: Option<&str>,
+    query: &str,
+) -> bool {
+    suppressed || cleared_query.is_some_and(|cleared| cleared == query)
+}
+
 #[cfg(test)]
 mod open_in_folder_retry_tests {
     use super::{
-        folder_destination_plan, open_in_folder_should_stop, FolderDestinationPlan,
+        can_reuse_folder_stream_for_destination, folder_destination_plan,
+        open_in_folder_should_stop, search_folder_focus_should_stop, FolderDestinationPlan,
+        should_ignore_cleared_search_event, SEARCH_DEBOUNCE_MS,
     };
 
     #[test]
@@ -500,6 +539,38 @@ mod open_in_folder_retry_tests {
     }
 
     #[test]
+    fn search_debounce_stays_responsive() {
+        assert!(SEARCH_DEBOUNCE_MS <= 150);
+    }
+
+    #[test]
+    fn folder_destination_reuses_cached_full_stream_even_when_search_was_active() {
+        assert!(can_reuse_folder_stream_for_destination(true, true));
+        assert!(!can_reuse_folder_stream_for_destination(true, false));
+        assert!(!can_reuse_folder_stream_for_destination(false, true));
+    }
+
+    #[test]
+    fn search_folder_focus_waits_until_the_pending_target_is_consumed() {
+        assert!(!search_folder_focus_should_stop(true, true, true, true, false, 1));
+        assert!(!search_folder_focus_should_stop(true, true, false, true, false, 1));
+        assert!(search_folder_focus_should_stop(true, true, false, false, false, 2));
+        assert!(search_folder_focus_should_stop(true, true, false, true, true, 2));
+    }
+
+    #[test]
+    fn search_folder_focus_stops_if_user_moves_on() {
+        assert!(search_folder_focus_should_stop(false, true, true, true, false, 1));
+        assert!(search_folder_focus_should_stop(true, false, true, true, false, 1));
+    }
+
+    #[test]
+    fn stale_event_for_the_query_just_cleared_is_ignored_once() {
+        assert!(should_ignore_cleared_search_event(true, None, "marianne"));
+        assert!(should_ignore_cleared_search_event(false, Some("marianne"), "marianne"));
+        assert!(!should_ignore_cleared_search_event(false, Some("marianne"), "maria"));
+    }
+
     fn exact_photo_navigation_never_schedules_generic_folder_scroll() {
         assert_eq!(
             folder_destination_plan(true, true),
@@ -736,6 +807,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let search_text = Rc::new(RefCell::new(String::new()));
     let search_entry_slot: Rc<RefCell<Option<gtk::SearchEntry>>> = Rc::new(RefCell::new(None));
     let search_suppressed = Rc::new(Cell::new(false));
+    let cleared_search_query = Rc::new(RefCell::new(None::<String>));
     let search_debounce: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
     let gallery_for_actions: Rc<RefCell<Weak<grid::Gallery>>> = Rc::new(RefCell::new(Weak::new()));
     let sidebar_for_unavailable: Rc<RefCell<Option<gtk::ScrolledWindow>>> =
@@ -973,6 +1045,40 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     };
     let grid_thumbnail_size = grid_thumbnail_size_from_setting(&connection.borrow());
 
+    // Result activation should dismiss the visible search UI without running the
+    // normal empty-query handler. Running that handler here would immediately
+    // rebuild the current full library/folder model while the user is opening a
+    // result, which is both unnecessary and can stall the GTK thread.
+    let clear_search_after_result: Rc<dyn Fn()> = {
+        let search_entry = search_entry_slot.clone();
+        let search_text = search_text.clone();
+        let suppressed = search_suppressed.clone();
+        let debounce = search_debounce.clone();
+        let cleared_query = cleared_search_query.clone();
+        Rc::new(move || {
+            if let Some(source) = debounce.borrow_mut().take() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.remove()));
+            }
+            let query = search_text.borrow().clone();
+            cleared_query.replace(Some(query.clone()));
+            suppressed.set(true);
+            if let Some(entry) = search_entry.borrow().as_ref() {
+                entry.set_text("");
+            }
+            search_text.replace(String::new());
+            suppressed.set(false);
+            let cleared_query_for_timeout = cleared_query.clone();
+            glib::timeout_add_local_once(Duration::from_millis(500), move || {
+                if cleared_query_for_timeout.borrow().as_deref() == Some(query.as_str()) {
+                    cleared_query_for_timeout.replace(None);
+                }
+            });
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("SEARCH TRACE result_clear_silent");
+            }
+        })
+    };
+
     let gallery = Rc::new(grid::Gallery::new(
         &[],
         grid_thumbnail_size,
@@ -982,6 +1088,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         },
         {
             let availability_refresh = availability_refresh.clone();
+            let clear_search_after_result = clear_search_after_result.clone();
             move |photos, selected_index| {
                 if photos
                     .get(selected_index)
@@ -990,6 +1097,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     availability_refresh();
                 }
                 lightbox_for_grid.open(photos, selected_index);
+                clear_search_after_result();
             }
         },
         {
@@ -2866,6 +2974,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let search_text = search_text.clone();
         let suppressed = search_suppressed.clone();
         let debounce = search_debounce.clone();
+        let cleared_query = cleared_search_query.clone();
         let filter = filter.clone();
         let connection = connection.clone();
         let gallery = gallery.clone();
@@ -2883,14 +2992,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             // destination is established. This also covers Folder-to-Folder
             // reuse, which otherwise would not bump the refresh generation.
             invalidate_pending_grid_navigation();
+            gallery.clear_pending_folder_target();
+            let query = search_text.borrow().clone();
+            cleared_query.replace(Some(query.clone()));
             if !exact_photo_target {
                 open_in_folder_exact_target.set(None);
             }
             let folder_target = if let sidebar::SidebarFilter::Folder(folder_id) = new_filter {
-                db::folders(&connection.borrow())
+                db::folder_path_by_id(&connection.borrow(), folder_id)
                     .ok()
-                    .and_then(|folders| folders.into_iter().find(|folder| folder.id == folder_id))
-                    .map(|folder| (folder.id, folder.path))
+                    .flatten()
+                    .map(|path| (folder_id, path))
             } else {
                 None
             };
@@ -2898,9 +3010,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             // folder should be a scroll operation, not another database query
             // and model rebuild. An active global search is the exception: its
             // grid model is not the Folder stream, so it must be reloaded.
-            let reuse_folder_stream = search_text.borrow().is_empty()
-                && matches!(filter.get(), sidebar::SidebarFilter::Folder(_))
-                && folder_target.is_some();
+            let reuse_folder_stream = can_reuse_folder_stream_for_destination(
+                folder_target.is_some(),
+                gallery.can_restore_folder_cache(),
+            );
 
             if let Some(source) = debounce.borrow_mut().take() {
                 source.remove();
@@ -2912,6 +3025,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             suppressed.set(false);
             search_text.replace(String::new());
             lightbox.close();
+            let cleared_query_for_timeout = cleared_query.clone();
+            glib::timeout_add_local_once(Duration::from_millis(500), move || {
+                if cleared_query_for_timeout.borrow().as_deref() == Some(query.as_str()) {
+                    cleared_query_for_timeout.replace(None);
+                }
+            });
             filter.set(new_filter);
             if let Some(sidebar) = sidebar_selection.borrow().as_ref() {
                 sidebar::set_active_filter(sidebar, new_filter);
@@ -3883,12 +4002,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let gallery_for_search = gallery.clone();
     let connection_for_search = connection.clone();
-    let folder_cache_for_search = folder_cache.clone();
     let filter_for_search = filter.clone();
     let search_text_for_search = search_text.clone();
     let sort_for_search = sort.clone();
     let group_mode_for_search = group_mode.clone();
     let search_suppressed_for_search = search_suppressed.clone();
+    let cleared_search_query_for_search = cleared_search_query.clone();
     let search_debounce_for_search = search_debounce.clone();
     let destination_click_for_search = destination_click.clone();
     let sidebar_selection_for_search = sidebar_selection_slot.clone();
@@ -3912,10 +4031,23 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
             }
             let query = entry.text().to_string();
-            // Imports and refreshes can change the folder hierarchy after the
-            // window was created. Read the current records so suggestions do
-            // not lag behind the sidebar and scan results.
-            let folders_for_search = folder_cache_for_search.borrow().clone();
+            if should_ignore_cleared_search_event(
+                false,
+                cleared_search_query_for_search.borrow().as_deref(),
+                &query,
+            ) {
+                cleared_search_query_for_search.replace(None);
+                return;
+            }
+            // Folder suggestions come directly from the library database.
+            // This is intentionally a lightweight lookup: do not call db::folders()
+            // here because it also calculates recursive counts and availability.
+            let folders_for_search = db::search_folders(
+                &connection_for_search.borrow(),
+                &query,
+                24,
+            )
+            .unwrap_or_default();
             search_text_for_search.replace(query.clone());
             // Search is a global results view even when it was started from a
             // folder. Temporarily leave the Folder stream while text is active;
@@ -3939,7 +4071,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
             }
             eprintln!(
-                "SEARCH TRACE changed folders_cached count={} query_chars={} entry_width={} area_width={} header_width={} sidebar_shown={} split_collapsed={}",
+                "SEARCH TRACE changed folder_db_matches count={} query_chars={} entry_width={} area_width={} header_width={} sidebar_shown={} split_collapsed={}",
                 folders_for_search.len(),
                 query.chars().count(),
                 entry.width(),
@@ -3956,8 +4088,72 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 Rc::new({
                     let destination_click = destination_click_for_search.clone();
                     let sidebar_selection = sidebar_selection_for_search.clone();
+                    let gallery = gallery_for_search.clone();
+                    let filter = filter_for_search.clone();
+                    let search_text = search_text_for_search.clone();
+                    let folders = folders_for_search.clone();
                     move |folder_id| {
+                        if std::env::var_os("PICASA_TRACE").is_some() {
+                            eprintln!("SEARCH TRACE suggestion_navigate folder_id={}", folder_id);
+                        }
+                        let folder_path = folders
+                            .iter()
+                            .find(|folder| folder.id == folder_id)
+                            .map(|folder| folder.path.clone());
+
+                        // Folder suggestions are navigation results. Clear the search and
+                        // enter the normal continuous Folder view, then focus this folder.
+                        // destination_click restores the cached Folder stream when available.
                         destination_click(sidebar::SidebarFilter::Folder(folder_id));
+
+                        // The first Folder navigation after startup has no cache yet. The
+                        // continuous stream is built progressively, so preserve the requested
+                        // folder on the Gallery until its rows are ready. This also lets a
+                        // valid cache restore focus immediately without reloading the stream.
+                        if let Some(folder_path) = folder_path {
+                            gallery.set_pending_folder_target(folder_id, folder_path);
+                            if std::env::var_os("PICASA_TRACE").is_some() {
+                                eprintln!(
+                                    "SEARCH TRACE folder_focus_pending folder_id={folder_id}"
+                                );
+                            }
+                            let focused_immediately = gallery.try_focus_pending_folder();
+                            let gallery = gallery.clone();
+                            let filter = filter.clone();
+                            let search_text = search_text.clone();
+                            let attempts = Rc::new(Cell::new(0u32));
+                            let attempts_for_timer = attempts.clone();
+                            if !focused_immediately {
+                                glib::timeout_add_local(Duration::from_millis(25), move || {
+                                let attempt = attempts_for_timer.get() + 1;
+                                attempts_for_timer.set(attempt);
+                                let still_on_target = filter.get()
+                                    == sidebar::SidebarFilter::Folder(folder_id);
+                                let search_is_clear = search_text.borrow().is_empty();
+                                let building = gallery.stream_building();
+                                let focused = if still_on_target && search_is_clear {
+                                    gallery.try_focus_pending_folder()
+                                } else {
+                                    false
+                                };
+                                let pending = gallery.has_pending_folder_target();
+
+                                if search_folder_focus_should_stop(
+                                    still_on_target,
+                                    search_is_clear,
+                                    building,
+                                    pending,
+                                    focused,
+                                    attempt,
+                                ) {
+                                    glib::ControlFlow::Break
+                                } else {
+                                    glib::ControlFlow::Continue
+                                }
+                                });
+                            }
+                        }
+
                         if let Some(sidebar) = sidebar_selection.borrow().as_ref().cloned() {
                             glib::timeout_add_local_once(
                                 Duration::from_millis(100),
@@ -3985,23 +4181,32 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 let gallery = gallery_for_search.clone();
                 let debounce_slot = search_debounce_for_search.clone();
                 let query_for_refresh = query.clone();
-                let source = glib::timeout_add_local(Duration::from_millis(300), move || {
-                    let refresh_started = Instant::now();
-                    // The source removes itself after returning Break. Clear
-                    // the slot now so a later keystroke never tries to remove
-                    // an already-finished SourceId.
-                    debounce_slot.borrow_mut().take();
-                    if search_text.borrow().as_str() != query_for_refresh {
-                        return glib::ControlFlow::Break;
-                    }
-                    refresh_grid(&connection, filter.get(), &query_for_refresh, sort.get(), &gallery);
-                    eprintln!(
-                        "SEARCH TRACE global_refresh_done query={:?} elapsed_ms={}",
-                        query_for_refresh,
-                        refresh_started.elapsed().as_millis()
-                    );
-                    glib::ControlFlow::Break
-                });
+                let source = glib::timeout_add_local(
+                    Duration::from_millis(SEARCH_DEBOUNCE_MS),
+                    move || {
+                        let refresh_started = Instant::now();
+                        // The source removes itself after returning Break. Clear
+                        // the slot now so a later keystroke never tries to remove
+                        // an already-finished SourceId.
+                        debounce_slot.borrow_mut().take();
+                        if search_text.borrow().as_str() != query_for_refresh {
+                            return glib::ControlFlow::Break;
+                        }
+                        refresh_grid(
+                            &connection,
+                            filter.get(),
+                            &query_for_refresh,
+                            sort.get(),
+                            &gallery,
+                        );
+                        eprintln!(
+                            "SEARCH TRACE global_refresh_done query={:?} elapsed_ms={}",
+                            query_for_refresh,
+                            refresh_started.elapsed().as_millis()
+                        );
+                        glib::ControlFlow::Break
+                    },
+                );
                 search_debounce_for_search.replace(Some(source));
             }
             eprintln!(

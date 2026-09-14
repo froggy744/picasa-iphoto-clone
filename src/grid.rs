@@ -1291,6 +1291,9 @@ pub struct Gallery {
     // Folder rows actually exist, instead of stopping as soon as the backing
     // photo store contains the target id.
     stream_building: Rc<Cell<bool>>,
+    // Folder selected from search while the continuous stream is being built.
+    // Keep the target with the Gallery so clearing the search cannot drop it.
+    pending_folder_target: Rc<RefCell<Option<(i64, String)>>>,
     group_mode: Rc<Cell<GroupMode>>,
     group_date: Rc<Cell<GroupDate>>,
     group_ranges: Rc<RefCell<Vec<GroupRange>>>,
@@ -1966,6 +1969,7 @@ impl Gallery {
             current_photos,
             replace_generation: Rc::new(Cell::new(0)),
             stream_building: Rc::new(Cell::new(false)),
+            pending_folder_target: Rc::new(RefCell::new(None)),
             group_mode: Rc::new(Cell::new(GroupMode::None)),
             group_date: Rc::new(Cell::new(GroupDate::Taken)),
             group_ranges: Rc::new(RefCell::new(Vec::new())),
@@ -2396,6 +2400,46 @@ impl Gallery {
     /// section order unchanged), in which case `folder_store` must not be
     /// cleared. The Folder rows reference the restored PhotoObjects by index and
     /// `selection` reads them through `store`, so both must be replaced.
+    pub fn can_restore_folder_cache(&self) -> bool {
+        self.folder_cache.borrow().as_ref().is_some_and(|cache| {
+            cache.columns == self.current_columns.get()
+                && cache.order == *self.folder_order.borrow()
+        })
+    }
+
+    pub fn set_pending_folder_target(&self, folder_id: i64, folder_path: String) {
+        self.pending_folder_target
+            .replace(Some((folder_id, folder_path)));
+    }
+
+    pub fn clear_pending_folder_target(&self) {
+        self.pending_folder_target.replace(None);
+    }
+
+    pub fn has_pending_folder_target(&self) -> bool {
+        self.pending_folder_target.borrow().is_some()
+    }
+
+    /// Focus the search-selected folder only after its real Folder rows exist.
+    /// A cache restore makes those rows available immediately; a progressive
+    /// build makes them available once ranges and rows have been rebuilt.
+    pub fn try_focus_pending_folder(&self) -> bool {
+        if self.stream_building.get() || self.group_mode.get() != GroupMode::Folder {
+            return false;
+        }
+        let Some((folder_id, folder_path)) = self.pending_folder_target.borrow().clone() else {
+            return false;
+        };
+        if !self.scroll_to_folder(folder_id, &folder_path) {
+            return false;
+        }
+        self.pending_folder_target.replace(None);
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!("SEARCH TRACE suggestion_focus_done folder_id={folder_id}");
+        }
+        true
+    }
+
     fn restore_folder_cache(&self) -> bool {
         let Some(cache) = self.folder_cache.borrow().clone() else {
             return false;
@@ -5417,10 +5461,10 @@ fn collect_tiles(widget: &gtk::Widget, tiles: &mut Vec<SquareTile>) {
 #[cfg(test)]
 mod folder_stream_tests {
     use super::{
-        folder_chunk_size, folder_dragged_positions, folder_line_height,
-        folder_section_plan, folder_selection_after_click, folder_virtual_row_matches,
-        folder_virtual_rows, FolderCatalogEntry, FolderRowData,
-        FolderRowKind, FolderTileBounds, FolderVirtualRow, GroupRange,
+        folder_chunk_size, folder_dragged_positions, folder_line_height, folder_section_plan,
+        folder_selection_after_click, folder_virtual_row_matches, folder_virtual_rows,
+        FolderCatalogEntry, FolderRowData, FolderRowKind, FolderTileBounds, FolderVirtualRow,
+        GroupRange,
     };
 
     #[test]
@@ -5655,7 +5699,9 @@ mod folder_stream_tests {
 
         let plan = folder_section_plan(&ranges, &catalog, &[1, 11, 274]);
         assert_eq!(
-            plan.iter().map(|section| section.folder_id).collect::<Vec<_>>(),
+            plan.iter()
+                .map(|section| section.folder_id)
+                .collect::<Vec<_>>(),
             vec![274]
         );
     }
@@ -5669,7 +5715,9 @@ mod folder_stream_tests {
         }];
         let plan = folder_section_plan(&ranges, &catalog, &[99, 10, 11]);
         assert_eq!(
-            plan.iter().map(|section| section.folder_id).collect::<Vec<_>>(),
+            plan.iter()
+                .map(|section| section.folder_id)
+                .collect::<Vec<_>>(),
             vec![10, 11]
         );
     }
@@ -5792,7 +5840,9 @@ mod folder_stream_tests {
         let plan = folder_section_plan(&original, &[], &[11, 10]);
 
         assert_eq!(
-            plan.iter().map(|section| section.folder_id).collect::<Vec<_>>(),
+            plan.iter()
+                .map(|section| section.folder_id)
+                .collect::<Vec<_>>(),
             vec![11, 10]
         );
         assert_eq!(plan[0].range_index, Some(1));

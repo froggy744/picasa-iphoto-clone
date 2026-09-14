@@ -24,6 +24,77 @@ mod tests {
 
     use super::*;
 
+
+    #[test]
+    fn folder_search_uses_registered_database_names_and_paths() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection.execute(
+            "INSERT INTO folders(path, name) VALUES
+             ('/photos/marianne portraits', 'Marianne Portraits'),
+             ('/photos/rugga kids', 'Sports Archive'),
+             ('/photos/camera', 'Camera')",
+            [],
+        ).unwrap();
+        connection
+            .execute(
+                "INSERT INTO photos(path, folder_id, trashed) VALUES
+                 ('/photos/marianne portraits/a.jpg', 1, 0),
+                 ('/photos/rugga kids/a.jpg', 2, 0)",
+                [],
+            )
+            .unwrap();
+
+        let by_name = search_folders(&connection, "MARIANNE", 20).unwrap();
+        assert_eq!(by_name.len(), 1);
+        assert_eq!(by_name[0].name, "Marianne Portraits");
+
+        let by_path = search_folders(&connection, "rugga kids", 20).unwrap();
+        assert_eq!(by_path.len(), 1);
+        assert_eq!(by_path[0].path, "/photos/rugga kids");
+
+        assert!(search_folders(&connection, "m", 20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn folder_search_excludes_empty_folders_but_keeps_photo_bearing_ancestors() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection.execute(
+            "INSERT INTO folders(path, name, parent_id) VALUES
+             ('/photos/marianne', 'Marianne', NULL),
+             ('/photos/marianne/empty', 'Empty Marianne', 1),
+             ('/photos/marianne/with-photos', 'Photos Marianne', 1)",
+            [],
+        ).unwrap();
+        connection
+            .execute(
+                "INSERT INTO photos(path, folder_id, trashed) VALUES (?1, ?2, 0)",
+                rusqlite::params!["/photos/marianne/with-photos/a.jpg", 3],
+            )
+            .unwrap();
+
+        let results = search_folders(&connection, "marianne", 20).unwrap();
+        let ids = results.iter().map(|folder| folder.id).collect::<Vec<_>>();
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    #[test]
+    fn folder_path_lookup_returns_exact_registered_folder() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection
+            .execute("INSERT INTO folders(path, name) VALUES (?1, ?2)",
+                ["/photos/exact-target", "Exact Target"])
+            .unwrap();
+        let id = connection.last_insert_rowid();
+
+        assert_eq!(
+            folder_path_by_id(&connection, id).unwrap().as_deref(),
+            Some("/photos/exact-target")
+        );
+        assert_eq!(folder_path_by_id(&connection, id + 100).unwrap(), None);
+    }
     #[test]
     fn rename_and_trash_updates_are_persisted() {
         let connection = Connection::open_in_memory().unwrap();

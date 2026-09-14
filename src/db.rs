@@ -49,6 +49,13 @@ CREATE INDEX IF NOT EXISTS idx_photos_folder ON photos(folder_id);
 CREATE INDEX IF NOT EXISTS idx_album_photos_photo ON album_photos(photo_id);
 "#;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderSearchResult {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Folder {
     pub id: i64,
