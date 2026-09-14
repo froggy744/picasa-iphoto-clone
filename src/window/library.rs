@@ -495,6 +495,7 @@ mod photo_action_tests {
             name: name.to_string(),
             parent_id,
             imported_root,
+            watched: false,
             photo_count: 1,
             subfolder_count: 0,
             available: true,

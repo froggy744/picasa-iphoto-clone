@@ -67,8 +67,7 @@ fn migrate_folder_schema(connection: &Connection) -> Result<()> {
     if !columns.iter().any(|column| column == "imported_root") {
         connection.execute("ALTER TABLE folders ADD COLUMN imported_root BOOLEAN NOT NULL DEFAULT 0", [])?;
     }
-    // Legacy compatibility only. Automatic folder watching is intentionally
-    // no longer exposed or read by the runtime.
+    // Keep the per-root watch preference when upgrading older libraries.
     if !columns.iter().any(|column| column == "watched") {
         connection.execute("ALTER TABLE folders ADD COLUMN watched BOOLEAN NOT NULL DEFAULT 0", [])?;
     }

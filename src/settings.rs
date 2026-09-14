@@ -19,6 +19,7 @@ impl SettingsWindow {
         connection: Rc<RefCell<Connection>>,
         formats_changed: Rc<dyn Fn()>,
         theme_changed: Rc<dyn Fn()>,
+        folder_watch_changed: Rc<dyn Fn()>,
         initial_page: Option<&str>,
     ) {
         if let Some(window) = self.window.borrow().upgrade() {
@@ -57,7 +58,7 @@ impl SettingsWindow {
             "Themes",
         );
         stack.add_titled(
-            &folders_page(connection.clone()),
+            &folders_page(connection.clone(), folder_watch_changed),
             Some("folders"),
             "Folders",
         );
@@ -136,16 +137,72 @@ fn formats_page(
     scroll_page(content)
 }
 
-fn folders_page(connection: Rc<RefCell<Connection>>) -> gtk::ScrolledWindow {
-    let content = page_content("Folders", "Folders currently registered in the library.");
-    let folders = crate::db::folders(&connection.borrow()).unwrap_or_default();
+fn folders_page(
+    connection: Rc<RefCell<Connection>>,
+    folder_watch_changed: Rc<dyn Fn()>,
+) -> gtk::ScrolledWindow {
+    let content = page_content(
+        "Folders",
+        "Manage registered folders and choose which folders are watched for changes.",
+    );
     let list = settings_list();
+
+    let automatic = gtk::Switch::new();
+    automatic.set_valign(gtk::Align::Center);
+    automatic.set_active(crate::db::folder_watching_enabled(&connection.borrow()));
+    {
+        let connection = connection.clone();
+        let folder_watch_changed = folder_watch_changed.clone();
+        automatic.connect_active_notify(move |toggle| {
+            if let Err(error) = crate::db::set_folder_watching_enabled(
+                &connection.borrow(),
+                toggle.is_active(),
+            ) {
+                eprintln!("Could not save automatic folder watching setting: {error}");
+                return;
+            }
+            folder_watch_changed();
+        });
+    }
+    append_row(
+        &list,
+        "Automatic folder watching",
+        Some("Detect changes automatically in folders marked for watching."),
+        Some(automatic.upcast_ref()),
+    );
+
+    let folders = crate::db::folders(&connection.borrow()).unwrap_or_default();
     for folder in &folders {
         let status = if folder.available {
             "Available"
         } else {
             "Unavailable"
         };
+        let toggle = gtk::Switch::new();
+        toggle.set_valign(gtk::Align::Center);
+        toggle.set_active(folder.watched);
+        automatic
+            .bind_property("active", &toggle, "sensitive")
+            .sync_create()
+            .build();
+        let folder_id = folder.id;
+        let connection = connection.clone();
+        let folder_watch_changed = folder_watch_changed.clone();
+        toggle.connect_active_notify(move |toggle| {
+            match crate::db::set_folder_watched(
+                &connection.borrow(),
+                folder_id,
+                toggle.is_active(),
+            ) {
+                Ok(true) => folder_watch_changed(),
+                Ok(false) => eprintln!(
+                    "Could not change watch state for missing folder {folder_id}"
+                ),
+                Err(error) => {
+                    eprintln!("Could not change folder watch state: {error}");
+                }
+            }
+        });
         append_row(
             &list,
             &folder.name,
@@ -153,7 +210,7 @@ fn folders_page(connection: Rc<RefCell<Connection>>) -> gtk::ScrolledWindow {
                 "{}\n{status} · {} photos",
                 folder.path, folder.photo_count
             )),
-            None,
+            Some(toggle.upcast_ref()),
         );
     }
     append_empty_state(&list, "No library folders", folders.is_empty());

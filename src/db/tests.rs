@@ -542,6 +542,70 @@ mod tests {
     }
 
     #[test]
+    fn watched_folder_state_is_persisted_for_imported_roots() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+
+        let root = mark_import_root(&connection, "/home/peet/Pictures").unwrap();
+        let initial = folders(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.id == root)
+            .unwrap();
+        assert!(!initial.watched);
+
+        assert!(set_folder_watched(&connection, root, true).unwrap());
+        let watched = folders(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.id == root)
+            .unwrap();
+        assert!(watched.watched);
+
+        assert!(set_folder_watched(&connection, root, false).unwrap());
+        let unwatched = folders(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.id == root)
+            .unwrap();
+        assert!(!unwatched.watched);
+    }
+
+    #[test]
+    fn discovered_subfolder_can_be_marked_watched() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+
+        let root = mark_import_root(&connection, "/home/peet/Pictures").unwrap();
+        let child = insert_discovered_folder(
+            &connection,
+            "/home/peet/Pictures/Screenshots",
+            root,
+        )
+        .unwrap();
+
+        assert!(set_folder_watched(&connection, child, true).unwrap());
+        let child = folders(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.id == child)
+            .unwrap();
+        assert!(child.watched);
+    }
+
+    #[test]
+    fn automatic_folder_watching_defaults_on_and_can_be_disabled() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+
+        assert!(folder_watching_enabled(&connection));
+        set_folder_watching_enabled(&connection, false).unwrap();
+        assert!(!folder_watching_enabled(&connection));
+        set_folder_watching_enabled(&connection, true).unwrap();
+        assert!(folder_watching_enabled(&connection));
+    }
+
+    #[test]
     fn imported_root_availability_is_inherited_by_descendant_folders() {
         let folders = vec![
             Folder {
@@ -550,6 +614,7 @@ mod tests {
                 name: "Photos".to_string(),
                 parent_id: None,
                 imported_root: true,
+                watched: false,
                 photo_count: 5_000,
                 subfolder_count: 1,
                 available: true,
@@ -560,6 +625,7 @@ mod tests {
                 name: "2026".to_string(),
                 parent_id: Some(10),
                 imported_root: false,
+                watched: false,
                 photo_count: 5_000,
                 subfolder_count: 0,
                 available: true,
@@ -570,6 +636,7 @@ mod tests {
                 name: "Pictures".to_string(),
                 parent_id: None,
                 imported_root: true,
+                watched: false,
                 photo_count: 1,
                 subfolder_count: 0,
                 available: true,

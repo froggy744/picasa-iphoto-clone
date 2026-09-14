@@ -93,6 +93,7 @@ pub fn bind_refresh_gate(scrolled: &gtk::ScrolledWindow, gate: &gtk::Button) {
 const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
 const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
+const FOLDER_WATCH_KEY: &str = "picasa-sidebar-folder-watch";
 const FOLDER_MODE_TOGGLE_KEY: &str = "picasa-sidebar-folder-mode-toggle";
 const FOLDER_MODE_CHANGED_KEY: &str = "picasa-sidebar-folder-mode-changed";
 const KEYBOARD_GRID_TARGET_KEY: &str = "picasa-sidebar-keyboard-grid-target";
@@ -116,6 +117,7 @@ pub fn build(
     on_folder_statistics: Rc<dyn Fn(Folder)>,
     on_remove_folder: Rc<dyn Fn(Folder)>,
     on_folder_favorite: Rc<dyn Fn(Folder, bool)>,
+    on_folder_watch: Rc<dyn Fn(Folder, bool)>,
     folder_display_mode: FolderDisplayMode,
     on_folder_display_mode_changed: Rc<dyn Fn(FolderDisplayMode)>,
 ) -> gtk::ScrolledWindow {
@@ -360,6 +362,7 @@ pub fn build(
         folder_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics);
         folder_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder);
         folder_list.set_data(FOLDER_FAVORITE_KEY, on_folder_favorite);
+        folder_list.set_data(FOLDER_WATCH_KEY, on_folder_watch);
     }
 
     populate_albums(&album_list, albums, &on_delete_album);
@@ -1663,6 +1666,10 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
         list.data::<Rc<dyn Fn(Folder, bool)>>(FOLDER_FAVORITE_KEY)
             .map(|callback| callback.as_ref().clone())
     };
+    let watch = unsafe {
+        list.data::<Rc<dyn Fn(Folder, bool)>>(FOLDER_WATCH_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
     let Some(refresh) = refresh else {
         return;
     };
@@ -1673,6 +1680,9 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
         return;
     };
     let Some(favorite) = favorite else {
+        return;
+    };
+    let Some(watch) = watch else {
         return;
     };
 
@@ -1717,6 +1727,22 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
             refresh(path.clone());
         });
         menu.append(&refresh_item);
+
+        let watch_item = gtk::Button::with_label(if folder_for_menu.watched {
+            "Stop Watching Folder"
+        } else {
+            "Watch Folder"
+        });
+        watch_item.add_css_class("flat");
+        let folder = folder_for_menu.clone();
+        let watch = watch.clone();
+        let watched = !folder_for_menu.watched;
+        let popover_for_watch = popover.clone();
+        watch_item.connect_clicked(move |_| {
+            popover_for_watch.popdown();
+            watch(folder.clone(), watched);
+        });
+        menu.append(&watch_item);
 
         let statistics_item = gtk::Button::with_label("Folder statistics");
         statistics_item.add_css_class("flat");

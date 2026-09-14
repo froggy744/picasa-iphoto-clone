@@ -130,6 +130,7 @@ mod reconnect_tests {
             name: id.to_string(),
             parent_id: None,
             imported_root: true,
+            watched: false,
             photo_count: 0,
             subfolder_count: 0,
             available,

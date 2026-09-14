@@ -4,6 +4,7 @@ const MAX_RECENTLY_ADDED_LIMIT: usize = 1_000_000;
 pub const LIBRARY_AVAILABLE_SETTING_KEY: &str = "library-stats-available";
 pub const LIBRARY_UNAVAILABLE_SETTING_KEY: &str = "library-stats-unavailable";
 pub const LIBRARY_STATS_UPDATED_SETTING_KEY: &str = "library-stats-updated";
+pub const FOLDER_WATCHING_ENABLED_SETTING_KEY: &str = "folder-watching-enabled";
 
 pub fn setting(connection: &Connection, key: &str) -> Result<Option<String>> {
     Ok(connection
@@ -11,6 +12,22 @@ pub fn setting(connection: &Connection, key: &str) -> Result<Option<String>> {
             row.get(0)
         })
         .optional()?)
+}
+
+pub fn folder_watching_enabled(connection: &Connection) -> bool {
+    setting(connection, FOLDER_WATCHING_ENABLED_SETTING_KEY)
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some("false")
+}
+
+pub fn set_folder_watching_enabled(connection: &Connection, enabled: bool) -> Result<()> {
+    set_setting(
+        connection,
+        FOLDER_WATCHING_ENABLED_SETTING_KEY,
+        if enabled { "true" } else { "false" },
+    )
 }
 
 pub fn recently_added_limit(connection: &Connection) -> usize {

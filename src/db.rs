@@ -56,6 +56,7 @@ pub struct Folder {
     pub name: String,
     pub parent_id: Option<i64>,
     pub imported_root: bool,
+    pub watched: bool,
     pub photo_count: i64,
     pub subfolder_count: i64,
     pub available: bool,

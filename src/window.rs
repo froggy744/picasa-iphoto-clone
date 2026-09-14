@@ -5,6 +5,7 @@ use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
 use adw::prelude::*;
+use gio::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
 use rusqlite::Connection;
@@ -293,6 +294,7 @@ enum PhotoScanRequestReason {
     ManualLibraryRefresh,
     ImportFolder,
     FilesystemNotification,
+    DebouncedWatchRefresh,
     AvailabilityUpdate,
     ProgrammaticSidebarSelection,
 }
@@ -303,6 +305,9 @@ impl PhotoScanRequestReason {
             Self::UserFolderRefresh => Some(ScanJobKind::FolderRefresh),
             Self::ManualLibraryRefresh => Some(ScanJobKind::Refresh),
             Self::ImportFolder => Some(ScanJobKind::Import),
+            // Raw filesystem signals never cross the scan boundary directly.
+            // Only the coalesced/debounced watch request may start a targeted scan.
+            Self::DebouncedWatchRefresh => Some(ScanJobKind::FolderRefresh),
             Self::FilesystemNotification
             | Self::AvailabilityUpdate
             | Self::ProgrammaticSidebarSelection => None,
@@ -315,10 +320,34 @@ impl PhotoScanRequestReason {
             Self::ManualLibraryRefresh => "manual_refresh",
             Self::ImportFolder => "import",
             Self::FilesystemNotification => "filesystem_notification",
+            Self::DebouncedWatchRefresh => "watch_refresh",
             Self::AvailabilityUpdate => "availability_update",
             Self::ProgrammaticSidebarSelection => "programmatic_sidebar_selection",
         }
     }
+}
+
+/// Resolve a watched library folder to the imported root that owns its scan.
+/// A discovered subfolder can be watched independently, but scanning still
+/// uses the existing imported-root boundary so folder ownership cannot be
+/// rewritten by an automatic refresh.
+fn watch_scan_root(folders: &[db::Folder], watched_id: i64) -> Option<String> {
+    let by_id = folders
+        .iter()
+        .map(|folder| (folder.id, folder))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut current = by_id.get(&watched_id).copied();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(folder) = current {
+        if !seen.insert(folder.id) {
+            return None;
+        }
+        if folder.imported_root {
+            return Some(folder.path.clone());
+        }
+        current = folder.parent_id.and_then(|id| by_id.get(&id).copied());
+    }
+    None
 }
 
 #[derive(Debug)]
@@ -502,7 +531,8 @@ mod folder_scroll_tests {
 
 #[cfg(test)]
 mod photo_scan_authorization_tests {
-    use super::{PhotoScanRequestReason, ScanJobKind, ScanJobState};
+    use super::{watch_scan_root, PhotoScanRequestReason, ScanJobKind, ScanJobState};
+    use crate::db;
 
     fn authorized_kind(reason: PhotoScanRequestReason) -> Option<ScanJobKind> {
         let mut job = ScanJobState::default();
@@ -537,6 +567,44 @@ mod photo_scan_authorization_tests {
     #[test]
     fn filesystem_notifications_cannot_authorize_a_refresh() {
         assert_denied_without_job_mutation(PhotoScanRequestReason::FilesystemNotification);
+    }
+
+    #[test]
+    fn watched_subfolder_scans_through_its_imported_root() {
+        let folders = vec![
+            db::Folder {
+                id: 1,
+                path: "/photos".to_string(),
+                name: "photos".to_string(),
+                parent_id: None,
+                imported_root: true,
+                watched: false,
+                photo_count: 0,
+                subfolder_count: 1,
+                available: true,
+            },
+            db::Folder {
+                id: 2,
+                path: "/photos/screenshots".to_string(),
+                name: "screenshots".to_string(),
+                parent_id: Some(1),
+                imported_root: false,
+                watched: true,
+                photo_count: 0,
+                subfolder_count: 0,
+                available: true,
+            },
+        ];
+
+        assert_eq!(watch_scan_root(&folders, 2).as_deref(), Some("/photos"));
+    }
+
+    #[test]
+    fn debounced_watch_refresh_authorizes_targeted_scanning() {
+        assert_eq!(
+            authorized_kind(PhotoScanRequestReason::DebouncedWatchRefresh),
+            Some(ScanJobKind::FolderRefresh)
+        );
     }
 
     #[test]

@@ -782,6 +782,100 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         RefCell<Option<Rc<dyn Fn(PhotoScanRequestReason, String)>>>,
     > =
         Rc::new(RefCell::new(None));
+
+    // Keep filesystem monitors alive for exactly the folders the user marked
+    // for watching. Raw monitor callbacks only mark the owning imported root
+    // dirty; they never start a scan directly.
+    let folder_watch_monitors: Rc<RefCell<Vec<gio::FileMonitor>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let pending_watch_refreshes: Rc<
+        RefCell<std::collections::HashMap<String, Instant>>,
+    > = Rc::new(RefCell::new(std::collections::HashMap::new()));
+    let rebuild_folder_watches: Rc<dyn Fn()> = {
+        let connection = connection.clone();
+        let monitors = folder_watch_monitors.clone();
+        let pending = pending_watch_refreshes.clone();
+        Rc::new(move || {
+            for monitor in monitors.borrow_mut().drain(..) {
+                monitor.cancel();
+            }
+            pending.borrow_mut().clear();
+
+            if !db::folder_watching_enabled(&connection.borrow()) {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!("WATCH TRACE rebuild enabled=false monitors=0");
+                }
+                return;
+            }
+
+            let Ok(folders) = db::folders(&connection.borrow()) else {
+                eprintln!("WATCH ERROR could not read folders");
+                return;
+            };
+            let mut installed = 0usize;
+            for folder in folders.iter().filter(|folder| folder.watched && folder.available) {
+                let Some(scan_root) = watch_scan_root(&folders, folder.id) else {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!(
+                            "WATCH TRACE skip folder={} path={} reason=no_imported_root",
+                            folder.id, folder.path
+                        );
+                    }
+                    continue;
+                };
+                let watched_path = folder.path.clone();
+                let file = crate::source::file(&watched_path);
+                let monitor = match file.monitor_directory(
+                    gio::FileMonitorFlags::NONE,
+                    gio::Cancellable::NONE,
+                ) {
+                    Ok(monitor) => monitor,
+                    Err(error) => {
+                        eprintln!(
+                            "WATCH ERROR monitor path={} error={}",
+                            watched_path, error
+                        );
+                        continue;
+                    }
+                };
+                let pending_for_event = pending.clone();
+                let watched_path_for_event = watched_path.clone();
+                let scan_root_for_event = scan_root.clone();
+                monitor.connect_changed(move |_, file, other_file, event| {
+                    // Ignore metadata-only monitor noise. Content changes are
+                    // coalesced below before they can authorize any scan.
+                    if matches!(
+                        event,
+                        gio::FileMonitorEvent::AttributeChanged
+                            | gio::FileMonitorEvent::PreUnmount
+                            | gio::FileMonitorEvent::Unmounted
+                    ) {
+                        return;
+                    }
+                    pending_for_event
+                        .borrow_mut()
+                        .insert(scan_root_for_event.clone(), Instant::now());
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!(
+                            "WATCH TRACE event watched={} root={} event={:?} file={} other={}",
+                            watched_path_for_event,
+                            scan_root_for_event,
+                            event,
+                            crate::source::reference(file),
+                            other_file
+                                .map(crate::source::reference)
+                                .unwrap_or_default()
+                        );
+                    }
+                });
+                monitors.borrow_mut().push(monitor);
+                installed += 1;
+            }
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("WATCH TRACE rebuild enabled=true monitors={installed}");
+            }
+        })
+    };
     let import_folder: Rc<dyn Fn()> = {
         let slot = import_folder_slot.clone();
         Rc::new(move || {
@@ -989,6 +1083,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let settings_sidebar = sidebar_for_unavailable.clone();
     let settings_on_unavailable = availability_refresh.clone();
     let settings_albums_refresh = albums_home_refresh_slot.clone();
+    let settings_rebuild_folder_watches = rebuild_folder_watches.clone();
     let present_settings: Rc<dyn Fn(Option<&'static str>)> = Rc::new(move |initial_page| {
         let connection = settings_connection.clone();
         let gallery = settings_gallery.clone();
@@ -1000,6 +1095,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let on_unavailable = settings_on_unavailable.clone();
         let theme_connection = settings_connection.clone();
         let theme_albums_refresh = settings_albums_refresh.clone();
+        let watch_connection = settings_connection.clone();
+        let watch_sidebar = settings_sidebar.clone();
+        let watch_on_unavailable = settings_on_unavailable.clone();
         settings_window.present(
             &settings_parent,
             settings_connection.clone(),
@@ -1027,6 +1125,21 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     refresh(&albums);
                 }
             }),
+            {
+                let rebuild_folder_watches = settings_rebuild_folder_watches.clone();
+                Rc::new(move || {
+                    rebuild_folder_watches();
+                    if let Some(sidebar) = watch_sidebar.borrow().as_ref().cloned() {
+                        if let Ok(folders) = db::folders(&watch_connection.borrow()) {
+                            sidebar::refresh_folder_rows(
+                                &sidebar,
+                                &folders,
+                                &watch_on_unavailable,
+                            );
+                        }
+                    }
+                })
+            },
             initial_page,
         );
     });
@@ -3049,6 +3162,39 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
             })
         },
+        {
+            let connection = connection.clone();
+            let sidebar = sidebar_for_unavailable.clone();
+            let on_unavailable = availability_refresh.clone();
+            let rebuild_folder_watches = rebuild_folder_watches.clone();
+            let parent: gtk::Widget = window.clone().upcast();
+            Rc::new(move |folder, watched| {
+                match db::set_folder_watched(&connection.borrow(), folder.id, watched) {
+                    Ok(true) => {
+                        rebuild_folder_watches();
+                        if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
+                            if let Ok(folders) = db::folders(&connection.borrow()) {
+                                sidebar::refresh_folder_rows(
+                                    &sidebar,
+                                    &folders,
+                                    &on_unavailable,
+                                );
+                            }
+                        }
+                    }
+                    Ok(false) => show_error(
+                        &parent,
+                        "Could not change folder watch state",
+                        "That folder is no longer registered in the library.",
+                    ),
+                    Err(error) => show_error(
+                        &parent,
+                        "Could not change folder watch state",
+                        &error.to_string(),
+                    ),
+                }
+            })
+        },
         folder_display_mode,
         {
             let connection = connection.clone();
@@ -4551,6 +4697,39 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         })
     }));
 
+    // Debounce/coalesce monitor activity independently from scan authorization.
+    // One busy scan cannot be interrupted by a watch event; the dirty root
+    // remains pending and is submitted after the current job becomes idle.
+    {
+        let pending = pending_watch_refreshes.clone();
+        let scan_job = scan_job.clone();
+        let refresh_folder_slot = refresh_folder_slot.clone();
+        glib::timeout_add_local(Duration::from_millis(250), move || {
+            if scan_job.borrow().kind.is_some() {
+                return glib::ControlFlow::Continue;
+            }
+            let now = Instant::now();
+            let ready = pending
+                .borrow()
+                .iter()
+                .find_map(|(path, changed_at)| {
+                    (now.duration_since(*changed_at) >= Duration::from_millis(750))
+                        .then(|| path.clone())
+                });
+            if let Some(path) = ready {
+                pending.borrow_mut().remove(&path);
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!("WATCH TRACE dispatch root={path}");
+                }
+                if let Some(callback) = refresh_folder_slot.borrow().as_ref() {
+                    callback(PhotoScanRequestReason::DebouncedWatchRefresh, path);
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+    rebuild_folder_watches();
+
     let cancel_scan_job: Rc<dyn Fn()> = {
         let scan_job = scan_job.clone();
         let refresh_status_label = refresh_status_label.clone();
@@ -5362,7 +5541,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         continue;
                     }
 
-                    if kind == Some(ScanJobKind::Refresh)
+                    if matches!(kind, Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh))
                         && !matches!(filter_for_events.get(), sidebar::SidebarFilter::Folder(_))
                     {
                         refresh_grid(
