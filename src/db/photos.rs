@@ -290,6 +290,25 @@ pub fn folders(connection: &Connection) -> Result<Vec<Folder>> {
     Ok(folders)
 }
 
+/// Return only user-selected scan roots. Discovered descendants are never
+/// refresh roots, even when they contain photos or are marked watched.
+pub fn imported_root_paths(connection: &Connection) -> Result<Vec<String>> {
+    let mut statement = connection.prepare(
+        "SELECT path FROM folders
+         WHERE imported_root = 1
+           AND NOT EXISTS (
+             SELECT 1
+             FROM folders ancestor
+             WHERE ancestor.imported_root = 1
+               AND ancestor.id != folders.id
+               AND folders.path LIKE ancestor.path || '/%'
+           )
+         ORDER BY path COLLATE NOCASE",
+    )?;
+    let rows = statement.query_map([], |row| row.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<String>>>()?)
+}
+
 /// Persist whether a registered library folder should be watched.
 /// Any indexed folder can be watched independently; the watcher runtime remains
 /// responsible for coalescing filesystem activity safely.

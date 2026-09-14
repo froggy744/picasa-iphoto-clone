@@ -59,12 +59,13 @@ fn migrate_folder_schema(connection: &Connection) -> Result<()> {
         .prepare("PRAGMA table_info(folders)")?
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let needs_inference = !columns.iter().any(|column| column == "parent_id")
-        || !columns.iter().any(|column| column == "imported_root");
-    if !columns.iter().any(|column| column == "parent_id") {
+    let had_parent_id = columns.iter().any(|column| column == "parent_id");
+    let had_imported_root = columns.iter().any(|column| column == "imported_root");
+    let needs_inference = !had_parent_id || !had_imported_root;
+    if !had_parent_id {
         connection.execute("ALTER TABLE folders ADD COLUMN parent_id INTEGER REFERENCES folders(id)", [])?;
     }
-    if !columns.iter().any(|column| column == "imported_root") {
+    if !had_imported_root {
         connection.execute("ALTER TABLE folders ADD COLUMN imported_root BOOLEAN NOT NULL DEFAULT 0", [])?;
     }
     // Keep the per-root watch preference when upgrading older libraries.
@@ -73,6 +74,7 @@ fn migrate_folder_schema(connection: &Connection) -> Result<()> {
     }
     if !needs_inference {
         repair_folder_parent_links(connection)?;
+        repair_legacy_root_state(connection)?;
         connection.execute_batch("CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);")?;
         return Ok(());
     }
@@ -86,10 +88,74 @@ fn migrate_folder_schema(connection: &Connection) -> Result<()> {
             .filter(|(candidate_id, candidate_path)| candidate_id != id && is_descendant_path(path, candidate_path))
             .min_by_key(|(_, candidate_path)| candidate_path.len())
             .map(|(candidate_id, _)| *candidate_id);
-        connection.execute("UPDATE folders SET parent_id = ?1, imported_root = ?2 WHERE id = ?3", rusqlite::params![parent, parent.is_none(), id])?;
+        connection.execute(
+            "UPDATE folders SET parent_id = ?1, imported_root = ?2 WHERE id = ?3",
+            rusqlite::params![parent, parent.is_none(), id],
+        )?;
     }
     repair_folder_parent_links(connection)?;
+    connection.execute(
+        "INSERT OR REPLACE INTO settings(key, value) VALUES ('folder-root-legacy-migration-v1', 'complete')",
+        [],
+    )?;
     connection.execute_batch("CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);")?;
+    Ok(())
+}
+
+/// Recover the one legacy shape that can be identified after the root flag was
+/// introduced: a parent grouping row was created after a nested root and was
+/// therefore left unmarked. This runs once, before new explicit imports can
+/// establish a different intentional nested-root scope.
+fn repair_legacy_root_state(connection: &Connection) -> Result<()> {
+    let already_repaired: Option<String> = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'folder-root-legacy-migration-v1'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if already_repaired.is_some() {
+        return Ok(());
+    }
+
+    let candidates = connection
+        .prepare(
+            "SELECT parent.id, parent.path
+             FROM folders parent
+             WHERE parent.parent_id IS NULL
+               AND parent.imported_root = 0
+               AND EXISTS (
+                 SELECT 1 FROM folders child
+                 WHERE child.imported_root = 1
+                   AND child.path LIKE parent.path || '/%'
+                   AND child.id < parent.id
+               )
+               AND (
+                 SELECT COUNT(*) FROM folders child
+                 WHERE child.imported_root = 1
+                   AND child.path LIKE parent.path || '/%'
+               ) = 1
+             ORDER BY length(parent.path), parent.path",
+        )?
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    for (id, path) in candidates {
+        connection.execute(
+            "UPDATE folders SET imported_root = 0
+             WHERE imported_root = 1 AND path LIKE ?1 || '/%'",
+            [&path],
+        )?;
+        connection.execute(
+            "UPDATE folders SET imported_root = 1 WHERE id = ?1",
+            [id],
+        )?;
+    }
+
+    connection.execute(
+        "INSERT OR REPLACE INTO settings(key, value) VALUES ('folder-root-legacy-migration-v1', 'complete')",
+        [],
+    )?;
     Ok(())
 }
 

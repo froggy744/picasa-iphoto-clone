@@ -4049,6 +4049,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             )
             .unwrap_or_default();
             search_text_for_search.replace(query.clone());
+            if !query.is_empty() {
+                gallery_for_search.cancel_progressive_build();
+            }
             // Search is a global results view even when it was started from a
             // folder. Temporarily leave the Folder stream while text is active;
             // clearing the query restores the continuous Folder view.
@@ -4636,11 +4639,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     right_column.append(&right_header);
     right_column.append(&content);
 
-    // Toasts for import/scan progress and results.
-    let toast_overlay = adw::ToastOverlay::new();
-    toast_overlay.set_child(Some(&main_surface));
-
-    window.set_content(Some(&toast_overlay));
+    window.set_content(Some(&main_surface));
 
     let startup_gallery = gallery.clone();
     let startup_photos_for_idle = startup_photos.clone();
@@ -5082,7 +5081,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         if std::env::var_os("PICASA_TRACE").is_some() {
             eprintln!("REFRESH request reason=manual_refresh path=<library>");
         }
-        if scan_job_for_refresh.borrow().kind.is_some() {
+        let maintenance_was_active = scan_job_for_refresh
+            .borrow()
+            .kind
+            == Some(ScanJobKind::Maintenance);
+        if maintenance_was_active {
+            scan_job_for_refresh.borrow_mut().preempt_maintenance();
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("REFRESH startup_thumbnail_recovery_preempted");
+            }
+        } else if scan_job_for_refresh.borrow().kind.is_some() {
             if std::env::var_os("PICASA_TRACE").is_some() {
                 eprintln!(
                     "REFRESH request_ignored reason=manual_refresh active_job=true path=<library>"
@@ -5120,11 +5128,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if std::env::var_os("PICASA_TRACE").is_some() {
                 eprintln!("REFRESH prepare_worker_start generation={generation}");
             }
-            let folders = db::open_default()
-                .and_then(|connection| db::folders(&connection))
+            let roots = db::open_default()
+                .and_then(|connection| db::imported_root_paths(&connection))
                 .map_err(|error| error.to_string());
             let elapsed_ms = started.elapsed().as_millis();
-            let count = folders.as_ref().map(|folders| folders.len()).unwrap_or(0);
+            let count = roots.as_ref().map(|roots| roots.len()).unwrap_or(0);
             if std::env::var_os("PICASA_TRACE").is_some() {
                 eprintln!(
                     "REFRESH prepare_worker_done folders={} elapsed_ms={}",
@@ -5133,7 +5141,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
             let _ = sender.send(RefreshPrepareEvent::LibraryReady {
                 generation,
-                folders,
+                roots,
                 elapsed_ms,
             });
         });
@@ -5252,7 +5260,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let filter_for_events = filter.clone();
     let search_for_events = search_text.clone();
     let sort_for_events = sort.clone();
-    let toast_overlay_for_events = toast_overlay.clone();
     let scan_job_for_events = scan_job.clone();
     let start_next_scan_for_events = start_next_scan.clone();
     let stop_scan_for_events = stop_scan.clone();
@@ -5265,8 +5272,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let mut thumbnail_dirty_paths = VecDeque::<std::path::PathBuf>::new();
     let mut thumbnail_dirty_seen = std::collections::HashSet::<std::path::PathBuf>::new();
     let mut priority_thumbnail_paths = Vec::new();
-    let mut failure_toast_shown = false;
-    let mut progress_toast: Option<adw::Toast> = None;
+    let mut failure_message_shown = false;
     let mut thumbnail_total: usize = 0;
     let mut last_progress_update = Instant::now();
 
@@ -5289,18 +5295,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             match prepare_event {
                 RefreshPrepareEvent::LibraryReady {
                     generation,
-                    folders,
+                    roots,
                     elapsed_ms,
                 } => {
                     if generation != scan_job_for_events.borrow().generation {
                         continue;
                     }
-                    let roots = match folders {
-                        Ok(folders) => folders
-                            .into_iter()
-                            .filter(|folder| folder.imported_root)
-                            .map(|folder| folder.path)
-                            .collect::<VecDeque<_>>(),
+                    let roots = match roots {
+                        Ok(roots) => roots.into_iter().collect::<VecDeque<_>>(),
                         Err(error) => {
                             eprintln!("Could not refresh library folders: {error}");
                             let mut job = scan_job_for_events.borrow_mut();
@@ -5419,27 +5421,21 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         }
 
-        if priority_pending > 0 {
-            if let Some(toast) = progress_toast.as_ref() {
-                if thumbnail_total == 0 {
-                    toast.set_title(&format!("Creating visible thumbnails ({priority_pending} queued)"));
-                }
-            } else {
-                let toast = adw::Toast::new("Creating visible thumbnails…");
-                toast.set_timeout(0);
-                toast_overlay_for_events.add_toast(toast.clone());
-                progress_toast = Some(toast);
-            }
+        if priority_pending > 0 && thumbnail_total == 0 {
+            refresh_status_label_for_events
+                .set_text(&format!("Creating visible thumbnails ({priority_pending} queued)"));
+            refresh_status_box_for_events.set_visible(true);
         } else if priority_completions > 0 && thumbnail_total == 0 {
-            if let Some(toast) = progress_toast.take() {
-                toast.dismiss();
-            }
+            refresh_status_box_for_events.set_visible(false);
         }
         let callback_started = Instant::now();
         // Never monopolize the GTK loop when a fast scanner has queued many
         // results. Leaving some events queued lets GTK process input, redraws,
         // scrolling, and folder changes between import batches.
-        const MAX_EVENTS_PER_TICK: usize = 128;
+        // Keep scan/photo events from monopolizing GTK while a large refresh
+        // or thumbnail recovery is active. A smaller batch lets input,
+        // redraws, and the Stop button run between worker updates.
+        const MAX_EVENTS_PER_TICK: usize = 16;
         let mut handled_events = 0;
         while handled_events < MAX_EVENTS_PER_TICK {
             let Ok(ui_event) = scan_receiver.try_recv() else {
@@ -5465,10 +5461,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 displayed_generation = Some(ui_event.generation);
                 scan_count = 0;
                 thumbnail_total = 0;
-                failure_toast_shown = false;
-                if let Some(toast) = progress_toast.take() {
-                    toast.dismiss();
-                }
+                failure_message_shown = false;
             }
 
             let event = ui_event.event;
@@ -5488,25 +5481,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         .file_name()
                         .and_then(|name| name.to_str())
                         .unwrap_or_else(|| root.to_str().unwrap_or("folder"));
-                    if matches!(
-                        scan_job_for_events.borrow().kind,
-                        Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                    ) {
-                        refresh_status_label_for_events.set_text(&format!("Scanning {folder_name}…"));
-                    }
-                    if !matches!(
-                        scan_job_for_events.borrow().kind,
-                        Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                    ) {
-                        if let Some(toast) = progress_toast.as_ref() {
-                            toast.set_title(&format!("Scanning {folder_name}…"));
-                        } else {
-                            let toast = adw::Toast::new(&format!("Scanning {folder_name}…"));
-                            toast.set_timeout(0);
-                            toast_overlay_for_events.add_toast(toast.clone());
-                            progress_toast = Some(toast);
-                        }
-                    }
+                    refresh_status_label_for_events.set_text(&format!("Scanning {folder_name}…"));
+                    refresh_status_spinner_for_events.set_spinning(true);
+                    refresh_status_box_for_events.set_visible(true);
                 }
 
                 scanner::ScanEvent::FolderStarted { folder } => {
@@ -5542,43 +5519,34 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             path.display()
                         );
                     }
-                    if *newly_discovered
-                        && crate::image_format::path_is_enabled(
-                            &connection_for_events.borrow(),
-                            &photo.path,
-                        )
-                        && (matches!(filter_for_events.get(), sidebar::SidebarFilter::All)
-                            || matches!(filter_for_events.get(), sidebar::SidebarFilter::Folder(id) if Some(id) == photo.folder_id))
-                    {
-                        pending_photos.push_back(photo.clone());
-                    } else if !newly_discovered {
-                        gallery_for_events.update_dimensions(photo.id, photo.width, photo.height);
-                        if selected_photo_for_events
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|selected| selected.id() == photo.id)
+                    let search_active = !search_for_events.borrow().is_empty();
+                    if !search_active {
+                        if *newly_discovered
+                            && crate::image_format::path_is_enabled(
+                                &connection_for_events.borrow(),
+                                &photo.path,
+                            )
+                            && (matches!(filter_for_events.get(), sidebar::SidebarFilter::All)
+                                || matches!(filter_for_events.get(), sidebar::SidebarFilter::Folder(id) if Some(id) == photo.folder_id))
                         {
-                            let selected = selected_photo_for_events.borrow().clone();
-                            info_for_events.set_photo(selected.as_ref());
+                            pending_photos.push_back(photo.clone());
+                        } else if !newly_discovered {
+                            gallery_for_events.update_dimensions(photo.id, photo.width, photo.height);
+                            if selected_photo_for_events
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|selected| selected.id() == photo.id)
+                            {
+                                let selected = selected_photo_for_events.borrow().clone();
+                                info_for_events.set_photo(selected.as_ref());
+                            }
                         }
                     }
 
                     if last_progress_update.elapsed() >= Duration::from_millis(150) {
                         let text = format!("Indexed {scan_count} photos");
-                        if matches!(
-                            scan_job_for_events.borrow().kind,
-                            Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                        ) {
-                            refresh_status_label_for_events.set_text(&text);
-                        }
-                        if !matches!(
-                            scan_job_for_events.borrow().kind,
-                            Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                        ) {
-                            if let Some(toast) = progress_toast.as_ref() {
-                                toast.set_title(&text);
-                            }
-                        }
+                        refresh_status_label_for_events.set_text(&text);
+                        refresh_status_box_for_events.set_visible(true);
                         last_progress_update = Instant::now();
                     }
                 }
@@ -5599,20 +5567,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         );
                     }
                     let text = format!("Indexed {imported} photos");
-                    if matches!(
-                        scan_job_for_events.borrow().kind,
-                        Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                    ) {
-                        refresh_status_label_for_events.set_text(&text);
-                    }
-                    if !matches!(
-                        scan_job_for_events.borrow().kind,
-                        Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                    ) {
-                        if let Some(toast) = progress_toast.as_ref() {
-                            toast.set_title(&text);
-                        }
-                    }
+                    refresh_status_label_for_events.set_text(&text);
+                    refresh_status_box_for_events.set_visible(true);
                 }
 
                 scanner::ScanEvent::ThumbnailsDeferred { total } => {
@@ -5626,26 +5582,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     }
                     scan_count = 0;
                     thumbnail_total = *total;
-                    if matches!(
-                        scan_job_for_events.borrow().kind,
-                        Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                    ) {
-                        refresh_status_label_for_events
-                            .set_text(&format!("Creating thumbnails 0 / {total}"));
-                    }
-                    if !matches!(
-                        scan_job_for_events.borrow().kind,
-                        Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                    ) {
-                        if let Some(toast) = progress_toast.as_ref() {
-                            toast.set_title(&format!("Creating thumbnails 0 / {total}"));
-                        } else {
-                            let toast = adw::Toast::new(&format!("Creating thumbnails 0 / {total}"));
-                            toast.set_timeout(0);
-                            toast_overlay_for_events.add_toast(toast.clone());
-                            progress_toast = Some(toast);
-                        }
-                    }
+                    refresh_status_label_for_events
+                        .set_text(&format!("Creating thumbnails 0 / {total}"));
+                    refresh_status_spinner_for_events.set_spinning(true);
+                    refresh_status_box_for_events.set_visible(true);
+                    stop_scan_for_events.set_visible(true);
                 }
 
                 scanner::ScanEvent::ThumbnailCreated { path } => {
@@ -5667,46 +5608,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     }
                     if last_progress_update.elapsed() >= Duration::from_millis(150) {
                         let text = format!("Creating thumbnails {scan_count} / {thumbnail_total}");
-                        if matches!(
-                            scan_job_for_events.borrow().kind,
-                            Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                        ) {
-                            refresh_status_label_for_events.set_text(&text);
-                        }
-                        if !matches!(
-                            scan_job_for_events.borrow().kind,
-                            Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                        ) {
-                            if let Some(toast) = progress_toast.as_ref() {
-                                toast.set_title(&text);
-                            }
-                        }
+                        refresh_status_label_for_events.set_text(&text);
+                        refresh_status_box_for_events.set_visible(true);
                         last_progress_update = Instant::now();
                     }
                 }
 
                 scanner::ScanEvent::Failed { path, error } => {
                     eprintln!("SCAN FAILED: {}: {}", path.display(), error);
-                    if matches!(
-                        scan_job_for_events.borrow().kind,
-                        Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
-                    ) {
-                        refresh_status_label_for_events.set_text("Scanning… some files failed");
+                    if !failure_message_shown {
+                        failure_message_shown = true;
+                        refresh_status_label_for_events
+                            .set_text(&format!("Some files could not be added: {error}"));
                     } else {
-                        if let Some(toast) = progress_toast.as_ref() {
-                            toast.set_title("Scanning… some files failed");
-                        }
-
-                        // Keep one failure visible in the toast area for imports/maintenance,
-                        // but do not enqueue thousands of toasts for a damaged folder.
-                        if !failure_toast_shown {
-                            failure_toast_shown = true;
-                            toast_overlay_for_events.add_toast(adw::Toast::new(&format!(
-                                "Some files could not be added: {}",
-                                error
-                            )));
-                        }
+                        refresh_status_label_for_events.set_text("Scanning… some files failed");
                     }
+                    refresh_status_box_for_events.set_visible(true);
                 }
 
                 scanner::ScanEvent::Finished { imported, failed } => {
@@ -5766,10 +5683,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                     stop_scan_for_events.set_visible(false);
                     refresh_status_spinner_for_events.set_spinning(false);
-                    if let Some(toast) = progress_toast.take() {
-                        toast.dismiss();
-                    }
-
                     let message = match kind {
                         Some(ScanJobKind::Refresh) => {
                             if total_failed == 0 {
@@ -5818,17 +5731,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             total_imported, total_failed
                         );
                     }
-                    if matches!(kind, Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)) {
-                        refresh_status_label_for_events.set_text(&message);
-                        refresh_status_box_for_events.set_visible(true);
-                        let panel = refresh_status_box_for_events.clone();
-                        glib::timeout_add_local_once(Duration::from_millis(2500), move || {
-                            panel.set_visible(false);
-                        });
-                    } else {
-                        refresh_status_box_for_events.set_visible(false);
-                        toast_overlay_for_events.add_toast(adw::Toast::new(&message));
-                    }
+                    refresh_status_label_for_events.set_text(&message);
+                    refresh_status_box_for_events.set_visible(true);
+                    let panel = refresh_status_box_for_events.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(2500), move || {
+                        panel.set_visible(false);
+                    });
                 }
 
                 scanner::ScanEvent::Cancelled { imported } => {
@@ -5852,23 +5760,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         }
                         _ => format!("Import stopped · {imported} photos added"),
                     };
-                    if let Some(toast) = progress_toast.take() {
-                        toast.dismiss();
-                    }
                     if std::env::var_os("PICASA_TRACE").is_some() {
                         eprintln!("REFRESH cancelled imported={imported}");
                     }
-                    if matches!(kind, Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)) {
-                        refresh_status_label_for_events.set_text(&message);
-                        refresh_status_box_for_events.set_visible(true);
-                        let panel = refresh_status_box_for_events.clone();
-                        glib::timeout_add_local_once(Duration::from_millis(2500), move || {
-                            panel.set_visible(false);
-                        });
-                    } else {
-                        refresh_status_box_for_events.set_visible(false);
-                        toast_overlay_for_events.add_toast(adw::Toast::new(&message));
-                    }
+                    refresh_status_label_for_events.set_text(&message);
+                    refresh_status_box_for_events.set_visible(true);
+                    let panel = refresh_status_box_for_events.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(2500), move || {
+                        panel.set_visible(false);
+                    });
                 }
             }
         }
@@ -5882,6 +5782,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }
 
         const PHOTO_APPEND_BATCH: usize = 192;
+        if !search_for_events.borrow().is_empty() {
+            // Search results supersede progressive scan appends. The next
+            // debounced refresh will replace the model from the DB.
+            pending_photos.clear();
+        }
         if !pending_photos.is_empty() {
             let batch_started = Instant::now();
             let mut batch = Vec::with_capacity(PHOTO_APPEND_BATCH.min(pending_photos.len()));

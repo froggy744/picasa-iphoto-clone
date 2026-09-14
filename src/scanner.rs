@@ -390,6 +390,12 @@ fn collect_files(
         if control.is_cancelled() {
             break;
         }
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "SCAN folder_start root={} folder={}",
+                root_path, folder_path
+            );
+        }
         folders.push((folder_path.clone(), parent_path));
         let enumerator = directory
             .enumerate_children(
@@ -535,4 +541,37 @@ fn is_raw(path: &str) -> bool {
 
 fn is_heif(path: &str) -> bool {
     crate::image_format::uses(path, crate::image_format::DecoderKind::Heif)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn recursive_collection_reaches_nested_photo_below_imported_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "picasa-rs-scanner-recursion-{}-{unique}",
+            std::process::id()
+        ));
+        let nested = root.join("Marianne Lotter").join("FB-Marianne");
+        fs::create_dir_all(&nested).unwrap();
+        let photo = nested.join("photo.jpg");
+        fs::write(&photo, []).unwrap();
+
+        let (files, folders) =
+            collect_files(&gio::File::for_path(&root), &ScanControl::default()).unwrap();
+        assert!(files
+            .iter()
+            .any(|(_, _, folder)| folder.ends_with("FB-Marianne")));
+        assert!(folders
+            .iter()
+            .any(|(folder, _)| folder.ends_with("FB-Marianne")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

@@ -433,6 +433,256 @@ mod tests {
     }
 
     #[test]
+    fn imported_root_paths_include_empty_roots_and_exclude_discovered_descendants() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+
+        let root = mark_import_root(&connection, "/photos/root").unwrap();
+        insert_discovered_folder(&connection, "/photos/root/child", root).unwrap();
+
+        assert_eq!(
+            imported_root_paths(&connection).unwrap(),
+            vec!["/photos/root".to_string()]
+        );
+    }
+
+    #[test]
+    fn old_folder_schema_migrates_top_level_imported_root_only() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "picasa-rs-legacy-folder-migration-{}-{unique}.db",
+            std::process::id()
+        ));
+
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE photos (
+                         id INTEGER PRIMARY KEY,
+                         path TEXT UNIQUE NOT NULL,
+                         folder_id INTEGER,
+                         taken_at TEXT,
+                         camera TEXT,
+                         width INTEGER,
+                         height INTEGER,
+                         size_bytes INTEGER,
+                         mtime INTEGER,
+                         rotation INTEGER DEFAULT 0,
+                         favorite BOOLEAN DEFAULT 0,
+                         trashed BOOLEAN DEFAULT 0
+                     );
+                     CREATE TABLE folders (
+                         id INTEGER PRIMARY KEY,
+                         path TEXT UNIQUE NOT NULL,
+                         name TEXT
+                     );
+                     CREATE TABLE albums (
+                         id INTEGER PRIMARY KEY,
+                         name TEXT NOT NULL UNIQUE
+                     );
+                     CREATE TABLE album_photos (
+                         album_id INTEGER NOT NULL,
+                         photo_id INTEGER NOT NULL,
+                         PRIMARY KEY(album_id, photo_id)
+                     );
+                     CREATE TABLE settings (
+                         key TEXT PRIMARY KEY,
+                         value TEXT NOT NULL
+                     );
+                     INSERT INTO folders(id, path, name) VALUES
+                         (1, '/Pics', 'Pics'),
+                         (2, '/Pics/Marianne Lotter', 'Marianne Lotter'),
+                         (3, '/Pics/Marianne Lotter/FB-Marianne', 'FB-Marianne');
+                     INSERT INTO photos(id, path, folder_id) VALUES
+                         (1, '/Pics/Marianne Lotter/FB-Marianne/photo.jpg', 3);",
+                )
+                .unwrap();
+        }
+
+        let connection = open(&path).unwrap();
+        let folders_by_path = folders(&connection)
+            .unwrap()
+            .into_iter()
+            .map(|folder| (folder.path.clone(), folder))
+            .collect::<std::collections::HashMap<_, _>>();
+        assert!(folders_by_path["/Pics"].imported_root);
+        assert!(!folders_by_path["/Pics/Marianne Lotter"].imported_root);
+        assert!(!folders_by_path["/Pics/Marianne Lotter/FB-Marianne"].imported_root);
+        assert_eq!(
+            imported_root_paths(&connection).unwrap(),
+            vec!["/Pics".to_string()]
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+    }
+
+    #[test]
+    fn legacy_root_repair_promotes_late_parent_and_demotes_nested_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "picasa-rs-root-repair-{}-{unique}.db",
+            std::process::id()
+        ));
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(SCHEMA).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO folders(id,path,name,parent_id,imported_root) VALUES
+                     (62, '/Pics/Clive', 'Clive', 68, 1),
+                     (68, '/Pics', 'Pics', NULL, 0)",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let connection = open(&path).unwrap();
+        assert_eq!(
+            imported_root_paths(&connection).unwrap(),
+            vec!["/Pics".to_string()]
+        );
+        assert!(!folders(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.path == "/Pics/Clive")
+            .unwrap()
+            .imported_root);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+    }
+
+    #[test]
+    fn legacy_root_repair_keeps_multiple_nested_roots_independent() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "picasa-rs-root-repair-multiple-{}-{unique}.db",
+            std::process::id()
+        ));
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(SCHEMA).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO folders(id,path,name,parent_id,imported_root) VALUES
+                     (136, '/4TBP/one', 'one', 155, 1),
+                     (141, '/4TBP/two', 'two', 155, 1),
+                     (155, '/4TBP', '4TBP', NULL, 0)",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let connection = open(&path).unwrap();
+        assert_eq!(
+            imported_root_paths(&connection).unwrap(),
+            vec!["/4TBP/one".to_string(), "/4TBP/two".to_string()]
+        );
+        assert!(!folders(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.path == "/4TBP")
+            .unwrap()
+            .imported_root);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+    }
+
+    #[test]
+    fn reimporting_a_discovered_folder_promotes_it_to_an_imported_root() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+
+        let parent = insert_folder(&connection, "/photos/root").unwrap();
+        insert_discovered_folder(&connection, "/photos/root/child", parent).unwrap();
+        mark_import_root(&connection, "/photos/root/child").unwrap();
+
+        let child = folders(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.path == "/photos/root/child")
+            .unwrap();
+        assert!(child.imported_root);
+        assert_eq!(imported_root_paths(&connection).unwrap(), vec![child.path]);
+    }
+
+    #[test]
+    fn folder_upsert_does_not_clear_an_existing_imported_root() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+
+        mark_import_root(&connection, "/photos/root").unwrap();
+        insert_folder(&connection, "/photos/root").unwrap();
+        insert_discovered_folder(
+            &connection,
+            "/photos/root/child",
+            connection
+                .query_row("SELECT id FROM folders WHERE path = '/photos/root'", [], |row| {
+                    row.get(0)
+                })
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            imported_root_paths(&connection).unwrap(),
+            vec!["/photos/root".to_string()]
+        );
+    }
+
+    #[test]
+    fn imported_root_persists_after_reopening_and_clearing_indexed_photos() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "picasa-rs-import-root-test-{}-{unique}.db",
+            std::process::id()
+        ));
+
+        {
+            let connection = open(&path).unwrap();
+            let root = mark_import_root(&connection, "/photos/root").unwrap();
+            upsert_photo(
+                &connection,
+                Path::new("/photos/root/a.jpg"),
+                Some(root),
+                &PhotoMetadata::default(),
+            )
+            .unwrap();
+            connection.execute("DELETE FROM photos", []).unwrap();
+        }
+
+        {
+            let connection = open(&path).unwrap();
+            assert_eq!(
+                imported_root_paths(&connection).unwrap(),
+                vec!["/photos/root".to_string()]
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+    }
+
+    #[test]
     fn importing_a_folder_under_an_existing_root_remains_an_explicit_root() {
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch(SCHEMA).unwrap();

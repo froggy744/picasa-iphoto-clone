@@ -4025,6 +4025,17 @@ impl Gallery {
         }
     }
 
+    /// Stop a progressive replacement that is no longer the active view.
+    ///
+    /// Search replaces the model shortly afterward. Cancelling the old idle
+    /// batches keeps a large library refresh from continuing to mutate the
+    /// GTK model while the user is typing.
+    pub fn cancel_progressive_build(&self) {
+        self.replace_generation
+            .set(self.replace_generation.get().wrapping_add(1));
+        self.stream_building.set(false);
+    }
+
     /// Returns the currently selected thumbnail position when the grid has a
     /// single active selection. Keyboard navigation uses this to decide when
     /// Up/Down should cross into the adjacent folder.

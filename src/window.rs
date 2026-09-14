@@ -360,7 +360,7 @@ struct ScanUiEvent {
 enum RefreshPrepareEvent {
     LibraryReady {
         generation: u64,
-        folders: Result<Vec<db::Folder>, String>,
+        roots: Result<Vec<String>, String>,
         elapsed_ms: u128,
     },
     FolderReady {
@@ -383,6 +383,20 @@ struct ScanJobState {
 }
 
 impl ScanJobState {
+    fn preempt_maintenance(&mut self) -> bool {
+        if self.kind != Some(ScanJobKind::Maintenance) {
+            return false;
+        }
+        if let Some(active) = self.active.take() {
+            active.cancel();
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.kind = None;
+        self.pending.clear();
+        self.stop_requested = false;
+        true
+    }
+
     /// Crosses the authorization boundary for photo discovery/scanning.
     /// Passive reasons leave every job field untouched.
     fn authorize_photo_scan(&mut self, reason: PhotoScanRequestReason) -> Option<u64> {
@@ -623,6 +637,23 @@ mod photo_scan_authorization_tests {
             authorized_kind(PhotoScanRequestReason::ManualLibraryRefresh),
             Some(ScanJobKind::Refresh)
         );
+    }
+
+    #[test]
+    fn manual_refresh_can_preempt_startup_thumbnail_recovery() {
+        let control = crate::scanner::ScanControl::default();
+        let mut job = ScanJobState {
+            generation: 7,
+            kind: Some(ScanJobKind::Maintenance),
+            active: Some(control.clone()),
+            ..Default::default()
+        };
+
+        assert!(job.preempt_maintenance());
+        assert_eq!(job.kind, None);
+        assert!(job.active.is_none());
+        assert_eq!(job.generation, 8);
+        assert!(control.is_cancelled());
     }
 
     #[test]
