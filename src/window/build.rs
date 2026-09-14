@@ -707,6 +707,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // is open, it toggles between fit and 1:1 viewing.
     // The actual open action is installed after Gallery exists.
     let space_open_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let edit_space_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let collection_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i32)>>>> =
         Rc::new(RefCell::new(None));
     let search_popup_slot: Rc<RefCell<Option<gtk::Popover>>> = Rc::new(RefCell::new(None));
@@ -719,6 +720,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     window_escape.set_propagation_phase(gtk::PropagationPhase::Capture);
     let lightbox_for_window_escape = lightbox.clone();
     let space_open_slot_for_key = space_open_slot.clone();
+    let edit_space_slot_for_key = edit_space_slot.clone();
     let one_to_one_for_key = info.one_to_one.clone();
     let space_toggle_in_progress_for_key = space_toggle_in_progress.clone();
     let search_popup_for_key = search_popup_slot.clone();
@@ -774,7 +776,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             lightbox_for_window_escape.navigate_collection(if key == gtk::gdk::Key::Up { -1 } else { 1 });
             glib::Propagation::Stop
         } else if key == gtk::gdk::Key::space {
-            if lightbox_for_window_escape.root.is_visible() {
+            if let Some(toggle_edit) = edit_space_slot_for_key.borrow().as_ref() {
+                toggle_edit();
+            } else if lightbox_for_window_escape.root.is_visible() {
                 if one_to_one_for_key.is_active() {
                     space_toggle_in_progress_for_key.set(true);
                     one_to_one_for_key.set_active(false);
@@ -2700,10 +2704,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let selected_photo = selected_photo.clone();
         let info = info.clone();
         let lightbox = lightbox.clone();
+        let edit_space_slot = edit_space_slot.clone();
         edit_open_slot.replace(Some(Rc::new(move |id| {
             let Some(db_photo) = db::photo(&connection.borrow(), id).ok().flatten() else {
                 return;
             };
+            edit_space_slot.borrow_mut().take();
             lightbox.close();
             let library_scroll_y = gallery.scroll_position();
             while let Some(child) = edit_page.first_child() {
@@ -2715,7 +2721,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 let main_stack = main_stack.clone();
                 let one_to_one = info.one_to_one.clone();
                 let gallery = gallery.clone();
+                let edit_space_slot = edit_space_slot.clone();
                 Rc::new(move || {
+                    edit_space_slot.borrow_mut().take();
                     one_to_one.set_active(false);
                     main_stack.set_visible_child_name("photos");
                     gallery.restore_view(id, library_scroll_y);
@@ -2738,8 +2746,24 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 close,
                 saved,
             );
+            {
+                let one_to_one = info.one_to_one.clone();
+                editor.set_one_to_one_sync_handler(move |enabled| {
+                    one_to_one.set_active(enabled);
+                });
+            }
             edit_page.append(&editor.root);
             edit_editor.replace(Some(editor));
+            {
+                let main_stack = main_stack.clone();
+                let one_to_one = info.one_to_one.clone();
+                let edit_space_slot = edit_space_slot.clone();
+                edit_space_slot.replace(Some(Rc::new(move || {
+                    if main_stack.visible_child_name().as_deref() == Some("edit") {
+                        one_to_one.set_active(!one_to_one.is_active());
+                    }
+                })));
+            }
             main_stack.set_visible_child_name("edit");
         })));
     }
