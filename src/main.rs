@@ -3,7 +3,6 @@ mod collage;
 mod db;
 mod diagnostics;
 mod edit;
-mod folder_watcher;
 mod grid;
 mod image_format;
 mod infobar;
@@ -41,7 +40,7 @@ fn main() {
     );
     application.connect_activate(|application| {
         // Startup loads indexed rows and recovers missing cached previews.
-        // Folder discovery runs through import/refresh actions and folder watches.
+        // Folder discovery runs only through explicit import/refresh actions.
         match db::open_default() {
             Ok(connection) => window::build(application, connection).present(),
             Err(error) => {

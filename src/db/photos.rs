@@ -195,7 +195,7 @@ pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: 
 
 pub fn folders(connection: &Connection) -> Result<Vec<Folder>> {
     let mut statement = connection.prepare(
-        "SELECT f.id, f.path, COALESCE(f.name, f.path), f.parent_id, f.imported_root, f.watched,
+        "SELECT f.id, f.path, COALESCE(f.name, f.path), f.parent_id, f.imported_root,
                 (WITH RECURSIVE descendants(id) AS (
                    SELECT id FROM folders WHERE id = f.id
                    UNION ALL
@@ -213,9 +213,8 @@ pub fn folders(connection: &Connection) -> Result<Vec<Folder>> {
             name: row.get(2)?,
             parent_id: row.get(3)?,
             imported_root: row.get(4)?,
-            watched: row.get(5)?,
-            photo_count: row.get(6)?,
-            subfolder_count: row.get(7)?,
+            photo_count: row.get(5)?,
+            subfolder_count: row.get(6)?,
             // Availability is resolved below from imported roots so a USB
             // library checks its one registered source, not every descendant.
             available: true,
@@ -288,14 +287,6 @@ pub fn folder_availability_by_id(
         );
     }
     resolved
-}
-
-pub fn set_folder_watched(connection: &Connection, folder_id: i64, watched: bool) -> Result<()> {
-    connection.execute(
-        "UPDATE folders SET watched = ?1 WHERE id = ?2",
-        params![watched, folder_id],
-    )?;
-    Ok(())
 }
 
 /// Remove a folder and its indexed descendants from the application database.

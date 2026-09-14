@@ -284,6 +284,43 @@ enum ScanJobKind {
     Maintenance,
 }
 
+/// Only direct user actions may authorize filesystem discovery/photo scanning.
+/// Passive UI and filesystem signals are represented here so they cannot be
+/// accidentally mapped onto a scan job later.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PhotoScanRequestReason {
+    UserFolderRefresh,
+    ManualLibraryRefresh,
+    ImportFolder,
+    FilesystemNotification,
+    AvailabilityUpdate,
+    ProgrammaticSidebarSelection,
+}
+
+impl PhotoScanRequestReason {
+    fn scan_kind(self) -> Option<ScanJobKind> {
+        match self {
+            Self::UserFolderRefresh => Some(ScanJobKind::FolderRefresh),
+            Self::ManualLibraryRefresh => Some(ScanJobKind::Refresh),
+            Self::ImportFolder => Some(ScanJobKind::Import),
+            Self::FilesystemNotification
+            | Self::AvailabilityUpdate
+            | Self::ProgrammaticSidebarSelection => None,
+        }
+    }
+
+    fn trace_label(self) -> &'static str {
+        match self {
+            Self::UserFolderRefresh => "user_click",
+            Self::ManualLibraryRefresh => "manual_refresh",
+            Self::ImportFolder => "import",
+            Self::FilesystemNotification => "filesystem_notification",
+            Self::AvailabilityUpdate => "availability_update",
+            Self::ProgrammaticSidebarSelection => "programmatic_sidebar_selection",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ScanUiEvent {
     generation: u64,
@@ -314,6 +351,24 @@ struct ScanJobState {
     imported_total: usize,
     failed_total: usize,
     stop_requested: bool,
+}
+
+impl ScanJobState {
+    /// Crosses the authorization boundary for photo discovery/scanning.
+    /// Passive reasons leave every job field untouched.
+    fn authorize_photo_scan(&mut self, reason: PhotoScanRequestReason) -> Option<u64> {
+        let kind = reason.scan_kind()?;
+        if let Some(previous) = self.active.take() {
+            previous.cancel();
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.kind = Some(kind);
+        self.pending.clear();
+        self.imported_total = 0;
+        self.failed_total = 0;
+        self.stop_requested = false;
+        Some(self.generation)
+    }
 }
 
 fn spawn_tagged_scan(
@@ -442,6 +497,80 @@ mod folder_scroll_tests {
 
         scrub.end();
         assert!(!scrub.sample_due(started + Duration::from_millis(100)));
+    }
+}
+
+#[cfg(test)]
+mod photo_scan_authorization_tests {
+    use super::{PhotoScanRequestReason, ScanJobKind, ScanJobState};
+
+    fn authorized_kind(reason: PhotoScanRequestReason) -> Option<ScanJobKind> {
+        let mut job = ScanJobState::default();
+        let generation = job.authorize_photo_scan(reason);
+        assert_eq!(generation.is_some(), job.kind.is_some());
+        assert_eq!(generation.unwrap_or_default(), job.generation);
+        job.kind
+    }
+
+    fn assert_denied_without_job_mutation(reason: PhotoScanRequestReason) {
+        let mut job = ScanJobState {
+            generation: 41,
+            pending: std::collections::VecDeque::from(["keep".to_string()]),
+            imported_total: 7,
+            failed_total: 3,
+            stop_requested: true,
+            ..Default::default()
+        };
+
+        assert_eq!(job.authorize_photo_scan(reason), None);
+        assert_eq!(job.generation, 41);
+        assert_eq!(job.kind, None);
+        assert_eq!(
+            job.pending,
+            std::collections::VecDeque::from(["keep".to_string()])
+        );
+        assert_eq!(job.imported_total, 7);
+        assert_eq!(job.failed_total, 3);
+        assert!(job.stop_requested);
+    }
+
+    #[test]
+    fn filesystem_notifications_cannot_authorize_a_refresh() {
+        assert_denied_without_job_mutation(PhotoScanRequestReason::FilesystemNotification);
+    }
+
+    #[test]
+    fn availability_updates_cannot_authorize_a_refresh() {
+        assert_denied_without_job_mutation(PhotoScanRequestReason::AvailabilityUpdate);
+    }
+
+    #[test]
+    fn programmatic_sidebar_selection_cannot_authorize_a_refresh() {
+        assert_denied_without_job_mutation(PhotoScanRequestReason::ProgrammaticSidebarSelection);
+    }
+
+    #[test]
+    fn manual_library_refresh_authorizes_scanning() {
+        assert_eq!(
+            authorized_kind(PhotoScanRequestReason::ManualLibraryRefresh),
+            Some(ScanJobKind::Refresh)
+        );
+    }
+
+    #[test]
+    fn explicit_folder_refresh_authorizes_scanning() {
+        assert_eq!(
+            authorized_kind(PhotoScanRequestReason::UserFolderRefresh),
+            Some(ScanJobKind::FolderRefresh)
+        );
+    }
+
+    #[test]
+    fn import_authorization_remains_unchanged() {
+        assert_eq!(
+            authorized_kind(PhotoScanRequestReason::ImportFolder),
+            Some(ScanJobKind::Import)
+        );
     }
 }
 include!("window/search.rs");

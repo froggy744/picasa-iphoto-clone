@@ -711,13 +711,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         })
     };
-    let refresh_folder_slot: Rc<RefCell<Option<Rc<dyn Fn(String)>>>> =
+    let refresh_folder_slot: Rc<
+        RefCell<Option<Rc<dyn Fn(PhotoScanRequestReason, String)>>>,
+    > =
         Rc::new(RefCell::new(None));
-    let folder_watch_manager = Rc::new(RefCell::new(
-        crate::folder_watcher::FolderWatchManager::default(),
-    ));
-    let (folder_watch_sender, folder_watch_receiver) =
-        std::sync::mpsc::channel::<String>();
     let import_folder: Rc<dyn Fn()> = {
         let slot = import_folder_slot.clone();
         Rc::new(move || {
@@ -746,6 +743,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let import_folder = import_folder.clone();
         let delete_album = delete_album.clone();
         Rc::new(move || {
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("AVAILABILITY request reason=availability_update scan=false");
+            }
+            debug_assert!(PhotoScanRequestReason::AvailabilityUpdate
+                .scan_kind()
+                .is_none());
             refresh_availability_ui(
                 &connection,
                 &folder_cache,
@@ -915,27 +918,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let settings_lightbox = lightbox.clone();
     let settings_sidebar = sidebar_for_unavailable.clone();
     let settings_on_unavailable = availability_refresh.clone();
-    let settings_folder_watch_changed = {
-        let connection = connection.clone();
-        let manager = folder_watch_manager.clone();
-        let updates = folder_watch_sender.clone();
-        Rc::new(move |folder_id: i64, watched: bool| {
-            if watched {
-                if let Some(folder) = db::folders(&connection.borrow())
-                    .ok()
-                    .and_then(|folders| folders.into_iter().find(|folder| folder.id == folder_id))
-                {
-                    manager
-                        .borrow_mut()
-                        .watch(folder_id, folder.path, updates.clone());
-                }
-            } else {
-                manager.borrow_mut().unwatch(folder_id);
-            }
-        }) as Rc<dyn Fn(i64, bool)>
-    };
     let settings_albums_refresh = albums_home_refresh_slot.clone();
-    let settings_folder_watch_changed_for_settings = settings_folder_watch_changed.clone();
     let present_settings: Rc<dyn Fn(Option<&'static str>)> = Rc::new(move |initial_page| {
         let connection = settings_connection.clone();
         let gallery = settings_gallery.clone();
@@ -945,7 +928,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let lightbox = settings_lightbox.clone();
         let sidebar = settings_sidebar.clone();
         let on_unavailable = settings_on_unavailable.clone();
-        let folder_watch_changed = settings_folder_watch_changed_for_settings.clone();
         let theme_connection = settings_connection.clone();
         let theme_albums_refresh = settings_albums_refresh.clone();
         settings_window.present(
@@ -969,7 +951,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     }
                 }
             }),
-            folder_watch_changed,
             Rc::new(move || {
                 let albums = db::albums(&theme_connection.borrow()).unwrap_or_default();
                 if let Some(refresh) = theme_albums_refresh.borrow().as_ref() {
@@ -2936,7 +2917,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let slot = refresh_folder_slot.clone();
             Rc::new(move |path| {
                 if let Some(callback) = slot.borrow().as_ref() {
-                    callback(path);
+                    callback(PhotoScanRequestReason::UserFolderRefresh, path);
                 }
             })
         },
@@ -2974,27 +2955,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         show_error(
                             context.info.root.upcast_ref(),
                             "Could not update folder favourites",
-                            &error.to_string(),
-                        );
-                    }
-                }
-            })
-        },
-        {
-            let connection = connection.clone();
-            let folder_watch_changed = settings_folder_watch_changed.clone();
-            let refresh = availability_refresh.clone();
-            let parent: gtk::Widget = window.clone().upcast();
-            Rc::new(move |folder: db::Folder, watched: bool| {
-                match db::set_folder_watched(&connection.borrow(), folder.id, watched) {
-                    Ok(()) => {
-                        folder_watch_changed(folder.id, watched);
-                        refresh();
-                    }
-                    Err(error) => {
-                        show_error(
-                            &parent,
-                            "Could not update folder watching",
                             &error.to_string(),
                         );
                     }
@@ -3078,6 +3038,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 // Mount changes only re-evaluate folder availability for the
                 // offline badge. Cached thumbnails stay usable; do not start
                 // thumbnail recovery, scanning, or per-photo file checks.
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!("AVAILABILITY request reason=mount_update scan=false");
+                }
                 availability_refresh();
             });
         })
@@ -4421,13 +4384,24 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let refresh_status_label = refresh_status_label.clone();
         let stop_scan = stop_scan.clone();
         let refresh = refresh.clone();
-        Rc::new(move |path: String| {
+        Rc::new(move |reason: PhotoScanRequestReason, path: String| {
             if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("REFRESH folder_click path={path}");
+                eprintln!("REFRESH request reason={} path={path}", reason.trace_label());
+            }
+            if reason.scan_kind().is_none() {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "REFRESH request_ignored reason={} authorized=false path={path}",
+                        reason.trace_label()
+                    );
+                }
+                return;
             }
             if scan_job.borrow().kind.is_some() {
                 if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!("REFRESH folder_click_ignored active_job=true path={path}");
+                    eprintln!(
+                        "REFRESH request_ignored reason=user_click active_job=true path={path}"
+                    );
                 }
                 refresh_status_label.set_text("Refresh already running…");
                 refresh_status_spinner.set_spinning(true);
@@ -4446,16 +4420,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             stop_scan.set_visible(true);
             let generation = {
                 let mut job = scan_job.borrow_mut();
-                if let Some(previous) = job.active.take() {
-                    previous.cancel();
-                }
-                job.generation = job.generation.wrapping_add(1);
-                job.kind = Some(ScanJobKind::FolderRefresh);
-                job.pending.clear();
-                job.imported_total = 0;
-                job.failed_total = 0;
-                job.stop_requested = false;
-                job.generation
+                job.authorize_photo_scan(reason)
+                    .expect("folder refresh reason was authorized")
             };
             let sender = refresh_prepare_sender.clone();
             std::thread::spawn(move || {
@@ -4478,32 +4444,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             });
         })
     }));
-
-    {
-        let refresh_folder_slot = refresh_folder_slot.clone();
-        glib::timeout_add_local(Duration::from_millis(500), move || {
-            let mut paths = std::collections::HashSet::new();
-            while let Ok(path) = folder_watch_receiver.try_recv() {
-                paths.insert(path);
-            }
-            if let Some(refresh) = refresh_folder_slot.borrow().as_ref() {
-                for path in paths {
-                    refresh(path);
-                }
-            }
-            glib::ControlFlow::Continue
-        });
-    }
-
-    for folder in db::folders(&connection.borrow())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|folder| folder.watched)
-    {
-        folder_watch_manager
-            .borrow_mut()
-            .watch(folder.id, folder.path, folder_watch_sender.clone());
-    }
 
     let cancel_scan_job: Rc<dyn Fn()> = {
         let scan_job = scan_job.clone();
@@ -4610,6 +4550,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 if let Some(file) = dialog.file() {
                     let root = crate::source::reference(&file);
                     if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!("IMPORT request reason=user_click path={root}");
                     }
                     if let Err(error) = db::mark_import_root(&connection.borrow(), &root) {
                         eprintln!("Could not register imported folder {root}: {error}");
@@ -4622,16 +4563,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     sidebar_refresh();
                     {
                         let mut job = scan_job.borrow_mut();
-                        if let Some(previous) = job.active.take() {
-                            previous.cancel();
-                        }
-                        job.generation = job.generation.wrapping_add(1);
-                        job.kind = Some(ScanJobKind::Import);
-                        job.pending.clear();
+                        job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
+                            .expect("import is an authorized scan reason");
                         job.pending.push_back(root);
-                        job.imported_total = 0;
-                        job.failed_total = 0;
-                        job.stop_requested = false;
                     }
                     start_next_scan();
                 }
@@ -4656,11 +4590,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     refresh.connect_clicked(move |button| {
         if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("REFRESH click");
+            eprintln!("REFRESH request reason=manual_refresh path=<library>");
         }
         if scan_job_for_refresh.borrow().kind.is_some() {
             if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("REFRESH click_ignored active_job=true");
+                eprintln!(
+                    "REFRESH request_ignored reason=manual_refresh active_job=true path=<library>"
+                );
             }
             refresh_status_label_for_click.set_text("Refresh already running…");
             refresh_status_spinner_for_click.set_spinning(true);
@@ -4684,16 +4620,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
         let generation = {
             let mut job = scan_job_for_refresh.borrow_mut();
-            if let Some(previous) = job.active.take() {
-                previous.cancel();
-            }
-            job.generation = job.generation.wrapping_add(1);
-            job.kind = Some(ScanJobKind::Refresh);
-            job.pending.clear();
-            job.imported_total = 0;
-            job.failed_total = 0;
-            job.stop_requested = false;
-            job.generation
+            job.authorize_photo_scan(PhotoScanRequestReason::ManualLibraryRefresh)
+                .expect("manual library refresh is an authorized scan reason")
         };
 
         let sender = refresh_prepare_sender_for_click.clone();

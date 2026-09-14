@@ -93,7 +93,6 @@ pub fn bind_refresh_gate(scrolled: &gtk::ScrolledWindow, gate: &gtk::Button) {
 const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
 const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
-const FOLDER_WATCH_KEY: &str = "picasa-sidebar-folder-watch";
 const FOLDER_MODE_TOGGLE_KEY: &str = "picasa-sidebar-folder-mode-toggle";
 const FOLDER_MODE_CHANGED_KEY: &str = "picasa-sidebar-folder-mode-changed";
 const KEYBOARD_GRID_TARGET_KEY: &str = "picasa-sidebar-keyboard-grid-target";
@@ -117,7 +116,6 @@ pub fn build(
     on_folder_statistics: Rc<dyn Fn(Folder)>,
     on_remove_folder: Rc<dyn Fn(Folder)>,
     on_folder_favorite: Rc<dyn Fn(Folder, bool)>,
-    on_folder_watch: Rc<dyn Fn(Folder, bool)>,
     folder_display_mode: FolderDisplayMode,
     on_folder_display_mode_changed: Rc<dyn Fn(FolderDisplayMode)>,
 ) -> gtk::ScrolledWindow {
@@ -362,7 +360,6 @@ pub fn build(
         folder_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics);
         folder_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder);
         folder_list.set_data(FOLDER_FAVORITE_KEY, on_folder_favorite);
-        folder_list.set_data(FOLDER_WATCH_KEY, on_folder_watch);
     }
 
     populate_albums(&album_list, albums, &on_delete_album);
@@ -707,8 +704,8 @@ pub fn refresh_library_counts(
     }
 }
 
-/// Rebuild only the folder rows from fresh folder data (for example after a
-/// watched-folder change in Settings) while preserving the scroll position.
+/// Rebuild only the folder rows from fresh folder data while preserving the
+/// scroll position.
 pub fn refresh_folder_rows(
     scrolled: &gtk::ScrolledWindow,
     folders: &[Folder],
@@ -1572,9 +1569,6 @@ fn append_folder_row(
         content.append(&disclosure_slot);
     }
 
-    // Watched folders (set in Settings) overlay an eye on the folder icon so
-    // the row alignment is unchanged. Pin the overlay to the icon's exact size
-    // and alignment; otherwise it can claim extra width and shift the row.
     let icon_overlay = gtk::Overlay::new();
     icon_overlay.set_size_request(18, 18);
     icon_overlay.set_halign(gtk::Align::Center);
@@ -1583,15 +1577,6 @@ fn append_folder_row(
     let icon = gtk::Image::from_icon_name("folder-symbolic");
     icon.set_pixel_size(18);
     icon_overlay.set_child(Some(&icon));
-    if folder.watched {
-        let watched = gtk::Image::from_icon_name("view-reveal-symbolic");
-        watched.set_pixel_size(12);
-        watched.set_halign(gtk::Align::Center);
-        watched.set_valign(gtk::Align::Center);
-        watched.add_css_class("sidebar-watched-folder");
-        watched.set_tooltip_text(Some("Watched for changes"));
-        icon_overlay.add_overlay(&watched);
-    }
     content.append(&icon_overlay);
 
     let labels = gtk::Box::new(gtk::Orientation::Vertical, 1);
@@ -1678,10 +1663,6 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
         list.data::<Rc<dyn Fn(Folder, bool)>>(FOLDER_FAVORITE_KEY)
             .map(|callback| callback.as_ref().clone())
     };
-    let watch = unsafe {
-        list.data::<Rc<dyn Fn(Folder, bool)>>(FOLDER_WATCH_KEY)
-            .map(|callback| callback.as_ref().clone())
-    };
     let Some(refresh) = refresh else {
         return;
     };
@@ -1692,9 +1673,6 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
         return;
     };
     let Some(favorite) = favorite else {
-        return;
-    };
-    let Some(watch) = watch else {
         return;
     };
 
@@ -1762,25 +1740,6 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
             remove(folder.clone());
         });
         menu.append(&remove_item);
-
-        let watch_item = gtk::Button::with_label(if folder_for_menu.watched {
-            "Stop watching folder"
-        } else {
-            "Watch folder for changes"
-        });
-        watch_item.add_css_class("flat");
-        watch_item.set_sensitive(folder_for_menu.imported_root);
-        if !folder_for_menu.imported_root {
-            watch_item.set_tooltip_text(Some("Only explicitly imported folders can be watched"));
-        }
-        let folder = folder_for_menu.clone();
-        let watch = watch.clone();
-        let popover_for_watch = popover.clone();
-        watch_item.connect_clicked(move |_| {
-            popover_for_watch.popdown();
-            watch(folder.clone(), !folder.watched);
-        });
-        menu.append(&watch_item);
 
         let add_favorites = gtk::Button::with_label("Add all photos to Favourites");
         add_favorites.add_css_class("flat");
