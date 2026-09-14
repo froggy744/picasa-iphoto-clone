@@ -17,6 +17,7 @@ pub struct EditEditor {
     zoom_out_action: Rc<dyn Fn()>,
     fit_action: Rc<dyn Fn()>,
     one_to_one_action: Rc<dyn Fn(bool)>,
+    set_library_rotation_action: Rc<dyn Fn(i32)>,
     one_to_one_sync: Rc<RefCell<Option<Box<dyn Fn(bool)>>>>,
 }
 
@@ -39,6 +40,10 @@ impl EditEditor {
 
     pub fn set_one_to_one(&self, enabled: bool) {
         (self.one_to_one_action)(enabled);
+    }
+
+    pub fn set_library_rotation(&self, rotation: i32) {
+        (self.set_library_rotation_action)(rotation);
     }
 
     pub fn set_one_to_one_sync_handler(&self, handler: impl Fn(bool) + 'static) {
@@ -132,14 +137,10 @@ impl PreviewGeometry {
 #[derive(Clone, Copy)]
 enum OneToOneAnchor {
     Cursor {
-        h_scroll: f64,
-        v_scroll: f64,
+        normalized_x: f64,
+        normalized_y: f64,
         pointer_x: f64,
         pointer_y: f64,
-        viewport_width: f64,
-        viewport_height: f64,
-        old_width: f64,
-        old_height: f64,
     },
     Center,
 }
@@ -512,6 +513,7 @@ pub fn build(
     // 0.0 means fit-to-canvas. Positive values are display zoom factors.
     let canvas_zoom = Rc::new(Cell::new(0.0f64));
     let native_one_to_one = Rc::new(Cell::new(false));
+    let active_rotation = Rc::new(Cell::new(photo.rotation().rem_euclid(360)));
     let pending_one_to_one_anchor: Rc<RefCell<Option<OneToOneAnchor>>> =
         Rc::new(RefCell::new(None));
     let one_to_one_sync: Rc<RefCell<Option<Box<dyn Fn(bool)>>>> =
@@ -656,6 +658,7 @@ pub fn build(
         configure_scale_scroll(scale, &tools_scroll);
     }
 
+    let active_rotation_for_queue = active_rotation.clone();
     let queue_preview: Rc<dyn Fn()> = {
         let session = session.clone();
         let picture = picture.clone();
@@ -689,13 +692,14 @@ pub fn build(
             let crop_overlay = crop_overlay.clone();
             let preview_debounce_for_fire = preview_debounce.clone();
             let preview_worker = preview_worker.clone();
+            let active_rotation = active_rotation_for_queue.clone();
             let source = glib::timeout_add_local_once(Duration::from_millis(90), move || {
                 preview_debounce_for_fire.borrow_mut().take();
                 let current_generation = generation.get().wrapping_add(1);
                 generation.set(current_generation);
                 let recipe = session.borrow().recipe.clone();
                 let path = photo.path();
-                let rotation = photo.rotation();
+                let rotation = active_rotation.get();
                 let native = native_one_to_one.get();
                 let (target_width, target_height) = if native {
                     let mut width = if photo.width() > 0 {
@@ -779,40 +783,37 @@ pub fn build(
                                         );
 
                                         let anchor = pending_one_to_one_anchor.borrow_mut().take();
-                                        let picture_scroll = picture_scroll.clone();
-                                        glib::idle_add_local_once(move || {
-                                            let hadj = picture_scroll.hadjustment();
-                                            let vadj = picture_scroll.vadjustment();
+                                        let picture_scroll_for_restore = picture_scroll.clone();
+                                        let picture_scroll_for_tick = picture_scroll.clone();
+                                        picture_scroll_for_restore.add_tick_callback(move |_, _| {
+                                            let hadj = picture_scroll_for_tick.hadjustment();
+                                            let vadj = picture_scroll_for_tick.vadjustment();
+                                            if hadj.upper() < width as f64 && vadj.upper() < height as f64 {
+                                                return glib::ControlFlow::Continue;
+                                            }
                                             let h_max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
                                             let v_max = (vadj.upper() - vadj.page_size()).max(vadj.lower());
-                                            let (target_h, target_v, anchored) = match anchor {
+                                            let (target_h, target_v, anchored, trace_anchor) = match anchor {
                                                 Some(OneToOneAnchor::Cursor {
-                                                    h_scroll,
-                                                    v_scroll,
+                                                    normalized_x,
+                                                    normalized_y,
                                                     pointer_x,
                                                     pointer_y,
-                                                    viewport_width,
-                                                    viewport_height,
-                                                    old_width,
-                                                    old_height,
                                                 }) => (
-                                                    one_to_one_scroll_target(
-                                                        h_scroll,
+                                                    normalized_scroll_target(
+                                                        normalized_x,
                                                         pointer_x,
-                                                        viewport_width,
-                                                        old_width,
+                                                        hadj.page_size(),
                                                         width as f64,
-                                                        true,
                                                     ),
-                                                    one_to_one_scroll_target(
-                                                        v_scroll,
+                                                    normalized_scroll_target(
+                                                        normalized_y,
                                                         pointer_y,
-                                                        viewport_height,
-                                                        old_height,
+                                                        vadj.page_size(),
                                                         height as f64,
-                                                        true,
                                                     ),
                                                     true,
+                                                    Some((normalized_x, normalized_y, pointer_x, pointer_y)),
                                                 ),
                                                 _ => (
                                                     one_to_one_scroll_target(
@@ -832,20 +833,23 @@ pub fn build(
                                                         false,
                                                     ),
                                                     false,
+                                                    None,
                                                 ),
                                             };
                                             hadj.set_value(target_h.clamp(hadj.lower(), h_max));
                                             vadj.set_value(target_v.clamp(vadj.lower(), v_max));
                                             if std::env::var_os("PICASA_TRACE").is_some() {
                                                 eprintln!(
-                                                    "EDIT 1TO1 anchor={} scroll=({:.1},{:.1}) target={}x{}",
+                                                    "EDIT 1TO1 anchor={} normalized={:?} scroll=({:.1},{:.1}) target={}x{}",
                                                     if anchored { "cursor" } else { "center" },
+                                                    trace_anchor,
                                                     hadj.value(),
                                                     vadj.value(),
                                                     width,
                                                     height
                                                 );
                                             }
+                                            glib::ControlFlow::Break
                                         });
                                     } else {
                                         apply_canvas_zoom(
@@ -1337,21 +1341,53 @@ pub fn build(
                 let viewport_width = picture_scroll.width().max(1) as f64;
                 let viewport_height = picture_scroll.height().max(1) as f64;
                 let (pointer_x, pointer_y) = canvas_pointer.get();
-                let pointer_on_image = pointer_x.is_finite()
-                    && pointer_y.is_finite()
-                    && pointer_over_content(pointer_x, viewport_width, old_width)
-                    && pointer_over_content(pointer_y, viewport_height, old_height);
-
-                let anchor = if pointer_on_image {
-                    OneToOneAnchor::Cursor {
-                        h_scroll: picture_scroll.hadjustment().value(),
-                        v_scroll: picture_scroll.vadjustment().value(),
-                        pointer_x,
-                        pointer_y,
+                let (photo_x, photo_y, photo_width, photo_height) = if canvas_zoom.get() <= 0.0 {
+                    fit_photo_rect(
                         viewport_width,
                         viewport_height,
+                        dimensions.0.max(1) as f64,
+                        dimensions.1.max(1) as f64,
+                    )
+                } else {
+                    (
+                        ((viewport_width - old_width) * 0.5).max(0.0),
+                        ((viewport_height - old_height) * 0.5).max(0.0),
                         old_width,
                         old_height,
+                    )
+                };
+                let normalized = normalized_image_point(
+                    pointer_x,
+                    pointer_y,
+                    photo_x,
+                    photo_y,
+                    photo_width,
+                    photo_height,
+                    if canvas_zoom.get() <= 0.0 {
+                        0.0
+                    } else {
+                        picture_scroll.hadjustment().value()
+                    },
+                    if canvas_zoom.get() <= 0.0 {
+                        0.0
+                    } else {
+                        picture_scroll.vadjustment().value()
+                    },
+                );
+
+                let anchor = if let Some((normalized_x, normalized_y)) = normalized {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!(
+                            "EDIT 1TO1 request normalized=({:.4},{:.4}) cursor=({:.1},{:.1}) rect=({:.1},{:.1},{:.1},{:.1})",
+                            normalized_x, normalized_y, pointer_x, pointer_y,
+                            photo_x, photo_y, photo_width, photo_height
+                        );
+                    }
+                    OneToOneAnchor::Cursor {
+                        normalized_x,
+                        normalized_y,
+                        pointer_x,
+                        pointer_y,
                     }
                 } else {
                     OneToOneAnchor::Center
@@ -1367,6 +1403,31 @@ pub fn build(
                 pending_one_to_one_anchor.borrow_mut().take();
                 fit_action();
             }
+        })
+    };
+
+    let set_library_rotation_action: Rc<dyn Fn(i32)> = {
+        let active_rotation = active_rotation.clone();
+        let native_one_to_one = native_one_to_one.clone();
+        let pending_one_to_one_anchor = pending_one_to_one_anchor.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let one_to_one_sync = one_to_one_sync.clone();
+        let picture = picture.clone();
+        let picture_scroll = picture_scroll.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let queue_preview = queue_preview.clone();
+        Rc::new(move |rotation| {
+            active_rotation.set(rotation.rem_euclid(360));
+            pending_one_to_one_anchor.borrow_mut().take();
+            let was_one_to_one = native_one_to_one.replace(false);
+            if was_one_to_one {
+                if let Some(handler) = one_to_one_sync.borrow().as_ref() {
+                    handler(false);
+                }
+            }
+            canvas_zoom.set(0.0);
+            apply_canvas_zoom(&picture, &picture_scroll, preview_dimensions.get(), 0.0);
+            queue_preview();
         })
     };
 
@@ -1481,6 +1542,7 @@ pub fn build(
         let session = session.clone();
         let photo = photo.clone();
         let parent = parent.clone();
+        let active_rotation = active_rotation.clone();
         export.connect_clicked(move |_| {
             let dialog = gtk::FileChooserNative::new(
                 Some("Export Edited Photo"),
@@ -1497,7 +1559,7 @@ pub fn build(
             dialog.set_current_name(&filename);
 
             let reference = photo.path();
-            let rotation = photo.rotation();
+            let rotation = active_rotation.get();
             let source_width = photo.width();
             let source_height = photo.height();
             let session = session.clone();
@@ -1637,6 +1699,7 @@ pub fn build(
         zoom_out_action,
         fit_action,
         one_to_one_action,
+        set_library_rotation_action,
         one_to_one_sync,
     }
 }
@@ -1694,6 +1757,52 @@ fn pointer_over_content(pointer: f64, viewport: f64, content: f64) -> bool {
         padding + content
     };
     pointer >= padding && pointer <= visible_end
+}
+
+fn fit_photo_rect(
+    container_w: f64,
+    container_h: f64,
+    image_w: f64,
+    image_h: f64,
+) -> (f64, f64, f64, f64) {
+    contained_rect(container_w, container_h, image_w, image_h)
+}
+
+fn normalized_image_point(
+    pointer_x: f64,
+    pointer_y: f64,
+    photo_x: f64,
+    photo_y: f64,
+    photo_width: f64,
+    photo_height: f64,
+    h_scroll: f64,
+    v_scroll: f64,
+) -> Option<(f64, f64)> {
+    if !pointer_x.is_finite()
+        || !pointer_y.is_finite()
+        || photo_width <= 0.0
+        || photo_height <= 0.0
+        || pointer_x < photo_x
+        || pointer_y < photo_y
+        || pointer_x > photo_x + photo_width
+        || pointer_y > photo_y + photo_height
+    {
+        return None;
+    }
+    Some((
+        ((h_scroll + pointer_x - photo_x) / photo_width).clamp(0.0, 1.0),
+        ((v_scroll + pointer_y - photo_y) / photo_height).clamp(0.0, 1.0),
+    ))
+}
+
+fn normalized_scroll_target(
+    normalized: f64,
+    pointer: f64,
+    viewport: f64,
+    native_content: f64,
+) -> f64 {
+    let padding = ((viewport - native_content) * 0.5).max(0.0);
+    normalized.clamp(0.0, 1.0) * native_content + padding - pointer
 }
 
 fn one_to_one_scroll_target(
@@ -2026,7 +2135,32 @@ fn contained_rect(
 
 #[cfg(test)]
 mod zoom_anchor_tests {
-    use super::{anchored_scroll_target, one_to_one_scroll_target, pointer_over_content};
+    use super::{
+        anchored_scroll_target, fit_photo_rect, normalized_image_point, normalized_scroll_target,
+        one_to_one_scroll_target, pointer_over_content,
+    };
+
+    #[test]
+    fn fit_anchor_uses_letterboxed_photo_rectangle() {
+        let rect = fit_photo_rect(400.0, 400.0, 1000.0, 800.0);
+        assert_eq!(rect, (0.0, 40.0, 400.0, 320.0));
+        let normalized =
+            normalized_image_point(200.0, 160.0, rect.0, rect.1, rect.2, rect.3, 0.0, 0.0)
+                .expect("cursor is over photo");
+        let target = (
+            normalized_scroll_target(normalized.0, 200.0, 400.0, 1000.0),
+            normalized_scroll_target(normalized.1, 160.0, 400.0, 800.0),
+        );
+        assert!((target.0 - 300.0).abs() < 0.001);
+        assert!((target.1 - 140.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn fit_anchor_returns_none_when_pointer_is_in_margin() {
+        assert!(
+            normalized_image_point(10.0, 10.0, 0.0, 40.0, 400.0, 320.0, 0.0, 0.0).is_none()
+        );
+    }
 
     #[test]
     fn zoom_anchor_keeps_centered_image_point_under_pointer() {

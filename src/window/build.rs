@@ -2906,6 +2906,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let info_rotate = info.clone();
     let gallery_for_rotate = gallery.clone();
     let lightbox_for_rotate = lightbox.clone();
+    let edit_editor_for_rotate = edit_editor.clone();
+    let main_stack_for_rotate = main_stack.clone();
 
     info.rotate.connect_clicked(move |_| {
         let Some(photo) = selected_for_rotate.borrow().clone() else {
@@ -2921,6 +2923,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         info_rotate.set_photo(Some(&photo));
         gallery_for_rotate.refresh_thumbnails();
         lightbox_for_rotate.refresh_current();
+        if main_stack_for_rotate.visible_child_name().as_deref() == Some("edit") {
+            if let Some(editor) = edit_editor_for_rotate.borrow().as_ref() {
+                if editor.photo_id() == photo.id() {
+                    editor.set_library_rotation(rotation);
+                }
+            }
+        }
         if std::env::var_os("PICASA_TRACE").is_some() {
             eprintln!(
                 "UI TRACE photo_rotated id={} rotation={}",
