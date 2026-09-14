@@ -129,6 +129,21 @@ impl PreviewGeometry {
     }
 }
 
+#[derive(Clone, Copy)]
+enum OneToOneAnchor {
+    Cursor {
+        h_scroll: f64,
+        v_scroll: f64,
+        pointer_x: f64,
+        pointer_y: f64,
+        viewport_width: f64,
+        viewport_height: f64,
+        old_width: f64,
+        old_height: f64,
+    },
+    Center,
+}
+
 struct PreviewJob {
     generation: u64,
     path: String,
@@ -497,6 +512,8 @@ pub fn build(
     // 0.0 means fit-to-canvas. Positive values are display zoom factors.
     let canvas_zoom = Rc::new(Cell::new(0.0f64));
     let native_one_to_one = Rc::new(Cell::new(false));
+    let pending_one_to_one_anchor: Rc<RefCell<Option<OneToOneAnchor>>> =
+        Rc::new(RefCell::new(None));
     let one_to_one_sync: Rc<RefCell<Option<Box<dyn Fn(bool)>>>> =
         Rc::new(RefCell::new(None));
     let generation = Rc::new(Cell::new(0u64));
@@ -650,6 +667,7 @@ pub fn build(
         let picture_scroll = picture_scroll.clone();
         let canvas_zoom = canvas_zoom.clone();
         let native_one_to_one = native_one_to_one.clone();
+        let pending_one_to_one_anchor = pending_one_to_one_anchor.clone();
         let crop_overlay = crop_overlay.clone();
         let preview_debounce = preview_debounce.clone();
         let preview_worker = preview_worker.clone();
@@ -667,6 +685,7 @@ pub fn build(
             let picture_scroll = picture_scroll.clone();
             let canvas_zoom = canvas_zoom.clone();
             let native_one_to_one = native_one_to_one.clone();
+            let pending_one_to_one_anchor = pending_one_to_one_anchor.clone();
             let crop_overlay = crop_overlay.clone();
             let preview_debounce_for_fire = preview_debounce.clone();
             let preview_worker = preview_worker.clone();
@@ -727,6 +746,7 @@ pub fn build(
                 let preview_dimensions = preview_dimensions.clone();
                 let picture_scroll = picture_scroll.clone();
                 let canvas_zoom = canvas_zoom.clone();
+                let pending_one_to_one_anchor = pending_one_to_one_anchor.clone();
                 let crop_overlay = crop_overlay.clone();
                 glib::timeout_add_local(Duration::from_millis(25), move || {
                     match receiver.try_recv() {
@@ -757,6 +777,76 @@ pub fn build(
                                             &picture_scroll,
                                             (width as i32, height as i32),
                                         );
+
+                                        let anchor = pending_one_to_one_anchor.borrow_mut().take();
+                                        let picture_scroll = picture_scroll.clone();
+                                        glib::idle_add_local_once(move || {
+                                            let hadj = picture_scroll.hadjustment();
+                                            let vadj = picture_scroll.vadjustment();
+                                            let h_max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
+                                            let v_max = (vadj.upper() - vadj.page_size()).max(vadj.lower());
+                                            let (target_h, target_v, anchored) = match anchor {
+                                                Some(OneToOneAnchor::Cursor {
+                                                    h_scroll,
+                                                    v_scroll,
+                                                    pointer_x,
+                                                    pointer_y,
+                                                    viewport_width,
+                                                    viewport_height,
+                                                    old_width,
+                                                    old_height,
+                                                }) => (
+                                                    one_to_one_scroll_target(
+                                                        h_scroll,
+                                                        pointer_x,
+                                                        viewport_width,
+                                                        old_width,
+                                                        width as f64,
+                                                        true,
+                                                    ),
+                                                    one_to_one_scroll_target(
+                                                        v_scroll,
+                                                        pointer_y,
+                                                        viewport_height,
+                                                        old_height,
+                                                        height as f64,
+                                                        true,
+                                                    ),
+                                                    true,
+                                                ),
+                                                _ => (
+                                                    one_to_one_scroll_target(
+                                                        0.0,
+                                                        0.0,
+                                                        hadj.page_size(),
+                                                        1.0,
+                                                        width as f64,
+                                                        false,
+                                                    ),
+                                                    one_to_one_scroll_target(
+                                                        0.0,
+                                                        0.0,
+                                                        vadj.page_size(),
+                                                        1.0,
+                                                        height as f64,
+                                                        false,
+                                                    ),
+                                                    false,
+                                                ),
+                                            };
+                                            hadj.set_value(target_h.clamp(hadj.lower(), h_max));
+                                            vadj.set_value(target_v.clamp(vadj.lower(), v_max));
+                                            if std::env::var_os("PICASA_TRACE").is_some() {
+                                                eprintln!(
+                                                    "EDIT 1TO1 anchor={} scroll=({:.1},{:.1}) target={}x{}",
+                                                    if anchored { "cursor" } else { "center" },
+                                                    hadj.value(),
+                                                    vadj.value(),
+                                                    width,
+                                                    height
+                                                );
+                                            }
+                                        });
                                     } else {
                                         apply_canvas_zoom(
                                             &picture,
@@ -1110,9 +1200,24 @@ pub fn build(
         toolbar_zoom_in.connect_clicked(move |_| zoom_in_action());
     }
 
-    // Ctrl + mouse wheel over the photo canvas uses the exact same incremental
-    // zoom actions as the toolbar buttons. Ordinary wheel input is left alone
-    // for normal ScrolledWindow panning/scrolling.
+    // Track the pointer in viewport-local coordinates so Ctrl+wheel can keep
+    // the image point under the cursor fixed while the picture is resized.
+    // Toolbar +/- deliberately keeps its existing centre-based behaviour.
+    let canvas_pointer = Rc::new(Cell::new((f64::NAN, f64::NAN)));
+    let canvas_motion = gtk::EventControllerMotion::new();
+    {
+        let canvas_pointer = canvas_pointer.clone();
+        canvas_motion.connect_motion(move |_, x, y| canvas_pointer.set((x, y)));
+    }
+    {
+        let canvas_pointer = canvas_pointer.clone();
+        canvas_motion.connect_leave(move |_| canvas_pointer.set((f64::NAN, f64::NAN)));
+    }
+    picture_scroll.add_controller(canvas_motion);
+
+    // Ctrl + mouse wheel uses the same incremental zoom actions as the toolbar,
+    // then restores the scroll position around the pointer after GTK has laid
+    // out the resized GtkPicture. Ordinary wheel input remains native scrolling.
     let canvas_zoom_scroll = gtk::EventControllerScroll::new(
         gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::DISCRETE,
     );
@@ -1120,6 +1225,11 @@ pub fn build(
     {
         let zoom_in_action = zoom_in_action.clone();
         let zoom_out_action = zoom_out_action.clone();
+        let picture_scroll = picture_scroll.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let native_one_to_one = native_one_to_one.clone();
+        let canvas_pointer = canvas_pointer.clone();
         canvas_zoom_scroll.connect_scroll(move |controller, _, dy| {
             if !controller
                 .current_event_state()
@@ -1129,11 +1239,74 @@ pub fn build(
                 return glib::Propagation::Proceed;
             }
 
+            let (pointer_x, pointer_y) = canvas_pointer.get();
+            let pointer_valid = pointer_x.is_finite() && pointer_y.is_finite();
+            let dimensions = preview_dimensions.get();
+            let old_native = native_one_to_one.get();
+            let old_multiplier = if canvas_zoom.get() <= 0.0 {
+                1.0
+            } else {
+                canvas_zoom.get()
+            };
+            let (old_width, old_height) = if old_native {
+                (dimensions.0.max(1) as f64, dimensions.1.max(1) as f64)
+            } else {
+                canvas_size_for_zoom(&picture_scroll, dimensions, old_multiplier)
+            };
+            let old_h_value = picture_scroll.hadjustment().value();
+            let old_v_value = picture_scroll.vadjustment().value();
+            let viewport_width = picture_scroll.width().max(1) as f64;
+            let viewport_height = picture_scroll.height().max(1) as f64;
+
             if dy < 0.0 {
                 zoom_in_action();
             } else {
                 zoom_out_action();
             }
+
+            if pointer_valid {
+                let new_multiplier = if canvas_zoom.get() <= 0.0 {
+                    1.0
+                } else {
+                    canvas_zoom.get()
+                };
+                let (new_width, new_height) =
+                    canvas_size_for_zoom(&picture_scroll, dimensions, new_multiplier);
+                let target_h = anchored_scroll_target(
+                    old_h_value,
+                    pointer_x,
+                    viewport_width,
+                    old_width,
+                    new_width,
+                );
+                let target_v = anchored_scroll_target(
+                    old_v_value,
+                    pointer_y,
+                    viewport_height,
+                    old_height,
+                    new_height,
+                );
+                let picture_scroll = picture_scroll.clone();
+                glib::idle_add_local_once(move || {
+                    let hadj = picture_scroll.hadjustment();
+                    let vadj = picture_scroll.vadjustment();
+                    let h_max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
+                    let v_max = (vadj.upper() - vadj.page_size()).max(vadj.lower());
+                    hadj.set_value(target_h.clamp(hadj.lower(), h_max));
+                    vadj.set_value(target_v.clamp(vadj.lower(), v_max));
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!(
+                            "EDIT ZOOM anchor=({:.1},{:.1}) scroll=({:.1},{:.1}) zoom={:.2}",
+                            pointer_x,
+                            pointer_y,
+                            hadj.value(),
+                            vadj.value(),
+                            new_multiplier
+                        );
+                    }
+                });
+            }
+
             glib::Propagation::Stop
         });
     }
@@ -1141,17 +1314,57 @@ pub fn build(
 
     let one_to_one_action: Rc<dyn Fn(bool)> = {
         let native_one_to_one = native_one_to_one.clone();
+        let pending_one_to_one_anchor = pending_one_to_one_anchor.clone();
         let canvas_zoom = canvas_zoom.clone();
+        let canvas_pointer = canvas_pointer.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let picture_scroll = picture_scroll.clone();
         let queue_preview = queue_preview.clone();
         let fit_action = fit_action.clone();
         Rc::new(move |enabled| {
             if enabled {
+                let dimensions = preview_dimensions.get();
+                let multiplier = if canvas_zoom.get() <= 0.0 {
+                    1.0
+                } else {
+                    canvas_zoom.get()
+                };
+                let (old_width, old_height) = if native_one_to_one.get() {
+                    (dimensions.0.max(1) as f64, dimensions.1.max(1) as f64)
+                } else {
+                    canvas_size_for_zoom(&picture_scroll, dimensions, multiplier)
+                };
+                let viewport_width = picture_scroll.width().max(1) as f64;
+                let viewport_height = picture_scroll.height().max(1) as f64;
+                let (pointer_x, pointer_y) = canvas_pointer.get();
+                let pointer_on_image = pointer_x.is_finite()
+                    && pointer_y.is_finite()
+                    && pointer_over_content(pointer_x, viewport_width, old_width)
+                    && pointer_over_content(pointer_y, viewport_height, old_height);
+
+                let anchor = if pointer_on_image {
+                    OneToOneAnchor::Cursor {
+                        h_scroll: picture_scroll.hadjustment().value(),
+                        v_scroll: picture_scroll.vadjustment().value(),
+                        pointer_x,
+                        pointer_y,
+                        viewport_width,
+                        viewport_height,
+                        old_width,
+                        old_height,
+                    }
+                } else {
+                    OneToOneAnchor::Center
+                };
+                pending_one_to_one_anchor.replace(Some(anchor));
+
                 native_one_to_one.set(true);
                 // Native 1:1 has its own sizing path. Do not encode it as a
                 // normal Fit-relative zoom multiplier.
                 canvas_zoom.set(0.0);
                 queue_preview();
             } else {
+                pending_one_to_one_anchor.borrow_mut().take();
                 fit_action();
             }
         })
@@ -1441,6 +1654,69 @@ fn fit_zoom_for_canvas(scroll: &gtk::ScrolledWindow, dimensions: (i32, i32)) -> 
         .max(0.01)
 }
 
+fn canvas_size_for_zoom(
+    scroll: &gtk::ScrolledWindow,
+    dimensions: (i32, i32),
+    zoom: f64,
+) -> (f64, f64) {
+    let fit = fit_zoom_for_canvas(scroll, dimensions);
+    let effective_zoom = (fit * zoom).clamp(0.01, 8.0);
+    (
+        (dimensions.0.max(1) as f64 * effective_zoom).max(1.0),
+        (dimensions.1.max(1) as f64 * effective_zoom).max(1.0),
+    )
+}
+
+fn anchored_scroll_target(
+    current_scroll: f64,
+    pointer: f64,
+    viewport: f64,
+    old_content: f64,
+    new_content: f64,
+) -> f64 {
+    let old_content = old_content.max(1.0);
+    let new_content = new_content.max(1.0);
+    let old_padding = ((viewport - old_content) * 0.5).max(0.0);
+    let new_padding = ((viewport - new_content) * 0.5).max(0.0);
+    let image_position = (current_scroll + pointer - old_padding).clamp(0.0, old_content);
+    let normalized = image_position / old_content;
+    normalized * new_content + new_padding - pointer
+}
+
+fn pointer_over_content(pointer: f64, viewport: f64, content: f64) -> bool {
+    if !pointer.is_finite() || !viewport.is_finite() || !content.is_finite() {
+        return false;
+    }
+    let padding = ((viewport - content) * 0.5).max(0.0);
+    let visible_end = if content >= viewport {
+        viewport
+    } else {
+        padding + content
+    };
+    pointer >= padding && pointer <= visible_end
+}
+
+fn one_to_one_scroll_target(
+    current_scroll: f64,
+    pointer: f64,
+    viewport: f64,
+    old_content: f64,
+    native_content: f64,
+    anchor_cursor: bool,
+) -> f64 {
+    if anchor_cursor {
+        anchored_scroll_target(
+            current_scroll,
+            pointer,
+            viewport,
+            old_content,
+            native_content,
+        )
+    } else {
+        ((native_content - viewport) * 0.5).max(0.0)
+    }
+}
+
 fn apply_canvas_zoom(
     picture: &gtk::Picture,
     scroll: &gtk::ScrolledWindow,
@@ -1460,10 +1736,9 @@ fn apply_canvas_zoom(
         return;
     }
     // Positive zoom values are multipliers of the current Fit scale.
-    let fit = fit_zoom_for_canvas(scroll, dimensions);
-    let effective_zoom = (fit * zoom).clamp(0.01, 8.0);
-    let width = ((dimensions.0.max(1) as f64 * effective_zoom).round() as i32).max(1);
-    let height = ((dimensions.1.max(1) as f64 * effective_zoom).round() as i32).max(1);
+    let (width, height) = canvas_size_for_zoom(scroll, dimensions, zoom);
+    let width = width.round() as i32;
+    let height = height.round() as i32;
     // Keep shrinking enabled: disabling it makes GtkPicture insist on the
     // paintable's intrinsic size and defeats incremental size requests.
     picture.set_can_shrink(true);
@@ -1746,4 +2021,48 @@ fn contained_rect(
         width,
         height,
     )
+}
+
+
+#[cfg(test)]
+mod zoom_anchor_tests {
+    use super::{anchored_scroll_target, one_to_one_scroll_target, pointer_over_content};
+
+    #[test]
+    fn zoom_anchor_keeps_centered_image_point_under_pointer() {
+        let target = anchored_scroll_target(0.0, 500.0, 1000.0, 800.0, 1200.0);
+        assert!((target - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn zoom_anchor_preserves_off_center_scrolled_point() {
+        let target = anchored_scroll_target(250.0, 125.0, 500.0, 1000.0, 2000.0);
+        assert!((target - 625.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn zoom_anchor_handles_zooming_out_to_content_smaller_than_viewport() {
+        let target = anchored_scroll_target(250.0, 250.0, 500.0, 1000.0, 400.0);
+        assert!((target - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn one_to_one_anchor_preserves_cursor_image_point() {
+        let target = one_to_one_scroll_target(0.0, 400.0, 1000.0, 800.0, 4000.0, true);
+        assert!((target - 1100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn one_to_one_without_image_pointer_centers_native_image() {
+        let target = one_to_one_scroll_target(0.0, 0.0, 1000.0, 800.0, 4000.0, false);
+        assert!((target - 1500.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn pointer_must_be_over_centered_image_to_anchor_one_to_one() {
+        assert!(!pointer_over_content(50.0, 1000.0, 800.0));
+        assert!(pointer_over_content(100.0, 1000.0, 800.0));
+        assert!(pointer_over_content(900.0, 1000.0, 800.0));
+        assert!(!pointer_over_content(950.0, 1000.0, 800.0));
+    }
 }
