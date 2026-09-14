@@ -453,6 +453,73 @@ fn install_gallery_zoom_scroll(scrolled: &gtk::ScrolledWindow, gallery: Rc<grid:
     scrolled.add_controller(controller);
 }
 
+fn open_in_folder_should_stop(building: bool, revealed: bool, attempt: u32) -> bool {
+    (!building && revealed) || attempt >= 800
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FolderDestinationPlan {
+    Normal,
+    ReuseWithoutFolderScroll,
+    RefreshWithoutFolderScroll,
+}
+
+fn folder_destination_plan(
+    exact_photo_target: bool,
+    reuse_folder_stream: bool,
+) -> FolderDestinationPlan {
+    if !exact_photo_target {
+        FolderDestinationPlan::Normal
+    } else if reuse_folder_stream {
+        FolderDestinationPlan::ReuseWithoutFolderScroll
+    } else {
+        FolderDestinationPlan::RefreshWithoutFolderScroll
+    }
+}
+
+#[cfg(test)]
+mod open_in_folder_retry_tests {
+    use super::{
+        folder_destination_plan, open_in_folder_should_stop, FolderDestinationPlan,
+    };
+
+    #[test]
+    fn stops_immediately_after_photo_is_revealed() {
+        assert!(open_in_folder_should_stop(false, true, 1));
+    }
+
+    #[test]
+    fn keeps_retrying_while_stream_is_building_or_photo_is_not_revealed() {
+        assert!(!open_in_folder_should_stop(true, false, 1));
+        assert!(!open_in_folder_should_stop(false, false, 25));
+    }
+
+    #[test]
+    fn hard_limit_still_stops_missing_photo_retry_loop() {
+        assert!(open_in_folder_should_stop(false, false, 800));
+    }
+
+    #[test]
+    fn exact_photo_navigation_never_schedules_generic_folder_scroll() {
+        assert_eq!(
+            folder_destination_plan(true, true),
+            FolderDestinationPlan::ReuseWithoutFolderScroll
+        );
+        assert_eq!(
+            folder_destination_plan(true, false),
+            FolderDestinationPlan::RefreshWithoutFolderScroll
+        );
+        assert_eq!(
+            folder_destination_plan(false, true),
+            FolderDestinationPlan::Normal
+        );
+        assert_eq!(
+            folder_destination_plan(false, false),
+            FolderDestinationPlan::Normal
+        );
+    }
+}
+
 pub fn build(app: &adw::Application, connection: Connection) -> adw::ApplicationWindow {
     let build_started = Instant::now();
     let window = adw::ApplicationWindow::new(app);
@@ -768,6 +835,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         Rc::new(RefCell::new(None));
     let folder_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i64, i64)>>>> =
         Rc::new(RefCell::new(None));
+    // Open in Folder keeps this exact target alive briefly so a sidebar
+    // Tree-mode reorder cannot replace it with a generic folder-header scroll.
+    let open_in_folder_exact_target: Rc<Cell<Option<i64>>> = Rc::new(Cell::new(None));
     let navigate_to_folder: Rc<dyn Fn(i64, i64)> = {
         let slot = folder_navigation_slot.clone();
         Rc::new(move |folder_id, photo_id| {
@@ -2678,7 +2748,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let main_split = adw::OverlaySplitView::new();
 
     let album_theme_changed_for_destination = album_theme_changed.clone();
-    let destination_click: Rc<dyn Fn(sidebar::SidebarFilter)> = {
+    let destination_click_with_target: Rc<dyn Fn(sidebar::SidebarFilter, bool)> = {
         let search_entry = search_entry_slot.clone();
         let search_text = search_text.clone();
         let suppressed = search_suppressed.clone();
@@ -2694,7 +2764,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let albums_home = albums_home.clone();
         let connection_for_albums = connection.clone();
         let album_home_click_slot = album_home_click_slot.clone();
-        Rc::new(move |new_filter| {
+        let open_in_folder_exact_target = open_in_folder_exact_target.clone();
+        Rc::new(move |new_filter, exact_photo_target| {
+            // Cancel stale async refresh/folder-scroll work before this new
+            // destination is established. This also covers Folder-to-Folder
+            // reuse, which otherwise would not bump the refresh generation.
+            invalidate_pending_grid_navigation();
+            if !exact_photo_target {
+                open_in_folder_exact_target.set(None);
+            }
             let folder_target = if let sidebar::SidebarFilter::Folder(folder_id) = new_filter {
                 db::folders(&connection.borrow())
                     .ok()
@@ -2746,23 +2824,52 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
             main_stack.set_visible_child_name("photos");
             apply_gallery_grouping(&gallery, new_filter, sort.get(), group_mode.get());
-            if let Some((folder_id, folder_path)) = folder_target {
-                if reuse_folder_stream && gallery.scroll_to_folder(folder_id, &folder_path) {
+            match folder_destination_plan(exact_photo_target, reuse_folder_stream) {
+                FolderDestinationPlan::ReuseWithoutFolderScroll => {
+                    // Open in Folder will select/scroll the exact photo below.
+                    // Do not also queue the generic folder-header destination.
                     return;
                 }
-                refresh_grid_to_folder(
-                    &connection,
-                    new_filter,
-                    "",
-                    sort.get(),
-                    &gallery,
-                    folder_id,
-                    folder_path,
-                );
-            } else {
-                refresh_grid(&connection, new_filter, "", sort.get(), &gallery);
+                FolderDestinationPlan::RefreshWithoutFolderScroll => {
+                    // Load the continuous Folder stream, but deliberately omit
+                    // folder_target so refresh_grid_inner does not schedule a
+                    // later scroll_to_folder() that can overwrite the exact photo.
+                    refresh_grid_inner(
+                        &connection,
+                        new_filter,
+                        "",
+                        sort.get(),
+                        &gallery,
+                        None,
+                    );
+                }
+                FolderDestinationPlan::Normal => {
+                    if let Some((folder_id, folder_path)) = folder_target {
+                        if reuse_folder_stream
+                            && gallery.scroll_to_folder(folder_id, &folder_path)
+                        {
+                            return;
+                        }
+                        refresh_grid_to_folder(
+                            &connection,
+                            new_filter,
+                            "",
+                            sort.get(),
+                            &gallery,
+                            folder_id,
+                            folder_path,
+                        );
+                    } else {
+                        refresh_grid(&connection, new_filter, "", sort.get(), &gallery);
+                    }
+                }
             }
         })
+    };
+
+    let destination_click: Rc<dyn Fn(sidebar::SidebarFilter)> = {
+        let destination_click_with_target = destination_click_with_target.clone();
+        Rc::new(move |new_filter| destination_click_with_target(new_filter, false))
     };
 
     album_home_click_slot.replace(Some({
@@ -2770,74 +2877,53 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         Rc::new(move |album_id| destination_click(sidebar::SidebarFilter::Album(album_id)))
     }));
     folder_navigation_slot.replace(Some({
-        let destination_click = destination_click.clone();
+        let destination_click_with_target = destination_click_with_target.clone();
         let sidebar_selection = sidebar_selection_slot.clone();
         let gallery = gallery.clone();
+        let exact_target = open_in_folder_exact_target.clone();
         Rc::new(move |folder_id, photo_id| {
-            destination_click(sidebar::SidebarFilter::Folder(folder_id));
+            exact_target.set(Some(photo_id));
+            destination_click_with_target(sidebar::SidebarFilter::Folder(folder_id), true);
             let gallery = gallery.clone();
+            let exact_target_for_timer = exact_target.clone();
             let attempts = Rc::new(Cell::new(0u32));
-            let first_success = Rc::new(Cell::new(None::<u32>));
             let attempts_for_timer = attempts.clone();
-            let first_success_for_timer = first_success.clone();
             glib::timeout_add_local(Duration::from_millis(25), move || {
                 let attempt = attempts_for_timer.get() + 1;
                 attempts_for_timer.set(attempt);
-                // While the Folder stream is still building, do NOT scan the
-                // growing model: select_photo is O(photos), and calling it
-                // every 25 ms starves the very idle build that would create the
-                // target row (measured: build stalled at 40k/66k for 20 s).
-                // Wait for the build to finish, then select once per tick.
                 let building = gallery.stream_building();
                 let revealed = if building {
                     false
                 } else {
                     gallery.select_photo(photo_id)
                 };
-                if revealed && first_success_for_timer.get().is_none() {
-                    first_success_for_timer.set(Some(attempt));
-                }
 
-                let settled = first_success_for_timer
-                    .get()
-                    .is_some_and(|success| attempt.saturating_sub(success) >= 24);
-                // Keep retrying until the stream is fully built AND the target
-                // has stayed selected for a short settling window. The hard
-                // limit is only a safety net for genuinely missing photos.
-                if (!building && settled) || attempt >= 800 {
+                if open_in_folder_should_stop(building, revealed, attempt) {
                     if std::env::var_os("PICASA_TRACE").is_some() {
                         eprintln!(
-                            "UI TRACE open_in_folder_done id={} attempt={} building={} first_success={:?} revealed={}",
-                            photo_id,
-                            attempt,
-                            building,
-                            first_success_for_timer.get(),
-                            revealed
+                            "UI TRACE open_in_folder_done id={} attempt={} building={} revealed={}",
+                            photo_id, attempt, building, revealed
                         );
                     }
+                    // Keep the exact target around long enough for the sidebar's
+                    // own Tree-mode/ancestor expansion callbacks to settle.
+                    // Those callbacks may reorder Folder rows, but will reassert
+                    // this photo instead of jumping to the folder header.
+                    let exact_target_for_clear = exact_target_for_timer.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(750), move || {
+                        if exact_target_for_clear.get() == Some(photo_id) {
+                            exact_target_for_clear.set(None);
+                        }
+                    });
                     glib::ControlFlow::Break
                 } else {
                     glib::ControlFlow::Continue
                 }
             });
-            let sidebar = sidebar_selection.borrow().as_ref().cloned();
-            if let Some(sidebar) = sidebar {
-                // set_active_filter(), tree expansion, and folder-list rebuilds
-                // can each schedule their own scroll restoration. Re-apply the
-                // sidebar reveal briefly so Open in Folder from search/lightbox
-                // reliably ends with the target folder visible and selected.
-                let sidebar_attempts = Rc::new(Cell::new(0u32));
-                let sidebar_attempts_for_timer = sidebar_attempts.clone();
-                glib::timeout_add_local(Duration::from_millis(100), move || {
-                    let attempt = sidebar_attempts_for_timer.get() + 1;
-                    sidebar_attempts_for_timer.set(attempt);
-                    sidebar::scroll_to_folder(&sidebar, folder_id);
-                    if attempt >= 24 {
-                        glib::ControlFlow::Break
-                    } else {
-                        glib::ControlFlow::Continue
-                    }
-                });
+            if let Some(sidebar) = sidebar_selection.borrow().as_ref().cloned() {
+                // scroll_to_folder() already retries internally if Tree mode or
+                // ancestor expansion is required. Do not hammer it 24 times.
+                sidebar::scroll_to_folder(&sidebar, folder_id);
             }
         })
     }));
@@ -2892,6 +2978,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .flatten()
         .as_deref(),
     );
+    let initial_folder_order = folder_stream_order(&folders, folder_display_mode);
+    gallery.set_folder_catalog(&folders, &initial_folder_order);
 
     let sidebar = sidebar::build(
         &folders,
@@ -2968,6 +3056,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let sort = sort.clone();
             let gallery = gallery.clone();
             let group_mode = group_mode.clone();
+            let open_in_folder_exact_target = open_in_folder_exact_target.clone();
             Rc::new(move |mode| {
                 if let Err(error) = db::set_setting(
                     &connection.borrow(),
@@ -2994,9 +3083,26 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     // Reorder the existing stream instead of a full database
                     // refresh and 66k PhotoObject rebuild (measured 2565 ms).
                     let order = folder_stream_order(&folders, mode);
-                    gallery.reorder_folder_stream(&order);
-                    if let Some(folder_path) = folder_path {
-                        gallery.scroll_to_folder(folder_id, &folder_path);
+                    gallery.set_folder_catalog(&folders, &order);
+
+                    // Rebuilding/reordering the virtual Folder rows is
+                    // synchronous, but GTK realizes the new ListView layout on
+                    // the next main-loop turn. Reassert the destination only
+                    // after that turn so an Albums/Photos -> Folder/Tree
+                    // transition cannot leave the viewport at the restored
+                    // cache position. This does not alter smooth scrolling.
+                    if let Some(photo_id) = open_in_folder_exact_target.get() {
+                        let gallery = gallery.clone();
+                        glib::idle_add_local_once(move || {
+                            if !gallery.stream_building() {
+                                gallery.select_photo(photo_id);
+                            }
+                        });
+                    } else if let Some(folder_path) = folder_path {
+                        let gallery = gallery.clone();
+                        glib::idle_add_local_once(move || {
+                            gallery.scroll_to_folder(folder_id, &folder_path);
+                        });
                     }
                 }
             })

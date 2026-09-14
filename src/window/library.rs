@@ -3,6 +3,14 @@ use std::sync::mpsc::TryRecvError;
 static REFRESH_GENERATION: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// Invalidate any asynchronous grid result or delayed folder destination from
+/// an older navigation. Folder-to-folder reuse does not start a new database
+/// refresh, so it must still advance this generation to prevent an older
+/// Albums/Photos -> Folder timer from pulling the view back later.
+fn invalidate_pending_grid_navigation() {
+    REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn refresh_grid(
     connection: &Rc<RefCell<Connection>>,
     filter: sidebar::SidebarFilter,
@@ -135,6 +143,7 @@ fn refresh_grid_inner(
                                 gallery,
                                 folder_id,
                                 folder_path,
+                                generation,
                             );
                         });
                     }
@@ -153,6 +162,7 @@ fn scroll_gallery_to_folder_when_ready(
     gallery: Rc<grid::Gallery>,
     folder_id: i64,
     folder_path: String,
+    generation: u64,
 ) {
     let total_attempts = Rc::new(Cell::new(0u32));
     // Counts only the attempts made after the progressive stream finished.
@@ -162,6 +172,12 @@ fn scroll_gallery_to_folder_when_ready(
     let total_for_timer = total_attempts.clone();
     let settled_for_timer = settled_attempts.clone();
     glib::timeout_add_local(Duration::from_millis(25), move || {
+        // A newer destination/refresh supersedes this timer. Without this
+        // guard, an old Albums/Photos -> Folder transition can fire later and
+        // pull the continuous Folder view back to the previous folder.
+        if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) != generation {
+            return glib::ControlFlow::Break;
+        }
         total_for_timer.set(total_for_timer.get() + 1);
         // scroll_to_folder scans the whole photo model. Calling it every 25 ms
         // while the progressive Folder stream is still being built starves that
@@ -285,73 +301,16 @@ fn sort_folder_stream(
     });
 }
 
-/// Folder ids in the order their sections appear in the Folder stream for the
-/// given display mode. Exposed so the grid can reorder existing photos when the
-/// user only changes the sidebar tree mode (no database query or model rebuild).
+/// Folder ids in the canonical order used by the continuous Folder gallery.
+///
+/// Sidebar Flat/Tree is presentation-only. The gallery must keep one stable
+/// section order across that toggle; otherwise GtkListView has to splice and
+/// recycle the visible row set just because the sidebar changed shape.
 pub(super) fn folder_stream_order(
     folders: &[db::Folder],
-    display_mode: sidebar::FolderDisplayMode,
+    _display_mode: sidebar::FolderDisplayMode,
 ) -> Vec<i64> {
-    let order = folder_tree_order(folders);
-    let tree_rank = order
-        .iter()
-        .enumerate()
-        .map(|(index, folder_id)| (*folder_id, index))
-        .collect::<std::collections::HashMap<_, _>>();
-    if display_mode != sidebar::FolderDisplayMode::ImportedOnly {
-        return order;
-    }
-
-    let by_id = folders
-        .iter()
-        .map(|folder| (folder.id, folder))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut roots = folders
-        .iter()
-        .filter(|folder| folder.imported_root)
-        .collect::<Vec<_>>();
-    roots.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-            .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
-    });
-    let imported_rank = roots
-        .into_iter()
-        .enumerate()
-        .map(|(index, folder)| (folder.id, index))
-        .collect::<std::collections::HashMap<_, _>>();
-    let root_rank_by_folder = folders
-        .iter()
-        .map(|folder| {
-            let rank = nearest_imported_root(folder.id, &by_id)
-                .and_then(|root_id| imported_rank.get(&root_id).copied())
-                .unwrap_or(usize::MAX);
-            (folder.id, rank)
-        })
-        .collect::<std::collections::HashMap<_, _>>();
-
-    let mut ordered = order;
-    ordered.sort_by(|left, right| {
-        root_rank_by_folder
-            .get(left)
-            .copied()
-            .unwrap_or(usize::MAX)
-            .cmp(
-                &root_rank_by_folder
-                    .get(right)
-                    .copied()
-                    .unwrap_or(usize::MAX),
-            )
-            .then_with(|| {
-                tree_rank
-                    .get(left)
-                    .copied()
-                    .unwrap_or(usize::MAX)
-                    .cmp(&tree_rank.get(right).copied().unwrap_or(usize::MAX))
-            })
-    });
-    ordered
+    folder_tree_order(folders)
 }
 
 fn folder_tree_order(folders: &[db::Folder]) -> Vec<i64> {
@@ -411,25 +370,6 @@ fn folder_tree_order(folders: &[db::Folder]) -> Vec<i64> {
     order
 }
 
-fn nearest_imported_root<'a>(
-    folder_id: i64,
-    by_id: &std::collections::HashMap<i64, &'a db::Folder>,
-) -> Option<i64> {
-    let mut current = Some(folder_id);
-    let mut seen = std::collections::HashSet::new();
-    while let Some(id) = current {
-        if !seen.insert(id) {
-            break;
-        }
-        let folder = by_id.get(&id)?;
-        if folder.imported_root {
-            return Some(id);
-        }
-        current = folder.parent_id;
-    }
-    None
-}
-
 fn compare_optional<T: Ord>(
     left: Option<T>,
     right: Option<T>,
@@ -487,8 +427,8 @@ fn confirm_action(
 #[cfg(test)]
 mod photo_action_tests {
     use super::{
-        sort_folder_stream, sort_photos, valid_file_name, wallpaper_layout, PhotoSort,
-        SortDirection, SortField, WallpaperLayout,
+        folder_stream_order, sort_folder_stream, sort_photos, valid_file_name, wallpaper_layout,
+        PhotoSort, SortDirection, SortField, WallpaperLayout,
     };
     use crate::db::{Folder, Photo};
 
@@ -605,7 +545,7 @@ mod photo_action_tests {
     }
 
     #[test]
-    fn imported_only_stream_follows_imported_root_order() {
+    fn sidebar_display_mode_does_not_reorder_folder_gallery() {
         let folders = vec![
             folder(10, "/Pictures", "Pictures", None, true),
             folder(11, "/Pictures/Drone", "Drone", Some(10), false),
@@ -616,6 +556,11 @@ mod photo_action_tests {
             photo_in_folder("/Pictures/Drone/p.jpg", 11, "/Pictures/Drone"),
             photo_in_folder("/Data/Trips/d.jpg", 21, "/Data/Trips"),
         ];
+
+        let tree_order = folder_stream_order(&folders, crate::sidebar::FolderDisplayMode::Tree);
+        let flat_order =
+            folder_stream_order(&folders, crate::sidebar::FolderDisplayMode::ImportedOnly);
+        assert_eq!(tree_order, flat_order);
 
         sort_folder_stream(
             &mut photos,

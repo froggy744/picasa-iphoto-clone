@@ -10,7 +10,7 @@ use glib::subclass::prelude::*;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use crate::db::Photo;
+use crate::db::{Folder, Photo};
 use crate::photo_object::PhotoObject;
 
 // EDIT THESE TWO VALUES to set your default thumbnail width and height.
@@ -650,7 +650,23 @@ impl SquareTile {
     /// reading, and decoding happen on a bounded worker set here. The result is
     /// applied only if this recycled tile still represents the same photo.
     fn queue_folder_cached_visual_async(&self, visible_priority: bool) -> bool {
-        self.queue_presentation_visual_async(visible_priority)
+        let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
+            return false;
+        };
+        let Some(request) = photo_presentation_request(&photo, visible_priority) else {
+            return false;
+        };
+
+        if let Some(paintable) = folder_thumbnail_cache_get(&request.key) {
+            self.apply_presentation_paintable(&request.key, &paintable);
+            return true;
+        }
+
+        // Folder ListView rows are recycled aggressively when their model is
+        // rebound. Keep any existing paintable as a temporary visual backstop
+        // until the key-validated async result arrives. Missing/failed results
+        // still clear the tile through mark_presentation_missing().
+        crate::thumbnail_display::submit(request)
     }
 
     /// Load the final viewport thumbnail after Folder scrolling settles.
@@ -680,7 +696,51 @@ impl SquareTile {
         // Scrolling never probes originals. Offline state comes from the
         // folder/mount snapshot plus explicit background availability refreshes.
         if !self.imp().visual_loaded.get() {
-            self.queue_presentation_visual_async(true);
+            self.queue_folder_cached_visual_async(true);
+        }
+    }
+
+    /// Reset a recycled Folder tile without blanking its current paintable.
+    ///
+    /// GtkListView can unbind/rebind the same tile pool during a Folder model
+    /// splice. Clearing every image at unbind produces a wall of placeholders
+    /// while async cache decodes catch up. The next bind immediately changes
+    /// the photo identity and queues the correct presentation key; completion
+    /// application validates that key before replacing this temporary backstop.
+    fn clear_photo_folder_recycle(&self) {
+        self.imp().visual_loaded.set(false);
+        self.imp().photo.take();
+        self.imp().photo_index.set(None);
+        if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
+            if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
+                picture.set_tooltip_text(None);
+                if let Some(placeholder) = picture.next_sibling().and_downcast::<gtk::Image>() {
+                    let visible = picture.paintable().is_none();
+                    if placeholder.is_visible() != visible {
+                        placeholder.set_visible(visible);
+                    }
+                }
+            }
+            for class_name in ["manual-selected", "folder-photo-selected"] {
+                frame.remove_css_class(class_name);
+            }
+            let mut child = frame.first_child();
+            while let Some(current) = child {
+                if let Some(image) = current.downcast_ref::<gtk::Image>() {
+                    if image.has_css_class("favorite-badge")
+                        || image.has_css_class("edited-badge")
+                        || image.has_css_class("selection-badge")
+                    {
+                        image.set_visible(false);
+                    }
+                }
+                if let Some(button) = current.downcast_ref::<gtk::Button>() {
+                    if button.has_css_class("offline-badge") {
+                        button.set_visible(false);
+                    }
+                }
+                child = current.next_sibling();
+            }
         }
     }
 
@@ -988,6 +1048,22 @@ struct GroupRange {
     folder_id: i64,
 }
 
+/// Lightweight folder metadata used only to keep Folder sections in the same
+/// hierarchy order as the sidebar. Parent/container folders that do not own
+/// photos directly are navigation nodes only; they never become blank rows in
+/// the continuous photo stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FolderCatalogEntry {
+    folder_id: i64,
+    photo_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FolderSectionPlan {
+    folder_id: i64,
+    range_index: Option<usize>,
+}
+
 /// A fully built Folder stream kept alive between view switches.
 ///
 /// The Folder virtual rows in `folder_store` reference photos by index and the
@@ -1193,6 +1269,11 @@ pub struct Gallery {
     // Presentation-only Folder section order. This must never reorder the
     // shared Library photo model. Empty means use the natural range order.
     folder_order: Rc<RefCell<Vec<i64>>>,
+    // Includes parent/container folders that have recursive photos but no
+    // direct photo range. Those folders still need a real virtual header so a
+    // sidebar click can land on the requested folder rather than its first
+    // descendant.
+    folder_catalog: Rc<RefCell<Vec<FolderCatalogEntry>>>,
     folder_view_changed: Rc<RefCell<Option<Rc<dyn Fn(bool)>>>>,
     selected: Rc<dyn Fn(Option<PhotoObject>)>,
     store: gio::ListStore,
@@ -1662,7 +1743,7 @@ impl Gallery {
                     }
                     for tile in box_tiles(&photo_line) {
                         if tile.imp().photo.borrow().is_some() {
-                            tile.clear_photo();
+                            tile.clear_photo_folder_recycle();
                         }
                         if tile.opacity() != 1.0 {
                             tile.set_opacity(1.0);
@@ -1739,7 +1820,7 @@ impl Gallery {
                     for (slot, tile) in tiles.iter().enumerate() {
                         if slot >= slot_count {
                             if tile.imp().photo.borrow().is_some() {
-                                tile.clear_photo();
+                                tile.clear_photo_folder_recycle();
                             }
                             if tile.opacity() != 1.0 {
                                 tile.set_opacity(1.0);
@@ -1776,7 +1857,7 @@ impl Gallery {
                             // Keep an allocated transparent slot so a short final
                             // line preserves the exact same column geometry.
                             if tile.imp().photo.borrow().is_some() {
-                                tile.clear_photo();
+                                tile.clear_photo_folder_recycle();
                             }
                             if tile.opacity() != 0.0 {
                                 tile.set_opacity(0.0);
@@ -1817,7 +1898,7 @@ impl Gallery {
                 return;
             };
             for tile in box_tiles(&photo_line) {
-                tile.clear_photo();
+                tile.clear_photo_folder_recycle();
                 tile.set_opacity(1.0);
                 tile.set_can_target(false);
                 tile.set_visible(false);
@@ -1871,6 +1952,7 @@ impl Gallery {
             folder_store,
             folder_cache: Rc::new(RefCell::new(None)),
             folder_order: Rc::new(RefCell::new(Vec::new())),
+            folder_catalog: Rc::new(RefCell::new(Vec::new())),
             folder_view_changed: Rc::new(RefCell::new(None)),
             selected,
             store,
@@ -2043,11 +2125,7 @@ impl Gallery {
         let Some(row) = self.folder_row_index_for_photo(photo_id) else {
             return;
         };
-        let exact_offset = {
-            let ranges = self.group_ranges.borrow();
-            let rows = folder_virtual_rows(&ranges, folder_chunk_size(self.current_columns.get()));
-            folder_row_offset(&rows, row as usize, self.tile_height.get())
-        };
+        let exact_offset = f64::from(row) * f64::from(folder_row_height(self.tile_height.get()));
         let root = self.folder_root.clone();
         let generation = self.folder_scroll_generation.clone();
         let request = generation.get().wrapping_add(1);
@@ -2291,6 +2369,7 @@ impl Gallery {
             &self.group_ranges,
             &self.current_columns,
             &self.folder_order,
+            &self.folder_catalog,
             &self.folder_store,
         );
         self.save_folder_cache();
@@ -2338,12 +2417,28 @@ impl Gallery {
         true
     }
 
-    /// Reorder only the Folder presentation to match a new sidebar tree mode.
-    /// The shared Library photo model and GtkMultiSelection stay untouched;
-    /// Folder rows retain their source positions and are merely presented in a
-    /// different section order.
-    pub fn reorder_folder_stream(&self, folder_order: &[i64]) {
+    /// Supply the folder hierarchy/order used by the sidebar. The catalog is
+    /// ordering metadata only: folders without direct photos must not become
+    /// empty gallery sections.
+    pub fn set_folder_catalog(&self, folders: &[Folder], folder_order: &[i64]) {
+        let catalog = folders
+            .iter()
+            .map(|folder| FolderCatalogEntry {
+                folder_id: folder.id,
+                photo_count: usize::try_from(folder.photo_count.max(0)).unwrap_or(0),
+            })
+            .collect::<Vec<_>>();
+        let catalog_changed = self.folder_catalog.borrow().as_slice() != catalog.as_slice();
+        let order_changed = self.folder_order.borrow().as_slice() != folder_order;
+        if !catalog_changed && !order_changed {
+            return;
+        }
+
+        self.folder_catalog.replace(catalog);
         self.folder_order.replace(folder_order.to_vec());
+        // Cached rows encode the previous catalog/order. Force the next Folder
+        // entry to use the new anchors instead of reusing stale rows.
+        self.folder_cache.replace(None);
         if self.group_mode.get() == GroupMode::Folder {
             self.rebuild_folder_rows();
         }
@@ -3712,6 +3807,7 @@ impl Gallery {
         let tile_height = self.tile_height.clone();
         let folder_store = self.folder_store.clone();
         let folder_order = self.folder_order.clone();
+        let folder_catalog = self.folder_catalog.clone();
         let folder_cache = self.folder_cache.clone();
         let folder_root = self.folder_root.clone();
         let replace_generation = self.replace_generation.clone();
@@ -3782,6 +3878,7 @@ impl Gallery {
                         &group_ranges,
                         &current_columns,
                         &folder_order,
+                        &folder_catalog,
                         &folder_store,
                     );
                     if group_mode.get() == GroupMode::Folder {
@@ -3909,27 +4006,34 @@ impl Gallery {
     /// Falls back to the `ListView` when the tile is not realized yet.
     fn focus_folder_tile(&self, photo_id: i64) {
         let root = self.folder_root.clone();
-        glib::idle_add_local_once(move || {
-            let root_for_find = root.clone();
-            glib::idle_add_local_once(move || {
-                let mut tiles = Vec::new();
-                collect_tiles(root_for_find.upcast_ref(), &mut tiles);
-                let tile = tiles.into_iter().find(|tile| {
-                    tile.imp()
-                        .photo
-                        .borrow()
-                        .as_ref()
-                        .is_some_and(|photo| photo.id() == photo_id)
-                });
-                match tile {
-                    Some(tile) => {
-                        tile.grab_focus();
-                    }
-                    None => {
-                        root_for_find.grab_focus();
-                    }
-                }
-            });
+        let attempts = Rc::new(Cell::new(0u32));
+        let attempts_for_timer = attempts.clone();
+        // GtkListView may need a few frames to realize a far target row after
+        // scroll_to(). Wait for the exact tile to exist, but never issue another
+        // scroll here: repeated scroll requests are what used to fight the
+        // smooth Folder scroller.
+        glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+            let mut tiles = Vec::new();
+            collect_tiles(root.upcast_ref(), &mut tiles);
+            if let Some(tile) = tiles.into_iter().find(|tile| {
+                tile.imp()
+                    .photo
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|photo| photo.id() == photo_id)
+            }) {
+                tile.grab_focus();
+                return glib::ControlFlow::Break;
+            }
+
+            let attempt = attempts_for_timer.get() + 1;
+            attempts_for_timer.set(attempt);
+            if attempt >= 30 {
+                root.grab_focus();
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
         });
     }
 
@@ -4338,53 +4442,113 @@ fn rebuild_group_ranges_for(
     group_ranges.replace(ranges);
 }
 
+fn folder_section_plan(
+    ranges: &[GroupRange],
+    catalog: &[FolderCatalogEntry],
+    folder_order: &[i64],
+) -> Vec<FolderSectionPlan> {
+    let mut plan = Vec::new();
+    let mut emitted_ranges = HashSet::new();
+    let mut seen_folder_ids = HashSet::new();
+
+    // Prefer the sidebar/tree order when available. Parent/container folders
+    // can appear in that order, but only ids backed by a real photo range are
+    // emitted below.
+    let ordered_ids: Vec<i64> = if folder_order.is_empty() {
+        catalog
+            .iter()
+            .filter(|folder| folder.photo_count > 0)
+            .map(|folder| folder.folder_id)
+            .collect()
+    } else {
+        folder_order.to_vec()
+    };
+
+    for folder_id in ordered_ids {
+        if !seen_folder_ids.insert(folder_id) {
+            continue;
+        }
+        for (range_index, range) in ranges.iter().enumerate() {
+            if range.folder_id == folder_id {
+                plan.push(FolderSectionPlan {
+                    folder_id,
+                    range_index: Some(range_index),
+                });
+                emitted_ranges.insert(range_index);
+            }
+        }
+        // No direct range means this is only a parent/container navigation
+        // node. Do not emit a blank header row for it; scroll_to_folder() will
+        // resolve such a target to the first photo-bearing descendant header.
+    }
+
+    // Never hide a real photo range just because the folder catalog/order was
+    // stale or incomplete. Append any unplanned ranges in their source order.
+    for (range_index, range) in ranges.iter().enumerate() {
+        if emitted_ranges.insert(range_index) {
+            plan.push(FolderSectionPlan {
+                folder_id: range.folder_id,
+                range_index: Some(range_index),
+            });
+        }
+    }
+
+    plan
+}
+
 fn build_folder_virtual_objects(
     ranges: &[GroupRange],
     photos: &[PhotoObject],
     line_size: usize,
+    catalog: &[FolderCatalogEntry],
+    folder_order: &[i64],
 ) -> Vec<FolderRowObject> {
     let line_size = line_size.max(1);
-    let estimated_rows = ranges.iter().fold(0usize, |total, range| {
+    let plan = folder_section_plan(ranges, catalog, folder_order);
+    let estimated_rows = ranges.iter().fold(plan.len(), |total, range| {
         let photos_in_range = range.end.saturating_sub(range.start);
-        total + 1 + photos_in_range.div_ceil(line_size)
+        total + photos_in_range.div_ceil(line_size)
     });
     let mut rows = Vec::with_capacity(estimated_rows);
 
-    for range in ranges {
-        rows.push(FolderRowObject::new(FolderRowData {
-            kind: FolderRowKind::Header,
-            folder_id: range.folder_id,
-            folder_path: photos
-                .get(range.start)
-                .and_then(|photo| photo.folder_path())
-                .unwrap_or_default(),
-            label: range.label.clone(),
-            count: range.end.saturating_sub(range.start),
-            start: range.start,
-            end: range.start,
-            photo_ids: Vec::new(),
-        }));
-
-        let mut start = range.start;
-        while start < range.end {
-            let end = (start + line_size).min(range.end);
-            let photo_ids = photos
-                .get(start..end)
-                .map(|slice| slice.iter().map(|photo| photo.id()).collect())
-                .unwrap_or_default();
+    for section in plan {
+        if let Some(range_index) = section.range_index {
+            let range = &ranges[range_index];
             rows.push(FolderRowObject::new(FolderRowData {
-                kind: FolderRowKind::Photos,
+                kind: FolderRowKind::Header,
                 folder_id: range.folder_id,
-                // Photo lines need only folder/range/photo identity. Avoid
-                // cloning heading strings into thousands of rows.
-                folder_path: String::new(),
-                label: String::new(),
-                count: 0,
-                start,
-                end,
-                photo_ids,
+                folder_path: photos
+                    .get(range.start)
+                    .and_then(|photo| photo.folder_path())
+                    .unwrap_or_default(),
+                label: range.label.clone(),
+                count: range.end.saturating_sub(range.start),
+                start: range.start,
+                end: range.start,
+                photo_ids: Vec::new(),
             }));
-            start = end;
+
+            let mut start = range.start;
+            while start < range.end {
+                let end = (start + line_size).min(range.end);
+                let photo_ids = photos
+                    .get(start..end)
+                    .map(|slice| slice.iter().map(|photo| photo.id()).collect())
+                    .unwrap_or_default();
+                rows.push(FolderRowObject::new(FolderRowData {
+                    kind: FolderRowKind::Photos,
+                    folder_id: range.folder_id,
+                    // Photo lines need only folder/range/photo identity. Avoid
+                    // cloning heading strings into thousands of rows.
+                    folder_path: String::new(),
+                    label: String::new(),
+                    count: 0,
+                    start,
+                    end,
+                    photo_ids,
+                }));
+                start = end;
+            }
         }
     }
 
@@ -4400,21 +4564,6 @@ fn folder_virtual_row_matches(old: &FolderRowData, new: &FolderRowData) -> bool 
         && old.start == new.start
         && old.end == new.end
         && old.photo_ids == new.photo_ids
-}
-
-fn ordered_folder_ranges(ranges: &[GroupRange], folder_order: &[i64]) -> Vec<GroupRange> {
-    if folder_order.is_empty() {
-        return ranges.to_vec();
-    }
-
-    let rank = folder_order
-        .iter()
-        .enumerate()
-        .map(|(index, folder_id)| (*folder_id, index))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut ordered = ranges.to_vec();
-    ordered.sort_by_key(|range| rank.get(&range.folder_id).copied().unwrap_or(usize::MAX));
-    ordered
 }
 
 fn save_folder_cache_for(
@@ -4437,6 +4586,7 @@ fn rebuild_folder_rows_for(
     group_ranges: &Rc<RefCell<Vec<GroupRange>>>,
     current_columns: &Rc<Cell<u32>>,
     folder_order: &Rc<RefCell<Vec<i64>>>,
+    folder_catalog: &Rc<RefCell<Vec<FolderCatalogEntry>>>,
     folder_store: &gio::ListStore,
 ) {
     let trace = std::env::var_os("PICASA_TRACE_VERBOSE").is_some();
@@ -4445,14 +4595,15 @@ fn rebuild_folder_rows_for(
     let photos = current_photos.borrow();
     let old_rows = folder_store.n_items();
     let line_size = folder_chunk_size(current_columns.get());
-    let ordered_ranges = ordered_folder_ranges(&ranges, &folder_order.borrow());
-    let new_rows = build_folder_virtual_objects(&ordered_ranges, &photos, line_size);
+    let catalog = folder_catalog.borrow();
+    let order = folder_order.borrow();
+    let new_rows = build_folder_virtual_objects(&ranges, &photos, line_size, &catalog, &order);
 
     if trace {
         eprintln!(
             "UI PERF folder_line_plan photos={} folders={} line_size={} columns={} model_rows={} old_store_rows={} ms={}",
             photos.len(),
-            ordered_ranges.len(),
+            ranges.len(),
             line_size,
             current_columns.get().max(1),
             new_rows.len(),
@@ -5267,9 +5418,9 @@ fn collect_tiles(widget: &gtk::Widget, tiles: &mut Vec<SquareTile>) {
 mod folder_stream_tests {
     use super::{
         folder_chunk_size, folder_dragged_positions, folder_line_height,
-        folder_selection_after_click, folder_virtual_row_matches, folder_virtual_rows,
-        ordered_folder_ranges, FolderRowData, FolderRowKind, FolderTileBounds, FolderVirtualRow,
-        GroupRange,
+        folder_section_plan, folder_selection_after_click, folder_virtual_row_matches,
+        folder_virtual_rows, FolderCatalogEntry, FolderRowData,
+        FolderRowKind, FolderTileBounds, FolderVirtualRow, GroupRange,
     };
 
     #[test]
@@ -5455,6 +5606,75 @@ mod folder_stream_tests {
     }
 
     #[test]
+    fn parent_folder_with_recursive_photos_is_navigation_only() {
+        let ranges = vec![GroupRange {
+            start: 0,
+            end: 5,
+            label: "Drone Building".to_string(),
+            folder_id: 274,
+        }];
+        let catalog = vec![
+            FolderCatalogEntry {
+                folder_id: 11,
+                photo_count: 5,
+            },
+            FolderCatalogEntry {
+                folder_id: 274,
+                photo_count: 5,
+            },
+        ];
+
+        let plan = folder_section_plan(&ranges, &catalog, &[11, 274]);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].folder_id, 274);
+        assert_eq!(plan[0].range_index, Some(0));
+    }
+
+    #[test]
+    fn filesystem_ancestors_do_not_add_gallery_headers() {
+        let ranges = vec![GroupRange {
+            start: 0,
+            end: 5,
+            label: "Drone Building".to_string(),
+            folder_id: 274,
+        }];
+        let catalog = vec![
+            FolderCatalogEntry {
+                folder_id: 1,
+                photo_count: 5,
+            },
+            FolderCatalogEntry {
+                folder_id: 11,
+                photo_count: 5,
+            },
+            FolderCatalogEntry {
+                folder_id: 274,
+                photo_count: 5,
+            },
+        ];
+
+        let plan = folder_section_plan(&ranges, &catalog, &[1, 11, 274]);
+        assert_eq!(
+            plan.iter().map(|section| section.folder_id).collect::<Vec<_>>(),
+            vec![274]
+        );
+    }
+
+    #[test]
+    fn empty_parent_folder_does_not_add_blank_gallery_section() {
+        let ranges = sample_ranges();
+        let catalog = vec![FolderCatalogEntry {
+            folder_id: 99,
+            photo_count: 0,
+        }];
+        let plan = folder_section_plan(&ranges, &catalog, &[99, 10, 11]);
+        assert_eq!(
+            plan.iter().map(|section| section.folder_id).collect::<Vec<_>>(),
+            vec![10, 11]
+        );
+    }
+
+    #[test]
     fn folder_virtual_stream_uses_one_fixed_photo_line_per_column_width() {
         let rows = folder_virtual_rows(&sample_ranges(), 3);
         assert_eq!(rows.len(), 9);
@@ -5567,19 +5787,16 @@ mod folder_stream_tests {
     }
 
     #[test]
-    fn folder_range_order_changes_presentation_without_changing_source_ranges() {
+    fn folder_section_plan_changes_presentation_without_changing_source_ranges() {
         let original = sample_ranges();
-        let ordered = ordered_folder_ranges(&original, &[11, 10]);
+        let plan = folder_section_plan(&original, &[], &[11, 10]);
 
         assert_eq!(
-            ordered
-                .iter()
-                .map(|range| range.folder_id)
-                .collect::<Vec<_>>(),
+            plan.iter().map(|section| section.folder_id).collect::<Vec<_>>(),
             vec![11, 10]
         );
-        assert_eq!((ordered[0].start, ordered[0].end), (5, 18));
-        assert_eq!((ordered[1].start, ordered[1].end), (0, 5));
+        assert_eq!(plan[0].range_index, Some(1));
+        assert_eq!(plan[1].range_index, Some(0));
         assert_eq!(
             original
                 .iter()
