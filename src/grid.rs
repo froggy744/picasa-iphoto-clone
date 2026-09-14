@@ -1009,18 +1009,18 @@ enum FolderRowKind {
     Photos,
 }
 
-/// One Folder model photo row is exactly one visual line. This keeps row
-/// geometry stable and lets GtkListView own virtualization without a nested
-/// FlowBox wrapping a variable number of internal rows.
-///
-/// This must exceed the header widget's *natural* height (margin_top 26 +
-/// title line ~20 + separator 7+1 + margin_bottom 8 ~= 62). A height_request
-/// is only a minimum, so a smaller constant lets realized header rows measure
-/// taller than the estimator assumes; the cumulative drift over hundreds of
-/// folder headers produced >1000 px anchor corrections that cancelled the
-/// smooth-scroll spring mid-animation. 70 keeps every row at exactly this
-/// height (minimum dominates natural) so position estimates are exact.
+/// Minimum height needed by the Folder section header's contents.
 const FOLDER_HEADER_HEIGHT: i32 = 70;
+
+/// GtkListView estimates positions for unrealized rows. Mixing 70 px header
+/// rows with taller photo rows makes those estimates drift as rows are
+/// recycled, which shows up as 33 px (and multiples of 33 px) adjustment
+/// corrections that fight the custom smooth-scroll spring. Keep every model
+/// row the same height for the current zoom level so virtualized geometry is
+/// deterministic.
+fn folder_row_height(tile_height: i32) -> i32 {
+    folder_line_height(tile_height).max(FOLDER_HEADER_HEIGHT)
+}
 
 fn folder_chunk_size(columns: u32) -> usize {
     columns.max(1) as usize
@@ -1030,13 +1030,8 @@ fn folder_chunk_size(columns: u32) -> usize {
 /// gives every model row a fixed height, so we do not need GtkListView's
 /// estimated far-row position when restoring an anchor after a column change.
 fn folder_row_offset(rows: &[FolderVirtualRow], target_row: usize, tile_height: i32) -> f64 {
-    rows.iter()
-        .take(target_row)
-        .map(|row| match row.kind {
-            FolderRowKind::Header => FOLDER_HEADER_HEIGHT,
-            FolderRowKind::Photos => folder_line_height(tile_height),
-        } as f64)
-        .sum()
+    let row_height = folder_row_height(tile_height) as f64;
+    rows.iter().take(target_row).map(|_| row_height).sum()
 }
 
 #[derive(Clone, Default)]
@@ -1562,7 +1557,7 @@ impl Gallery {
             row_root.set_hexpand(true);
             row_root.set_vexpand(false);
             row_root.add_css_class("folder-stream-row");
-            row_root.set_height_request(folder_line_height(setup_tile_height.get()));
+            row_root.set_height_request(folder_row_height(setup_tile_height.get()));
 
             let header_outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
             header_outer.set_widget_name("picasa-folder-section-header");
@@ -1655,9 +1650,9 @@ impl Gallery {
 
             match data.kind {
                 FolderRowKind::Header => {
-                    let header_height = FOLDER_HEADER_HEIGHT;
-                    if row_root.height_request() != header_height {
-                        row_root.set_height_request(header_height);
+                    let row_height = folder_row_height(tile_height_for_folder_bind.get());
+                    if row_root.height_request() != row_height {
+                        row_root.set_height_request(row_height);
                     }
                     if !header.is_visible() {
                         header.set_visible(true);
@@ -1717,9 +1712,9 @@ impl Gallery {
                     if !photo_line.is_visible() {
                         photo_line.set_visible(true);
                     }
-                    let line_height = folder_line_height(tile_height_for_folder_bind.get());
-                    if row_root.height_request() != line_height {
-                        row_root.set_height_request(line_height);
+                    let row_height = folder_row_height(tile_height_for_folder_bind.get());
+                    if row_root.height_request() != row_height {
+                        row_root.set_height_request(row_height);
                     }
 
                     let row_photos = {
@@ -3027,13 +3022,13 @@ impl Gallery {
         }
 
         let columns = self.current_columns.get().max(1) as usize;
-        let line_height = folder_line_height(self.tile_height.get()).max(1) as f64;
+        let row_height = folder_row_height(self.tile_height.get()).max(1) as f64;
         let view_start = scroll_y.max(0.0);
-        let view_end = view_start + viewport_height.max(line_height);
-        // Include one photo line on either side so a page jump paints the edge
+        let view_end = view_start + viewport_height.max(row_height);
+        // Include one model row on either side so a page jump paints the edge
         // rows too, without wasting decode work on several speculative screens.
-        let target_start = (view_start - line_height).max(0.0);
-        let target_end = view_end + line_height;
+        let target_start = (view_start - row_height).max(0.0);
+        let target_end = view_end + row_height;
 
         let mut y = 0.0_f64;
         let mut indexes = Vec::<usize>::new();
@@ -3041,7 +3036,7 @@ impl Gallery {
         for range in ranges.iter() {
             let photo_count = range.end.saturating_sub(range.start);
             let photo_rows = photo_count.div_ceil(columns);
-            let section_height = FOLDER_HEADER_HEIGHT as f64 + photo_rows as f64 * line_height;
+            let section_height = (1 + photo_rows) as f64 * row_height;
             let section_end = y + section_height;
 
             if section_end < target_start {
@@ -3052,10 +3047,10 @@ impl Gallery {
                 break;
             }
 
-            let photo_rows_y = y + FOLDER_HEADER_HEIGHT as f64;
+            let photo_rows_y = y + row_height;
             for row in 0..photo_rows {
-                let row_top = photo_rows_y + row as f64 * line_height;
-                let row_bottom = row_top + line_height;
+                let row_top = photo_rows_y + row as f64 * row_height;
+                let row_bottom = row_top + row_height;
                 if row_bottom < target_start {
                     continue;
                 }
@@ -5245,7 +5240,7 @@ fn update_folder_realized_rows(widget: &gtk::Widget, tile_width: i32, tile_heigh
             }
             if line.is_visible() {
                 if let Some(row_root) = line.parent().and_downcast::<gtk::Box>() {
-                    row_root.set_height_request(folder_line_height(tile_height));
+                    row_root.set_height_request(folder_row_height(tile_height));
                 }
             }
         }
@@ -5431,8 +5426,15 @@ mod folder_stream_tests {
             },
         ];
 
-        // Header 70 + two 100px photo lines + header 70.
-        assert_eq!(super::folder_row_offset(&rows, 4, 88), 340.0);
+        // At tile height 88 the shared model-row height is 100px, so four
+        // rows (including both headers) have an exact 400px offset.
+        assert_eq!(super::folder_row_offset(&rows, 4, 88), 400.0);
+    }
+
+    #[test]
+    fn folder_model_rows_share_one_height_per_zoom_level() {
+        assert_eq!(super::folder_row_height(88), 100);
+        assert_eq!(super::folder_row_height(40), super::FOLDER_HEADER_HEIGHT);
     }
 
     fn sample_ranges() -> Vec<GroupRange> {
