@@ -1836,6 +1836,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // Folder mode uses its own virtualized ListView. Full-width folder headers
     // are ordinary ListView rows, so they move away naturally with the photos.
     folder_scroll.set_child(Some(&gallery.folder_root));
+    let folder_scroll_overlay = gtk::Overlay::new();
+    folder_scroll_overlay.set_hexpand(true);
+    folder_scroll_overlay.set_vexpand(true);
+    folder_scroll_overlay.set_child(Some(&folder_scroll));
+    folder_scroll_overlay.add_overlay(&gallery.folder_rubberband);
 
     // A temporary date bubble makes a long chronological All Photos scrollbar
     // usable like a timeline. It is deliberately attached only to the GridView
@@ -1919,7 +1924,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     gallery_scroll_stack.set_hexpand(true);
     gallery_scroll_stack.set_vexpand(true);
     gallery_scroll_stack.add_named(&grid_scroll, Some("grid"));
-    gallery_scroll_stack.add_named(&folder_scroll, Some("folders"));
+    gallery_scroll_stack.add_named(&folder_scroll_overlay, Some("folders"));
     {
         let gallery_scroll_stack = gallery_scroll_stack.clone();
         let gallery_for_folder_view = gallery.clone();

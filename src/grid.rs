@@ -1259,6 +1259,7 @@ pub struct Gallery {
     // in a Box/Viewport to implement grouping.
     pub root: gtk::GridView,
     pub folder_root: gtk::ListView,
+    pub folder_rubberband: gtk::DrawingArea,
     pub group_header: gtk::Box,
     group_title: gtk::Label,
     group_count: gtk::Label,
@@ -1918,7 +1919,7 @@ impl Gallery {
         folder_root.add_css_class("folder-stream");
         folder_root.add_css_class("photo-grid");
 
-        install_folder_root_input(
+        let folder_rubberband = install_folder_root_input(
             &folder_root,
             &selection,
             &current_photos,
@@ -1949,6 +1950,7 @@ impl Gallery {
         let gallery = Self {
             root,
             folder_root,
+            folder_rubberband,
             group_header,
             group_title,
             group_count,
@@ -5018,6 +5020,15 @@ fn folder_dragged_positions(
     positions
 }
 
+fn folder_drag_rectangle(start: (f64, f64), end: (f64, f64)) -> (f64, f64, f64, f64) {
+    (
+        start.0.min(end.0),
+        start.1.min(end.1),
+        (start.0 - end.0).abs(),
+        (start.1 - end.1).abs(),
+    )
+}
+
 #[derive(Default)]
 struct FolderDragState {
     start: Option<(f64, f64)>,
@@ -5065,9 +5076,34 @@ fn install_folder_root_input(
     context_menu: &Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>,
     collage_mode: &Rc<Cell<bool>>,
     collage_ids: &Rc<RefCell<HashSet<i64>>>,
-) {
+) -> gtk::DrawingArea {
     let anchor: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
     let trace = std::env::var_os("PICASA_TRACE_VERBOSE").is_some();
+    let rubberband = gtk::DrawingArea::new();
+    rubberband.set_hexpand(true);
+    rubberband.set_vexpand(true);
+    rubberband.set_can_target(false);
+    rubberband.add_css_class("folder-rubberband");
+    let rubberband_rect: Rc<Cell<Option<(f64, f64, f64, f64)>>> = Rc::new(Cell::new(None));
+    let rubberband_rect_for_draw = rubberband_rect.clone();
+    rubberband.set_draw_func(move |_, context, width, height| {
+        let Some((x, y, rect_width, rect_height)) = rubberband_rect_for_draw.get() else {
+            return;
+        };
+        let x = x.clamp(0.0, width as f64);
+        let y = y.clamp(0.0, height as f64);
+        let right = (x + rect_width).clamp(0.0, width as f64);
+        let bottom = (y + rect_height).clamp(0.0, height as f64);
+        let width = (right - x).max(0.0);
+        let height = (bottom - y).max(0.0);
+        context.set_source_rgba(0.30, 0.62, 0.86, 0.18);
+        context.rectangle(x, y, width, height);
+        let _ = context.fill_preserve();
+        context.set_source_rgba(0.47, 0.73, 0.91, 0.95);
+        context.set_line_width(1.0);
+        let _ = context.stroke();
+    });
+    rubberband.set_visible(false);
 
     let left_click = gtk::GestureClick::new();
     left_click.set_button(1);
@@ -5183,9 +5219,14 @@ fn install_folder_root_input(
     let root_for_begin = folder_root.clone();
     let selection_for_begin = selection.clone();
     let collage_mode_for_begin = collage_mode.clone();
+    let rubberband_for_begin = rubberband.clone();
+    let rubberband_rect_for_begin = rubberband_rect.clone();
     let state_for_begin = drag_state.clone();
     drag.connect_drag_begin(move |gesture, x, y| {
         state_for_begin.borrow_mut().clear();
+        rubberband_rect_for_begin.set(None);
+        rubberband_for_begin.set_visible(false);
+        rubberband_for_begin.queue_draw();
         if collage_mode_for_begin.get() {
             gesture.set_state(gtk::EventSequenceState::Denied);
             return;
@@ -5219,6 +5260,8 @@ fn install_folder_root_input(
     let selection_for_update = selection.clone();
     let current_photos_for_update = current_photos.clone();
     let state_for_update = drag_state.clone();
+    let rubberband_for_update = rubberband.clone();
+    let rubberband_rect_for_update = rubberband_rect.clone();
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
         // A stationary press still emits tiny drag updates. Do not claim those,
         // otherwise the click gesture is cancelled and loses its double-click
@@ -5251,6 +5294,9 @@ fn install_folder_root_input(
                 return;
             };
             let end = (start.0 + offset_x, start.1 + offset_y);
+            rubberband_rect_for_update.set(Some(folder_drag_rectangle(start, end)));
+            rubberband_for_update.set_visible(true);
+            rubberband_for_update.queue_draw();
             let mut bounds = Vec::new();
             let mut tiles = Vec::new();
             collect_tiles(root_for_update.upcast_ref(), &mut tiles);
@@ -5311,11 +5357,16 @@ fn install_folder_root_input(
 
     let state_for_end = drag_state.clone();
     let root_for_end = folder_root.clone();
+    let rubberband_for_end = rubberband.clone();
+    let rubberband_rect_for_end = rubberband_rect.clone();
     drag.connect_drag_end(move |_, _, _| {
         if trace {
             eprintln!("FOLDER INPUT drag_end");
         }
         root_for_end.set_cursor_from_name(None);
+        rubberband_rect_for_end.set(None);
+        rubberband_for_end.set_visible(false);
+        rubberband_for_end.queue_draw();
         state_for_end.borrow_mut().clear();
     });
 
@@ -5326,6 +5377,7 @@ fn install_folder_root_input(
     // Grouping first triggered gtk_gesture_group assertions at startup.
     folder_root.add_controller(drag.clone());
     left_click.group_with(&drag);
+    rubberband
 }
 
 fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiSelection) {
@@ -5842,6 +5894,14 @@ mod folder_stream_tests {
         assert_eq!(
             folder_dragged_positions(&tiles, (160.0, 0.0), (50.0, 50.0)),
             vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn folder_drag_rectangle_handles_reverse_pointer_direction() {
+        assert_eq!(
+            super::folder_drag_rectangle((120.0, 90.0), (20.0, 10.0)),
+            (20.0, 10.0, 100.0, 80.0)
         );
     }
 

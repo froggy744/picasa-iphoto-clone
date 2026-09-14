@@ -2568,9 +2568,7 @@ mod tests {
         );
 
         assert_eq!(with_bookshelf, without_bookshelf);
-        assert!(with_bookshelf.contains(&directory.join("pink/pink-frame.png")));
         assert!(with_bookshelf.contains(&directory.join("vintage/blue-frame.png")));
-        assert!(with_bookshelf.contains(&directory.join("wedding/wedding-frame.png")));
     }
 
     #[test]
@@ -3192,14 +3190,9 @@ mod tests {
             ),
             ("vintage/blue-frame.png", (0.3569, 0.2715, 0.3157, 0.4160)),
             (
-                "wedding/wedding-frame.png",
-                (0.2524, 0.2461, 0.5269, 0.4775),
-            ),
-            (
                 "white-panel/white-panel-frame.png",
                 (0.1826, 0.1060, 0.6273, 0.5400),
             ),
-            ("pink/pink-frame.png", (0.1995, 0.1060, 0.6167, 0.5460)),
         ];
         for (relative, (x, y, width, height)) in expected {
             let opening = frame_photo_opening(&root.join(relative));
@@ -3231,9 +3224,7 @@ mod tests {
         let root = Path::new("images/theme/album-covers");
         for relative in [
             "standard/standard-frame.png",
-            "wedding/wedding-frame.png",
             "white-panel/white-panel-frame.png",
-            "pink/pink-frame.png",
         ] {
             let opening = frame_photo_opening(&root.join(relative));
             for width in [100, 136, 220, 300] {
@@ -3514,7 +3505,6 @@ mod tests {
     fn selection_is_stable_when_album_contents_change() {
         let root = Path::new("images/theme/album-covers");
         let frames = vec![
-            root.join("pink/pink-frame.png"),
             root.join("standard/standard-frame.png"),
             root.join("vintage/blue-frame.png"),
             root.join("vintage/green-frame.png"),
@@ -3534,13 +3524,13 @@ mod tests {
         let root = Path::new("images/theme/album-covers");
         // A theme with one file always shows that file.
         let single = CoverTheme {
-            name: "pink".to_string(),
-            frames: vec![root.join("pink/pink-frame.png")],
+            name: "standard".to_string(),
+            frames: vec![root.join("standard/standard-frame.png")],
         };
         for id in -100..100 {
             assert_eq!(
                 single.frame_for(&album(id)),
-                Some(&root.join("pink/pink-frame.png"))
+                Some(&root.join("standard/standard-frame.png"))
             );
         }
 

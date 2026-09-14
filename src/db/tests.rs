@@ -282,7 +282,7 @@ mod tests {
         let second = create_album(&connection, "Second").unwrap();
         let _ = create_album(&connection, "Untouched").unwrap();
         set_album_cover_frame(&connection, first.id, "vintage/blue-frame.png").unwrap();
-        set_album_cover_frame(&connection, second.id, "pink/pink-frame.png").unwrap();
+        set_album_cover_frame(&connection, second.id, "vintage/green-frame.png").unwrap();
 
         assert_eq!(clear_all_album_cover_frames(&connection).unwrap(), 2);
 

@@ -57,8 +57,8 @@ value stays valid when files are added or removed.
 
 Every top-level folder under `images/theme/album-covers` is one theme. A theme
 holds either a single frame file or several colour variants of one design. The
-five shipped themes are `pink`, `standard`, `vintage`, `wedding` and
-`white-panel`, with `vintage` holding five variants.
+three shipped theme families are `standard`, `vintage` and `white-panel`,
+with `vintage` holding five variants.
 
 A page uses one theme at a time. The page-wide index chooses that theme, so
 albums that never picked a frame of their own all show the same theme, whether
@@ -98,7 +98,7 @@ so a new design only has to ship artwork.
 - Openings are cached per path and modification time, because decoding nine
   frames on every album refresh would be wasted work.
 - The shipped frames use two different openings: the 805x500 / 827x500 "panel"
-  skins and the 1359x1024 "book" skins (`standard`, `vintage/*`, `wedding`).
+  skins and the 1359x1024 "book" skins (`standard`, `vintage/*`).
 
 ## Persistence
 
