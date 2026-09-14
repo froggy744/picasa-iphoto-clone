@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use gtk4 as gtk;
@@ -16,6 +17,7 @@ pub struct EditEditor {
     zoom_out_action: Rc<dyn Fn()>,
     fit_action: Rc<dyn Fn()>,
     one_to_one_action: Rc<dyn Fn(bool)>,
+    one_to_one_sync: Rc<RefCell<Option<Box<dyn Fn(bool)>>>>,
 }
 
 impl EditEditor {
@@ -38,6 +40,284 @@ impl EditEditor {
     pub fn set_one_to_one(&self, enabled: bool) {
         (self.one_to_one_action)(enabled);
     }
+
+    pub fn set_one_to_one_sync_handler(&self, handler: impl Fn(bool) + 'static) {
+        self.one_to_one_sync.replace(Some(Box::new(handler)));
+    }
+}
+
+#[derive(Clone)]
+struct PreviewBase {
+    path: String,
+    rotation: i32,
+    target_width: u32,
+    target_height: u32,
+    image: image::RgbaImage,
+}
+
+impl PreviewBase {
+    fn matches(&self, path: &str, rotation: i32, target_width: u32, target_height: u32) -> bool {
+        self.path == path
+            && self.rotation == rotation
+            && self.target_width == target_width
+            && self.target_height == target_height
+    }
+}
+
+const PREVIEW_BASE_CACHE_CAPACITY: usize = 2;
+
+fn cached_preview_base(
+    cache: &Arc<Mutex<Vec<PreviewBase>>>,
+    path: &str,
+    rotation: i32,
+    target_width: u32,
+    target_height: u32,
+) -> Option<image::RgbaImage> {
+    cache
+        .lock()
+        .ok()?
+        .iter()
+        .find(|entry| entry.matches(path, rotation, target_width, target_height))
+        .map(|entry| entry.image.clone())
+}
+
+fn store_preview_base(cache: &Arc<Mutex<Vec<PreviewBase>>>, entry: PreviewBase) {
+    let Ok(mut cache) = cache.lock() else {
+        return;
+    };
+    cache.retain(|existing| {
+        !existing.matches(
+            &entry.path,
+            entry.rotation,
+            entry.target_width,
+            entry.target_height,
+        )
+    });
+    cache.push(entry);
+    while cache.len() > PREVIEW_BASE_CACHE_CAPACITY {
+        cache.remove(0);
+    }
+}
+
+#[derive(Clone)]
+struct PreviewGeometry {
+    path: String,
+    rotation: i32,
+    target_width: u32,
+    target_height: u32,
+    crop: CropRect,
+    straighten: f32,
+    image: image::RgbaImage,
+}
+
+impl PreviewGeometry {
+    fn matches(
+        &self,
+        path: &str,
+        rotation: i32,
+        target_width: u32,
+        target_height: u32,
+        crop: CropRect,
+        straighten: f32,
+    ) -> bool {
+        self.path == path
+            && self.rotation == rotation
+            && self.target_width == target_width
+            && self.target_height == target_height
+            && self.crop == crop.normalized()
+            && self.straighten == straighten
+    }
+}
+
+struct PreviewJob {
+    generation: u64,
+    path: String,
+    rotation: i32,
+    target_width: u32,
+    target_height: u32,
+    recipe: EditRecipe,
+    result_sender: std::sync::mpsc::Sender<anyhow::Result<(u64, u32, u32, Vec<u8>)>>,
+}
+
+fn spawn_preview_worker(
+    base_cache: Arc<Mutex<Vec<PreviewBase>>>,
+) -> std::sync::mpsc::Sender<PreviewJob> {
+    let (job_sender, job_receiver) = std::sync::mpsc::channel::<PreviewJob>();
+    std::thread::spawn(move || {
+        let mut geometry_cache: Option<PreviewGeometry> = None;
+        let mut pending: Option<PreviewJob> = None;
+
+        loop {
+            let mut job = match pending.take() {
+                Some(job) => job,
+                None => match job_receiver.recv() {
+                    Ok(job) => job,
+                    Err(_) => break,
+                },
+            };
+
+            let mut coalesced = 0usize;
+            while let Ok(newer) = job_receiver.try_recv() {
+                job = newer;
+                coalesced += 1;
+            }
+            if coalesced > 0 && std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "EDIT PREVIEW WORKER coalesced={} generation={}",
+                    coalesced, job.generation
+                );
+            }
+
+            let result = render_preview_job(&job, &base_cache, &mut geometry_cache).map(|image| {
+                (
+                    job.generation,
+                    image.width(),
+                    image.height(),
+                    image.into_raw(),
+                )
+            });
+
+            // If newer slider requests arrived while this frame was rendering,
+            // keep only the newest one. The just-completed frame is stale, but
+            // its decoded/geometry cache work remains useful to the next job.
+            let mut newest = None;
+            let mut superseded = 0usize;
+            while let Ok(next) = job_receiver.try_recv() {
+                newest = Some(next);
+                superseded += 1;
+            }
+            if let Some(next) = newest {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "EDIT PREVIEW WORKER superseded={} finished_generation={} next_generation={}",
+                        superseded, job.generation, next.generation
+                    );
+                }
+                pending = Some(next);
+                continue;
+            }
+
+            let _ = job.result_sender.send(result);
+        }
+    });
+    job_sender
+}
+
+fn render_preview_job(
+    job: &PreviewJob,
+    base_cache: &Arc<Mutex<Vec<PreviewBase>>>,
+    geometry_cache: &mut Option<PreviewGeometry>,
+) -> anyhow::Result<image::RgbaImage> {
+    let total_started = Instant::now();
+    let crop = job.recipe.crop.normalized();
+    let straighten = job.recipe.straighten;
+    let geometry_needed = straighten.abs() >= 0.01 || !crop.is_full();
+
+    let geometry_hit = geometry_needed
+        && geometry_cache.as_ref().is_some_and(|entry| {
+            entry.matches(
+                &job.path,
+                job.rotation,
+                job.target_width,
+                job.target_height,
+                crop,
+                straighten,
+            )
+        });
+
+    let mut base_hit = false;
+    let mut decode_ms = 0u128;
+    let mut geometry_ms = 0u128;
+
+    let geometry = if geometry_hit {
+        geometry_cache
+            .as_ref()
+            .expect("geometry cache matched")
+            .image
+            .clone()
+    } else {
+        let base = if let Some(image) = cached_preview_base(
+            base_cache,
+            &job.path,
+            job.rotation,
+            job.target_width,
+            job.target_height,
+        ) {
+            base_hit = true;
+            image
+        } else {
+            let decode_started = Instant::now();
+            let image = super::render::decode_base_for_viewer(
+                &job.path,
+                job.rotation,
+                job.target_width,
+                job.target_height,
+            )?;
+            decode_ms = decode_started.elapsed().as_millis();
+            store_preview_base(
+                base_cache,
+                PreviewBase {
+                    path: job.path.clone(),
+                    rotation: job.rotation,
+                    target_width: job.target_width,
+                    target_height: job.target_height,
+                    image: image.clone(),
+                },
+            );
+            image
+        };
+
+        if geometry_needed {
+            let geometry_started = Instant::now();
+            let image = super::render::apply_geometry(base, &job.recipe);
+            geometry_ms = geometry_started.elapsed().as_millis();
+            geometry_cache.replace(PreviewGeometry {
+                path: job.path.clone(),
+                rotation: job.rotation,
+                target_width: job.target_width,
+                target_height: job.target_height,
+                crop,
+                straighten,
+                image: image.clone(),
+            });
+            image
+        } else {
+            base
+        }
+    };
+
+    let tone_started = Instant::now();
+    let rendered = super::render::apply_tone(geometry, &job.recipe);
+    let tone_ms = tone_started.elapsed().as_millis();
+
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "EDIT PREVIEW base_cache={} geometry_cache={} decode_ms={} geometry_ms={} tone_ms={} total_ms={} target={}x{} path={}",
+            if geometry_hit {
+                "skip"
+            } else if base_hit {
+                "hit"
+            } else {
+                "miss"
+            },
+            if geometry_hit {
+                "hit"
+            } else if geometry_needed {
+                "miss"
+            } else {
+                "bypass"
+            },
+            decode_ms,
+            geometry_ms,
+            tone_ms,
+            total_started.elapsed().as_millis(),
+            job.target_width,
+            job.target_height,
+            job.path
+        );
+    }
+
+    Ok(rendered)
 }
 
 #[derive(Clone)]
@@ -111,10 +391,10 @@ pub fn build(
     toolbar.append(&redo);
 
     let toolbar_zoom_out = gtk::Button::with_label("−");
-    toolbar_zoom_out.set_tooltip_text(Some("Zoom out"));
+    toolbar_zoom_out.set_tooltip_text(Some("Zoom out (Ctrl + mouse wheel)"));
     toolbar.append(&toolbar_zoom_out);
     let toolbar_zoom_in = gtk::Button::with_label("+");
-    toolbar_zoom_in.set_tooltip_text(Some("Zoom in"));
+    toolbar_zoom_in.set_tooltip_text(Some("Zoom in (Ctrl + mouse wheel)"));
     toolbar.append(&toolbar_zoom_in);
 
     let reset = gtk::Button::with_label("Reset");
@@ -217,8 +497,15 @@ pub fn build(
     // 0.0 means fit-to-canvas. Positive values are display zoom factors.
     let canvas_zoom = Rc::new(Cell::new(0.0f64));
     let native_one_to_one = Rc::new(Cell::new(false));
+    let one_to_one_sync: Rc<RefCell<Option<Box<dyn Fn(bool)>>>> =
+        Rc::new(RefCell::new(None));
     let generation = Rc::new(Cell::new(0u64));
     let preview_debounce: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+    // Keep both the normal Fit preview base and a prefetched native-resolution
+    // base. Sharing this tiny cache with the prefetch thread lets 1:1 reuse the
+    // decoded pixels without evicting the fast 1800x1400 editing base.
+    let preview_base_cache: Arc<Mutex<Vec<PreviewBase>>> = Arc::new(Mutex::new(Vec::new()));
+    let preview_worker = spawn_preview_worker(preview_base_cache.clone());
 
     // Drag-to-pan for the editing canvas. Keep this controller on the
     // stationary ScrolledWindow so pointer coordinates do not move with the
@@ -365,6 +652,7 @@ pub fn build(
         let native_one_to_one = native_one_to_one.clone();
         let crop_overlay = crop_overlay.clone();
         let preview_debounce = preview_debounce.clone();
+        let preview_worker = preview_worker.clone();
         Rc::new(move || {
             if let Some(source) = preview_debounce.borrow_mut().take() {
                 source.remove();
@@ -381,6 +669,7 @@ pub fn build(
             let native_one_to_one = native_one_to_one.clone();
             let crop_overlay = crop_overlay.clone();
             let preview_debounce_for_fire = preview_debounce.clone();
+            let preview_worker = preview_worker.clone();
             let source = glib::timeout_add_local_once(Duration::from_millis(90), move || {
                 preview_debounce_for_fire.borrow_mut().take();
                 let current_generation = generation.get().wrapping_add(1);
@@ -407,21 +696,30 @@ pub fn build(
                 } else {
                     (1800, 1400)
                 };
+
                 busy.set_visible(true);
                 busy.start();
                 status.set_text("Rendering preview…");
-                let (sender, receiver) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let result = super::render::render_for_viewer(
-                        &path,
+
+                let (result_sender, receiver) = std::sync::mpsc::channel();
+                if preview_worker
+                    .send(PreviewJob {
+                        generation: current_generation,
+                        path,
                         rotation,
-                        &recipe,
                         target_width,
                         target_height,
-                    )
-                    .map(|image| (image.width(), image.height(), image.into_raw()));
-                    let _ = sender.send(result);
-                });
+                        recipe,
+                        result_sender,
+                    })
+                    .is_err()
+                {
+                    busy.stop();
+                    busy.set_visible(false);
+                    status.set_text("Preview worker stopped");
+                    return;
+                }
+
                 let picture = picture.clone();
                 let status = status.clone();
                 let busy = busy.clone();
@@ -431,46 +729,66 @@ pub fn build(
                 let canvas_zoom = canvas_zoom.clone();
                 let crop_overlay = crop_overlay.clone();
                 glib::timeout_add_local(Duration::from_millis(25), move || {
-                    let Ok(result) = receiver.try_recv() else {
-                        return glib::ControlFlow::Continue;
-                    };
-                    if generation.get() != current_generation {
-                        return glib::ControlFlow::Break;
-                    }
-                    busy.stop();
-                    busy.set_visible(false);
-                    match result {
-                        Ok((width, height, pixels)) => {
-                            let bytes = glib::Bytes::from_owned(pixels);
-                            let texture = gtk::gdk::MemoryTexture::new(
-                                width as i32,
-                                height as i32,
-                                gtk::gdk::MemoryFormat::R8g8b8a8,
-                                &bytes,
-                                width as usize * 4,
-                            );
-                            preview_dimensions.set((width as i32, height as i32));
-                            picture.set_paintable(Some(&texture));
-                            if native {
-                                apply_canvas_one_to_one(
-                                    &picture,
-                                    &picture_scroll,
-                                    (width as i32, height as i32),
-                                );
-                            } else {
-                                apply_canvas_zoom(
-                                    &picture,
-                                    &picture_scroll,
-                                    (width as i32, height as i32),
-                                    canvas_zoom.get(),
-                                );
+                    match receiver.try_recv() {
+                        Ok(result) => {
+                            if generation.get() != current_generation {
+                                return glib::ControlFlow::Break;
                             }
-                            status.set_text(&format!("{} × {} preview", width, height));
-                            crop_overlay.queue_draw();
+                            busy.stop();
+                            busy.set_visible(false);
+                            match result {
+                                Ok((result_generation, width, height, pixels)) => {
+                                    if result_generation != current_generation {
+                                        return glib::ControlFlow::Break;
+                                    }
+                                    let bytes = glib::Bytes::from_owned(pixels);
+                                    let texture = gtk::gdk::MemoryTexture::new(
+                                        width as i32,
+                                        height as i32,
+                                        gtk::gdk::MemoryFormat::R8g8b8a8,
+                                        &bytes,
+                                        width as usize * 4,
+                                    );
+                                    preview_dimensions.set((width as i32, height as i32));
+                                    picture.set_paintable(Some(&texture));
+                                    if native {
+                                        apply_canvas_one_to_one(
+                                            &picture,
+                                            &picture_scroll,
+                                            (width as i32, height as i32),
+                                        );
+                                    } else {
+                                        apply_canvas_zoom(
+                                            &picture,
+                                            &picture_scroll,
+                                            (width as i32, height as i32),
+                                            canvas_zoom.get(),
+                                        );
+                                    }
+                                    status.set_text(&format!("{} × {} preview", width, height));
+                                    crop_overlay.queue_draw();
+                                }
+                                Err(error) => {
+                                    status.set_text(&format!("Preview failed: {error}"));
+                                }
+                            }
+                            glib::ControlFlow::Break
                         }
-                        Err(error) => status.set_text(&format!("Preview failed: {error}")),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            glib::ControlFlow::Continue
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            // A disconnected per-request receiver normally means
+                            // the worker coalesced this stale request into a newer
+                            // one. Only change UI state if it was still current.
+                            if generation.get() == current_generation {
+                                busy.stop();
+                                busy.set_visible(false);
+                                status.set_text("Preview worker stopped");
+                            }
+                            glib::ControlFlow::Break
+                        }
                     }
-                    glib::ControlFlow::Break
                 });
             });
             preview_debounce.replace(Some(source));
@@ -679,6 +997,7 @@ pub fn build(
         let preview_dimensions = preview_dimensions.clone();
         let canvas_zoom = canvas_zoom.clone();
         let native_one_to_one = native_one_to_one.clone();
+        let one_to_one_sync = one_to_one_sync.clone();
         reset.connect_clicked(move |_| {
             session.borrow_mut().reset();
             sync_controls();
@@ -688,7 +1007,12 @@ pub fn build(
 
             // Reset is a full editor reset: edits plus canvas presentation.
             // Return to Fit and clear any native 1:1 / panned viewport state.
-            native_one_to_one.set(false);
+            let was_one_to_one = native_one_to_one.replace(false);
+            if was_one_to_one {
+                if let Some(handler) = one_to_one_sync.borrow().as_ref() {
+                    handler(false);
+                }
+            }
             canvas_zoom.set(0.0);
             apply_canvas_zoom(&picture, &picture_scroll, preview_dimensions.get(), 0.0);
             let hadj = picture_scroll.hadjustment();
@@ -711,8 +1035,14 @@ pub fn build(
         let preview_dimensions = preview_dimensions.clone();
         let canvas_zoom = canvas_zoom.clone();
         let native_one_to_one = native_one_to_one.clone();
+        let one_to_one_sync = one_to_one_sync.clone();
         Rc::new(move || {
-            native_one_to_one.set(false);
+            let was_one_to_one = native_one_to_one.replace(false);
+            if was_one_to_one {
+                if let Some(handler) = one_to_one_sync.borrow().as_ref() {
+                    handler(false);
+                }
+            }
             canvas_zoom.set(0.0);
             apply_canvas_zoom(&picture, &picture_scroll, preview_dimensions.get(), 0.0);
         })
@@ -727,8 +1057,14 @@ pub fn build(
         let preview_dimensions = preview_dimensions.clone();
         let canvas_zoom = canvas_zoom.clone();
         let native_one_to_one = native_one_to_one.clone();
+        let one_to_one_sync = one_to_one_sync.clone();
         Rc::new(move || {
-            native_one_to_one.set(false);
+            let was_one_to_one = native_one_to_one.replace(false);
+            if was_one_to_one {
+                if let Some(handler) = one_to_one_sync.borrow().as_ref() {
+                    handler(false);
+                }
+            }
             let dimensions = preview_dimensions.get();
             let current_multiplier = if canvas_zoom.get() <= 0.0 {
                 1.0
@@ -746,8 +1082,14 @@ pub fn build(
         let preview_dimensions = preview_dimensions.clone();
         let canvas_zoom = canvas_zoom.clone();
         let native_one_to_one = native_one_to_one.clone();
+        let one_to_one_sync = one_to_one_sync.clone();
         Rc::new(move || {
-            native_one_to_one.set(false);
+            let was_one_to_one = native_one_to_one.replace(false);
+            if was_one_to_one {
+                if let Some(handler) = one_to_one_sync.borrow().as_ref() {
+                    handler(false);
+                }
+            }
             let dimensions = preview_dimensions.get();
             let current_multiplier = if canvas_zoom.get() <= 0.0 {
                 1.0
@@ -767,6 +1109,35 @@ pub fn build(
         let zoom_in_action = zoom_in_action.clone();
         toolbar_zoom_in.connect_clicked(move |_| zoom_in_action());
     }
+
+    // Ctrl + mouse wheel over the photo canvas uses the exact same incremental
+    // zoom actions as the toolbar buttons. Ordinary wheel input is left alone
+    // for normal ScrolledWindow panning/scrolling.
+    let canvas_zoom_scroll = gtk::EventControllerScroll::new(
+        gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::DISCRETE,
+    );
+    canvas_zoom_scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let zoom_in_action = zoom_in_action.clone();
+        let zoom_out_action = zoom_out_action.clone();
+        canvas_zoom_scroll.connect_scroll(move |controller, _, dy| {
+            if !controller
+                .current_event_state()
+                .contains(gtk::gdk::ModifierType::CONTROL_MASK)
+                || dy == 0.0
+            {
+                return glib::Propagation::Proceed;
+            }
+
+            if dy < 0.0 {
+                zoom_in_action();
+            } else {
+                zoom_out_action();
+            }
+            glib::Propagation::Stop
+        });
+    }
+    picture_scroll.add_controller(canvas_zoom_scroll);
 
     let one_to_one_action: Rc<dyn Fn(bool)> = {
         let native_one_to_one = native_one_to_one.clone();
@@ -792,12 +1163,18 @@ pub fn build(
         let pending_crop = pending_crop.clone();
         let canvas_zoom = canvas_zoom.clone();
         let native_one_to_one = native_one_to_one.clone();
+        let one_to_one_sync = one_to_one_sync.clone();
         let picture = picture.clone();
         let picture_scroll = picture_scroll.clone();
         let preview_dimensions = preview_dimensions.clone();
         crop.connect_clicked(move |_| {
             canvas_zoom.set(0.0);
-            native_one_to_one.set(false);
+            let was_one_to_one = native_one_to_one.replace(false);
+            if was_one_to_one {
+                if let Some(handler) = one_to_one_sync.borrow().as_ref() {
+                    handler(false);
+                }
+            }
             apply_canvas_zoom(&picture, &picture_scroll, preview_dimensions.get(), 0.0);
             pending_crop.replace(CropRect::default());
             crop_overlay.set_visible(true);
@@ -966,6 +1343,80 @@ pub fn build(
 
     queue_preview();
 
+    // Phase 5: warm the native-resolution decoded base shortly after the fast
+    // Fit preview has been requested. The decode happens on its own thread so
+    // slider rendering remains responsive. The shared two-entry cache keeps
+    // both Fit and native bases, so warming 1:1 never makes normal editing pay
+    // another decode.
+    {
+        let cache = preview_base_cache.clone();
+        let path = photo.path();
+        let rotation = photo.rotation();
+        let mut target_width = if photo.width() > 0 {
+            photo.width() as u32
+        } else {
+            u32::MAX
+        };
+        let mut target_height = if photo.height() > 0 {
+            photo.height() as u32
+        } else {
+            u32::MAX
+        };
+        if matches!(rotation.rem_euclid(360), 90 | 270) {
+            std::mem::swap(&mut target_width, &mut target_height);
+        }
+
+        glib::timeout_add_local_once(Duration::from_millis(300), move || {
+            if cached_preview_base(&cache, &path, rotation, target_width, target_height).is_some() {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "EDIT PREFETCH cache=hit target={}x{} path={}",
+                        target_width, target_height, path
+                    );
+                }
+                return;
+            }
+
+            std::thread::spawn(move || {
+                let started = Instant::now();
+                match super::render::decode_base_for_viewer(
+                    &path,
+                    rotation,
+                    target_width,
+                    target_height,
+                ) {
+                    Ok(image) => {
+                        let decode_ms = started.elapsed().as_millis();
+                        store_preview_base(
+                            &cache,
+                            PreviewBase {
+                                path: path.clone(),
+                                rotation,
+                                target_width,
+                                target_height,
+                                image,
+                            },
+                        );
+                        if std::env::var_os("PICASA_TRACE").is_some() {
+                            eprintln!(
+                                "EDIT PREFETCH cache=ready decode_ms={} target={}x{} path={}",
+                                decode_ms, target_width, target_height, path
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        if std::env::var_os("PICASA_TRACE").is_some() {
+                            eprintln!(
+                                "EDIT PREFETCH cache=failed target={}x{} path={} error={:#}",
+                                target_width, target_height, path, error
+                            );
+                        }
+                    }
+                }
+            });
+        });
+    }
+
     EditEditor {
         root,
         photo_id: photo.id(),
@@ -973,6 +1424,7 @@ pub fn build(
         zoom_out_action,
         fit_action,
         one_to_one_action,
+        one_to_one_sync,
     }
 }
 

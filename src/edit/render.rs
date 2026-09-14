@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use image::{DynamicImage, Rgba, RgbaImage};
+use rayon::prelude::*;
 
 use super::model::{CropRect, EditRecipe};
 
@@ -12,14 +13,18 @@ pub fn apply_library_rotation(image: RgbaImage, rotation: i32) -> RgbaImage {
     }
 }
 
-pub fn apply_recipe(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+pub fn apply_geometry(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
     if recipe.straighten.abs() >= 0.01 {
         image = rotate_autocrop(&image, recipe.straighten.to_radians());
     }
     if !recipe.crop.is_full() {
         image = crop_normalized(&image, recipe.crop);
     }
-    apply_tone(image, recipe)
+    image
+}
+
+pub fn apply_recipe(image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+    apply_tone(apply_geometry(image, recipe), recipe)
 }
 
 pub fn apply_recipe_without_crop(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
@@ -55,6 +60,16 @@ pub fn render_thumbnail(path: &str, rotation: i32, recipe: &EditRecipe) -> Resul
     ))
 }
 
+pub fn decode_base_for_viewer(
+    reference: &str,
+    rotation: i32,
+    width: u32,
+    height: u32,
+) -> Result<RgbaImage> {
+    let image = crate::thumbnail::decode_for_viewer(reference, width.max(1), height.max(1))?;
+    Ok(apply_library_rotation(image, rotation))
+}
+
 pub fn render_for_viewer(
     reference: &str,
     rotation: i32,
@@ -62,9 +77,8 @@ pub fn render_for_viewer(
     width: u32,
     height: u32,
 ) -> Result<RgbaImage> {
-    let image = crate::thumbnail::decode_for_viewer(reference, width.max(1), height.max(1))?;
     Ok(apply_recipe(
-        apply_library_rotation(image, rotation),
+        decode_base_for_viewer(reference, rotation, width, height)?,
         recipe,
     ))
 }
@@ -116,7 +130,7 @@ fn crop_normalized(image: &RgbaImage, crop: CropRect) -> RgbaImage {
     image::imageops::crop_imm(image, x, y, crop_width, crop_height).to_image()
 }
 
-fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+pub(super) fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
     if recipe.auto_color {
         apply_auto_color(&mut image);
     }
@@ -127,7 +141,7 @@ fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
     let exposure = 2.0_f32.powf(recipe.exposure);
     let temperature = recipe.temperature;
     let saturation = 1.0 + recipe.saturation;
-    for pixel in image.pixels_mut() {
+    image.as_mut().par_chunks_mut(4).for_each(|pixel| {
         let alpha = pixel[3];
         let mut r = pixel[0] as f32 / 255.0;
         let mut g = pixel[1] as f32 / 255.0;
@@ -177,26 +191,30 @@ fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
             g = y * (1.0 - 0.006 * strength);
             b = y * (1.0 - 0.180 * strength);
         }
-        *pixel = Rgba([
+        pixel.copy_from_slice(&[
             (r.clamp(0.0, 1.0) * 255.0).round() as u8,
             (g.clamp(0.0, 1.0) * 255.0).round() as u8,
             (b.clamp(0.0, 1.0) * 255.0).round() as u8,
             alpha,
         ]);
-    }
+    });
 
     if recipe.sharpen > 0.001 && image.width() > 2 && image.height() > 2 {
         let blurred = image::imageops::blur(&image, 1.1);
         let amount = recipe.sharpen * 1.6;
-        for (pixel, blurred) in image.pixels_mut().zip(blurred.pixels()) {
-            for channel in 0..3 {
-                let original = pixel[channel] as f32;
-                let soft = blurred[channel] as f32;
-                pixel[channel] = (original + (original - soft) * amount)
-                    .clamp(0.0, 255.0)
-                    .round() as u8;
-            }
-        }
+        image
+            .as_mut()
+            .par_chunks_mut(4)
+            .zip(blurred.as_raw().par_chunks(4))
+            .for_each(|(pixel, blurred)| {
+                for channel in 0..3 {
+                    let original = pixel[channel] as f32;
+                    let soft = blurred[channel] as f32;
+                    pixel[channel] = (original + (original - soft) * amount)
+                        .clamp(0.0, 255.0)
+                        .round() as u8;
+                }
+            });
     }
     image
 }
@@ -255,16 +273,16 @@ fn apply_auto_color(image: &mut RgbaImage) {
         1.0 + (raw_gains[1] - 1.0) * strength,
         1.0 + (raw_gains[2] - 1.0) * strength,
     ];
-    for pixel in image.pixels_mut() {
+    image.as_mut().par_chunks_mut(4).for_each(|pixel| {
         if pixel[3] < 16 {
-            continue;
+            return;
         }
         for channel in 0..3 {
             pixel[channel] = (pixel[channel] as f64 * gains[channel])
                 .clamp(0.0, 255.0)
                 .round() as u8;
         }
-    }
+    });
 }
 
 fn apply_auto_contrast(image: &mut RgbaImage) {
@@ -320,9 +338,9 @@ fn apply_auto_contrast(image: &mut RgbaImage) {
     let low = low as f32 / 255.0;
     let high = high as f32 / 255.0;
     let range = high - low;
-    for pixel in image.pixels_mut() {
+    image.as_mut().par_chunks_mut(4).for_each(|pixel| {
         if pixel[3] < 16 {
-            continue;
+            return;
         }
         let r = pixel[0] as f32 / 255.0;
         let g = pixel[1] as f32 / 255.0;
@@ -337,7 +355,7 @@ fn apply_auto_contrast(image: &mut RgbaImage) {
         pixel[0] = ((r + delta).clamp(0.0, 1.0) * 255.0).round() as u8;
         pixel[1] = ((g + delta).clamp(0.0, 1.0) * 255.0).round() as u8;
         pixel[2] = ((b + delta).clamp(0.0, 1.0) * 255.0).round() as u8;
-    }
+    });
 }
 
 fn rotate_autocrop(source: &RgbaImage, angle: f32) -> RgbaImage {
@@ -356,15 +374,23 @@ fn rotate_autocrop(source: &RgbaImage, angle: f32) -> RgbaImage {
     let dst_cx = (output_width as f32 - 1.0) * 0.5;
     let dst_cy = (output_height as f32 - 1.0) * 0.5;
 
-    for y in 0..output_height {
-        for x in 0..output_width {
-            let dx = x as f32 - dst_cx;
-            let dy = y as f32 - dst_cy;
-            let sx = cos * dx + sin * dy + src_cx;
-            let sy = -sin * dx + cos * dy + src_cy;
-            output.put_pixel(x, y, bilinear(source, sx, sy));
-        }
-    }
+    let row_bytes = output_width as usize * 4;
+    output
+        .as_mut()
+        .par_chunks_mut(row_bytes)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as u32;
+            for x in 0..output_width {
+                let dx = x as f32 - dst_cx;
+                let dy = y as f32 - dst_cy;
+                let sx = cos * dx + sin * dy + src_cx;
+                let sy = -sin * dx + cos * dy + src_cy;
+                let pixel = bilinear(source, sx, sy);
+                let offset = x as usize * 4;
+                row[offset..offset + 4].copy_from_slice(&pixel.0);
+            }
+        });
     output
 }
 
@@ -450,6 +476,34 @@ mod tests {
         };
         let output = apply_recipe(image, &recipe);
         assert_eq!(output.dimensions(), (50, 40));
+    }
+
+    #[test]
+    fn cached_geometry_then_tone_matches_full_recipe() {
+        let mut source = RgbaImage::new(120, 90);
+        for (index, pixel) in source.pixels_mut().enumerate() {
+            let value = (index % 251) as u8;
+            *pixel = Rgba([value, 255 - value, value / 2, 255]);
+        }
+
+        let mut recipe = EditRecipe::default();
+        recipe.straighten = 3.0;
+        recipe.crop = CropRect {
+            left: 0.1,
+            top: 0.15,
+            right: 0.9,
+            bottom: 0.85,
+        };
+        recipe.exposure = 0.35;
+        recipe.contrast = 0.2;
+        recipe.saturation = 0.15;
+
+        let full = apply_recipe(source.clone(), &recipe);
+        let geometry = apply_geometry(source, &recipe);
+        let cached = apply_tone(geometry, &recipe);
+
+        assert_eq!(cached.dimensions(), full.dimensions());
+        assert_eq!(cached.as_raw(), full.as_raw());
     }
 
     #[test]
