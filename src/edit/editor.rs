@@ -698,8 +698,8 @@ pub fn build(
 
     add_section_label(&filters_box, "Filters");
     let filter_grid = gtk::FlowBox::new();
-    filter_grid.set_row_spacing(5);
-    filter_grid.set_column_spacing(4);
+    filter_grid.set_row_spacing(6);
+    filter_grid.set_column_spacing(6);
     filter_grid.set_homogeneous(true);
     filter_grid.set_min_children_per_line(2);
     filter_grid.set_max_children_per_line(8);

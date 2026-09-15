@@ -110,10 +110,10 @@ const STANDARD_GTK4_CSS: &str = r#"
     .info-preview { border-radius: 8px; background: alpha(@theme_fg_color, 0.06); border: 1px solid alpha(@theme_fg_color, 0.10); }
     .edit-panel-tabs button { min-height: 34px; }
     .filter-grid > flowboxchild { padding: 0; margin: 0; min-width: 0; background: transparent; }
-    button.filter-tile { min-width: 56px; padding: 2px; border: 2px solid transparent; border-radius: 8px; background: alpha(@theme_fg_color, 0.04); box-shadow: none; }
-    button.filter-tile:hover { background: alpha(@theme_fg_color, 0.08); border-color: alpha(@accent_bg_color, 0.45); }
-    button.filter-tile:checked { background: alpha(@accent_bg_color, 0.12); border-color: @accent_bg_color; }
-    .filter-tile-preview { min-width: 56px; min-height: 56px; border-radius: 5px; background: alpha(@theme_fg_color, 0.06); }
+    button.filter-tile, button.filter-tile:hover, button.filter-tile:active, button.filter-tile:checked { padding: 0; border: none; background: transparent; box-shadow: none; outline: none; }
+    .filter-tile-preview { min-width: 56px; min-height: 56px; padding: 0; border: 2px solid transparent; border-radius: 9px; background: transparent; box-shadow: none; overflow: hidden; }
+    .filter-tile-preview > border { border: none; background: transparent; }
+    button.filter-tile:checked .filter-tile-preview { border-color: @accent_bg_color; }
     .filter-tile-label { font-size: 11px; }
     .info-title, .metric-val { color: @theme_fg_color; }
     .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: alpha(@theme_fg_color, 0.55); }
