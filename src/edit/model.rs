@@ -410,4 +410,32 @@ mod tests {
         assert!(session.redo());
         assert!((session.recipe.exposure - 1.1).abs() < 0.001);
     }
+
+    #[test]
+    fn removing_filter_preserves_tool_adjustments() {
+        let mut recipe = EditRecipe::default();
+        recipe.filter = FilterPreset::Clarendon;
+        recipe.exposure = 0.65;
+        recipe.saturation = 0.25;
+        let mut session = EditSession::new(recipe);
+
+        session.mutate(|recipe| recipe.filter = FilterPreset::None);
+
+        assert_eq!(session.recipe.filter, FilterPreset::None);
+        assert!((session.recipe.exposure - 0.65).abs() < 0.001);
+        assert!((session.recipe.saturation - 0.25).abs() < 0.001);
+    }
+
+    #[test]
+    fn reset_clears_filter_and_tool_adjustments() {
+        let mut recipe = EditRecipe::default();
+        recipe.filter = FilterPreset::Clarendon;
+        recipe.exposure = 0.65;
+        recipe.saturation = 0.25;
+        let mut session = EditSession::new(recipe);
+
+        session.reset();
+
+        assert_eq!(session.recipe, EditRecipe::default());
+    }
 }

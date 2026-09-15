@@ -132,16 +132,15 @@ fn crop_normalized(image: &RgbaImage, crop: CropRect) -> RgbaImage {
 }
 
 pub(super) fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+    if recipe.filter != filters::FilterPreset::None {
+        filters::apply_filter(&mut image, recipe.filter);
+    }
+
     if recipe.auto_color {
         apply_auto_color(&mut image);
     }
     if recipe.auto_contrast {
         apply_auto_contrast(&mut image);
-    }
-
-    if recipe.filter != filters::FilterPreset::None {
-        filters::apply_filter(&mut image, recipe.filter);
-        return image;
     }
 
     let exposure = 2.0_f32.powf(recipe.exposure);
@@ -486,16 +485,24 @@ mod tests {
     }
 
     #[test]
-    fn named_filter_replaces_manual_tone_pass() {
+    fn named_filter_is_followed_by_manual_tone_adjustments() {
         let image = RgbaImage::from_pixel(8, 8, Rgba([120, 130, 140, 255]));
         let mut recipe = EditRecipe::default();
         recipe.filter = FilterPreset::Clarendon;
-        recipe.exposure = 1.0;
+        recipe.exposure = 0.5;
 
         let output = apply_recipe(image.clone(), &recipe);
-        let mut expected = image;
-        crate::edit::filters::apply_filter(&mut expected, FilterPreset::Clarendon);
+        let mut filter_only = image;
+        crate::edit::filters::apply_filter(&mut filter_only, FilterPreset::Clarendon);
+        let exposure = 2.0_f32.powf(0.5);
+        let mut expected = filter_only.clone();
+        for pixel in expected.pixels_mut() {
+            for channel in 0..3 {
+                pixel[channel] = (pixel[channel] as f32 * exposure).clamp(0.0, 255.0).round() as u8;
+            }
+        }
 
+        assert_ne!(output.as_raw(), filter_only.as_raw());
         assert_eq!(output.as_raw(), expected.as_raw());
     }
 
