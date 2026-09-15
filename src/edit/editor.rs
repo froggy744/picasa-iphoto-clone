@@ -2342,21 +2342,11 @@ mod panel_tests {
         body.set_position(380);
         settle_gtk();
         let default_columns = first_row_count(&filter_grid);
-        let default_width = filter_grid.width();
         let first_tile = filter_grid.first_child().unwrap();
         let (minimum, natural, _, _) = first_tile.measure(gtk::Orientation::Horizontal, -1);
         body.set_position(500);
         settle_gtk();
         let wide_columns = first_row_count(&filter_grid);
-        eprintln!(
-            "responsive grid: default={} wide={} grid={}->{} tile={}/{}",
-            default_columns,
-            wide_columns,
-            default_width,
-            filter_grid.width(),
-            minimum,
-            natural
-        );
         assert!(minimum > 0 && natural >= minimum);
         assert!(default_columns >= 4);
         assert!(wide_columns > default_columns);
