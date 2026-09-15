@@ -622,8 +622,8 @@ pub fn build(
     filters_box.set_vexpand(true);
     filters_box.set_margin_top(12);
     filters_box.set_margin_bottom(16);
-    filters_box.set_margin_start(0);
-    filters_box.set_margin_end(0);
+    filters_box.set_margin_start(14);
+    filters_box.set_margin_end(14);
     let crop_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
     crop_box.set_hexpand(true);
     crop_box.set_vexpand(true);
@@ -2489,7 +2489,7 @@ mod panel_tests {
 
     #[test]
     fn filter_tiles_keep_a_compact_natural_width() {
-        assert_eq!(FILTER_TILE_WIDTH, 170);
+        assert_eq!(FILTER_TILE_WIDTH, 160);
     }
 
     #[test]
@@ -2627,7 +2627,9 @@ mod panel_tests {
             body.queue_resize();
             for _ in 0..100 {
                 settle_gtk();
-                if (flow.allocation().width() - position).abs() <= 8 {
+                // The stack pages carry 14px side margins (matching the tab
+                // row), so the grid is 28px narrower than the paned position.
+                if (flow.allocation().width() - (position - 28)).abs() <= 8 {
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(10));
@@ -2761,7 +2763,7 @@ fn add_section_label(parent: &gtk::Box, text: &str) {
     parent.append(&label);
 }
 
-const FILTER_TILE_WIDTH: i32 = 170;
+const FILTER_TILE_WIDTH: i32 = 160;
 // The preview frame paints a 2px border on each side, so the picture inside
 // must minimum-fit the remaining width at the default 4:3 thumbnail ratio.
 // Without a real minimum height the AspectFrame collapses to a 1px strip and
