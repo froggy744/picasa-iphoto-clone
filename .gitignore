@@ -20,6 +20,10 @@
 !/src/
 !/src/**
 
+# Keep bundled icon theme (Adwaita symbolic subset + compiled GResource)
+!/resources/
+!/resources/**
+
 # Keep the isolated GUI search regression check
 !/scripts/
 /scripts/*

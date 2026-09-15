@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/picrs">
+    <file compressed="true" preprocess="xml-stripblanks">icons/appointment-soon-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/document-edit-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/document-save-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/edit-redo-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/edit-undo-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/emblem-system-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/emote-love-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/folder-new-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/folder-open-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/folder-pictures-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/folder-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/go-previous-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/image-x-generic-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/list-add-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/object-rotate-right-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/object-select-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/pan-down-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/pan-end-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/pan-start-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/process-stop-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/sidebar-show-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/view-app-grid-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/view-grid-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/view-list-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/view-refresh-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/view-sidebar-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/view-sort-ascending-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/view-sort-descending-symbolic.svg</file>
+  </gresource>
+</gresources>
