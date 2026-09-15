@@ -879,11 +879,20 @@ pub fn build(
     straighten.add_css_class("crop-straighten-scale");
     crop_box.append(&straighten_box);
 
+    let crop_action_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let apply_crop_button = gtk::Button::with_label("Apply Crop");
+    apply_crop_button.set_hexpand(true);
+    apply_crop_button
+        .set_tooltip_text(Some("Commit the pending crop and return to the tools"));
+    apply_crop_button.add_css_class("suggested-action");
+    apply_crop_button.add_css_class("crop-apply-button");
     let reset_crop = gtk::Button::with_label("Reset Crop");
     reset_crop.set_hexpand(true);
     reset_crop.set_tooltip_text(Some("Remove the crop and return to the full photo"));
     reset_crop.add_css_class("crop-reset-button");
-    crop_box.append(&reset_crop);
+    crop_action_row.append(&apply_crop_button);
+    crop_action_row.append(&reset_crop);
+    crop_box.append(&crop_action_row);
 
     add_section_label(&tools_box, "LIGHT");
     let light_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -1914,7 +1923,7 @@ pub fn build(
     };
 
     // Entering the Crop tab activates the on-canvas crop overlay. Leaving the
-    // tab commits the pending crop automatically, so there is no Apply button.
+    // tab, the Apply Crop button or the Enter key commits the pending crop.
     {
         let crop_overlay = crop_overlay.clone();
         let pending_crop = pending_crop.clone();
@@ -2037,6 +2046,15 @@ pub fn build(
                 update_history_buttons();
                 queue_preview();
             }
+        });
+    }
+
+    {
+        let apply_crop = apply_crop.clone();
+        let tools_toggle = tools_toggle.clone();
+        apply_crop_button.connect_clicked(move |_| {
+            apply_crop();
+            tools_toggle.set_active(true);
         });
     }
 
@@ -2687,10 +2705,15 @@ mod panel_tests {
             widget.clone().downcast::<gtk::Button>().ok().and_then(|button| button.label()).as_deref()
                 == Some("Reset Crop")
         }));
-        assert!(!sidebar_widgets.iter().any(|widget| {
-            widget.clone().downcast::<gtk::Button>().ok().and_then(|button| button.label()).as_deref()
-                == Some("Apply Crop")
-        }));
+        let apply_crop_button = sidebar_widgets.iter().find_map(|widget| {
+            let button = widget.clone().downcast::<gtk::Button>().ok()?;
+            (button.label().as_deref() == Some("Apply Crop")).then_some(button)
+        });
+        assert!(
+            apply_crop_button.is_some(),
+            "crop tab needs an Apply Crop button"
+        );
+        assert!(apply_crop_button.unwrap().has_css_class("suggested-action"));
         settle_gtk();
 
     }

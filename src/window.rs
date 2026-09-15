@@ -166,7 +166,7 @@ pub(crate) const EDIT_PANEL_CSS: &str = r#"
     .crop-orientation-row button { min-height: 32px; padding: 3px 8px; }
     .crop-straighten { margin-bottom: 2px; }
     .crop-straighten .edit-adjustment-row { margin-bottom: 0; }
-    .crop-reset-button { min-height: 32px; margin-top: 4px; }
+    .crop-reset-button, .crop-apply-button { min-height: 32px; margin-top: 4px; }
     .quick-fix-row button { min-height: 30px; padding: 4px 8px; }
     .filter-grid > flowboxchild { padding: 0; margin: 0; min-width: 0; background: transparent; }
     button.filter-tile, button.filter-tile:hover, button.filter-tile:active, button.filter-tile:checked { min-width: 0; padding: 0; border: none; background: transparent; box-shadow: none; outline: none; }
