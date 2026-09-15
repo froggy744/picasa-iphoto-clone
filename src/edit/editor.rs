@@ -202,7 +202,11 @@ impl CropAspectPreset {
             Self::A4 => 297.0 / 210.0,
             Self::UsLetter => 11.0 / 8.5,
         };
-        Some(if portrait && ratio != 1.0 { 1.0 / ratio } else { ratio })
+        Some(if portrait && ratio != 1.0 {
+            1.0 / ratio
+        } else {
+            ratio
+        })
     }
 }
 
@@ -297,8 +301,7 @@ fn render_filter_thumbnails(
     Ok(FilterTileEffect::all()
         .into_iter()
         .map(|effect| {
-            let image =
-                super::render::apply_recipe(base.clone(), &effect.recipe(recipe));
+            let image = super::render::apply_recipe(base.clone(), &effect.recipe(recipe));
             let image = cover_crop_to_tile_size(image);
             (image.width(), image.height(), image.into_raw())
         })
@@ -921,8 +924,7 @@ pub fn build(
     let crop_action_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let apply_crop_button = gtk::Button::with_label("Apply Crop");
     apply_crop_button.set_hexpand(true);
-    apply_crop_button
-        .set_tooltip_text(Some("Commit the pending crop and return to the tools"));
+    apply_crop_button.set_tooltip_text(Some("Commit the pending crop and return to the tools"));
     apply_crop_button.add_css_class("suggested-action");
     apply_crop_button.add_css_class("crop-apply-button");
     let reset_crop = gtk::Button::with_label("Reset Crop");
@@ -991,8 +993,7 @@ pub fn build(
         glib::timeout_add_local(Duration::from_millis(25), move || {
             match receiver.try_recv() {
                 Ok(Ok(thumbnails)) => {
-                    for (picture, (width, height, pixels)) in
-                        filter_pictures.iter().zip(thumbnails)
+                    for (picture, (width, height, pixels)) in filter_pictures.iter().zip(thumbnails)
                     {
                         let bytes = glib::Bytes::from_owned(pixels);
                         let texture = gtk::gdk::MemoryTexture::new(
@@ -1071,111 +1072,114 @@ pub fn build(
             let preview_debounce_for_fire = preview_debounce.clone();
             let preview_worker = preview_worker.clone();
             let active_rotation = active_rotation_for_queue.clone();
-            let source = glib::timeout_add_local_once(Duration::from_millis(PREVIEW_THROTTLE_MS), move || {
-                preview_debounce_for_fire.borrow_mut().take();
-                let current_generation = generation.get().wrapping_add(1);
-                generation.set(current_generation);
-                let recipe = session.borrow().recipe.clone();
-                // While a slider drag is in progress, render half-resolution
-                // draft frames: 4x fewer pixels keeps the drag preview light
-                // and fast. The release handler queues a full-resolution
-                // settle render once the drag ends.
-                let interactive = session.borrow().action_active();
-                let path = photo.path();
-                let rotation = active_rotation.get();
-                let native = native_one_to_one.get();
-                let (target_width, target_height) = if native {
-                    let mut width = if photo.width() > 0 {
-                        photo.width() as u32
+            let source = glib::timeout_add_local_once(
+                Duration::from_millis(PREVIEW_THROTTLE_MS),
+                move || {
+                    preview_debounce_for_fire.borrow_mut().take();
+                    let current_generation = generation.get().wrapping_add(1);
+                    generation.set(current_generation);
+                    let recipe = session.borrow().recipe.clone();
+                    // While a slider drag is in progress, render half-resolution
+                    // draft frames: 4x fewer pixels keeps the drag preview light
+                    // and fast. The release handler queues a full-resolution
+                    // settle render once the drag ends.
+                    let interactive = session.borrow().action_active();
+                    let path = photo.path();
+                    let rotation = active_rotation.get();
+                    let native = native_one_to_one.get();
+                    let (target_width, target_height) = if native {
+                        let mut width = if photo.width() > 0 {
+                            photo.width() as u32
+                        } else {
+                            u32::MAX
+                        };
+                        let mut height = if photo.height() > 0 {
+                            photo.height() as u32
+                        } else {
+                            u32::MAX
+                        };
+                        if matches!(rotation.rem_euclid(360), 90 | 270) {
+                            std::mem::swap(&mut width, &mut height);
+                        }
+                        (width, height)
+                    } else if interactive {
+                        (1800 / 2, 1400 / 2)
                     } else {
-                        u32::MAX
+                        (1800, 1400)
                     };
-                    let mut height = if photo.height() > 0 {
-                        photo.height() as u32
-                    } else {
-                        u32::MAX
-                    };
-                    if matches!(rotation.rem_euclid(360), 90 | 270) {
-                        std::mem::swap(&mut width, &mut height);
+
+                    if !interactive {
+                        busy.set_visible(true);
+                        busy.start();
+                        status.set_text("Rendering preview…");
                     }
-                    (width, height)
-                } else if interactive {
-                    (1800 / 2, 1400 / 2)
-                } else {
-                    (1800, 1400)
-                };
 
-                if !interactive {
-                    busy.set_visible(true);
-                    busy.start();
-                    status.set_text("Rendering preview…");
-                }
+                    let (result_sender, receiver) = std::sync::mpsc::channel();
+                    if preview_worker
+                        .send(PreviewJob {
+                            generation: current_generation,
+                            path,
+                            rotation,
+                            target_width,
+                            target_height,
+                            recipe,
+                            interactive,
+                            result_sender,
+                        })
+                        .is_err()
+                    {
+                        busy.stop();
+                        busy.set_visible(false);
+                        status.set_text("Preview worker stopped");
+                        return;
+                    }
 
-                let (result_sender, receiver) = std::sync::mpsc::channel();
-                if preview_worker
-                    .send(PreviewJob {
-                        generation: current_generation,
-                        path,
-                        rotation,
-                        target_width,
-                        target_height,
-                        recipe,
-                        interactive,
-                        result_sender,
-                    })
-                    .is_err()
-                {
-                    busy.stop();
-                    busy.set_visible(false);
-                    status.set_text("Preview worker stopped");
-                    return;
-                }
-
-                let picture = picture.clone();
-                let status = status.clone();
-                let busy = busy.clone();
-                let generation = generation.clone();
-                let preview_dimensions = preview_dimensions.clone();
-                let picture_scroll = picture_scroll.clone();
-                let canvas_zoom = canvas_zoom.clone();
-                let pending_one_to_one_anchor = pending_one_to_one_anchor.clone();
-                let crop_overlay = crop_overlay.clone();
-                glib::timeout_add_local(Duration::from_millis(25), move || {
-                    match receiver.try_recv() {
-                        Ok(result) => {
-                            if generation.get() != current_generation {
-                                return glib::ControlFlow::Break;
-                            }
-                            if !interactive {
-                                busy.stop();
-                                busy.set_visible(false);
-                            }
-                            match result {
-                                Ok((result_generation, width, height, pixels)) => {
-                                    if result_generation != current_generation {
-                                        return glib::ControlFlow::Break;
-                                    }
-                                    let bytes = glib::Bytes::from_owned(pixels);
-                                    let texture = gtk::gdk::MemoryTexture::new(
-                                        width as i32,
-                                        height as i32,
-                                        gtk::gdk::MemoryFormat::R8g8b8a8,
-                                        &bytes,
-                                        width as usize * 4,
-                                    );
-                                    preview_dimensions.set((width as i32, height as i32));
-                                    picture.set_paintable(Some(&texture));
-                                    if native {
-                                        apply_canvas_one_to_one(
-                                            &picture,
-                                            &picture_scroll,
-                                            (width as i32, height as i32),
+                    let picture = picture.clone();
+                    let status = status.clone();
+                    let busy = busy.clone();
+                    let generation = generation.clone();
+                    let preview_dimensions = preview_dimensions.clone();
+                    let picture_scroll = picture_scroll.clone();
+                    let canvas_zoom = canvas_zoom.clone();
+                    let pending_one_to_one_anchor = pending_one_to_one_anchor.clone();
+                    let crop_overlay = crop_overlay.clone();
+                    glib::timeout_add_local(Duration::from_millis(25), move || {
+                        match receiver.try_recv() {
+                            Ok(result) => {
+                                if generation.get() != current_generation {
+                                    return glib::ControlFlow::Break;
+                                }
+                                if !interactive {
+                                    busy.stop();
+                                    busy.set_visible(false);
+                                }
+                                match result {
+                                    Ok((result_generation, width, height, pixels)) => {
+                                        if result_generation != current_generation {
+                                            return glib::ControlFlow::Break;
+                                        }
+                                        let bytes = glib::Bytes::from_owned(pixels);
+                                        let texture = gtk::gdk::MemoryTexture::new(
+                                            width as i32,
+                                            height as i32,
+                                            gtk::gdk::MemoryFormat::R8g8b8a8,
+                                            &bytes,
+                                            width as usize * 4,
                                         );
+                                        preview_dimensions.set((width as i32, height as i32));
+                                        picture.set_paintable(Some(&texture));
+                                        if native {
+                                            apply_canvas_one_to_one(
+                                                &picture,
+                                                &picture_scroll,
+                                                (width as i32, height as i32),
+                                            );
 
-                                        let anchor = pending_one_to_one_anchor.borrow_mut().take();
-                                        let picture_scroll_for_restore = picture_scroll.clone();
-                                        let picture_scroll_for_tick = picture_scroll.clone();
-                                        picture_scroll_for_restore.add_tick_callback(move |_, _| {
+                                            let anchor =
+                                                pending_one_to_one_anchor.borrow_mut().take();
+                                            let picture_scroll_for_restore = picture_scroll.clone();
+                                            let picture_scroll_for_tick = picture_scroll.clone();
+                                            picture_scroll_for_restore.add_tick_callback(move |_, _| {
                                             let hadj = picture_scroll_for_tick.hadjustment();
                                             let vadj = picture_scroll_for_tick.vadjustment();
                                             if hadj.upper() < width as f64 && vadj.upper() < height as f64 {
@@ -1241,38 +1245,41 @@ pub fn build(
                                             }
                                             glib::ControlFlow::Break
                                         });
-                                    } else {
-                                        apply_canvas_zoom(
-                                            &picture,
-                                            &picture_scroll,
-                                            (width as i32, height as i32),
-                                            canvas_zoom.get(),
-                                        );
+                                        } else {
+                                            apply_canvas_zoom(
+                                                &picture,
+                                                &picture_scroll,
+                                                (width as i32, height as i32),
+                                                canvas_zoom.get(),
+                                            );
+                                        }
+                                        status.set_text(&format!("{} × {} preview", width, height));
+                                        crop_overlay.queue_draw();
                                     }
-                                    status.set_text(&format!("{} × {} preview", width, height));
-                                    crop_overlay.queue_draw();
+                                    Err(error) => {
+                                        status.set_text(&format!("Preview failed: {error}"));
+                                    }
                                 }
-                                Err(error) => {
-                                    status.set_text(&format!("Preview failed: {error}"));
+                                glib::ControlFlow::Break
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                glib::ControlFlow::Continue
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                // A disconnected per-request receiver normally means
+                                // the worker coalesced this stale request into a newer
+                                // one. Only change UI state if it was still current.
+                                if generation.get() == current_generation {
+                                    busy.stop();
+                                    busy.set_visible(false);
+                                    status.set_text("Preview worker stopped");
                                 }
+                                glib::ControlFlow::Break
                             }
-                            glib::ControlFlow::Break
                         }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            // A disconnected per-request receiver normally means
-                            // the worker coalesced this stale request into a newer
-                            // one. Only change UI state if it was still current.
-                            if generation.get() == current_generation {
-                                busy.stop();
-                                busy.set_visible(false);
-                                status.set_text("Preview worker stopped");
-                            }
-                            glib::ControlFlow::Break
-                        }
-                    }
-                });
-            });
+                    });
+                },
+            );
             preview_debounce.replace(Some(source));
         })
     };
@@ -2090,7 +2097,9 @@ pub fn build(
         reset_crop.connect_clicked(move |_| {
             let had_crop = !session.borrow().recipe.crop.is_full();
             if had_crop {
-                session.borrow_mut().mutate(|recipe| recipe.crop = CropRect::default());
+                session
+                    .borrow_mut()
+                    .mutate(|recipe| recipe.crop = CropRect::default());
             }
             pending_crop.replace(CropRect::default());
             crop_aspect_preset.set(CropAspectPreset::Free);
@@ -2559,7 +2568,10 @@ mod panel_tests {
 
     #[test]
     fn original_filter_tile_uses_photo_editor_language() {
-        assert_eq!(FilterTileEffect::Preset(FilterPreset::None).label(), "Original");
+        assert_eq!(
+            FilterTileEffect::Preset(FilterPreset::None).label(),
+            "Original"
+        );
     }
 
     #[test]
@@ -2598,14 +2610,32 @@ mod panel_tests {
 
     #[test]
     fn crop_aspect_orientation_swaps_non_square_ratios() {
-        assert_eq!(CropAspectPreset::FourThree.ratio(1600, 900, false), Some(4.0 / 3.0));
-        assert_eq!(CropAspectPreset::FourThree.ratio(1600, 900, true), Some(3.0 / 4.0));
+        assert_eq!(
+            CropAspectPreset::FourThree.ratio(1600, 900, false),
+            Some(4.0 / 3.0)
+        );
+        assert_eq!(
+            CropAspectPreset::FourThree.ratio(1600, 900, true),
+            Some(3.0 / 4.0)
+        );
         assert_eq!(CropAspectPreset::Square.ratio(1600, 900, true), Some(1.0));
         assert_eq!(CropAspectPreset::Free.ratio(1600, 900, false), None);
-        assert_eq!(CropAspectPreset::A4.ratio(1600, 900, false), Some(297.0 / 210.0));
-        assert_eq!(CropAspectPreset::A4.ratio(1600, 900, true), Some(210.0 / 297.0));
-        assert_eq!(CropAspectPreset::UsLetter.ratio(1600, 900, false), Some(11.0 / 8.5));
-        assert_eq!(CropAspectPreset::UsLetter.ratio(1600, 900, true), Some(8.5 / 11.0));
+        assert_eq!(
+            CropAspectPreset::A4.ratio(1600, 900, false),
+            Some(297.0 / 210.0)
+        );
+        assert_eq!(
+            CropAspectPreset::A4.ratio(1600, 900, true),
+            Some(210.0 / 297.0)
+        );
+        assert_eq!(
+            CropAspectPreset::UsLetter.ratio(1600, 900, false),
+            Some(11.0 / 8.5)
+        );
+        assert_eq!(
+            CropAspectPreset::UsLetter.ratio(1600, 900, true),
+            Some(8.5 / 11.0)
+        );
     }
 
     #[test]
@@ -2717,8 +2747,14 @@ mod panel_tests {
             "default pane width shows two columns (flowbox alloc was {:?})",
             flow.allocation()
         );
-        assert!(columns_at(540) >= 3, "wider pane must expose a third column");
-        assert!(columns_at(720) >= 4, "wider pane must expose a fourth column");
+        assert!(
+            columns_at(540) >= 3,
+            "wider pane must expose a third column"
+        );
+        assert!(
+            columns_at(720) >= 4,
+            "wider pane must expose a fourth column"
+        );
         assert_eq!(columns_at(1200), 5, "widest pane caps at five columns");
 
         let first_child = flow.first_child().unwrap();
@@ -2739,12 +2775,20 @@ mod panel_tests {
 
         let top_level_tab_labels = buttons
             .iter()
-            .filter(|button| button.parent().is_some_and(|parent| parent.has_css_class("edit-panel-tabs")))
+            .filter(|button| {
+                button
+                    .parent()
+                    .is_some_and(|parent| parent.has_css_class("edit-panel-tabs"))
+            })
             .filter_map(|button| button.label().map(|label| label.to_string()))
             .collect::<Vec<_>>();
         assert_eq!(
             top_level_tab_labels,
-            vec!["Tools".to_string(), "Filters".to_string(), "Crop".to_string()]
+            vec![
+                "Tools".to_string(),
+                "Filters".to_string(),
+                "Crop".to_string()
+            ]
         );
 
         let crop_tab = buttons
@@ -2754,12 +2798,33 @@ mod panel_tests {
         crop_tab.emit_clicked();
         assert_eq!(stack.visible_child_name().as_deref(), Some("crop"));
 
-        for label in ["Free", "Original", "1:1", "4:3", "3:2", "16:9", "Landscape", "Portrait"] {
-            assert!(buttons.iter().any(|button| button.label().as_deref() == Some(label)), "missing crop control {label}");
+        for label in [
+            "Free",
+            "Original",
+            "1:1",
+            "4:3",
+            "3:2",
+            "16:9",
+            "Landscape",
+            "Portrait",
+        ] {
+            assert!(
+                buttons
+                    .iter()
+                    .any(|button| button.label().as_deref() == Some(label)),
+                "missing crop control {label}"
+            );
         }
-        assert!(sidebar_widgets.iter().any(|widget| widget.has_css_class("crop-straighten-scale")));
+        assert!(sidebar_widgets
+            .iter()
+            .any(|widget| widget.has_css_class("crop-straighten-scale")));
         assert!(sidebar_widgets.iter().any(|widget| {
-            widget.clone().downcast::<gtk::Button>().ok().and_then(|button| button.label()).as_deref()
+            widget
+                .clone()
+                .downcast::<gtk::Button>()
+                .ok()
+                .and_then(|button| button.label())
+                .as_deref()
                 == Some("Reset Crop")
         }));
         let apply_crop_button = sidebar_widgets.iter().find_map(|widget| {
@@ -2772,7 +2837,6 @@ mod panel_tests {
         );
         assert!(apply_crop_button.unwrap().has_css_class("suggested-action"));
         settle_gtk();
-
     }
 
     #[test]
@@ -3138,8 +3202,7 @@ fn configure_crop_overlay(
                 if image_width > 0 && image_height > 0 && target_ratio > 0.0 {
                     // In normalized coordinates the required width/height
                     // ratio must account for the displayed image aspect.
-                    let normalized_ratio =
-                        target_ratio * image_height as f64 / image_width as f64;
+                    let normalized_ratio = target_ratio * image_height as f64 / image_width as f64;
                     let sign_x = if cx >= sx { 1.0 } else { -1.0 };
                     let sign_y = if cy >= sy { 1.0 } else { -1.0 };
                     let mut width = (cx - sx).abs();
@@ -3210,5 +3273,3 @@ fn contained_rect(
         height,
     )
 }
-
-
