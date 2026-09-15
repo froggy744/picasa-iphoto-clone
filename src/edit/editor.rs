@@ -153,6 +153,10 @@ struct PreviewJob {
     target_width: u32,
     target_height: u32,
     recipe: EditRecipe,
+    // True for rapid-fire frames rendered while a slider drag is in progress.
+    // They skip the busy spinner/status churn; the settle render after the
+    // drag ends shows them again.
+    interactive: bool,
     result_sender: std::sync::mpsc::Sender<anyhow::Result<(u64, u32, u32, Vec<u8>)>>,
 }
 
@@ -744,6 +748,9 @@ pub fn build(
     let preview_dimensions = Rc::new(Cell::new((1i32, 1i32)));
     // 0.0 means fit-to-canvas. Positive values are display zoom factors.
     let canvas_zoom = Rc::new(Cell::new(0.0f64));
+    // Preview renders are throttled to this cadence while sliders move;
+    // see the queue_preview closure below.
+    const PREVIEW_THROTTLE_MS: u64 = 40;
     let native_one_to_one = Rc::new(Cell::new(false));
     let active_rotation = Rc::new(Cell::new(photo.rotation().rem_euclid(360)));
     let pending_one_to_one_anchor: Rc<RefCell<Option<OneToOneAnchor>>> =
@@ -1040,8 +1047,14 @@ pub fn build(
         let preview_debounce = preview_debounce.clone();
         let preview_worker = preview_worker.clone();
         Rc::new(move || {
-            if let Some(source) = preview_debounce.borrow_mut().take() {
-                source.remove();
+            // Throttle, not debounce: the old code reset the timer on every
+            // slider tick, so a continuous drag skipped every intermediate
+            // value and the preview jumped 0 -> 0.5 -> 1.0. If a render is
+            // already scheduled, keep it — it reads the live session state
+            // when it fires, so it always picks up the newest values, and the
+            // preview worker coalesces any jobs that overlap.
+            if preview_debounce.borrow().is_some() {
+                return;
             }
             let session = session.clone();
             let picture = picture.clone();
@@ -1058,11 +1071,16 @@ pub fn build(
             let preview_debounce_for_fire = preview_debounce.clone();
             let preview_worker = preview_worker.clone();
             let active_rotation = active_rotation_for_queue.clone();
-            let source = glib::timeout_add_local_once(Duration::from_millis(90), move || {
+            let source = glib::timeout_add_local_once(Duration::from_millis(PREVIEW_THROTTLE_MS), move || {
                 preview_debounce_for_fire.borrow_mut().take();
                 let current_generation = generation.get().wrapping_add(1);
                 generation.set(current_generation);
                 let recipe = session.borrow().recipe.clone();
+                // While a slider drag is in progress, render half-resolution
+                // draft frames: 4x fewer pixels keeps the drag preview light
+                // and fast. The release handler queues a full-resolution
+                // settle render once the drag ends.
+                let interactive = session.borrow().action_active();
                 let path = photo.path();
                 let rotation = active_rotation.get();
                 let native = native_one_to_one.get();
@@ -1081,13 +1099,17 @@ pub fn build(
                         std::mem::swap(&mut width, &mut height);
                     }
                     (width, height)
+                } else if interactive {
+                    (1800 / 2, 1400 / 2)
                 } else {
                     (1800, 1400)
                 };
 
-                busy.set_visible(true);
-                busy.start();
-                status.set_text("Rendering preview…");
+                if !interactive {
+                    busy.set_visible(true);
+                    busy.start();
+                    status.set_text("Rendering preview…");
+                }
 
                 let (result_sender, receiver) = std::sync::mpsc::channel();
                 if preview_worker
@@ -1098,6 +1120,7 @@ pub fn build(
                         target_width,
                         target_height,
                         recipe,
+                        interactive,
                         result_sender,
                     })
                     .is_err()
@@ -1123,8 +1146,10 @@ pub fn build(
                             if generation.get() != current_generation {
                                 return glib::ControlFlow::Break;
                             }
-                            busy.stop();
-                            busy.set_visible(false);
+                            if !interactive {
+                                busy.stop();
+                                busy.set_visible(false);
+                            }
                             match result {
                                 Ok((result_generation, width, height, pixels)) => {
                                     if result_generation != current_generation {
@@ -2940,10 +2965,17 @@ fn connect_scale(
         let session = session.clone();
         let dragging = dragging.clone();
         let update_history = update_history.clone();
+        let queue_preview = queue_preview.clone();
         press.connect_released(move |_, _, _, _| {
             if dragging.replace(false) {
+                let before = session.borrow().recipe.clone();
                 session.borrow_mut().end_action();
                 update_history();
+                // The drag rendered draft frames; queue one full-resolution
+                // settle frame, but only if the value actually changed.
+                if session.borrow().recipe != before {
+                    queue_preview();
+                }
             }
         });
     }
@@ -2969,6 +3001,10 @@ fn connect_scale(
 }
 
 fn configure_scale_scroll(scale: &gtk::Scale, tools_scroll: &gtk::ScrolledWindow) {
+    // One mouse-wheel click over the slider track changes the value by this
+    // much (wheel up increases, wheel down decreases). Fractional deltas from
+    // smooth-scroll devices produce proportional micro-steps.
+    const SLIDER_WHEEL_STEP: f64 = 0.05;
     let pointer_y = Rc::new(Cell::new(f64::NAN));
     let motion = gtk::EventControllerMotion::new();
     {
@@ -2987,12 +3023,19 @@ fn configure_scale_scroll(scale: &gtk::Scale, tools_scroll: &gtk::ScrolledWindow
     let tools_scroll = tools_scroll.clone();
     controller.connect_scroll(move |_, _, dy| {
         // GTK Scale reacts to wheel input across its full allocation, including
-        // value text and padding. Reserve only a narrow central track band for
-        // adjustment; everywhere else scrolls the editing tools normally.
+        // value text and padding, and steps the adjustment by its own coarse
+        // increments. Take over the narrow central track band and step the
+        // value by SLIDER_WHEEL_STEP per click instead; everywhere else
+        // scrolls the editing tools normally.
         let y = pointer_y.get();
         let center = scale_for_scroll.height() as f64 / 2.0;
         if y.is_finite() && (y - center).abs() <= 7.0 {
-            return glib::Propagation::Proceed;
+            if dy != 0.0 {
+                let adjustment = scale_for_scroll.adjustment();
+                // set_value clamps to [lower, upper]
+                adjustment.set_value(adjustment.value() - dy * SLIDER_WHEEL_STEP);
+            }
+            return glib::Propagation::Stop;
         }
 
         if dy != 0.0 {

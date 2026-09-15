@@ -255,6 +255,11 @@ impl EditSession {
         self.redo.clear();
     }
 
+    /// True while a continuous UI action (a slider drag) is in progress.
+    pub fn action_active(&self) -> bool {
+        self.active_action.is_some()
+    }
+
     pub fn end_action(&mut self) {
         let Some(previous) = self.active_action.take() else {
             return;
