@@ -3004,6 +3004,146 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         dialog.show();
     });
 
+    let selected_for_print = selected_photo.clone();
+    // GTK objects are not Send, so keep only a thread-safe weak reference to
+    // the window for the worker thread to hand back to the main loop.
+    let parent_for_print = glib::SendWeakRef::<adw::ApplicationWindow>::default();
+    parent_for_print.set(Some(&window));
+
+    info.print.connect_clicked(move |_| {
+        let Some(photo) = selected_for_print.borrow().clone() else {
+            return;
+        };
+
+        // PhotoObject is a GTK object and must stay on the GTK thread. Copy
+        // only Send-safe scalar/string values into the render worker, then pop
+        // the print dialog once the page is ready.
+        let reference = photo.path();
+        let rotation = photo.rotation();
+        let edit_recipe = photo.edit_recipe();
+        let source_width = photo.width();
+        let source_height = photo.height();
+        let job_name = photo.filename();
+
+        let parent_for_print_in_thread = parent_for_print.clone();
+        std::thread::spawn(move || {
+            let rendered = crate::edit::render::render_for_export(
+                &reference,
+                rotation,
+                &edit_recipe,
+                source_width,
+                source_height,
+            )
+            .map(downscale_for_print);
+
+            glib::MainContext::default().invoke(move || {
+                let image = match rendered {
+                    Ok(image) => image,
+                    Err(error) => {
+                        eprintln!("Could not prepare photo for printing: {error:#}");
+                        return;
+                    }
+                };
+                let image = Rc::new(image);
+
+                let operation = gtk::PrintOperation::new();
+                operation.set_job_name(&job_name);
+                operation.set_n_pages(1);
+                let page_image = image.clone();
+                operation.connect_draw_page(move |_operation, context, page_number| {
+                    if page_number == 0 {
+                        draw_print_page(&context, &page_image);
+                    }
+                });
+
+                let parent = parent_for_print_in_thread.upgrade();
+                if let Err(error) = operation.run(
+                    gtk::PrintOperationAction::PrintDialog,
+                    parent.as_ref(),
+                ) {
+                    eprintln!("Could not print photo: {error}");
+                }
+            });
+        });
+    });
+
+    // Bound the page raster so a very large photo cannot exhaust memory while
+    // the print dialog is open. 4000 px keeps a full-bleed A4 page above
+    // 300 DPI print quality.
+    const PRINT_MAX_DIMENSION: u32 = 4000;
+
+    fn downscale_for_print(image: image::RgbaImage) -> image::RgbaImage {
+        let largest = image.width().max(image.height());
+        if largest == 0 || largest <= PRINT_MAX_DIMENSION {
+            return image;
+        }
+        let factor = PRINT_MAX_DIMENSION as f64 / largest as f64;
+        let width = ((image.width() as f64 * factor).round() as u32).max(1);
+        let height = ((image.height() as f64 * factor).round() as u32).max(1);
+        image::imageops::resize(
+            &image,
+            width,
+            height,
+            image::imageops::FilterType::Lanczos3,
+        )
+    }
+
+    /// Paint the rendered photo centred on the print page, scaled to fit.
+    fn draw_print_page(context: &gtk::PrintContext, image: &image::RgbaImage) {
+        let image_width = image.width() as f64;
+        let image_height = image.height() as f64;
+        if image_width < 1.0 || image_height < 1.0 {
+            return;
+        }
+        let page_width = context.width();
+        let page_height = context.height();
+        let scale = (page_width / image_width).min(page_height / image_height);
+        if !scale.is_finite() || scale <= 0.0 {
+            return;
+        }
+
+        // Cairo ARgb32 surfaces hold premultiplied BGRA bytes, while the
+        // rendered photo is plain RGBA.
+        let mut data = image.as_raw().to_vec();
+        for pixel in data.chunks_exact_mut(4) {
+            let alpha = u32::from(pixel[3]);
+            let (red, green, blue) =
+                (u32::from(pixel[0]), u32::from(pixel[1]), u32::from(pixel[2]));
+            pixel[0] = ((blue * alpha + 127) / 255) as u8;
+            pixel[1] = ((green * alpha + 127) / 255) as u8;
+            pixel[2] = ((red * alpha + 127) / 255) as u8;
+        }
+
+        let Ok(stride) =
+            gtk::cairo::Format::stride_for_width(gtk::cairo::Format::ARgb32, image.width())
+        else {
+            return;
+        };
+        let Ok(surface) = gtk::cairo::ImageSurface::create_for_data(
+            data,
+            gtk::cairo::Format::ARgb32,
+            image.width() as i32,
+            image.height() as i32,
+            stride,
+        ) else {
+            return;
+        };
+
+        let draw_width = image_width * scale;
+        let draw_height = image_height * scale;
+        let x = (page_width - draw_width) / 2.0;
+        let y = (page_height - draw_height) / 2.0;
+        let cairo = context.cairo_context();
+        if cairo.save().is_err() {
+            return;
+        }
+        cairo.scale(scale, scale);
+        if cairo.set_source_surface(&surface, x / scale, y / scale).is_ok() {
+            let _ = cairo.paint();
+        }
+        let _ = cairo.restore();
+    }
+
     let main_split = adw::OverlaySplitView::new();
 
     let album_theme_changed_for_destination = album_theme_changed.clone();

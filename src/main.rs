@@ -29,6 +29,7 @@ const REFERENCED_ICONS: &[&str] = &[
     "object-select-symbolic",
     "folder-pictures-symbolic",
     "document-edit-symbolic",
+    "document-print-symbolic",
     "view-sort-descending-symbolic",
     "view-sort-ascending-symbolic",
     "view-sidebar-symbolic",
@@ -63,9 +64,9 @@ fn register_bundled_icons() {
 }
 
 /// Log which referenced icons the display can actually resolve. Run with
-/// PICASA_TRACE=1 to debug missing icons on platform bundles. Note:
-/// sidebar-hide-symbolic is intentionally not bundled; window::build falls
-/// back to view-sidebar-symbolic when it is absent.
+/// PICASA_TRACE=1 to debug missing icons on platform bundles. The bundle
+/// carries the full Adwaita SVG set plus the view-sidebar/sidebar-hide
+/// stand-ins, so every name in this list resolves everywhere.
 pub fn trace_icon_resolution() {
     if std::env::var_os("PICASA_TRACE").is_none() {
         return;

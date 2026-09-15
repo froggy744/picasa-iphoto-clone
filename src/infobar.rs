@@ -21,6 +21,7 @@ pub struct InfoBar {
     pub rotate: gtk::Button,
     pub export: gtk::Button,
     pub more: gtk::Button,
+    pub print: gtk::Button,
     pub grid_zoom_menu: gtk::MenuButton,
     pub grid_zoom_out: gtk::Button,
     pub grid_zoom_reset: gtk::Button,
@@ -183,6 +184,10 @@ impl InfoBar {
         configure_action_button(&more);
         more.set_tooltip_text(Some("Settings"));
 
+        let print = gtk::Button::from_icon_name("document-print-symbolic");
+        configure_action_button(&print);
+        print.set_tooltip_text(Some("Print photo"));
+
         actions.append(&favorite);
         actions.append(&edit);
         actions.append(&collage);
@@ -192,6 +197,7 @@ impl InfoBar {
         actions.append(&rotate);
         actions.append(&export);
         actions.append(&more);
+        actions.append(&print);
         root.append(&actions);
 
         // The action buttons are the controls that must always remain usable.
@@ -227,6 +233,7 @@ impl InfoBar {
             rotate,
             export,
             more,
+            print,
             grid_zoom_menu,
             grid_zoom_out,
             grid_zoom_reset,
@@ -249,6 +256,7 @@ impl InfoBar {
             self.rotate.set_sensitive(false);
             self.export.set_sensitive(false);
             self.more.set_sensitive(true);
+            self.print.set_sensitive(false);
             self.favorite.remove_css_class("active");
             self.favorite.set_icon_name("emote-love-symbolic");
             return;
@@ -297,6 +305,7 @@ impl InfoBar {
         self.rotate.set_sensitive(true);
         self.export.set_sensitive(true);
         self.more.set_sensitive(true);
+        self.print.set_sensitive(true);
 
         if photo.favorite() {
             self.favorite.set_icon_name("emote-love-symbolic");
