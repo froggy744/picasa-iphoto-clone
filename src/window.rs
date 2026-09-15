@@ -111,7 +111,7 @@ const STANDARD_GTK4_CSS: &str = r#"
     .edit-panel-tabs button { min-height: 34px; }
     .filter-grid > flowboxchild { padding: 0; margin: 0; min-width: 0; background: transparent; }
     button.filter-tile, button.filter-tile:hover, button.filter-tile:active, button.filter-tile:checked { padding: 0; border: none; background: transparent; box-shadow: none; outline: none; }
-    .filter-tile-preview { min-width: 56px; min-height: 56px; padding: 0; border: 2px solid transparent; border-radius: 9px; background: transparent; box-shadow: none; overflow: hidden; }
+    .filter-tile-preview { min-width: 67px; min-height: 67px; padding: 0; border: 2px solid transparent; border-radius: 12px; background: transparent; box-shadow: none; overflow: hidden; }
     .filter-tile-preview > border { border: none; background: transparent; }
     button.filter-tile:checked .filter-tile-preview { border-color: @accent_bg_color; }
     .filter-tile-label { font-size: 11px; }

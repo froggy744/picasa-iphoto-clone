@@ -200,7 +200,7 @@ fn render_filter_thumbnails(
     rotation: i32,
     recipe: &EditRecipe,
 ) -> anyhow::Result<Vec<FilterThumbnailPixels>> {
-    let base = super::render::decode_base_for_viewer(path, rotation, 192, 192)?;
+    let base = super::render::decode_base_for_viewer(path, rotation, 230, 230)?;
     Ok(FilterTileEffect::all()
         .into_iter()
         .map(|effect| {
@@ -533,10 +533,10 @@ pub fn build(
     let filters_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
     filters_box.set_hexpand(true);
     filters_box.set_vexpand(true);
-    filters_box.set_margin_top(14);
-    filters_box.set_margin_bottom(14);
-    filters_box.set_margin_start(10);
-    filters_box.set_margin_end(10);
+    filters_box.set_margin_top(10);
+    filters_box.set_margin_bottom(10);
+    filters_box.set_margin_start(8);
+    filters_box.set_margin_end(8);
     let crop_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
     crop_box.set_margin_top(14);
     crop_box.set_margin_bottom(14);
@@ -698,8 +698,8 @@ pub fn build(
 
     add_section_label(&filters_box, "Filters");
     let filter_grid = gtk::FlowBox::new();
-    filter_grid.set_row_spacing(6);
-    filter_grid.set_column_spacing(6);
+    filter_grid.set_row_spacing(4);
+    filter_grid.set_column_spacing(4);
     filter_grid.set_homogeneous(true);
     filter_grid.set_min_children_per_line(2);
     filter_grid.set_max_children_per_line(8);
@@ -2348,7 +2348,7 @@ mod panel_tests {
         settle_gtk();
         let wide_columns = first_row_count(&filter_grid);
         assert!(minimum > 0 && natural >= minimum);
-        assert!(default_columns >= 4);
+        assert!(default_columns >= 2);
         assert!(wide_columns > default_columns);
 
         let filter_tiles = sidebar_widgets
@@ -2393,16 +2393,16 @@ fn add_section_label(parent: &gtk::Box, text: &str) {
 
 fn filter_tile(effect: FilterTileEffect) -> (gtk::ToggleButton, gtk::Picture) {
     let button = gtk::ToggleButton::new();
-    button.set_size_request(56, -1);
+    button.set_size_request(67, -1);
     button.add_css_class("filter-tile");
     button.set_tooltip_text(Some(effect.label()));
 
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 3);
     let picture = gtk::Picture::new();
     picture.set_content_fit(gtk::ContentFit::Cover);
     picture.set_can_shrink(true);
     let preview_frame = gtk::AspectFrame::new(0.5, 0.5, 1.0, false);
-    preview_frame.set_size_request(56, 56);
+    preview_frame.set_size_request(67, 67);
     preview_frame.set_child(Some(&picture));
     preview_frame.add_css_class("filter-tile-preview");
     let label = gtk::Label::new(Some(effect.label()));
