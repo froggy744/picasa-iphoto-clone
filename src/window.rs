@@ -710,3 +710,4 @@ include!("window/availability.rs");
 include!("window/albums.rs");
 include!("window/photo_actions.rs");
 include!("window/library.rs");
+include!("window/print.rs");
