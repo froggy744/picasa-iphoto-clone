@@ -3855,7 +3855,7 @@ impl Gallery {
         let folder_order = self.folder_order.clone();
         let folder_catalog = self.folder_catalog.clone();
         let folder_cache = self.folder_cache.clone();
-        let folder_root = self.folder_root.clone();
+        let _folder_root = self.folder_root.clone();
         let replace_generation = self.replace_generation.clone();
         let stream_building = self.stream_building.clone();
 

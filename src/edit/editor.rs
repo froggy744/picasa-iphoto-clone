@@ -2621,8 +2621,9 @@ mod panel_tests {
 
         let columns_at = |position: i32| {
             body.set_position(position);
-            // set_position only stores the value; the children are re-allocated
-            // on the next layout pass, so force one and wait for the grid.
+            // set_position only stores the value; the start child is re-allocated
+            // on the next frame-clock layout pass, which requires a live display
+            // (this is why the test is #[ignored] and run on a real session).
             body.queue_resize();
             for _ in 0..100 {
                 settle_gtk();
@@ -2631,13 +2632,7 @@ mod panel_tests {
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            let count = first_row_count(&flow);
-            println!(
-                "DBG columns_at({position}) paned={} flow={:?} first_row={count}",
-                body.position(),
-                flow.allocation()
-            );
-            count
+            first_row_count(&flow)
         };
         assert_eq!(
             columns_at(360),
@@ -2645,71 +2640,6 @@ mod panel_tests {
             "default pane width shows two columns (flowbox alloc was {:?})",
             flow.allocation()
         );
-        for name in ["tools", "filters", "crop"] {
-            let child = stack.child_by_name(name).unwrap();
-            let (m, _, _, _) = child.measure(gtk::Orientation::Horizontal, -1);
-            println!("SWEEP page {name} min_width={m}");
-        }
-        {
-            let (m, _, _, _) = stack.measure(gtk::Orientation::Horizontal, -1);
-            println!("SWEEP stack min_width={m}");
-        }
-        {
-            let tabs_row = sidebar
-                .first_child()
-                .unwrap();
-            let (m, _, _, _) = tabs_row.measure(gtk::Orientation::Horizontal, -1);
-            println!("SWEEP tabs min_width={m}");
-        }
-        {
-            let (m, _, _, _) = sidebar.measure(gtk::Orientation::Horizontal, -1);
-            println!("SWEEP sidebar min_width={m}");
-        }
-        for position in [321, 300, 280, 260, 240, 220, 200] {
-            body.set_position(position);
-            for _ in 0..40 {
-                settle_gtk();
-                if (flow.allocation().width() - position).abs() <= 8 {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            println!(
-                "SWEEP position={position} paned_position={} flow={:?} columns={}",
-                body.position(),
-                flow.allocation(),
-                first_row_count(&flow)
-            );
-        }
-        body.set_position(360);
-        for _ in 0..100 {
-            settle_gtk();
-            if (flow.allocation().width() - 360).abs() <= 8 {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert_eq!(first_row_count(&flow), 2);
-        assert_eq!(columns_at(360), 2);
-        {
-            body.set_position(540);
-            body.queue_resize();
-            let sidebar_ref = sidebar.clone();
-            for i in 0..30 {
-                settle_gtk();
-                println!(
-                    "PROBE i={i} paned={} sidebar={:?} window_visible={} flow={:?}",
-                    body.position(),
-                    sidebar_ref.allocation(),
-                    parent.is_visible(),
-                    flow.allocation()
-                );
-                if flow.allocation().width() >= 500 {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        }
         assert!(columns_at(540) >= 3, "wider pane must expose a third column");
         assert!(columns_at(720) >= 4, "wider pane must expose a fourth column");
         assert_eq!(columns_at(1200), 5, "widest pane caps at five columns");

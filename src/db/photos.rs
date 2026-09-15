@@ -144,7 +144,7 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
     let id = connection.query_row("SELECT id FROM folders WHERE path = ?1", [path], |row| {
         row.get(0)
     })?;
-    let reparented = if imported_root {
+    let _reparented = if imported_root {
         connection.execute(
             "UPDATE folders
              SET parent_id = ?1, imported_root = 0
@@ -178,7 +178,7 @@ pub fn mark_import_root(connection: &Connection, path: &str) -> Result<i64> {
 
 pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: i64) -> Result<i64> {
     let name = path.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or(path);
-    let existing: Option<(i64, Option<i64>, bool)> = connection
+    let _existing: Option<(i64, Option<i64>, bool)> = connection
         .query_row("SELECT id, parent_id, imported_root FROM folders WHERE path = ?1", [path], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .optional()?;
     connection.execute(

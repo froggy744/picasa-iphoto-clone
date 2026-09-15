@@ -2224,7 +2224,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         // every 50 ms while the drag continues. Coalescing keeps the decode
         // queue owned by one destination instead of one per ±1 px anchor
         // correction GtkListView emits during drags.
-        let scrub_target_queued = if folder_direct_scrub_active_for_tick.get()
+        let _scrub_target_queued = if folder_direct_scrub_active_for_tick.get()
             && folder_scrub_sampler_for_tick
                 .borrow_mut()
                 .sample_due(Instant::now())
@@ -4531,8 +4531,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let sort = sort.clone();
         let group_mode = group_mode.clone();
         let group_none = group_none.clone();
-        let group_day = group_day.clone();
-        let group_month = group_month.clone();
+        let _group_day = group_day.clone();
+        let _group_month = group_month.clone();
         let connection = connection.clone();
         let filter = filter.clone();
         let search = search_text.clone();
