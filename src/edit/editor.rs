@@ -278,23 +278,55 @@ fn render_filter_thumbnails(
     rotation: i32,
     recipe: &EditRecipe,
 ) -> anyhow::Result<Vec<FilterThumbnailPixels>> {
-    // Decode at the on-screen tile preview size. FlowBox fits its columns
-    // from the tiles' natural width, so a larger base decode (e.g. 320x240)
-    // inflates every tile's natural size past two columns and the grid
-    // silently collapses to one column at the default pane width.
+    // Decode at twice the on-screen tile preview size. The widget's fixed
+    // size_request (FILTER_TILE_PREVIEW_*) still owns the tile's natural size,
+    // so the larger decode cannot inflate the grid; ContentFit::Cover then
+    // minifies the texture ~2:1 with the GPU's mipmapped filtering, which is
+    // far crisper than displaying a 1x texture that the FlowBox cell (163px)
+    // would otherwise slightly upscale.
     let base = super::render::decode_base_for_viewer(
         path,
         rotation,
-        FILTER_TILE_PREVIEW_WIDTH.max(1) as u32,
-        FILTER_TILE_PREVIEW_HEIGHT.max(1) as u32,
+        (FILTER_TILE_PREVIEW_WIDTH.max(1) as u32) * FILTER_TILE_SUPERSAMPLE,
+        (FILTER_TILE_PREVIEW_HEIGHT.max(1) as u32) * FILTER_TILE_SUPERSAMPLE,
     )?;
     Ok(FilterTileEffect::all()
         .into_iter()
         .map(|effect| {
-            let image = super::render::apply_recipe(base.clone(), &effect.recipe(recipe));
+            let image =
+                super::render::apply_recipe(base.clone(), &effect.recipe(recipe));
+            let image = cover_crop_to_tile_size(image);
             (image.width(), image.height(), image.into_raw())
         })
         .collect())
+}
+
+// Center-crop to the tile preview's aspect ratio and downscale to its exact
+// size — the same aspect-fill result ContentFit::Cover produces on the GPU,
+// but resampled in one averaging step from a supersampled source instead of
+// being displayed from a 1x texture.
+fn cover_crop_to_tile_size(image: image::RgbaImage) -> image::RgbaImage {
+    use image::imageops::FilterType;
+
+    let target_ratio = FILTER_TILE_PREVIEW_WIDTH as f64 / FILTER_TILE_PREVIEW_HEIGHT as f64;
+    let ratio = image.width() as f64 / image.height() as f64;
+    let cropped = if ratio > target_ratio {
+        let new_width =
+            ((image.height() as f64 * target_ratio).round() as u32).clamp(1, image.width());
+        let x = (image.width() - new_width) / 2;
+        image::imageops::crop_imm(&image, x, 0, new_width, image.height()).to_image()
+    } else {
+        let new_height =
+            ((image.width() as f64 / target_ratio).round() as u32).clamp(1, image.height());
+        let y = (image.height() - new_height) / 2;
+        image::imageops::crop_imm(&image, 0, y, image.width(), new_height).to_image()
+    };
+    image::imageops::resize(
+        &cropped,
+        FILTER_TILE_PREVIEW_WIDTH.max(1) as u32,
+        FILTER_TILE_PREVIEW_HEIGHT.max(1) as u32,
+        FilterType::Triangle,
+    )
 }
 
 fn spawn_preview_worker(
@@ -2794,6 +2826,9 @@ const FILTER_TILE_WIDTH: i32 = 160;
 const FILTER_TILE_FRAME_BORDER: i32 = 4;
 const FILTER_TILE_PREVIEW_WIDTH: i32 = FILTER_TILE_WIDTH - FILTER_TILE_FRAME_BORDER;
 const FILTER_TILE_PREVIEW_HEIGHT: i32 = FILTER_TILE_PREVIEW_WIDTH * 3 / 4;
+// Tile previews decode at this multiple of their on-screen size and are then
+// CPU-downscaled to the exact tile box; see render_filter_thumbnails.
+const FILTER_TILE_SUPERSAMPLE: u32 = 2;
 
 fn filter_tile(effect: FilterTileEffect) -> (gtk::ToggleButton, gtk::Picture) {
     let button = gtk::ToggleButton::new();
@@ -3132,3 +3167,5 @@ fn contained_rect(
         height,
     )
 }
+
+
