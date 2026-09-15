@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use image::{DynamicImage, Rgba, RgbaImage};
 use rayon::prelude::*;
 
+use super::filters;
 use super::model::{CropRect, EditRecipe};
 
 pub fn apply_library_rotation(image: RgbaImage, rotation: i32) -> RgbaImage {
@@ -136,6 +137,11 @@ pub(super) fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage
     }
     if recipe.auto_contrast {
         apply_auto_contrast(&mut image);
+    }
+
+    if recipe.filter != filters::FilterPreset::None {
+        filters::apply_filter(&mut image, recipe.filter);
+        return image;
     }
 
     let exposure = 2.0_f32.powf(recipe.exposure);
@@ -463,6 +469,7 @@ pub fn save_jpeg(image: &RgbaImage, destination: &std::path::Path, quality: u8) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edit::filters::FilterPreset;
 
     #[test]
     fn crop_reduces_dimensions() {
@@ -476,6 +483,20 @@ mod tests {
         };
         let output = apply_recipe(image, &recipe);
         assert_eq!(output.dimensions(), (50, 40));
+    }
+
+    #[test]
+    fn named_filter_replaces_manual_tone_pass() {
+        let image = RgbaImage::from_pixel(8, 8, Rgba([120, 130, 140, 255]));
+        let mut recipe = EditRecipe::default();
+        recipe.filter = FilterPreset::Clarendon;
+        recipe.exposure = 1.0;
+
+        let output = apply_recipe(image.clone(), &recipe);
+        let mut expected = image;
+        crate::edit::filters::apply_filter(&mut expected, FilterPreset::Clarendon);
+
+        assert_eq!(output.as_raw(), expected.as_raw());
     }
 
     #[test]

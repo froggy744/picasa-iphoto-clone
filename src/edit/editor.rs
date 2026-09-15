@@ -8,6 +8,7 @@ use gtk4 as gtk;
 use libadwaita as adw;
 use rusqlite::Connection;
 
+use super::filters::FilterPreset;
 use super::model::{CropRect, EditRecipe, EditSession};
 
 pub struct EditEditor {
@@ -351,6 +352,7 @@ struct Controls {
     auto_color: gtk::ToggleButton,
     black_white: gtk::ToggleButton,
     sepia: gtk::ToggleButton,
+    filters: Vec<(FilterPreset, gtk::ToggleButton)>,
 }
 
 impl Controls {
@@ -368,6 +370,9 @@ impl Controls {
         self.auto_color.set_active(recipe.auto_color);
         self.black_white.set_active(recipe.black_white);
         self.sepia.set_active(recipe.sepia);
+        for (preset, button) in &self.filters {
+            button.set_active(recipe.filter == *preset);
+        }
     }
 }
 
@@ -419,8 +424,13 @@ pub fn build(
 
     let tools_toggle = gtk::ToggleButton::with_label("Tools");
     tools_toggle.set_active(true);
-    tools_toggle.set_tooltip_text(Some("Show or hide editing controls"));
+    tools_toggle.set_tooltip_text(Some("Show editing controls"));
     toolbar.append(&tools_toggle);
+
+    let filters_toggle = gtk::ToggleButton::with_label("Filters");
+    filters_toggle.set_group(Some(&tools_toggle));
+    filters_toggle.set_tooltip_text(Some("Show one-tap photo filters"));
+    toolbar.append(&filters_toggle);
 
     let export = gtk::Button::with_label("Export");
     export.set_tooltip_text(Some("Export the current edited photo as a new JPEG"));
@@ -449,10 +459,27 @@ pub fn build(
     tools_box.set_margin_bottom(14);
     tools_box.set_margin_start(14);
     tools_box.set_margin_end(14);
+    let filters_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    filters_box.set_visible(true);
+    filters_box.set_hexpand(true);
+    filters_box.set_vexpand(true);
+    filters_box.set_width_request(285);
+    filters_box.set_margin_top(14);
+    filters_box.set_margin_bottom(14);
+    filters_box.set_margin_start(14);
+    filters_box.set_margin_end(14);
+
+    let panel_stack = gtk::Stack::new();
+    panel_stack.set_hexpand(true);
+    panel_stack.set_vexpand(true);
+    panel_stack.add_named(&tools_box, Some("tools"));
+    panel_stack.add_named(&filters_box, Some("filters"));
+    panel_stack.set_visible_child(&tools_box);
+
     let tools_scroll = gtk::ScrolledWindow::new();
     tools_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     tools_scroll.set_width_request(315);
-    tools_scroll.set_child(Some(&tools_box));
+    tools_scroll.set_child(Some(&panel_stack));
     body.set_start_child(Some(&tools_scroll));
 
     let preview_area = gtk::Overlay::new();
@@ -516,8 +543,7 @@ pub fn build(
     let active_rotation = Rc::new(Cell::new(photo.rotation().rem_euclid(360)));
     let pending_one_to_one_anchor: Rc<RefCell<Option<OneToOneAnchor>>> =
         Rc::new(RefCell::new(None));
-    let one_to_one_sync: Rc<RefCell<Option<Box<dyn Fn(bool)>>>> =
-        Rc::new(RefCell::new(None));
+    let one_to_one_sync: Rc<RefCell<Option<Box<dyn Fn(bool)>>>> = Rc::new(RefCell::new(None));
     let generation = Rc::new(Cell::new(0u64));
     let preview_debounce: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
     // Keep both the normal Fit preview base and a prefetched native-resolution
@@ -588,14 +614,31 @@ pub fn build(
     auto_row.append(&auto_color);
     tools_box.append(&auto_row);
 
-    let effect_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let black_white = gtk::ToggleButton::with_label("B&W");
     let sepia = gtk::ToggleButton::with_label("Sepia");
+
+    add_section_label(&filters_box, "Filters");
+    let filter_grid = gtk::Grid::new();
+    filter_grid.set_row_spacing(6);
+    filter_grid.set_column_spacing(6);
+    filter_grid.set_column_homogeneous(true);
+    let mut filter_buttons = Vec::new();
+    let filter_presets = std::iter::once(FilterPreset::None)
+        .chain(FilterPreset::ALL)
+        .collect::<Vec<_>>();
+    for (index, preset) in filter_presets.iter().copied().enumerate() {
+        let button = gtk::ToggleButton::with_label(preset.label());
+        button.set_hexpand(true);
+        filter_grid.attach(&button, (index % 2) as i32, (index / 2) as i32, 1, 1);
+        filter_buttons.push((preset, button));
+    }
+    let legacy_filter_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     black_white.set_hexpand(true);
     sepia.set_hexpand(true);
-    effect_row.append(&black_white);
-    effect_row.append(&sepia);
-    tools_box.append(&effect_row);
+    legacy_filter_row.append(&black_white);
+    legacy_filter_row.append(&sepia);
+    filters_box.append(&filter_grid);
+    filters_box.append(&legacy_filter_row);
 
     add_section_label(&tools_box, "Geometry");
     let crop = gtk::Button::with_label("Crop…");
@@ -638,6 +681,7 @@ pub fn build(
         auto_color,
         black_white,
         sepia,
+        filters: filter_buttons,
     };
     controls.sync(&session.borrow().recipe);
 
@@ -868,9 +912,7 @@ pub fn build(
                             }
                             glib::ControlFlow::Break
                         }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
-                            glib::ControlFlow::Continue
-                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                             // A disconnected per-request receiver normally means
                             // the worker coalesced this stale request into a newer
@@ -993,6 +1035,11 @@ pub fn build(
         let session = session.clone();
         let syncing = syncing.clone();
         let sepia = controls.sepia.clone();
+        let filters = controls
+            .filters
+            .iter()
+            .map(|(_, button)| button.clone())
+            .collect::<Vec<_>>();
         let queue_preview = queue_preview.clone();
         let update_history_buttons = update_history_buttons.clone();
         controls.black_white.connect_toggled(move |button| {
@@ -1003,10 +1050,14 @@ pub fn build(
             if active {
                 syncing.set(true);
                 sepia.set_active(false);
+                for filter in &filters {
+                    filter.set_active(false);
+                }
                 syncing.set(false);
             }
             session.borrow_mut().mutate(|recipe| {
                 recipe.black_white = active;
+                recipe.filter = FilterPreset::None;
                 if active {
                     recipe.sepia = false;
                 }
@@ -1019,6 +1070,11 @@ pub fn build(
         let session = session.clone();
         let syncing = syncing.clone();
         let black_white = controls.black_white.clone();
+        let filters = controls
+            .filters
+            .iter()
+            .map(|(_, button)| button.clone())
+            .collect::<Vec<_>>();
         let queue_preview = queue_preview.clone();
         let update_history_buttons = update_history_buttons.clone();
         controls.sepia.connect_toggled(move |button| {
@@ -1029,16 +1085,80 @@ pub fn build(
             if active {
                 syncing.set(true);
                 black_white.set_active(false);
+                for filter in &filters {
+                    filter.set_active(false);
+                }
                 syncing.set(false);
             }
             session.borrow_mut().mutate(|recipe| {
                 recipe.sepia = active;
+                recipe.filter = FilterPreset::None;
                 if active {
                     recipe.black_white = false;
                 }
             });
             update_history_buttons();
             queue_preview();
+        });
+    }
+    for (preset, button) in &controls.filters {
+        let preset = *preset;
+        let session = session.clone();
+        let syncing = syncing.clone();
+        let black_white = controls.black_white.clone();
+        let sepia = controls.sepia.clone();
+        let other_filters = controls
+            .filters
+            .iter()
+            .filter(|(other, _)| *other != preset)
+            .map(|(_, other)| other.clone())
+            .collect::<Vec<_>>();
+        let queue_preview = queue_preview.clone();
+        let update_history_buttons = update_history_buttons.clone();
+        button.connect_toggled(move |button| {
+            if syncing.get() {
+                return;
+            }
+            let active = button.is_active();
+            if active {
+                syncing.set(true);
+                black_white.set_active(false);
+                sepia.set_active(false);
+                for other in &other_filters {
+                    other.set_active(false);
+                }
+                syncing.set(false);
+            }
+            session.borrow_mut().mutate(|recipe| {
+                recipe.filter = if active { preset } else { FilterPreset::None };
+                recipe.black_white = false;
+                recipe.sepia = false;
+            });
+            update_history_buttons();
+            queue_preview();
+        });
+    }
+
+    {
+        let panel_stack = panel_stack.clone();
+        let tools_box = tools_box.clone();
+        let filters_toggle = filters_toggle.clone();
+        tools_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                filters_toggle.set_active(false);
+                panel_stack.set_visible_child(&tools_box);
+            }
+        });
+    }
+    {
+        let panel_stack = panel_stack.clone();
+        let filters_box = filters_box.clone();
+        let tools_toggle = tools_toggle.clone();
+        filters_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                tools_toggle.set_active(false);
+                panel_stack.set_visible_child(&filters_box);
+            }
         });
     }
 
@@ -1116,11 +1236,6 @@ pub fn build(
 
             queue_preview();
         });
-    }
-
-    {
-        let tools_scroll = tools_scroll.clone();
-        tools_toggle.connect_toggled(move |button| tools_scroll.set_visible(button.is_active()));
     }
 
     let fit_action: Rc<dyn Fn()> = {
@@ -1875,6 +1990,65 @@ fn apply_canvas_one_to_one(
     picture.queue_resize();
 }
 
+#[cfg(test)]
+mod panel_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn filters_switch_keeps_sidebar_visible() {
+        gtk::init().unwrap();
+        let parent = gtk::Window::new();
+        let photo: crate::photo_object::PhotoObject = glib::Object::new();
+        let editor = build(
+            &parent,
+            Rc::new(RefCell::new(Connection::open_in_memory().unwrap())),
+            photo,
+            Rc::new(|| {}),
+            Rc::new(|_| {}),
+        );
+        let toolbar = editor.root.first_child().unwrap();
+        let body = toolbar
+            .next_sibling()
+            .unwrap()
+            .downcast::<gtk::Paned>()
+            .unwrap();
+        let sidebar = body.start_child().unwrap();
+        let scroll = sidebar.clone().downcast::<gtk::ScrolledWindow>().unwrap();
+        let viewport = scroll.child().unwrap().downcast::<gtk::Viewport>().unwrap();
+        let stack = viewport.child().unwrap().downcast::<gtk::Stack>().unwrap();
+        let mut buttons = Vec::new();
+        let mut child = toolbar.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if let Ok(button) = widget.downcast::<gtk::ToggleButton>() {
+                buttons.push(button);
+            }
+        }
+        let tools = buttons
+            .iter()
+            .find(|b| b.label().as_deref() == Some("Tools"))
+            .unwrap();
+        let filters = buttons
+            .iter()
+            .find(|b| b.label().as_deref() == Some("Filters"))
+            .unwrap();
+        for _ in 0..3 {
+            filters.emit_clicked();
+            assert!(
+                sidebar.is_visible(),
+                "Filters must not hide the shared sidebar"
+            );
+            assert_eq!(stack.visible_child_name().as_deref(), Some("filters"));
+            assert!(!tools.is_active());
+            tools.emit_clicked();
+            assert!(sidebar.is_visible());
+            assert_eq!(stack.visible_child_name().as_deref(), Some("tools"));
+            assert!(!filters.is_active());
+        }
+    }
+}
+
 fn add_section_label(parent: &gtk::Box, text: &str) {
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);
@@ -2132,7 +2306,6 @@ fn contained_rect(
     )
 }
 
-
 #[cfg(test)]
 mod zoom_anchor_tests {
     use super::{
@@ -2157,9 +2330,7 @@ mod zoom_anchor_tests {
 
     #[test]
     fn fit_anchor_returns_none_when_pointer_is_in_margin() {
-        assert!(
-            normalized_image_point(10.0, 10.0, 0.0, 40.0, 400.0, 320.0, 0.0, 0.0).is_none()
-        );
+        assert!(normalized_image_point(10.0, 10.0, 0.0, 40.0, 400.0, 320.0, 0.0, 0.0).is_none());
     }
 
     #[test]

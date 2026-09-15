@@ -85,6 +85,7 @@ pub struct EditRecipe {
     pub auto_color: bool,
     pub black_white: bool,
     pub sepia: bool,
+    pub filter: super::filters::FilterPreset,
     pub sharpen: f32,
 }
 
@@ -104,6 +105,7 @@ impl Default for EditRecipe {
             auto_color: false,
             black_white: false,
             sepia: false,
+            filter: super::filters::FilterPreset::None,
             sharpen: 0.0,
         }
     }
@@ -149,6 +151,7 @@ impl EditRecipe {
                 "autocolor" => recipe.auto_color = flag(),
                 "bw" => recipe.black_white = flag(),
                 "sepia" => recipe.sepia = flag(),
+                "filter" => recipe.filter = super::filters::FilterPreset::decode(value),
                 "sharpen" => recipe.sharpen = number().unwrap_or(0.0).clamp(0.0, 1.0),
                 _ => {}
             }
@@ -161,7 +164,7 @@ impl EditRecipe {
             return String::new();
         }
         format!(
-            "v=1|crop={:.5},{:.5},{:.5},{:.5}|straighten={:.4}|exposure={:.4}|contrast={:.4}|fill={:.4}|highlights={:.4}|shadows={:.4}|temp={:.4}|sat={:.4}|autocontrast={}|autocolor={}|bw={}|sepia={}|sharpen={:.4}",
+            "v=1|crop={:.5},{:.5},{:.5},{:.5}|straighten={:.4}|exposure={:.4}|contrast={:.4}|fill={:.4}|highlights={:.4}|shadows={:.4}|temp={:.4}|sat={:.4}|autocontrast={}|autocolor={}|bw={}|sepia={}|filter={}|sharpen={:.4}",
             self.crop.left,
             self.crop.top,
             self.crop.right,
@@ -178,6 +181,7 @@ impl EditRecipe {
             self.auto_color as u8,
             self.black_white as u8,
             self.sepia as u8,
+            self.filter.key(),
             self.sharpen,
         )
     }
@@ -196,6 +200,7 @@ impl EditRecipe {
             && !self.auto_color
             && !self.black_white
             && !self.sepia
+            && self.filter == super::filters::FilterPreset::None
             && self.sharpen.abs() < 0.0001
     }
 }
@@ -299,6 +304,7 @@ impl EditSession {
 
 #[cfg(test)]
 mod tests {
+    use super::super::filters::FilterPreset;
     use super::*;
 
     #[test]
@@ -314,6 +320,7 @@ mod tests {
         recipe.contrast = 0.45;
         recipe.auto_color = true;
         recipe.sepia = true;
+        recipe.filter = FilterPreset::Valencia;
         recipe.sharpen = 0.4;
         let decoded = EditRecipe::decode(&recipe.encode());
         assert!((decoded.crop.left - 0.1).abs() < 0.001);
@@ -321,7 +328,30 @@ mod tests {
         assert!((decoded.contrast - 0.45).abs() < 0.001);
         assert!(decoded.auto_color);
         assert!(decoded.sepia);
+        assert_eq!(decoded.filter, FilterPreset::Valencia);
         assert!((decoded.sharpen - 0.4).abs() < 0.001);
+    }
+
+    #[test]
+    fn filter_is_persisted_and_makes_recipe_non_default() {
+        let mut recipe = EditRecipe::default();
+        assert!(recipe.is_default());
+        recipe.filter = FilterPreset::Clarendon;
+        assert!(!recipe.is_default());
+        assert_eq!(
+            EditRecipe::decode(&recipe.encode()).filter,
+            FilterPreset::Clarendon
+        );
+    }
+
+    #[test]
+    fn legacy_bw_and_sepia_recipes_still_decode_without_a_named_filter() {
+        let bw = EditRecipe::decode("v=1|bw=1");
+        let sepia = EditRecipe::decode("v=1|sepia=1");
+        assert_eq!(bw.filter, FilterPreset::None);
+        assert_eq!(sepia.filter, FilterPreset::None);
+        assert!(bw.black_white);
+        assert!(sepia.sepia);
     }
 
     #[test]
