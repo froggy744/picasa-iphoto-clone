@@ -200,7 +200,7 @@ fn render_filter_thumbnails(
     rotation: i32,
     recipe: &EditRecipe,
 ) -> anyhow::Result<Vec<FilterThumbnailPixels>> {
-    let base = super::render::decode_base_for_viewer(path, rotation, 230, 230)?;
+    let base = super::render::decode_base_for_viewer(path, rotation, 140, 140)?;
     Ok(FilterTileEffect::all()
         .into_iter()
         .map(|effect| {
@@ -698,8 +698,8 @@ pub fn build(
 
     add_section_label(&filters_box, "Filters");
     let filter_grid = gtk::FlowBox::new();
-    filter_grid.set_row_spacing(4);
-    filter_grid.set_column_spacing(4);
+    filter_grid.set_row_spacing(5);
+    filter_grid.set_column_spacing(5);
     filter_grid.set_homogeneous(true);
     filter_grid.set_min_children_per_line(2);
     filter_grid.set_max_children_per_line(8);
@@ -2393,7 +2393,6 @@ fn add_section_label(parent: &gtk::Box, text: &str) {
 
 fn filter_tile(effect: FilterTileEffect) -> (gtk::ToggleButton, gtk::Picture) {
     let button = gtk::ToggleButton::new();
-    button.set_size_request(67, -1);
     button.add_css_class("filter-tile");
     button.set_tooltip_text(Some(effect.label()));
 
@@ -2401,18 +2400,14 @@ fn filter_tile(effect: FilterTileEffect) -> (gtk::ToggleButton, gtk::Picture) {
     let picture = gtk::Picture::new();
     picture.set_content_fit(gtk::ContentFit::Cover);
     picture.set_can_shrink(true);
+    picture.set_size_request(70, 70);
     let preview_frame = gtk::AspectFrame::new(0.5, 0.5, 1.0, false);
-    preview_frame.set_size_request(67, 67);
     preview_frame.set_child(Some(&picture));
     preview_frame.add_css_class("filter-tile-preview");
     let label = gtk::Label::new(Some(effect.label()));
-    label.set_wrap(true);
-    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-    label.set_lines(2);
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     label.set_justify(gtk::Justification::Center);
-    label.set_max_width_chars(6);
-    label.set_height_request(30);
+    label.set_max_width_chars(10);
     label.add_css_class("filter-tile-label");
     content.append(&preview_frame);
     content.append(&label);
