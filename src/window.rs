@@ -108,13 +108,6 @@ const STANDARD_GTK4_CSS: &str = r#"
     .section-more-btn:hover { background: alpha(@theme_fg_color, 0.08); }
     .photo-info-bar { background: @window_bg_color; border-top: 1px solid alpha(@theme_fg_color, 0.12); color: @theme_fg_color; }
     .info-preview { border-radius: 8px; background: alpha(@theme_fg_color, 0.06); border: 1px solid alpha(@theme_fg_color, 0.10); }
-    .edit-panel-tabs button { min-height: 34px; }
-    .filter-grid > flowboxchild { padding: 0; margin: 0; min-width: 0; background: transparent; }
-    button.filter-tile, button.filter-tile:hover, button.filter-tile:active, button.filter-tile:checked { padding: 0; border: none; background: transparent; box-shadow: none; outline: none; }
-    .filter-tile-preview { padding: 0; border: 2px solid transparent; border-radius: 12px; background: transparent; box-shadow: none; overflow: hidden; }
-    .filter-tile-preview > border { border: none; background: transparent; }
-    button.filter-tile:checked .filter-tile-preview { border-color: @accent_bg_color; }
-    .filter-tile-label { font-size: 11px; }
     .info-title, .metric-val { color: @theme_fg_color; }
     .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: alpha(@theme_fg_color, 0.55); }
     .photo-action-button { border-radius: 8px; color: @theme_fg_color; background: alpha(@theme_fg_color, 0.05); border: 1px solid alpha(@theme_fg_color, 0.10); box-shadow: none; }
@@ -149,6 +142,39 @@ const STANDARD_GTK4_CSS: &str = r#"
 "#;
 
 const THEME_SETTING_KEY: &str = "appearance-theme";
+
+/// Structural styling for the edit-mode sidebar and its filter tile grid.
+/// These rules define the layout of the editing panels (tab bar, sliders,
+/// chrome-less filter tiles), so unlike the appearance themes they must apply
+/// in both the iPhone and Standard GTK4 looks. Without them the default theme
+/// pads every filter tile by its stock button geometry, which alone pushes a
+/// tile past the two-column threshold and collapses the grid.
+pub(crate) const EDIT_PANEL_CSS: &str = r#"
+    .edit-panel-tabs { margin-bottom: 4px; }
+    .edit-panel-tabs button { min-height: 34px; padding: 4px 10px; font-weight: 600; }
+    .edit-panel-pages { background: @window_bg_color; }
+    .edit-section-label { font-size: 11px; font-weight: 700; color: alpha(@theme_fg_color, 0.62); }
+    .edit-adjustment-group { margin-bottom: 6px; }
+    .edit-adjustment-row { margin-bottom: 3px; }
+    .edit-adjustment-value { font-variant-numeric: tabular-nums; min-width: 42px; }
+    .edit-adjustment-scale { margin-top: -2px; }
+    .edit-preview { background: alpha(@theme_fg_color, 0.045); border: 1px solid alpha(@theme_fg_color, 0.07); border-radius: 10px; }
+    .edit-canvas-stage, .edit-canvas-stage viewport { background: transparent; }
+    .crop-aspect-grid { margin-bottom: 4px; }
+    .crop-aspect-button { min-height: 32px; padding: 3px 8px; }
+    .crop-orientation-row { margin-bottom: 4px; }
+    .crop-orientation-row button { min-height: 32px; padding: 3px 8px; }
+    .crop-straighten { margin-bottom: 2px; }
+    .crop-straighten .edit-adjustment-row { margin-bottom: 0; }
+    .crop-reset-button { min-height: 32px; margin-top: 4px; }
+    .quick-fix-row button { min-height: 30px; padding: 4px 8px; }
+    .filter-grid > flowboxchild { padding: 0; margin: 0; min-width: 0; background: transparent; }
+    button.filter-tile, button.filter-tile:hover, button.filter-tile:active, button.filter-tile:checked { min-width: 0; padding: 0; border: none; background: transparent; box-shadow: none; outline: none; }
+    .filter-tile-preview { padding: 0; border: 2px solid transparent; border-radius: 9px; background: alpha(@theme_fg_color, 0.04); box-shadow: none; }
+    button.filter-tile:hover .filter-tile-preview { border-color: alpha(@theme_fg_color, 0.18); }
+    button.filter-tile:checked .filter-tile-preview { border-color: @accent_bg_color; }
+    .filter-tile-label { font-size: 11px; font-weight: 600; }
+"#;
 const SORT_FIELD_SETTING_KEY: &str = "photo-sort-field";
 const SORT_DIRECTION_SETTING_KEY: &str = "photo-sort-direction";
 const GROUP_MODE_SETTING_KEY: &str = "photo-group-mode";

@@ -157,6 +157,83 @@ struct PreviewJob {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CropAspectPreset {
+    Free,
+    Original,
+    Square,
+    FourThree,
+    ThreeTwo,
+    SixteenNine,
+    A4,
+    UsLetter,
+}
+
+impl CropAspectPreset {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Free => "Free",
+            Self::Original => "Original",
+            Self::Square => "1:1",
+            Self::FourThree => "4:3",
+            Self::ThreeTwo => "3:2",
+            Self::SixteenNine => "16:9",
+            Self::A4 => "A4",
+            Self::UsLetter => "US Letter",
+        }
+    }
+
+    fn ratio(self, image_width: i32, image_height: i32, portrait: bool) -> Option<f64> {
+        let ratio = match self {
+            Self::Free => return None,
+            Self::Original => {
+                if image_width <= 0 || image_height <= 0 {
+                    return None;
+                }
+                image_width as f64 / image_height as f64
+            }
+            Self::Square => 1.0,
+            Self::FourThree => 4.0 / 3.0,
+            Self::ThreeTwo => 3.0 / 2.0,
+            Self::SixteenNine => 16.0 / 9.0,
+            Self::A4 => 297.0 / 210.0,
+            Self::UsLetter => 11.0 / 8.5,
+        };
+        Some(if portrait && ratio != 1.0 { 1.0 / ratio } else { ratio })
+    }
+}
+
+fn centered_crop_for_aspect(image_width: i32, image_height: i32, ratio: f64) -> CropRect {
+    if image_width <= 0 || image_height <= 0 || !ratio.is_finite() || ratio <= 0.0 {
+        return CropRect::default();
+    }
+
+    let source_ratio = image_width as f64 / image_height as f64;
+    if (source_ratio - ratio).abs() < 0.0001 {
+        return CropRect::default();
+    }
+
+    if source_ratio > ratio {
+        let normalized_width = (ratio / source_ratio).clamp(0.0, 1.0);
+        let margin = (1.0 - normalized_width) * 0.5;
+        CropRect {
+            left: margin as f32,
+            top: 0.0,
+            right: (1.0 - margin) as f32,
+            bottom: 1.0,
+        }
+    } else {
+        let normalized_height = (source_ratio / ratio).clamp(0.0, 1.0);
+        let margin = (1.0 - normalized_height) * 0.5;
+        CropRect {
+            left: 0.0,
+            top: margin as f32,
+            right: 1.0,
+            bottom: (1.0 - margin) as f32,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FilterTileEffect {
     Preset(FilterPreset),
     BlackWhite,
@@ -173,6 +250,7 @@ impl FilterTileEffect {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Preset(FilterPreset::None) => "Original",
             Self::Preset(preset) => preset.label(),
             Self::BlackWhite => "B&W",
             Self::Sepia => "Sepia",
@@ -200,7 +278,16 @@ fn render_filter_thumbnails(
     rotation: i32,
     recipe: &EditRecipe,
 ) -> anyhow::Result<Vec<FilterThumbnailPixels>> {
-    let base = super::render::decode_base_for_viewer(path, rotation, 140, 140)?;
+    // Decode at the on-screen tile preview size. FlowBox fits its columns
+    // from the tiles' natural width, so a larger base decode (e.g. 320x240)
+    // inflates every tile's natural size past two columns and the grid
+    // silently collapses to one column at the default pane width.
+    let base = super::render::decode_base_for_viewer(
+        path,
+        rotation,
+        FILTER_TILE_PREVIEW_WIDTH.max(1) as u32,
+        FILTER_TILE_PREVIEW_HEIGHT.max(1) as u32,
+    )?;
     Ok(FilterTileEffect::all()
         .into_iter()
         .map(|effect| {
@@ -491,14 +578,14 @@ pub fn build(
     let body = gtk::Paned::new(gtk::Orientation::Horizontal);
     body.set_hexpand(true);
     body.set_vexpand(true);
-    body.set_position(380);
+    body.set_position(360);
     body.set_resize_start_child(false);
     body.set_shrink_start_child(false);
     body.set_wide_handle(true);
     root.append(&body);
 
     let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    sidebar.set_width_request(315);
+    sidebar.set_width_request(320);
 
     let panel_tabs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     panel_tabs.set_margin_top(12);
@@ -519,30 +606,31 @@ pub fn build(
     let crop_toggle = gtk::ToggleButton::with_label("Crop");
     crop_toggle.set_group(Some(&tools_toggle));
     crop_toggle.set_hexpand(true);
-    crop_toggle.set_tooltip_text(Some("Show crop and straighten controls"));
+    crop_toggle.set_tooltip_text(Some("Crop, straighten and compose the photo"));
     panel_tabs.append(&tools_toggle);
     panel_tabs.append(&filters_toggle);
     panel_tabs.append(&crop_toggle);
     sidebar.append(&panel_tabs);
 
-    let tools_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    tools_box.set_margin_top(14);
-    tools_box.set_margin_bottom(14);
+    let tools_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    tools_box.set_margin_top(12);
+    tools_box.set_margin_bottom(16);
     tools_box.set_margin_start(14);
     tools_box.set_margin_end(14);
-    let filters_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    let filters_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
     filters_box.set_hexpand(true);
     filters_box.set_vexpand(true);
-    filters_box.set_margin_top(10);
-    filters_box.set_margin_bottom(10);
-    filters_box.set_margin_start(8);
-    filters_box.set_margin_end(8);
-    let crop_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    crop_box.set_margin_top(14);
-    crop_box.set_margin_bottom(14);
+    filters_box.set_margin_top(12);
+    filters_box.set_margin_bottom(16);
+    filters_box.set_margin_start(0);
+    filters_box.set_margin_end(0);
+    let crop_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    crop_box.set_hexpand(true);
+    crop_box.set_vexpand(true);
+    crop_box.set_margin_top(12);
+    crop_box.set_margin_bottom(16);
     crop_box.set_margin_start(14);
     crop_box.set_margin_end(14);
-
     let tools_scroll = gtk::ScrolledWindow::new();
     tools_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     tools_scroll.set_child(Some(&tools_box));
@@ -552,7 +640,6 @@ pub fn build(
     let crop_scroll = gtk::ScrolledWindow::new();
     crop_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     crop_scroll.set_child(Some(&crop_box));
-
     let panel_stack = gtk::Stack::new();
     panel_stack.set_hexpand(true);
     panel_stack.set_vexpand(true);
@@ -567,10 +654,10 @@ pub fn build(
     let preview_area = gtk::Overlay::new();
     preview_area.set_hexpand(true);
     preview_area.set_vexpand(true);
-    preview_area.set_margin_top(18);
-    preview_area.set_margin_bottom(18);
-    preview_area.set_margin_start(18);
-    preview_area.set_margin_end(18);
+    preview_area.set_margin_top(12);
+    preview_area.set_margin_bottom(12);
+    preview_area.set_margin_start(12);
+    preview_area.set_margin_end(12);
     preview_area.add_css_class("edit-preview");
     body.set_end_child(Some(&preview_area));
 
@@ -584,6 +671,7 @@ pub fn build(
     picture_scroll.set_hexpand(true);
     picture_scroll.set_vexpand(true);
     picture_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+    picture_scroll.add_css_class("edit-canvas-stage");
     picture_scroll.set_child(Some(&picture));
     preview_area.set_child(Some(&picture_scroll));
 
@@ -618,6 +706,9 @@ pub fn build(
     let session = Rc::new(RefCell::new(EditSession::new(recipe)));
     let syncing = Rc::new(Cell::new(false));
     let pending_crop = Rc::new(RefCell::new(CropRect::default()));
+    let crop_aspect_preset = Rc::new(Cell::new(CropAspectPreset::Free));
+    let crop_portrait = Rc::new(Cell::new(false));
+    let crop_aspect_ratio = Rc::new(Cell::new(None::<f64>));
     let preview_dimensions = Rc::new(Cell::new((1i32, 1i32)));
     // 0.0 means fit-to-canvas. Positive values are display zoom factors.
     let canvas_zoom = Rc::new(Cell::new(0.0f64));
@@ -686,8 +777,9 @@ pub fn build(
     }
     picture_scroll.add_controller(pan_drag);
 
-    add_section_label(&filters_box, "Quick fixes");
+    add_section_label(&filters_box, "QUICK FIXES");
     let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    auto_row.add_css_class("quick-fix-row");
     let auto_contrast = gtk::ToggleButton::with_label("Auto Contrast");
     let auto_color = gtk::ToggleButton::with_label("Auto Colour");
     auto_contrast.set_hexpand(true);
@@ -696,13 +788,19 @@ pub fn build(
     auto_row.append(&auto_color);
     filters_box.append(&auto_row);
 
-    add_section_label(&filters_box, "Filters");
+    add_section_label(&filters_box, "FILTERS");
     let filter_grid = gtk::FlowBox::new();
-    filter_grid.set_row_spacing(5);
-    filter_grid.set_column_spacing(5);
+    filter_grid.set_row_spacing(10);
+    filter_grid.set_column_spacing(6);
+    // Homogeneous tiles reflow cleanly as the inspector is resized: two
+    // columns at the default pane width, growing to three, four and five on
+    // wider panes and collapsing back to one when the pane is dragged narrow.
+    // The count is driven purely by the fixed tile minimum width, so no child
+    // ever requests a width derived from the current pane size and widening
+    // the inspector can never trap the divider.
     filter_grid.set_homogeneous(true);
-    filter_grid.set_min_children_per_line(2);
-    filter_grid.set_max_children_per_line(8);
+    filter_grid.set_min_children_per_line(1);
+    filter_grid.set_max_children_per_line(5);
     filter_grid.set_selection_mode(gtk::SelectionMode::None);
     filter_grid.add_css_class("filter-grid");
     let mut filter_buttons = Vec::new();
@@ -720,77 +818,98 @@ pub fn build(
         }
     }
     filters_box.append(&filter_grid);
+
     let black_white = black_white.expect("B&W filter tile");
     let sepia = sepia.expect("Sepia filter tile");
 
-    add_section_label(&crop_box, "Crop and straighten");
-    let crop = gtk::Button::with_label("Crop…");
-    crop.set_halign(gtk::Align::Fill);
-    crop_box.append(&crop);
-    let crop_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let crop_apply = gtk::Button::with_label("Apply Crop");
-    crop_apply.add_css_class("suggested-action");
-    let crop_cancel = gtk::Button::with_label("Cancel");
-    let crop_reset = gtk::Button::with_label("Reset Crop");
-    crop_actions.append(&crop_apply);
-    crop_actions.append(&crop_cancel);
-    crop_actions.append(&crop_reset);
-    crop_actions.set_visible(false);
-    crop_box.append(&crop_actions);
+    // Crop has its own geometry workspace again. The tab earns its space by
+    // grouping aspect ratio, orientation, straighten and crop reset controls.
+    add_section_label(&crop_box, "ASPECT RATIO");
+    let aspect_grid = gtk::Grid::new();
+    aspect_grid.set_column_spacing(6);
+    aspect_grid.set_row_spacing(6);
+    aspect_grid.set_column_homogeneous(true);
+    aspect_grid.add_css_class("crop-aspect-grid");
 
-    let straighten = add_slider(&crop_box, "Straighten", -10.0, 10.0, 0.1, 1);
+    let aspect_presets = [
+        CropAspectPreset::Free,
+        CropAspectPreset::Original,
+        CropAspectPreset::Square,
+        CropAspectPreset::FourThree,
+        CropAspectPreset::ThreeTwo,
+        CropAspectPreset::SixteenNine,
+        CropAspectPreset::A4,
+        CropAspectPreset::UsLetter,
+    ];
+    let mut aspect_buttons = Vec::new();
+    let first_aspect = gtk::ToggleButton::with_label(aspect_presets[0].label());
+    first_aspect.set_active(true);
+    first_aspect.set_hexpand(true);
+    first_aspect.add_css_class("crop-aspect-button");
+    aspect_grid.attach(&first_aspect, 0, 0, 1, 1);
+    aspect_buttons.push((aspect_presets[0], first_aspect.clone()));
+    for (index, preset) in aspect_presets.iter().copied().enumerate().skip(1) {
+        let button = gtk::ToggleButton::with_label(preset.label());
+        button.set_group(Some(&first_aspect));
+        button.set_hexpand(true);
+        button.add_css_class("crop-aspect-button");
+        aspect_grid.attach(&button, (index % 2) as i32, (index / 2) as i32, 1, 1);
+        aspect_buttons.push((preset, button));
+    }
+    crop_box.append(&aspect_grid);
 
-    let tools_segments = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    tools_segments.add_css_class("linked");
-    let light_toggle = gtk::ToggleButton::with_label("Light");
-    light_toggle.set_active(true);
-    light_toggle.set_hexpand(true);
-    light_toggle.add_css_class("tools-segment");
-    let colour_toggle = gtk::ToggleButton::with_label("Colour");
-    colour_toggle.set_group(Some(&light_toggle));
-    colour_toggle.set_hexpand(true);
-    colour_toggle.add_css_class("tools-segment");
-    tools_segments.append(&light_toggle);
-    tools_segments.append(&colour_toggle);
-    tools_box.append(&tools_segments);
+    add_section_label(&crop_box, "ORIENTATION");
+    let orientation_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    orientation_row.add_css_class("linked");
+    orientation_row.add_css_class("crop-orientation-row");
+    let landscape = gtk::ToggleButton::with_label("Landscape");
+    landscape.set_hexpand(true);
+    landscape.set_active(true);
+    let portrait = gtk::ToggleButton::with_label("Portrait");
+    portrait.set_group(Some(&landscape));
+    portrait.set_hexpand(true);
+    orientation_row.append(&landscape);
+    orientation_row.append(&portrait);
+    crop_box.append(&orientation_row);
 
-    let light_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    let colour_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    let tuning_stack = gtk::Stack::new();
-    tuning_stack.set_hexpand(true);
-    tuning_stack.set_vexpand(true);
-    tuning_stack.add_named(&light_box, Some("light"));
-    tuning_stack.add_named(&colour_box, Some("colour"));
-    tuning_stack.set_visible_child(&light_box);
-    tools_box.append(&tuning_stack);
+    add_section_label(&crop_box, "STRAIGHTEN");
+    let straighten_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    straighten_box.add_css_class("crop-straighten");
+    let straighten = add_slider(&straighten_box, "Angle", -10.0, 10.0, 0.1, 1);
+    straighten.add_css_class("crop-straighten-scale");
+    crop_box.append(&straighten_box);
+
+    let reset_crop = gtk::Button::with_label("Reset Crop");
+    reset_crop.set_hexpand(true);
+    reset_crop.set_tooltip_text(Some("Remove the crop and return to the full photo"));
+    reset_crop.add_css_class("crop-reset-button");
+    crop_box.append(&reset_crop);
+
+    add_section_label(&tools_box, "LIGHT");
+    let light_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    light_box.add_css_class("edit-adjustment-group");
+    tools_box.append(&light_box);
 
     let exposure = add_slider(&light_box, "Exposure", -2.0, 2.0, 0.05, 2);
     let contrast = add_slider(&light_box, "Contrast", -1.0, 1.0, 0.02, 2);
     let fill_light = add_slider(&light_box, "Fill Light", -1.0, 1.0, 0.02, 2);
     let highlights = add_slider(&light_box, "Highlights", -1.0, 1.0, 0.02, 2);
     let shadows = add_slider(&light_box, "Shadows", -1.0, 1.0, 0.02, 2);
-    let sharpen = add_slider(&light_box, "Sharpen", 0.0, 1.0, 0.02, 2);
+
+    add_section_label(&tools_box, "COLOUR");
+    let colour_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    colour_box.add_css_class("edit-adjustment-group");
+    tools_box.append(&colour_box);
+
     let saturation = add_slider(&colour_box, "Saturation", -1.0, 1.0, 0.02, 2);
     let temperature = add_slider(&colour_box, "Warmth", -1.0, 1.0, 0.02, 2);
 
-    {
-        let tuning_stack = tuning_stack.clone();
-        let light_box = light_box.clone();
-        light_toggle.connect_toggled(move |button| {
-            if button.is_active() {
-                tuning_stack.set_visible_child(&light_box);
-            }
-        });
-    }
-    {
-        let tuning_stack = tuning_stack.clone();
-        let colour_box = colour_box.clone();
-        colour_toggle.connect_toggled(move |button| {
-            if button.is_active() {
-                tuning_stack.set_visible_child(&colour_box);
-            }
-        });
-    }
+    add_section_label(&tools_box, "DETAIL");
+    let detail_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    detail_box.add_css_class("edit-adjustment-group");
+    tools_box.append(&detail_box);
+
+    let sharpen = add_slider(&detail_box, "Sharpen", 0.0, 1.0, 0.02, 2);
 
     let controls = Controls {
         straighten,
@@ -824,7 +943,8 @@ pub fn build(
         glib::timeout_add_local(Duration::from_millis(25), move || {
             match receiver.try_recv() {
                 Ok(Ok(thumbnails)) => {
-                    for (picture, (width, height, pixels)) in filter_pictures.iter().zip(thumbnails)
+                    for (picture, (width, height, pixels)) in
+                        filter_pictures.iter().zip(thumbnails)
                     {
                         let bytes = glib::Bytes::from_owned(pixels);
                         let texture = gtk::gdk::MemoryTexture::new(
@@ -861,7 +981,6 @@ pub fn build(
     ] {
         configure_scale_scroll(scale, &tools_scroll);
     }
-    configure_scale_scroll(&controls.straighten, &crop_scroll);
 
     let active_rotation_for_queue = active_rotation.clone();
     let queue_preview: Rc<dyn Fn()> = {
@@ -1401,7 +1520,13 @@ pub fn build(
         let queue_preview = queue_preview.clone();
         let update_history_buttons = update_history_buttons.clone();
         let crop_overlay = crop_overlay.clone();
-        let crop_actions = crop_actions.clone();
+        let pending_crop = pending_crop.clone();
+        let crop_aspect_preset = crop_aspect_preset.clone();
+        let crop_portrait = crop_portrait.clone();
+        let crop_aspect_ratio = crop_aspect_ratio.clone();
+        let first_aspect = first_aspect.clone();
+        let landscape = landscape.clone();
+        let tools_toggle = tools_toggle.clone();
         let picture = picture.clone();
         let picture_scroll = picture_scroll.clone();
         let preview_dimensions = preview_dimensions.clone();
@@ -1412,8 +1537,14 @@ pub fn build(
             session.borrow_mut().reset();
             sync_controls();
             update_history_buttons();
+            pending_crop.replace(CropRect::default());
+            crop_aspect_preset.set(CropAspectPreset::Free);
+            crop_portrait.set(false);
+            crop_aspect_ratio.set(None);
+            first_aspect.set_active(true);
+            landscape.set_active(true);
             crop_overlay.set_visible(false);
-            crop_actions.set_visible(false);
+            tools_toggle.set_active(true);
 
             // Reset is a full editor reset: edits plus canvas presentation.
             // Return to Fit and clear any native 1:1 / panned viewport state.
@@ -1742,45 +1873,20 @@ pub fn build(
         })
     };
 
-    {
+    let cancel_crop: Rc<dyn Fn()> = {
         let crop_overlay = crop_overlay.clone();
-        let crop_actions = crop_actions.clone();
         let pending_crop = pending_crop.clone();
-        let canvas_zoom = canvas_zoom.clone();
-        let native_one_to_one = native_one_to_one.clone();
-        let one_to_one_sync = one_to_one_sync.clone();
-        let picture = picture.clone();
-        let picture_scroll = picture_scroll.clone();
-        let preview_dimensions = preview_dimensions.clone();
-        crop.connect_clicked(move |_| {
-            canvas_zoom.set(0.0);
-            let was_one_to_one = native_one_to_one.replace(false);
-            if was_one_to_one {
-                if let Some(handler) = one_to_one_sync.borrow().as_ref() {
-                    handler(false);
-                }
-            }
-            apply_canvas_zoom(&picture, &picture_scroll, preview_dimensions.get(), 0.0);
-            pending_crop.replace(CropRect::default());
-            crop_overlay.set_visible(true);
-            crop_actions.set_visible(true);
-            crop_overlay.queue_draw();
-        });
-    }
-    {
-        let crop_overlay = crop_overlay.clone();
-        let crop_actions = crop_actions.clone();
-        let pending_crop = pending_crop.clone();
-        crop_cancel.connect_clicked(move |_| {
+        let tools_toggle = tools_toggle.clone();
+        Rc::new(move || {
             pending_crop.replace(CropRect::default());
             crop_overlay.set_visible(false);
-            crop_actions.set_visible(false);
-        });
-    }
+            tools_toggle.set_active(true);
+        })
+    };
+
     let apply_crop: Rc<dyn Fn()> = {
         let session = session.clone();
         let crop_overlay = crop_overlay.clone();
-        let crop_actions = crop_actions.clone();
         let pending_crop = pending_crop.clone();
         let queue_preview = queue_preview.clone();
         let update_history_buttons = update_history_buttons.clone();
@@ -1788,61 +1894,184 @@ pub fn build(
             if !crop_overlay.is_visible() {
                 return;
             }
+
             let child = *pending_crop.borrow();
-            session
-                .borrow_mut()
-                .mutate(|recipe| recipe.crop = recipe.crop.compose(child));
+            let changed = !child.is_full();
+            if changed {
+                session
+                    .borrow_mut()
+                    .mutate(|recipe| recipe.crop = recipe.crop.compose(child));
+            }
+
             pending_crop.replace(CropRect::default());
             crop_overlay.set_visible(false);
-            crop_actions.set_visible(false);
-            update_history_buttons();
-            queue_preview();
+
+            if changed {
+                update_history_buttons();
+                queue_preview();
+            }
+        })
+    };
+
+    // Entering the Crop tab activates the on-canvas crop overlay. Leaving the
+    // tab commits the pending crop automatically, so there is no Apply button.
+    {
+        let crop_overlay = crop_overlay.clone();
+        let pending_crop = pending_crop.clone();
+        let canvas_zoom = canvas_zoom.clone();
+        let native_one_to_one = native_one_to_one.clone();
+        let one_to_one_sync = one_to_one_sync.clone();
+        let picture = picture.clone();
+        let picture_scroll = picture_scroll.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let apply_crop = apply_crop.clone();
+        crop_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                canvas_zoom.set(0.0);
+                let was_one_to_one = native_one_to_one.replace(false);
+                if was_one_to_one {
+                    if let Some(handler) = one_to_one_sync.borrow().as_ref() {
+                        handler(false);
+                    }
+                }
+                apply_canvas_zoom(&picture, &picture_scroll, preview_dimensions.get(), 0.0);
+                pending_crop.replace(CropRect::default());
+                crop_overlay.set_visible(true);
+                crop_overlay.queue_draw();
+            } else {
+                apply_crop();
+            }
+        });
+    }
+
+    // Aspect presets immediately reshape the crop rectangle and constrain new
+    // drag selections to the chosen ratio.
+    for (preset, button) in &aspect_buttons {
+        let preset = *preset;
+        let pending_crop = pending_crop.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let crop_aspect_preset = crop_aspect_preset.clone();
+        let crop_portrait = crop_portrait.clone();
+        let crop_aspect_ratio = crop_aspect_ratio.clone();
+        let crop_overlay = crop_overlay.clone();
+        button.connect_toggled(move |button| {
+            if !button.is_active() {
+                return;
+            }
+            crop_aspect_preset.set(preset);
+            let dimensions = preview_dimensions.get();
+            let ratio = preset.ratio(dimensions.0, dimensions.1, crop_portrait.get());
+            crop_aspect_ratio.set(ratio);
+            pending_crop.replace(
+                ratio
+                    .map(|ratio| centered_crop_for_aspect(dimensions.0, dimensions.1, ratio))
+                    .unwrap_or_default(),
+            );
+            crop_overlay.queue_draw();
+        });
+    }
+
+    let refresh_crop_orientation: Rc<dyn Fn(bool)> = {
+        let pending_crop = pending_crop.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let crop_aspect_preset = crop_aspect_preset.clone();
+        let crop_portrait = crop_portrait.clone();
+        let crop_aspect_ratio = crop_aspect_ratio.clone();
+        let crop_overlay = crop_overlay.clone();
+        Rc::new(move |portrait_mode| {
+            crop_portrait.set(portrait_mode);
+            let dimensions = preview_dimensions.get();
+            let ratio = crop_aspect_preset
+                .get()
+                .ratio(dimensions.0, dimensions.1, portrait_mode);
+            crop_aspect_ratio.set(ratio);
+            pending_crop.replace(
+                ratio
+                    .map(|ratio| centered_crop_for_aspect(dimensions.0, dimensions.1, ratio))
+                    .unwrap_or_default(),
+            );
+            crop_overlay.queue_draw();
         })
     };
     {
-        let apply_crop = apply_crop.clone();
-        crop_apply.connect_clicked(move |_| apply_crop());
+        let refresh_crop_orientation = refresh_crop_orientation.clone();
+        landscape.connect_toggled(move |button| {
+            if button.is_active() {
+                refresh_crop_orientation(false);
+            }
+        });
     }
     {
-        let apply_crop = apply_crop.clone();
+        let refresh_crop_orientation = refresh_crop_orientation.clone();
+        portrait.connect_toggled(move |button| {
+            if button.is_active() {
+                refresh_crop_orientation(true);
+            }
+        });
+    }
+
+    {
+        let session = session.clone();
+        let pending_crop = pending_crop.clone();
         let crop_overlay = crop_overlay.clone();
+        let crop_aspect_preset = crop_aspect_preset.clone();
+        let crop_portrait = crop_portrait.clone();
+        let crop_aspect_ratio = crop_aspect_ratio.clone();
+        let first_aspect = first_aspect.clone();
+        let landscape = landscape.clone();
+        let queue_preview = queue_preview.clone();
+        let update_history_buttons = update_history_buttons.clone();
+        reset_crop.connect_clicked(move |_| {
+            let had_crop = !session.borrow().recipe.crop.is_full();
+            if had_crop {
+                session.borrow_mut().mutate(|recipe| recipe.crop = CropRect::default());
+            }
+            pending_crop.replace(CropRect::default());
+            crop_aspect_preset.set(CropAspectPreset::Free);
+            crop_portrait.set(false);
+            crop_aspect_ratio.set(None);
+            first_aspect.set_active(true);
+            landscape.set_active(true);
+            crop_overlay.queue_draw();
+            if had_crop {
+                update_history_buttons();
+                queue_preview();
+            }
+        });
+    }
+
+    {
+        let apply_crop = apply_crop.clone();
+        let cancel_crop = cancel_crop.clone();
+        let crop_overlay = crop_overlay.clone();
+        let tools_toggle = tools_toggle.clone();
         let key = gtk::EventControllerKey::new();
         key.set_propagation_phase(gtk::PropagationPhase::Capture);
         key.connect_key_pressed(move |_, key, _, _| {
-            if crop_overlay.is_visible()
-                && matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
-            {
-                apply_crop();
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
+            if !crop_overlay.is_visible() {
+                return glib::Propagation::Proceed;
+            }
+            match key {
+                gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
+                    apply_crop();
+                    tools_toggle.set_active(true);
+                    glib::Propagation::Stop
+                }
+                gtk::gdk::Key::Escape => {
+                    cancel_crop();
+                    glib::Propagation::Stop
+                }
+                _ => glib::Propagation::Proceed,
             }
         });
         root.add_controller(key);
-    }
-    {
-        let session = session.clone();
-        let crop_overlay = crop_overlay.clone();
-        let crop_actions = crop_actions.clone();
-        let pending_crop = pending_crop.clone();
-        let queue_preview = queue_preview.clone();
-        let update_history_buttons = update_history_buttons.clone();
-        crop_reset.connect_clicked(move |_| {
-            session
-                .borrow_mut()
-                .mutate(|recipe| recipe.crop = CropRect::default());
-            pending_crop.replace(CropRect::default());
-            crop_overlay.set_visible(false);
-            crop_actions.set_visible(false);
-            update_history_buttons();
-            queue_preview();
-        });
     }
 
     configure_crop_overlay(
         &crop_overlay,
         pending_crop.clone(),
         preview_dimensions.clone(),
+        crop_aspect_ratio.clone(),
     );
 
     {
@@ -1854,7 +2083,9 @@ pub fn build(
         let photo = photo.clone();
         let parent = parent.clone();
         let active_rotation = active_rotation.clone();
+        let apply_crop = apply_crop.clone();
         export.connect_clicked(move |_| {
+            apply_crop();
             let dialog = gtk::FileChooserNative::new(
                 Some("Export Edited Photo"),
                 Some(&parent),
@@ -1907,7 +2138,9 @@ pub fn build(
         let on_saved = on_saved.clone();
         let on_close = on_close.clone();
         let parent = parent.clone();
+        let apply_crop = apply_crop.clone();
         done.connect_clicked(move |_| {
+            apply_crop();
             let encoded = session.borrow().recipe.encode();
             if let Err(error) =
                 crate::db::set_edit_recipe(&connection.borrow(), photo.id(), &encoded)
@@ -2250,6 +2483,16 @@ mod panel_tests {
     }
 
     #[test]
+    fn original_filter_tile_uses_photo_editor_language() {
+        assert_eq!(FilterTileEffect::Preset(FilterPreset::None).label(), "Original");
+    }
+
+    #[test]
+    fn filter_tiles_keep_a_compact_natural_width() {
+        assert_eq!(FILTER_TILE_WIDTH, 170);
+    }
+
+    #[test]
     fn filter_thumbnail_renderer_builds_every_quick_look() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/samples/AutoHide.jpg");
         let thumbnails = render_filter_thumbnails(path, 0, &EditRecipe::default()).unwrap();
@@ -2262,11 +2505,52 @@ mod panel_tests {
     }
 
     #[test]
+    fn crop_aspect_presets_produce_expected_centered_rectangles() {
+        let four_three = centered_crop_for_aspect(1600, 900, 4.0 / 3.0);
+        assert!((four_three.left - 0.125).abs() < 0.001);
+        assert!((four_three.right - 0.875).abs() < 0.001);
+        assert_eq!(four_three.top, 0.0);
+        assert_eq!(four_three.bottom, 1.0);
+
+        let portrait = centered_crop_for_aspect(1600, 900, 3.0 / 4.0);
+        // A 3:4 (portrait) crop out of a 16:9 landscape must trim the wide
+        // dimension: keep the full height and cut the sides to 900 * 3/4 px.
+        assert_eq!(portrait.top, 0.0);
+        assert_eq!(portrait.bottom, 1.0);
+        assert!((portrait.left - 0.2890625).abs() < 0.001);
+        assert!((portrait.right - 0.7109375).abs() < 0.001);
+    }
+
+    #[test]
+    fn crop_aspect_orientation_swaps_non_square_ratios() {
+        assert_eq!(CropAspectPreset::FourThree.ratio(1600, 900, false), Some(4.0 / 3.0));
+        assert_eq!(CropAspectPreset::FourThree.ratio(1600, 900, true), Some(3.0 / 4.0));
+        assert_eq!(CropAspectPreset::Square.ratio(1600, 900, true), Some(1.0));
+        assert_eq!(CropAspectPreset::Free.ratio(1600, 900, false), None);
+        assert_eq!(CropAspectPreset::A4.ratio(1600, 900, false), Some(297.0 / 210.0));
+        assert_eq!(CropAspectPreset::A4.ratio(1600, 900, true), Some(210.0 / 297.0));
+        assert_eq!(CropAspectPreset::UsLetter.ratio(1600, 900, false), Some(11.0 / 8.5));
+        assert_eq!(CropAspectPreset::UsLetter.ratio(1600, 900, true), Some(8.5 / 11.0));
+    }
+
+    #[test]
     #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
-    fn editor_uses_responsive_three_tab_sidebar() {
-        gtk::init().unwrap();
+    fn editor_uses_three_tab_sidebar_with_crop_workspace() {
+        if !gtk::is_initialized() {
+            gtk::init().unwrap();
+        }
+        // Apply the same structural edit-panel CSS the real window installs,
+        // so tile geometry matches production instead of stock theme padding.
+        let edit_css = gtk::CssProvider::new();
+        edit_css.load_from_data(crate::window::EDIT_PANEL_CSS);
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().unwrap(),
+            &edit_css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
         let parent = gtk::Window::new();
         let photo: crate::photo_object::PhotoObject = glib::Object::new();
+        photo.set_path(concat!(env!("CARGO_MANIFEST_DIR"), "/samples/AutoHide.jpg").to_string());
         let editor = build(
             &parent,
             Rc::new(RefCell::new(Connection::open_in_memory().unwrap())),
@@ -2274,10 +2558,11 @@ mod panel_tests {
             Rc::new(|| {}),
             Rc::new(|_| {}),
         );
-        parent.set_default_size(1100, 700);
+        parent.set_default_size(1500, 900);
         parent.set_child(Some(&editor.root));
         parent.present();
         settle_gtk();
+
         let toolbar = editor.root.first_child().unwrap();
         let body = toolbar
             .next_sibling()
@@ -2285,32 +2570,11 @@ mod panel_tests {
             .downcast::<gtk::Paned>()
             .unwrap();
         let sidebar = body.start_child().unwrap();
-        let toolbar_labels = descendants(&toolbar)
-            .into_iter()
-            .filter_map(|widget| widget.downcast::<gtk::ToggleButton>().ok())
-            .filter_map(|button| button.label())
-            .collect::<Vec<_>>();
-        assert!(!toolbar_labels
-            .iter()
-            .any(|label| { matches!(label.as_str(), "Tools" | "Filters" | "Crop") }));
-
         let sidebar_widgets = descendants(&sidebar);
         let buttons = sidebar_widgets
             .iter()
             .filter_map(|widget| widget.clone().downcast::<gtk::ToggleButton>().ok())
             .collect::<Vec<_>>();
-        let tools = buttons
-            .iter()
-            .find(|b| b.label().as_deref() == Some("Tools"))
-            .unwrap();
-        let filters = buttons
-            .iter()
-            .find(|b| b.label().as_deref() == Some("Filters"))
-            .unwrap();
-        let crop = buttons
-            .iter()
-            .find(|b| b.label().as_deref() == Some("Crop"))
-            .unwrap();
         let stack = sidebar_widgets
             .iter()
             .find(|widget| widget.has_css_class("edit-panel-pages"))
@@ -2319,97 +2583,301 @@ mod panel_tests {
             .downcast::<gtk::Stack>()
             .unwrap();
 
-        filters.emit_clicked();
-        assert_eq!(stack.visible_child_name().as_deref(), Some("filters"));
-        crop.emit_clicked();
-        assert_eq!(stack.visible_child_name().as_deref(), Some("crop"));
-        tools.emit_clicked();
-        assert_eq!(stack.visible_child_name().as_deref(), Some("tools"));
-
-        let filter_grid = sidebar_widgets
+        // The filter grid must reflow responsively: two columns at the default
+        // pane width, one when the pane is dragged narrow, up to five on wide
+        // panes, with preview thumbnails that have a real visible height.
+        let flow = sidebar_widgets
             .iter()
-            .find(|widget| widget.has_css_class("filter-grid"))
+            .find_map(|widget| widget.clone().downcast::<gtk::FlowBox>().ok())
+            .unwrap();
+        assert_eq!(flow.min_children_per_line(), 1);
+        assert_eq!(flow.max_children_per_line(), 5);
+        assert!(flow.is_homogeneous());
+
+        sidebar_widgets
+            .iter()
+            .filter(|widget| {
+                widget
+                    .parent()
+                    .is_some_and(|parent| parent.has_css_class("edit-panel-tabs"))
+            })
+            .find_map(|widget| {
+                let button = widget.clone().downcast::<gtk::ToggleButton>().ok()?;
+                (button.label().as_deref() == Some("Filters")).then_some(button)
+            })
             .unwrap()
-            .clone()
-            .downcast::<gtk::FlowBox>()
+            .emit_clicked();
+        settle_gtk();
+        // Window mapping and the first allocation passes are asynchronous and
+        // can be slow on headless displays without a window manager; wait for
+        // the grid to actually be laid out before asserting on its geometry.
+        for _ in 0..100 {
+            if flow.allocation().width() > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            settle_gtk();
+        }
+
+        let columns_at = |position: i32| {
+            body.set_position(position);
+            // set_position only stores the value; the children are re-allocated
+            // on the next layout pass, so force one and wait for the grid.
+            body.queue_resize();
+            for _ in 0..100 {
+                settle_gtk();
+                if (flow.allocation().width() - position).abs() <= 8 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let count = first_row_count(&flow);
+            println!(
+                "DBG columns_at({position}) paned={} flow={:?} first_row={count}",
+                body.position(),
+                flow.allocation()
+            );
+            count
+        };
+        assert_eq!(
+            columns_at(360),
+            2,
+            "default pane width shows two columns (flowbox alloc was {:?})",
+            flow.allocation()
+        );
+        for name in ["tools", "filters", "crop"] {
+            let child = stack.child_by_name(name).unwrap();
+            let (m, _, _, _) = child.measure(gtk::Orientation::Horizontal, -1);
+            println!("SWEEP page {name} min_width={m}");
+        }
+        {
+            let (m, _, _, _) = stack.measure(gtk::Orientation::Horizontal, -1);
+            println!("SWEEP stack min_width={m}");
+        }
+        {
+            let tabs_row = sidebar
+                .first_child()
+                .unwrap();
+            let (m, _, _, _) = tabs_row.measure(gtk::Orientation::Horizontal, -1);
+            println!("SWEEP tabs min_width={m}");
+        }
+        {
+            let (m, _, _, _) = sidebar.measure(gtk::Orientation::Horizontal, -1);
+            println!("SWEEP sidebar min_width={m}");
+        }
+        for position in [321, 300, 280, 260, 240, 220, 200] {
+            body.set_position(position);
+            for _ in 0..40 {
+                settle_gtk();
+                if (flow.allocation().width() - position).abs() <= 8 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            println!(
+                "SWEEP position={position} paned_position={} flow={:?} columns={}",
+                body.position(),
+                flow.allocation(),
+                first_row_count(&flow)
+            );
+        }
+        body.set_position(360);
+        for _ in 0..100 {
+            settle_gtk();
+            if (flow.allocation().width() - 360).abs() <= 8 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(first_row_count(&flow), 2);
+        assert_eq!(columns_at(360), 2);
+        {
+            body.set_position(540);
+            body.queue_resize();
+            let sidebar_ref = sidebar.clone();
+            for i in 0..30 {
+                settle_gtk();
+                println!(
+                    "PROBE i={i} paned={} sidebar={:?} window_visible={} flow={:?}",
+                    body.position(),
+                    sidebar_ref.allocation(),
+                    parent.is_visible(),
+                    flow.allocation()
+                );
+                if flow.allocation().width() >= 500 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        assert!(columns_at(540) >= 3, "wider pane must expose a third column");
+        assert!(columns_at(720) >= 4, "wider pane must expose a fourth column");
+        assert_eq!(columns_at(1200), 5, "widest pane caps at five columns");
+
+        let first_child = flow.first_child().unwrap();
+        let tile_button = first_child.first_child().unwrap();
+        let tile_content = tile_button.first_child().unwrap();
+        let tile_picture = tile_content
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::Picture>()
             .unwrap();
-        assert!(filter_grid.is_homogeneous());
-        assert!(filter_grid.min_children_per_line() < filter_grid.max_children_per_line());
-        assert!(filter_grid.max_children_per_line() >= 4);
+        let (tile_min_width, tile_min_height) = tile_picture.size_request();
+        assert_eq!(tile_min_width, FILTER_TILE_PREVIEW_WIDTH);
+        assert!(
+            tile_min_height >= 100,
+            "preview needs a visible minimum height"
+        );
+        assert!(tile_picture.allocation().height() >= tile_min_height);
 
-        filters.emit_clicked();
-        settle_gtk();
-        body.set_position(380);
-        settle_gtk();
-        let default_columns = first_row_count(&filter_grid);
-        let first_tile = filter_grid.first_child().unwrap();
-        let (minimum, natural, _, _) = first_tile.measure(gtk::Orientation::Horizontal, -1);
-        body.set_position(500);
-        settle_gtk();
-        let wide_columns = first_row_count(&filter_grid);
-        assert!(minimum > 0 && natural >= minimum);
-        assert!(default_columns >= 2);
-        assert!(wide_columns > default_columns);
-
-        let filter_tiles = sidebar_widgets
+        let top_level_tab_labels = buttons
             .iter()
-            .filter_map(|widget| widget.clone().downcast::<gtk::ToggleButton>().ok())
-            .filter(|button| button.has_css_class("filter-tile"))
+            .filter(|button| button.parent().is_some_and(|parent| parent.has_css_class("edit-panel-tabs")))
+            .filter_map(|button| button.label().map(|label| label.to_string()))
             .collect::<Vec<_>>();
-        assert_eq!(filter_tiles.len(), FilterPreset::ALL.len() + 3);
-        let none = filter_tiles
-            .iter()
-            .find(|button| button.tooltip_text().as_deref() == Some("None"))
-            .unwrap();
-        let clarendon = filter_tiles
-            .iter()
-            .find(|button| button.tooltip_text().as_deref() == Some("Clarendon"))
-            .unwrap();
-        assert!(none.is_active());
-        clarendon.emit_clicked();
-        assert!(clarendon.is_active());
-        assert!(!none.is_active());
-        none.emit_clicked();
-        assert!(none.is_active());
-        assert!(!clarendon.is_active());
-        none.emit_clicked();
-        assert!(none.is_active(), "None must remain the selected filter");
+        assert_eq!(
+            top_level_tab_labels,
+            vec!["Tools".to_string(), "Filters".to_string(), "Crop".to_string()]
+        );
 
-        let segments = sidebar_widgets
+        let crop_tab = buttons
             .iter()
-            .filter(|widget| widget.has_css_class("tools-segment"))
-            .count();
-        assert_eq!(segments, 2);
+            .find(|button| button.label().as_deref() == Some("Crop"))
+            .unwrap();
+        crop_tab.emit_clicked();
+        assert_eq!(stack.visible_child_name().as_deref(), Some("crop"));
+
+        for label in ["Free", "Original", "1:1", "4:3", "3:2", "16:9", "Landscape", "Portrait"] {
+            assert!(buttons.iter().any(|button| button.label().as_deref() == Some(label)), "missing crop control {label}");
+        }
+        assert!(sidebar_widgets.iter().any(|widget| widget.has_css_class("crop-straighten-scale")));
+        assert!(sidebar_widgets.iter().any(|widget| {
+            widget.clone().downcast::<gtk::Button>().ok().and_then(|button| button.label()).as_deref()
+                == Some("Reset Crop")
+        }));
+        assert!(!sidebar_widgets.iter().any(|widget| {
+            widget.clone().downcast::<gtk::Button>().ok().and_then(|button| button.label()).as_deref()
+                == Some("Apply Crop")
+        }));
+        settle_gtk();
+
+    }
+
+    #[test]
+    fn fit_anchor_uses_letterboxed_photo_rectangle() {
+        let rect = fit_photo_rect(400.0, 400.0, 1000.0, 800.0);
+        assert_eq!(rect, (0.0, 40.0, 400.0, 320.0));
+        let normalized =
+            normalized_image_point(200.0, 160.0, rect.0, rect.1, rect.2, rect.3, 0.0, 0.0)
+                .expect("cursor is over photo");
+        let target = (
+            normalized_scroll_target(normalized.0, 200.0, 400.0, 1000.0),
+            normalized_scroll_target(normalized.1, 160.0, 400.0, 800.0),
+        );
+        assert!((target.0 - 300.0).abs() < 0.001);
+        assert!((target.1 - 140.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn fit_anchor_returns_none_when_pointer_is_in_margin() {
+        assert!(normalized_image_point(10.0, 10.0, 0.0, 40.0, 400.0, 320.0, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn zoom_anchor_keeps_centered_image_point_under_pointer() {
+        let target = anchored_scroll_target(0.0, 500.0, 1000.0, 800.0, 1200.0);
+        assert!((target - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn zoom_anchor_preserves_off_center_scrolled_point() {
+        let target = anchored_scroll_target(250.0, 125.0, 500.0, 1000.0, 2000.0);
+        assert!((target - 625.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn zoom_anchor_handles_zooming_out_to_content_smaller_than_viewport() {
+        let target = anchored_scroll_target(250.0, 250.0, 500.0, 1000.0, 400.0);
+        assert!((target - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn one_to_one_anchor_preserves_cursor_image_point() {
+        let target = one_to_one_scroll_target(0.0, 400.0, 1000.0, 800.0, 4000.0, true);
+        assert!((target - 1100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn one_to_one_without_image_pointer_centers_native_image() {
+        let target = one_to_one_scroll_target(0.0, 0.0, 1000.0, 800.0, 4000.0, false);
+        assert!((target - 1500.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn pointer_must_be_over_centered_image_to_anchor_one_to_one() {
+        assert!(!pointer_over_content(50.0, 1000.0, 800.0));
+        assert!(pointer_over_content(100.0, 1000.0, 800.0));
+        assert!(pointer_over_content(900.0, 1000.0, 800.0));
+        assert!(!pointer_over_content(950.0, 1000.0, 800.0));
     }
 }
 
 fn add_section_label(parent: &gtk::Box, text: &str) {
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);
-    label.set_margin_top(6);
+    label.set_margin_top(8);
     label.add_css_class("heading");
+    label.add_css_class("edit-section-label");
     parent.append(&label);
 }
+
+const FILTER_TILE_WIDTH: i32 = 170;
+// The preview frame paints a 2px border on each side, so the picture inside
+// must minimum-fit the remaining width at the default 4:3 thumbnail ratio.
+// Without a real minimum height the AspectFrame collapses to a 1px strip and
+// the thumbnails appear missing until the async paintable happens to arrive.
+const FILTER_TILE_FRAME_BORDER: i32 = 4;
+const FILTER_TILE_PREVIEW_WIDTH: i32 = FILTER_TILE_WIDTH - FILTER_TILE_FRAME_BORDER;
+const FILTER_TILE_PREVIEW_HEIGHT: i32 = FILTER_TILE_PREVIEW_WIDTH * 3 / 4;
 
 fn filter_tile(effect: FilterTileEffect) -> (gtk::ToggleButton, gtk::Picture) {
     let button = gtk::ToggleButton::new();
     button.add_css_class("filter-tile");
     button.set_tooltip_text(Some(effect.label()));
+    // A fixed compact minimum width is intentional. It drives how many
+    // homogeneous columns FlowBox can fit, but unlike the previous resize
+    // callback this request never grows when the pane grows, so it cannot make
+    // the inspector sticky after a resize.
+    button.set_size_request(FILTER_TILE_WIDTH, -1);
+    button.set_halign(gtk::Align::Fill);
+    button.set_valign(gtk::Align::Start);
 
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 5);
+    content.set_hexpand(false);
+    content.set_halign(gtk::Align::Fill);
+
+    // The picture owns the 4:3 tile geometry directly. Wrapping it in an
+    // AspectFrame would inflate the tile's minimum width (the frame enforces
+    // its ratio on the minimum measurement), collapsing the grid back to a
+    // single column at the default pane width. ContentFit::Cover already
+    // letterbox-crops any thumbnail into the 4:3 preview box.
     let picture = gtk::Picture::new();
     picture.set_content_fit(gtk::ContentFit::Cover);
     picture.set_can_shrink(true);
-    picture.set_size_request(70, 70);
-    let preview_frame = gtk::AspectFrame::new(0.5, 0.5, 1.0, false);
-    preview_frame.set_child(Some(&picture));
-    preview_frame.add_css_class("filter-tile-preview");
+    picture.set_hexpand(true);
+    picture.set_vexpand(true);
+    picture.set_halign(gtk::Align::Fill);
+    picture.set_valign(gtk::Align::Fill);
+    picture.set_size_request(FILTER_TILE_PREVIEW_WIDTH, FILTER_TILE_PREVIEW_HEIGHT);
+    picture.add_css_class("filter-tile-preview");
+    picture.set_overflow(gtk::Overflow::Hidden);
+
     let label = gtk::Label::new(Some(effect.label()));
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     label.set_justify(gtk::Justification::Center);
-    label.set_max_width_chars(10);
+    label.set_max_width_chars(18);
     label.add_css_class("filter-tile-label");
-    content.append(&preview_frame);
+    content.append(&picture);
     content.append(&label);
     button.set_child(Some(&content));
     (button, picture)
@@ -2424,13 +2892,35 @@ fn add_slider(
     digits: i32,
 ) -> gtk::Scale {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    row.add_css_class("edit-adjustment-row");
+
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);
+    label.set_hexpand(true);
+    let value = gtk::Label::new(None);
+    value.set_xalign(1.0);
+    value.add_css_class("dim-label");
+    value.add_css_class("edit-adjustment-value");
+    header.append(&label);
+    header.append(&value);
+
     let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step);
     scale.set_digits(digits);
-    scale.set_draw_value(true);
+    scale.set_draw_value(false);
     scale.set_hexpand(true);
-    row.append(&label);
+    scale.add_css_class("edit-adjustment-scale");
+
+    let precision = digits.max(0) as usize;
+    value.set_text(&format!("{:.*}", precision, scale.value()));
+    {
+        let value = value.clone();
+        scale.connect_value_changed(move |scale| {
+            value.set_text(&format!("{:.*}", precision, scale.value()));
+        });
+    }
+
+    row.append(&header);
     row.append(&scale);
     parent.append(&row);
     scale
@@ -2551,6 +3041,7 @@ fn configure_crop_overlay(
     overlay: &gtk::DrawingArea,
     pending: Rc<RefCell<CropRect>>,
     preview_dimensions: Rc<Cell<(i32, i32)>>,
+    active_aspect_ratio: Rc<Cell<Option<f64>>>,
 ) {
     let pending_for_draw = pending.clone();
     let preview_for_draw = preview_dimensions.clone();
@@ -2608,6 +3099,29 @@ fn configure_crop_overlay(
             let (Some((sx, sy)), Some((cx, cy))) = (start, current) else {
                 return;
             };
+            let (mut cx, mut cy) = (cx, cy);
+            if let Some(target_ratio) = active_aspect_ratio.get() {
+                let (image_width, image_height) = preview_dimensions.get();
+                if image_width > 0 && image_height > 0 && target_ratio > 0.0 {
+                    // In normalized coordinates the required width/height
+                    // ratio must account for the displayed image aspect.
+                    let normalized_ratio =
+                        target_ratio * image_height as f64 / image_width as f64;
+                    let sign_x = if cx >= sx { 1.0 } else { -1.0 };
+                    let sign_y = if cy >= sy { 1.0 } else { -1.0 };
+                    let mut width = (cx - sx).abs();
+                    let mut height = (cy - sy).abs();
+                    if width > 0.0 && height > 0.0 && normalized_ratio > 0.0 {
+                        if width / height > normalized_ratio {
+                            width = height * normalized_ratio;
+                        } else {
+                            height = width / normalized_ratio;
+                        }
+                        cx = (sx + sign_x * width).clamp(0.0, 1.0);
+                        cy = (sy + sign_y * height).clamp(0.0, 1.0);
+                    }
+                }
+            }
             pending.replace(
                 CropRect {
                     left: sx.min(cx) as f32,
@@ -2662,70 +3176,4 @@ fn contained_rect(
         width,
         height,
     )
-}
-
-#[cfg(test)]
-mod zoom_anchor_tests {
-    use super::{
-        anchored_scroll_target, fit_photo_rect, normalized_image_point, normalized_scroll_target,
-        one_to_one_scroll_target, pointer_over_content,
-    };
-
-    #[test]
-    fn fit_anchor_uses_letterboxed_photo_rectangle() {
-        let rect = fit_photo_rect(400.0, 400.0, 1000.0, 800.0);
-        assert_eq!(rect, (0.0, 40.0, 400.0, 320.0));
-        let normalized =
-            normalized_image_point(200.0, 160.0, rect.0, rect.1, rect.2, rect.3, 0.0, 0.0)
-                .expect("cursor is over photo");
-        let target = (
-            normalized_scroll_target(normalized.0, 200.0, 400.0, 1000.0),
-            normalized_scroll_target(normalized.1, 160.0, 400.0, 800.0),
-        );
-        assert!((target.0 - 300.0).abs() < 0.001);
-        assert!((target.1 - 140.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn fit_anchor_returns_none_when_pointer_is_in_margin() {
-        assert!(normalized_image_point(10.0, 10.0, 0.0, 40.0, 400.0, 320.0, 0.0, 0.0).is_none());
-    }
-
-    #[test]
-    fn zoom_anchor_keeps_centered_image_point_under_pointer() {
-        let target = anchored_scroll_target(0.0, 500.0, 1000.0, 800.0, 1200.0);
-        assert!((target - 100.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn zoom_anchor_preserves_off_center_scrolled_point() {
-        let target = anchored_scroll_target(250.0, 125.0, 500.0, 1000.0, 2000.0);
-        assert!((target - 625.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn zoom_anchor_handles_zooming_out_to_content_smaller_than_viewport() {
-        let target = anchored_scroll_target(250.0, 250.0, 500.0, 1000.0, 400.0);
-        assert!((target - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn one_to_one_anchor_preserves_cursor_image_point() {
-        let target = one_to_one_scroll_target(0.0, 400.0, 1000.0, 800.0, 4000.0, true);
-        assert!((target - 1100.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn one_to_one_without_image_pointer_centers_native_image() {
-        let target = one_to_one_scroll_target(0.0, 0.0, 1000.0, 800.0, 4000.0, false);
-        assert!((target - 1500.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn pointer_must_be_over_centered_image_to_anchor_one_to_one() {
-        assert!(!pointer_over_content(50.0, 1000.0, 800.0));
-        assert!(pointer_over_content(100.0, 1000.0, 800.0));
-        assert!(pointer_over_content(900.0, 1000.0, 800.0));
-        assert!(!pointer_over_content(950.0, 1000.0, 800.0));
-    }
 }

@@ -4717,7 +4717,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     window.add_breakpoint(compact);
 
     let provider = gtk::CssProvider::new();
-    provider.load_from_data("\
+    provider.load_from_data(&format!(
+        "{}\n{}",
+        "\
         window, .layout-left-column, .navigation-sidebar { background: #252525; color: #f2f2f2; }\
         .layout-left-column { min-width: 200px; border-right: 1px solid #101010; }\
         .sidebar-resize-handle { background: transparent; }\
@@ -4800,7 +4802,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .lightbox-backdrop.standard-light { background: @view_bg_color; }\
         .lightbox-backdrop.standard-dark { background: #000000; }\
         .lightbox-picture { background: transparent; }\
-    ");
+    ",
+        crate::window::EDIT_PANEL_CSS,
+    ));
 
     gtk::style_context_add_provider_for_display(
         &gtk::gdk::Display::default().expect("a display is required"),
