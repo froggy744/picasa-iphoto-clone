@@ -2,11 +2,11 @@
 // Photo printing
 //
 // The bottom bar's print button renders the selected photo (library rotation,
-// crops and filters applied) on a worker thread and pops the standard GTK
-// print dialog. A custom "Photo" tab (gtk_print_operation's
-// create-custom-widget) offers exact physical print sizes, shrink-to-fit vs
-// crop-to-fill, and 1-4 prints per page. Choices persist across sessions via
-// the settings table, together with the GTK printer/paper selections.
+// crops and filters applied) on a worker thread, shows an Adwaita photo
+// options dialog (exact print size, shrink-to-fit vs crop-to-fill, 1-4 prints
+// per page) and then pops the standard GTK print dialog. Choices persist
+// across sessions via the settings table, together with the GTK
+// printer/paper selections.
 //
 // This file is include!()d into the `window` module, so it shares the
 // imports at the top of window.rs (gtk, adw, glib, db, Rc/RefCell, ...).
@@ -176,8 +176,8 @@ pub(crate) struct PhotoPrintRequest {
     pub job_name: String,
 }
 
-/// Render the photo in the background, then pop the print dialog with the
-/// photo options tab on the main thread.
+/// Render the photo in the background, then show the photo options dialog
+/// followed by the print dialog on the main thread.
 pub(crate) fn print_photo<W: IsA<gtk::Window>>(
     parent: &W,
     connection: &Rc<RefCell<Connection>>,
@@ -212,11 +212,11 @@ pub(crate) fn print_photo<W: IsA<gtk::Window>>(
 
         glib::MainContext::default().invoke(move || match rendered {
             Ok(image) => run_print_dialog(
-                &weak_parent,
+                weak_parent,
                 initial_extras,
                 Rc::new(*image),
-                &job_name,
-                saved_config.as_deref(),
+                job_name,
+                saved_config,
             ),
             Err(error) => eprintln!("Could not prepare photo for printing: {error:#}"),
         });
@@ -245,22 +245,69 @@ fn downscale_for_print(image: image::RgbaImage) -> image::RgbaImage {
 }
 
 // ---------------------------------------------------------------------------
-// Dialog
+// Dialogs
+//
+// A standalone photo-options dialog runs BEFORE the print operation. Print
+// dialog custom tabs (create-custom-widget) only exist in GTK's native Unix
+// print dialog; Flatpak portals and the Windows/macOS native dialogs never
+// show them, so the options live in our own Adwaita dialog instead.
 // ---------------------------------------------------------------------------
 
 fn run_print_dialog(
-    weak_parent: &glib::SendWeakRef<gtk::Window>,
+    weak_parent: glib::SendWeakRef<gtk::Window>,
     initial_extras: PrintExtras,
+    image: Rc<image::RgbaImage>,
+    job_name: String,
+    saved_config: Option<String>,
+) {
+    let Some(parent) = weak_parent.upgrade() else {
+        eprintln!("Could not print photo: the window is gone");
+        return;
+    };
+    let extras = Rc::new(RefCell::new(initial_extras));
+
+    let dialog = adw::AlertDialog::new(Some("Print photo"), Some(&job_name));
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("print", "Print");
+    dialog.set_response_appearance("print", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("print"));
+    dialog.set_close_response("cancel");
+    dialog.set_extra_child(Some(&build_extras_widget(&extras)));
+
+    let extras_for_response = extras.clone();
+    let image_for_print = image;
+    let job_name_for_print = job_name;
+    let parent_for_print = weak_parent;
+    let config_for_print = saved_config;
+    dialog.choose(Some(&parent), None::<&gio::Cancellable>, move |response| {
+        if response == "print" {
+            run_print_operation(
+                &parent_for_print,
+                &extras_for_response,
+                image_for_print,
+                &job_name_for_print,
+                config_for_print.as_deref(),
+            );
+        } else {
+            // Keep whatever sizes the user previewed, even on cancel.
+            persist_print_state(None, &extras_for_response.borrow());
+        }
+    });
+}
+
+fn run_print_operation(
+    weak_parent: &glib::SendWeakRef<gtk::Window>,
+    extras: &Rc<RefCell<PrintExtras>>,
     image: Rc<image::RgbaImage>,
     job_name: &str,
     saved_config: Option<&str>,
 ) {
-    let extras = Rc::new(RefCell::new(initial_extras));
     let operation = gtk::PrintOperation::new();
     operation.set_job_name(job_name);
     operation.set_n_pages(1);
 
-    // Restore the printer, paper and photo choices from the previous print.
+    // Restore the printer, paper and orientation choices from the previous
+    // print so the system dialog opens ready-to-go.
     if let Some(config) = saved_config {
         let key_file = glib::KeyFile::new();
         if key_file
@@ -278,12 +325,6 @@ fn run_print_dialog(
         }
     }
 
-    let extras_for_widget = extras.clone();
-    operation.connect_create_custom_widget(move |_| {
-        let widget: gtk::Widget = build_extras_widget(&extras_for_widget);
-        Some(widget.upcast())
-    });
-
     let extras_for_draw = extras.clone();
     let image_for_draw = image;
     operation.connect_draw_page(move |_operation, context, page_number| {
@@ -298,8 +339,8 @@ fn run_print_dialog(
     );
 
     match response {
-        // Apply/InProgress mean the user accepted the dialog: persist the
-        // printer, paper and orientation choices for the next print.
+        // Apply/InProgress mean the user accepted the print dialog: persist
+        // the printer, paper and orientation choices for the next time.
         Ok(result @ (gtk::PrintOperationResult::Apply
         | gtk::PrintOperationResult::InProgress)) => {
             let key_file = glib::KeyFile::new();
@@ -309,38 +350,34 @@ fn run_print_dialog(
             operation
                 .default_page_setup()
                 .to_key_file(&key_file, PRINT_PAGE_SETUP_GROUP);
-            let connection = match db::open_default() {
-                Ok(connection) => connection,
-                Err(error) => {
-                    eprintln!("Could not save print settings: {error:#}");
-                    return;
-                }
-            };
-            if let Err(error) =
-                db::set_setting(&connection, PRINT_CONFIG_KEY, &key_file.to_data())
-            {
-                eprintln!("Could not save print settings: {error}");
-            }
+            persist_print_state(Some(&key_file), &extras.borrow());
             let _ = result;
         }
-        Ok(_cancelled) => {}
+        Ok(_cancelled) => {
+            persist_print_state(None, &extras.borrow());
+        }
         Err(error) => eprintln!("Could not print photo: {error}"),
     }
+}
 
-    // The photo tab updates `extras` live, so save the final choices however
-    // the dialog was closed. A short-lived connection keeps the worker ->
-    // main-loop handoff free of non-Send handles.
+/// Save the print state with a short-lived connection. The shared library
+/// connection is intentionally not captured by the main-loop callbacks, so a
+/// fresh open keeps non-Send handles out of the worker -> main handoff.
+fn persist_print_state(config_key_file: Option<&glib::KeyFile>, extras: &PrintExtras) {
     let Ok(connection) = db::open_default() else {
         eprintln!("Could not open the photo library to save print options");
         return;
     };
-    let saved_extras = extras_to_string(&extras.borrow());
-    if let Err(error) = db::set_setting(&connection, PRINT_EXTRAS_KEY, &saved_extras) {
+    if let Some(key_file) = config_key_file {
+        if let Err(error) = db::set_setting(&connection, PRINT_CONFIG_KEY, &key_file.to_data()) {
+            eprintln!("Could not save print settings: {error}");
+        }
+    }
+    if let Err(error) = db::set_setting(&connection, PRINT_EXTRAS_KEY, &extras_to_string(extras)) {
         eprintln!("Could not save print options: {error}");
     }
 }
 
-/// Build the "Photo" tab shown inside the print dialog.
 fn build_extras_widget(extras: &Rc<RefCell<PrintExtras>>) -> gtk::Widget {
     let grid = gtk::Grid::new();
     grid.set_row_spacing(10);
