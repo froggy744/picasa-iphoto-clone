@@ -156,6 +156,60 @@ struct PreviewJob {
     result_sender: std::sync::mpsc::Sender<anyhow::Result<(u64, u32, u32, Vec<u8>)>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FilterTileEffect {
+    Preset(FilterPreset),
+    BlackWhite,
+    Sepia,
+}
+
+impl FilterTileEffect {
+    fn all() -> Vec<Self> {
+        std::iter::once(Self::Preset(FilterPreset::None))
+            .chain(FilterPreset::ALL.map(Self::Preset))
+            .chain([Self::BlackWhite, Self::Sepia])
+            .collect()
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Preset(preset) => preset.label(),
+            Self::BlackWhite => "B&W",
+            Self::Sepia => "Sepia",
+        }
+    }
+
+    fn recipe(self, base: &EditRecipe) -> EditRecipe {
+        let mut recipe = base.clone();
+        recipe.filter = FilterPreset::None;
+        recipe.black_white = false;
+        recipe.sepia = false;
+        match self {
+            Self::Preset(preset) => recipe.filter = preset,
+            Self::BlackWhite => recipe.black_white = true,
+            Self::Sepia => recipe.sepia = true,
+        }
+        recipe
+    }
+}
+
+type FilterThumbnailPixels = (u32, u32, Vec<u8>);
+
+fn render_filter_thumbnails(
+    path: &str,
+    rotation: i32,
+    recipe: &EditRecipe,
+) -> anyhow::Result<Vec<FilterThumbnailPixels>> {
+    let base = super::render::decode_base_for_viewer(path, rotation, 192, 192)?;
+    Ok(FilterTileEffect::all()
+        .into_iter()
+        .map(|effect| {
+            let image = super::render::apply_recipe(base.clone(), &effect.recipe(recipe));
+            (image.width(), image.height(), image.into_raw())
+        })
+        .collect())
+}
+
 fn spawn_preview_worker(
     base_cache: Arc<Mutex<Vec<PreviewBase>>>,
 ) -> std::sync::mpsc::Sender<PreviewJob> {
@@ -422,16 +476,6 @@ pub fn build(
     reset.set_tooltip_text(Some("Reset all edits to the original"));
     toolbar.append(&reset);
 
-    let tools_toggle = gtk::ToggleButton::with_label("Tools");
-    tools_toggle.set_active(true);
-    tools_toggle.set_tooltip_text(Some("Show editing controls"));
-    toolbar.append(&tools_toggle);
-
-    let filters_toggle = gtk::ToggleButton::with_label("Filters");
-    filters_toggle.set_group(Some(&tools_toggle));
-    filters_toggle.set_tooltip_text(Some("Show one-tap photo filters"));
-    toolbar.append(&filters_toggle);
-
     let export = gtk::Button::with_label("Export");
     export.set_tooltip_text(Some("Export the current edited photo as a new JPEG"));
     toolbar.append(&export);
@@ -447,40 +491,78 @@ pub fn build(
     let body = gtk::Paned::new(gtk::Orientation::Horizontal);
     body.set_hexpand(true);
     body.set_vexpand(true);
-    body.set_position(315);
+    body.set_position(380);
     body.set_resize_start_child(false);
     body.set_shrink_start_child(false);
     body.set_wide_handle(true);
     root.append(&body);
 
+    let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    sidebar.set_width_request(315);
+
+    let panel_tabs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    panel_tabs.set_margin_top(12);
+    panel_tabs.set_margin_start(14);
+    panel_tabs.set_margin_end(14);
+    panel_tabs.set_margin_bottom(4);
+    panel_tabs.add_css_class("linked");
+    panel_tabs.add_css_class("edit-panel-tabs");
+
+    let tools_toggle = gtk::ToggleButton::with_label("Tools");
+    tools_toggle.set_active(true);
+    tools_toggle.set_hexpand(true);
+    tools_toggle.set_tooltip_text(Some("Show editing controls"));
+    let filters_toggle = gtk::ToggleButton::with_label("Filters");
+    filters_toggle.set_group(Some(&tools_toggle));
+    filters_toggle.set_hexpand(true);
+    filters_toggle.set_tooltip_text(Some("Show one-tap photo filters"));
+    let crop_toggle = gtk::ToggleButton::with_label("Crop");
+    crop_toggle.set_group(Some(&tools_toggle));
+    crop_toggle.set_hexpand(true);
+    crop_toggle.set_tooltip_text(Some("Show crop and straighten controls"));
+    panel_tabs.append(&tools_toggle);
+    panel_tabs.append(&filters_toggle);
+    panel_tabs.append(&crop_toggle);
+    sidebar.append(&panel_tabs);
+
     let tools_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    tools_box.set_width_request(285);
     tools_box.set_margin_top(14);
     tools_box.set_margin_bottom(14);
     tools_box.set_margin_start(14);
     tools_box.set_margin_end(14);
     let filters_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    filters_box.set_visible(true);
     filters_box.set_hexpand(true);
     filters_box.set_vexpand(true);
-    filters_box.set_width_request(285);
     filters_box.set_margin_top(14);
     filters_box.set_margin_bottom(14);
-    filters_box.set_margin_start(14);
-    filters_box.set_margin_end(14);
+    filters_box.set_margin_start(10);
+    filters_box.set_margin_end(10);
+    let crop_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    crop_box.set_margin_top(14);
+    crop_box.set_margin_bottom(14);
+    crop_box.set_margin_start(14);
+    crop_box.set_margin_end(14);
+
+    let tools_scroll = gtk::ScrolledWindow::new();
+    tools_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    tools_scroll.set_child(Some(&tools_box));
+    let filters_scroll = gtk::ScrolledWindow::new();
+    filters_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    filters_scroll.set_child(Some(&filters_box));
+    let crop_scroll = gtk::ScrolledWindow::new();
+    crop_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    crop_scroll.set_child(Some(&crop_box));
 
     let panel_stack = gtk::Stack::new();
     panel_stack.set_hexpand(true);
     panel_stack.set_vexpand(true);
-    panel_stack.add_named(&tools_box, Some("tools"));
-    panel_stack.add_named(&filters_box, Some("filters"));
-    panel_stack.set_visible_child(&tools_box);
-
-    let tools_scroll = gtk::ScrolledWindow::new();
-    tools_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    tools_scroll.set_width_request(315);
-    tools_scroll.set_child(Some(&panel_stack));
-    body.set_start_child(Some(&tools_scroll));
+    panel_stack.add_css_class("edit-panel-pages");
+    panel_stack.add_named(&tools_scroll, Some("tools"));
+    panel_stack.add_named(&filters_scroll, Some("filters"));
+    panel_stack.add_named(&crop_scroll, Some("crop"));
+    panel_stack.set_visible_child(&tools_scroll);
+    sidebar.append(&panel_stack);
+    body.set_start_child(Some(&sidebar));
 
     let preview_area = gtk::Overlay::new();
     preview_area.set_hexpand(true);
@@ -604,7 +686,7 @@ pub fn build(
     }
     picture_scroll.add_controller(pan_drag);
 
-    add_section_label(&tools_box, "Basic fixes");
+    add_section_label(&filters_box, "Quick fixes");
     let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let auto_contrast = gtk::ToggleButton::with_label("Auto Contrast");
     let auto_color = gtk::ToggleButton::with_label("Auto Colour");
@@ -612,38 +694,39 @@ pub fn build(
     auto_color.set_hexpand(true);
     auto_row.append(&auto_contrast);
     auto_row.append(&auto_color);
-    tools_box.append(&auto_row);
-
-    let black_white = gtk::ToggleButton::with_label("B&W");
-    let sepia = gtk::ToggleButton::with_label("Sepia");
+    filters_box.append(&auto_row);
 
     add_section_label(&filters_box, "Filters");
-    let filter_grid = gtk::Grid::new();
-    filter_grid.set_row_spacing(6);
-    filter_grid.set_column_spacing(6);
-    filter_grid.set_column_homogeneous(true);
+    let filter_grid = gtk::FlowBox::new();
+    filter_grid.set_row_spacing(5);
+    filter_grid.set_column_spacing(4);
+    filter_grid.set_homogeneous(true);
+    filter_grid.set_min_children_per_line(2);
+    filter_grid.set_max_children_per_line(8);
+    filter_grid.set_selection_mode(gtk::SelectionMode::None);
+    filter_grid.add_css_class("filter-grid");
     let mut filter_buttons = Vec::new();
-    let filter_presets = std::iter::once(FilterPreset::None)
-        .chain(FilterPreset::ALL)
-        .collect::<Vec<_>>();
-    for (index, preset) in filter_presets.iter().copied().enumerate() {
-        let button = gtk::ToggleButton::with_label(preset.label());
-        button.set_hexpand(true);
-        filter_grid.attach(&button, (index % 2) as i32, (index / 2) as i32, 1, 1);
-        filter_buttons.push((preset, button));
+    let mut filter_pictures = Vec::new();
+    let mut black_white = None;
+    let mut sepia = None;
+    for effect in FilterTileEffect::all() {
+        let (button, picture) = filter_tile(effect);
+        filter_grid.insert(&button, -1);
+        filter_pictures.push(picture);
+        match effect {
+            FilterTileEffect::Preset(preset) => filter_buttons.push((preset, button)),
+            FilterTileEffect::BlackWhite => black_white = Some(button),
+            FilterTileEffect::Sepia => sepia = Some(button),
+        }
     }
-    let legacy_filter_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    black_white.set_hexpand(true);
-    sepia.set_hexpand(true);
-    legacy_filter_row.append(&black_white);
-    legacy_filter_row.append(&sepia);
     filters_box.append(&filter_grid);
-    filters_box.append(&legacy_filter_row);
+    let black_white = black_white.expect("B&W filter tile");
+    let sepia = sepia.expect("Sepia filter tile");
 
-    add_section_label(&tools_box, "Geometry");
+    add_section_label(&crop_box, "Crop and straighten");
     let crop = gtk::Button::with_label("Crop…");
     crop.set_halign(gtk::Align::Fill);
-    tools_box.append(&crop);
+    crop_box.append(&crop);
     let crop_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let crop_apply = gtk::Button::with_label("Apply Crop");
     crop_apply.add_css_class("suggested-action");
@@ -653,19 +736,61 @@ pub fn build(
     crop_actions.append(&crop_cancel);
     crop_actions.append(&crop_reset);
     crop_actions.set_visible(false);
-    tools_box.append(&crop_actions);
+    crop_box.append(&crop_actions);
 
-    let straighten = add_slider(&tools_box, "Straighten", -10.0, 10.0, 0.1, 1);
+    let straighten = add_slider(&crop_box, "Straighten", -10.0, 10.0, 0.1, 1);
 
-    add_section_label(&tools_box, "Tuning");
-    let exposure = add_slider(&tools_box, "Exposure", -2.0, 2.0, 0.05, 2);
-    let contrast = add_slider(&tools_box, "Contrast", -1.0, 1.0, 0.02, 2);
-    let fill_light = add_slider(&tools_box, "Fill Light", -1.0, 1.0, 0.02, 2);
-    let highlights = add_slider(&tools_box, "Highlights", -1.0, 1.0, 0.02, 2);
-    let shadows = add_slider(&tools_box, "Shadows", -1.0, 1.0, 0.02, 2);
-    let temperature = add_slider(&tools_box, "Colour Temperature", -1.0, 1.0, 0.02, 2);
-    let saturation = add_slider(&tools_box, "Saturation", -1.0, 1.0, 0.02, 2);
-    let sharpen = add_slider(&tools_box, "Sharpen", 0.0, 1.0, 0.02, 2);
+    let tools_segments = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    tools_segments.add_css_class("linked");
+    let light_toggle = gtk::ToggleButton::with_label("Light");
+    light_toggle.set_active(true);
+    light_toggle.set_hexpand(true);
+    light_toggle.add_css_class("tools-segment");
+    let colour_toggle = gtk::ToggleButton::with_label("Colour");
+    colour_toggle.set_group(Some(&light_toggle));
+    colour_toggle.set_hexpand(true);
+    colour_toggle.add_css_class("tools-segment");
+    tools_segments.append(&light_toggle);
+    tools_segments.append(&colour_toggle);
+    tools_box.append(&tools_segments);
+
+    let light_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    let colour_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    let tuning_stack = gtk::Stack::new();
+    tuning_stack.set_hexpand(true);
+    tuning_stack.set_vexpand(true);
+    tuning_stack.add_named(&light_box, Some("light"));
+    tuning_stack.add_named(&colour_box, Some("colour"));
+    tuning_stack.set_visible_child(&light_box);
+    tools_box.append(&tuning_stack);
+
+    let exposure = add_slider(&light_box, "Exposure", -2.0, 2.0, 0.05, 2);
+    let contrast = add_slider(&light_box, "Contrast", -1.0, 1.0, 0.02, 2);
+    let fill_light = add_slider(&light_box, "Fill Light", -1.0, 1.0, 0.02, 2);
+    let highlights = add_slider(&light_box, "Highlights", -1.0, 1.0, 0.02, 2);
+    let shadows = add_slider(&light_box, "Shadows", -1.0, 1.0, 0.02, 2);
+    let sharpen = add_slider(&light_box, "Sharpen", 0.0, 1.0, 0.02, 2);
+    let saturation = add_slider(&colour_box, "Saturation", -1.0, 1.0, 0.02, 2);
+    let temperature = add_slider(&colour_box, "Warmth", -1.0, 1.0, 0.02, 2);
+
+    {
+        let tuning_stack = tuning_stack.clone();
+        let light_box = light_box.clone();
+        light_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                tuning_stack.set_visible_child(&light_box);
+            }
+        });
+    }
+    {
+        let tuning_stack = tuning_stack.clone();
+        let colour_box = colour_box.clone();
+        colour_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                tuning_stack.set_visible_child(&colour_box);
+            }
+        });
+    }
 
     let controls = Controls {
         straighten,
@@ -685,11 +810,46 @@ pub fn build(
     };
     controls.sync(&session.borrow().recipe);
 
+    // Generate all quick-look tiles away from the GTK thread. The previews
+    // use the current tool recipe while substituting only the tile's filter,
+    // so they remain representative without delaying editor startup.
+    {
+        let path = photo.path();
+        let rotation = active_rotation.get();
+        let recipe = session.borrow().recipe.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(render_filter_thumbnails(&path, rotation, &recipe));
+        });
+        glib::timeout_add_local(Duration::from_millis(25), move || {
+            match receiver.try_recv() {
+                Ok(Ok(thumbnails)) => {
+                    for (picture, (width, height, pixels)) in filter_pictures.iter().zip(thumbnails)
+                    {
+                        let bytes = glib::Bytes::from_owned(pixels);
+                        let texture = gtk::gdk::MemoryTexture::new(
+                            width as i32,
+                            height as i32,
+                            gtk::gdk::MemoryFormat::R8g8b8a8,
+                            &bytes,
+                            width as usize * 4,
+                        );
+                        picture.set_paintable(Some(&texture));
+                    }
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            }
+        });
+    }
+
     // Ordinary wheel scrolling over a slider should continue scrolling the
     // tools panel. Only the narrow track area in the middle of the scale keeps
     // the normal GTK wheel-to-adjust behavior.
     for scale in [
-        &controls.straighten,
         &controls.exposure,
         &controls.contrast,
         &controls.fill_light,
@@ -701,6 +861,7 @@ pub fn build(
     ] {
         configure_scale_scroll(scale, &tools_scroll);
     }
+    configure_scale_scroll(&controls.straighten, &crop_scroll);
 
     let active_rotation_for_queue = active_rotation.clone();
     let queue_preview: Rc<dyn Fn()> = {
@@ -1035,6 +1196,13 @@ pub fn build(
         let session = session.clone();
         let syncing = syncing.clone();
         let sepia = controls.sepia.clone();
+        let none_filter = controls
+            .filters
+            .iter()
+            .find(|(preset, _)| *preset == FilterPreset::None)
+            .expect("None filter tile")
+            .1
+            .clone();
         let filters = controls
             .filters
             .iter()
@@ -1054,6 +1222,10 @@ pub fn build(
                     filter.set_active(false);
                 }
                 syncing.set(false);
+            } else {
+                syncing.set(true);
+                none_filter.set_active(true);
+                syncing.set(false);
             }
             session.borrow_mut().mutate(|recipe| {
                 recipe.black_white = active;
@@ -1070,6 +1242,13 @@ pub fn build(
         let session = session.clone();
         let syncing = syncing.clone();
         let black_white = controls.black_white.clone();
+        let none_filter = controls
+            .filters
+            .iter()
+            .find(|(preset, _)| *preset == FilterPreset::None)
+            .expect("None filter tile")
+            .1
+            .clone();
         let filters = controls
             .filters
             .iter()
@@ -1089,6 +1268,10 @@ pub fn build(
                     filter.set_active(false);
                 }
                 syncing.set(false);
+            } else {
+                syncing.set(true);
+                none_filter.set_active(true);
+                syncing.set(false);
             }
             session.borrow_mut().mutate(|recipe| {
                 recipe.sepia = active;
@@ -1107,6 +1290,13 @@ pub fn build(
         let syncing = syncing.clone();
         let black_white = controls.black_white.clone();
         let sepia = controls.sepia.clone();
+        let none_filter = controls
+            .filters
+            .iter()
+            .find(|(candidate, _)| *candidate == FilterPreset::None)
+            .expect("None filter tile")
+            .1
+            .clone();
         let other_filters = controls
             .filters
             .iter()
@@ -1128,6 +1318,10 @@ pub fn build(
                     other.set_active(false);
                 }
                 syncing.set(false);
+            } else {
+                syncing.set(true);
+                none_filter.set_active(true);
+                syncing.set(false);
             }
             session.borrow_mut().mutate(|recipe| {
                 recipe.filter = if active { preset } else { FilterPreset::None };
@@ -1141,23 +1335,25 @@ pub fn build(
 
     {
         let panel_stack = panel_stack.clone();
-        let tools_box = tools_box.clone();
-        let filters_toggle = filters_toggle.clone();
         tools_toggle.connect_toggled(move |button| {
             if button.is_active() {
-                filters_toggle.set_active(false);
-                panel_stack.set_visible_child(&tools_box);
+                panel_stack.set_visible_child_name("tools");
             }
         });
     }
     {
         let panel_stack = panel_stack.clone();
-        let filters_box = filters_box.clone();
-        let tools_toggle = tools_toggle.clone();
         filters_toggle.connect_toggled(move |button| {
             if button.is_active() {
-                tools_toggle.set_active(false);
-                panel_stack.set_visible_child(&filters_box);
+                panel_stack.set_visible_child_name("filters");
+            }
+        });
+    }
+    {
+        let panel_stack = panel_stack.clone();
+        crop_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                panel_stack.set_visible_child_name("crop");
             }
         });
     }
@@ -1994,9 +2190,80 @@ fn apply_canvas_one_to_one(
 mod panel_tests {
     use super::*;
 
+    fn descendants(root: &impl IsA<gtk::Widget>) -> Vec<gtk::Widget> {
+        let mut widgets = Vec::new();
+        let mut child = root.as_ref().first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            widgets.extend(descendants(&widget));
+            widgets.push(widget);
+        }
+        widgets
+    }
+
+    fn settle_gtk() {
+        let context = glib::MainContext::default();
+        for _ in 0..8 {
+            while context.pending() {
+                context.iteration(false);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn first_row_count(flow: &gtk::FlowBox) -> usize {
+        let Some(first) = flow.first_child() else {
+            return 0;
+        };
+        let row_y = first.allocation().y();
+        let mut count = 0;
+        let mut child = Some(first);
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if widget.allocation().y() == row_y {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn filter_tile_recipes_replace_only_the_filter_effect() {
+        let mut base = EditRecipe::default();
+        base.filter = FilterPreset::Clarendon;
+        base.black_white = true;
+        base.exposure = 0.4;
+        base.saturation = 0.2;
+
+        let none = FilterTileEffect::Preset(FilterPreset::None).recipe(&base);
+        let sepia = FilterTileEffect::Sepia.recipe(&base);
+
+        assert_eq!(none.filter, FilterPreset::None);
+        assert!(!none.black_white);
+        assert!(!none.sepia);
+        assert!((none.exposure - 0.4).abs() < 0.001);
+        assert!((none.saturation - 0.2).abs() < 0.001);
+        assert_eq!(sepia.filter, FilterPreset::None);
+        assert!(!sepia.black_white);
+        assert!(sepia.sepia);
+        assert!((sepia.exposure - 0.4).abs() < 0.001);
+    }
+
+    #[test]
+    fn filter_thumbnail_renderer_builds_every_quick_look() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/samples/AutoHide.jpg");
+        let thumbnails = render_filter_thumbnails(path, 0, &EditRecipe::default()).unwrap();
+
+        assert_eq!(thumbnails.len(), FilterPreset::ALL.len() + 3);
+        assert!(thumbnails.iter().all(|(width, height, pixels)| *width > 0
+            && *height > 0
+            && pixels.len() == *width as usize * *height as usize * 4));
+        assert_ne!(thumbnails[0].2, thumbnails[1].2);
+    }
+
     #[test]
     #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
-    fn filters_switch_keeps_sidebar_visible() {
+    fn editor_uses_responsive_three_tab_sidebar() {
         gtk::init().unwrap();
         let parent = gtk::Window::new();
         let photo: crate::photo_object::PhotoObject = glib::Object::new();
@@ -2007,6 +2274,10 @@ mod panel_tests {
             Rc::new(|| {}),
             Rc::new(|_| {}),
         );
+        parent.set_default_size(1100, 700);
+        parent.set_child(Some(&editor.root));
+        parent.present();
+        settle_gtk();
         let toolbar = editor.root.first_child().unwrap();
         let body = toolbar
             .next_sibling()
@@ -2014,17 +2285,20 @@ mod panel_tests {
             .downcast::<gtk::Paned>()
             .unwrap();
         let sidebar = body.start_child().unwrap();
-        let scroll = sidebar.clone().downcast::<gtk::ScrolledWindow>().unwrap();
-        let viewport = scroll.child().unwrap().downcast::<gtk::Viewport>().unwrap();
-        let stack = viewport.child().unwrap().downcast::<gtk::Stack>().unwrap();
-        let mut buttons = Vec::new();
-        let mut child = toolbar.first_child();
-        while let Some(widget) = child {
-            child = widget.next_sibling();
-            if let Ok(button) = widget.downcast::<gtk::ToggleButton>() {
-                buttons.push(button);
-            }
-        }
+        let toolbar_labels = descendants(&toolbar)
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::ToggleButton>().ok())
+            .filter_map(|button| button.label())
+            .collect::<Vec<_>>();
+        assert!(!toolbar_labels
+            .iter()
+            .any(|label| { matches!(label.as_str(), "Tools" | "Filters" | "Crop") }));
+
+        let sidebar_widgets = descendants(&sidebar);
+        let buttons = sidebar_widgets
+            .iter()
+            .filter_map(|widget| widget.clone().downcast::<gtk::ToggleButton>().ok())
+            .collect::<Vec<_>>();
         let tools = buttons
             .iter()
             .find(|b| b.label().as_deref() == Some("Tools"))
@@ -2033,19 +2307,89 @@ mod panel_tests {
             .iter()
             .find(|b| b.label().as_deref() == Some("Filters"))
             .unwrap();
-        for _ in 0..3 {
-            filters.emit_clicked();
-            assert!(
-                sidebar.is_visible(),
-                "Filters must not hide the shared sidebar"
-            );
-            assert_eq!(stack.visible_child_name().as_deref(), Some("filters"));
-            assert!(!tools.is_active());
-            tools.emit_clicked();
-            assert!(sidebar.is_visible());
-            assert_eq!(stack.visible_child_name().as_deref(), Some("tools"));
-            assert!(!filters.is_active());
-        }
+        let crop = buttons
+            .iter()
+            .find(|b| b.label().as_deref() == Some("Crop"))
+            .unwrap();
+        let stack = sidebar_widgets
+            .iter()
+            .find(|widget| widget.has_css_class("edit-panel-pages"))
+            .unwrap()
+            .clone()
+            .downcast::<gtk::Stack>()
+            .unwrap();
+
+        filters.emit_clicked();
+        assert_eq!(stack.visible_child_name().as_deref(), Some("filters"));
+        crop.emit_clicked();
+        assert_eq!(stack.visible_child_name().as_deref(), Some("crop"));
+        tools.emit_clicked();
+        assert_eq!(stack.visible_child_name().as_deref(), Some("tools"));
+
+        let filter_grid = sidebar_widgets
+            .iter()
+            .find(|widget| widget.has_css_class("filter-grid"))
+            .unwrap()
+            .clone()
+            .downcast::<gtk::FlowBox>()
+            .unwrap();
+        assert!(filter_grid.is_homogeneous());
+        assert!(filter_grid.min_children_per_line() < filter_grid.max_children_per_line());
+        assert!(filter_grid.max_children_per_line() >= 4);
+
+        filters.emit_clicked();
+        settle_gtk();
+        body.set_position(380);
+        settle_gtk();
+        let default_columns = first_row_count(&filter_grid);
+        let default_width = filter_grid.width();
+        let first_tile = filter_grid.first_child().unwrap();
+        let (minimum, natural, _, _) = first_tile.measure(gtk::Orientation::Horizontal, -1);
+        body.set_position(500);
+        settle_gtk();
+        let wide_columns = first_row_count(&filter_grid);
+        eprintln!(
+            "responsive grid: default={} wide={} grid={}->{} tile={}/{}",
+            default_columns,
+            wide_columns,
+            default_width,
+            filter_grid.width(),
+            minimum,
+            natural
+        );
+        assert!(minimum > 0 && natural >= minimum);
+        assert!(default_columns >= 4);
+        assert!(wide_columns > default_columns);
+
+        let filter_tiles = sidebar_widgets
+            .iter()
+            .filter_map(|widget| widget.clone().downcast::<gtk::ToggleButton>().ok())
+            .filter(|button| button.has_css_class("filter-tile"))
+            .collect::<Vec<_>>();
+        assert_eq!(filter_tiles.len(), FilterPreset::ALL.len() + 3);
+        let none = filter_tiles
+            .iter()
+            .find(|button| button.tooltip_text().as_deref() == Some("None"))
+            .unwrap();
+        let clarendon = filter_tiles
+            .iter()
+            .find(|button| button.tooltip_text().as_deref() == Some("Clarendon"))
+            .unwrap();
+        assert!(none.is_active());
+        clarendon.emit_clicked();
+        assert!(clarendon.is_active());
+        assert!(!none.is_active());
+        none.emit_clicked();
+        assert!(none.is_active());
+        assert!(!clarendon.is_active());
+        none.emit_clicked();
+        assert!(none.is_active(), "None must remain the selected filter");
+
+        let segments = sidebar_widgets
+            .iter()
+            .filter(|widget| widget.has_css_class("tools-segment"))
+            .count();
+        assert_eq!(segments, 2);
     }
 }
 
@@ -2055,6 +2399,35 @@ fn add_section_label(parent: &gtk::Box, text: &str) {
     label.set_margin_top(6);
     label.add_css_class("heading");
     parent.append(&label);
+}
+
+fn filter_tile(effect: FilterTileEffect) -> (gtk::ToggleButton, gtk::Picture) {
+    let button = gtk::ToggleButton::new();
+    button.set_size_request(56, -1);
+    button.add_css_class("filter-tile");
+    button.set_tooltip_text(Some(effect.label()));
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let picture = gtk::Picture::new();
+    picture.set_content_fit(gtk::ContentFit::Cover);
+    picture.set_can_shrink(true);
+    let preview_frame = gtk::AspectFrame::new(0.5, 0.5, 1.0, false);
+    preview_frame.set_size_request(56, 56);
+    preview_frame.set_child(Some(&picture));
+    preview_frame.add_css_class("filter-tile-preview");
+    let label = gtk::Label::new(Some(effect.label()));
+    label.set_wrap(true);
+    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    label.set_lines(2);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_justify(gtk::Justification::Center);
+    label.set_max_width_chars(6);
+    label.set_height_request(30);
+    label.add_css_class("filter-tile-label");
+    content.append(&preview_frame);
+    content.append(&label);
+    button.set_child(Some(&content));
+    (button, picture)
 }
 
 fn add_slider(
