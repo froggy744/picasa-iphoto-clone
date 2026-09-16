@@ -86,7 +86,8 @@ fn collage_css() -> String {
          .collage-drop-target { border: 3px solid #4d9fdb; box-shadow: 0 0 0 3px alpha(#4d9fdb, 0.45), 0 3px 12px alpha(#000000, 0.35); }\
          .collage-photo-rounded { }\
          .collage-layout-tile { min-height: 54px; }\
-         .collage-radius-row { margin-top: 2px; }",
+         .collage-radius-row { margin-top: 2px; }\
+         .collage-tabs button { min-height: 34px; padding: 4px 10px; }",
     );
     for radius in 0..=MAX_PREVIEW_CORNER_RADIUS {
         css.push_str(&format!(
@@ -123,14 +124,14 @@ impl CollageEditor {
     pub fn add_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
         self.project.borrow_mut().add_photos(photos);
         self.status
-            .set_text(&format!("{} photos", self.project.borrow().items.len()));
+            .set_text(&photo_count_text(self.project.borrow().items.len()));
         refresh_preview(&self.canvas, &self.frames, &self.project);
     }
 
     pub fn set_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
         self.project.borrow_mut().set_photos(photos);
         self.status
-            .set_text(&format!("{} photos", self.project.borrow().items.len()));
+            .set_text(&photo_count_text(self.project.borrow().items.len()));
         refresh_preview(&self.canvas, &self.frames, &self.project);
     }
 }
@@ -165,7 +166,7 @@ pub fn build(
     heading.set_halign(gtk::Align::Start);
     heading.add_css_class("title-2");
     controls.append(&heading);
-    let status = gtk::Label::new(Some(&format!("{} photos", project.borrow().items.len())));
+    let status = gtk::Label::new(Some(&photo_count_text(project.borrow().items.len())));
     status.set_halign(gtk::Align::Start);
     status.add_css_class("dim-label");
     controls.append(&status);
@@ -252,7 +253,7 @@ pub fn build(
     }
     let layout_tiles = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     layout_tiles.add_css_class("linked");
-    layout_tiles.add_css_class("edit-panel-tabs");
+    layout_tiles.add_css_class("collage-tabs");
     // Homogeneous thirds so the layout tiles, the fit/orientation row and
     // the bottom actions all align to the same three column edges.
     layout_tiles.set_homogeneous(true);
@@ -304,7 +305,7 @@ pub fn build(
     }
     let fit_orientation_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     fit_orientation_row.add_css_class("linked");
-    fit_orientation_row.add_css_class("edit-panel-tabs");
+    fit_orientation_row.add_css_class("collage-tabs");
     fit_orientation_row.set_homogeneous(true);
     for button in [&fit_toggle, &portrait_btn, &landscape_btn] {
         fit_orientation_row.append(button);
@@ -616,7 +617,7 @@ pub fn build(
     // equal-width blocks spanning the panel width.
     let actions_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     actions_row.add_css_class("linked");
-    actions_row.add_css_class("edit-panel-tabs");
+    actions_row.add_css_class("collage-tabs");
     actions_row.set_homogeneous(true);
     let add_photos = icon_label_button("list-add-symbolic", "Add", "Add photos from the library");
     let shuffle = icon_label_button(
@@ -643,7 +644,7 @@ pub fn build(
     primary_grid.set_column_homogeneous(true);
     primary_grid.set_column_spacing(6);
     primary_grid.set_hexpand(true);
-    primary_grid.add_css_class("edit-panel-tabs");
+    primary_grid.add_css_class("collage-tabs");
     let export = gtk::Button::with_label("Create Collage…");
     export.add_css_class("suggested-action");
     export.set_tooltip_text(Some("Render and export the collage as a JPEG"));
@@ -701,6 +702,14 @@ fn add_section_label(parent: &gtk::Box, text: &str) {
     label.add_css_class("heading");
     label.add_css_class("edit-section-label");
     parent.append(&label);
+}
+
+fn photo_count_text(count: usize) -> String {
+    if count == 1 {
+        "1 photo".to_string()
+    } else {
+        format!("{count} photos")
+    }
 }
 
 fn icon_label_button(icon: &str, label: &str, tooltip: &str) -> gtk::Button {
