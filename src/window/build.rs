@@ -2726,6 +2726,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let edit_page = edit_page.clone();
         let edit_editor = edit_editor.clone();
         let collage_add_mode = collage_add_mode.clone();
+        let gallery = gallery.clone();
         let connection_for_teardown = connection.clone();
         main_stack_for_teardown.connect_visible_child_notify(move |stack| {
             let visible = stack.visible_child_name();
@@ -2742,6 +2743,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                                 db::set_setting(&guard, crate::collage::DRAFT_SETTING_KEY, &json);
                         }
                     }
+                    // Clear the grid selection so the next toolbar collage
+                    // click is a blank start and can offer the resume prompt.
+                    gallery.set_selected_photo_ids(&[]);
                     while let Some(child) = collage_page.first_child() {
                         collage_page.remove(&child);
                     }
@@ -3930,6 +3934,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let connection = connection.clone();
         Rc::new(move || {
             gallery.set_collage_selection_mode(false);
+            // Drop the grid selection too: otherwise the collage photos
+            // stay selected and the next toolbar click reads as an
+            // explicit selection, silently skipping "Resume Collage?".
+            gallery.set_selected_photo_ids(&[]);
             collage_add_mode.set(false);
             // Persist the draft before teardown so "Resume Collage?" can
             // restore it the next time the editor opens.
