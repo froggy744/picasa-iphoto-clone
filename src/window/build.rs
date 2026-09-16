@@ -3007,27 +3007,38 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let selected_for_print = selected_photo.clone();
     let window_for_print = window.clone();
     let connection_for_print = connection.clone();
+    let gallery_for_print = gallery.clone();
 
     info.print.connect_clicked(move |_| {
         let Some(photo) = selected_for_print.borrow().clone() else {
             return;
         };
 
-        // PhotoObject is a GTK object and must stay on the GTK thread. Copy
-        // only Send-safe scalar/string values into the print request; the
-        // render happens on a worker thread while the dialog runs here.
-        print_photo(
-            &window_for_print,
-            &connection_for_print,
-            PhotoPrintRequest {
-                reference: photo.path(),
-                rotation: photo.rotation(),
-                edit_recipe: photo.edit_recipe(),
-                source_width: photo.width(),
-                source_height: photo.height(),
-                job_name: photo.filename(),
-            },
-        );
+        // Print every selected photo (the full multi-selection, falling back
+        // to the anchor photo when nothing extra is selected). PhotoObject is
+        // a GTK object and must stay on the GTK thread: copy only Send-safe
+        // scalar/string values into the print requests; the renders happen on
+        // a worker thread while the dialog runs here.
+        let ids = gallery_for_print.selected_photo_ids(Some(photo.id()));
+        let requests: Vec<PhotoPrintRequest> = ids
+            .iter()
+            .filter_map(|id| db::photo(&connection_for_print.borrow(), *id).ok().flatten())
+            .map(|record| PhotoPrintRequest {
+                job_name: record
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("photo")
+                    .to_string(),
+                reference: record.path,
+                rotation: record.rotation,
+                edit_recipe: record.edit_recipe,
+                source_width: record.width.unwrap_or(0),
+                source_height: record.height.unwrap_or(0),
+            })
+            .collect();
+
+        print_photos(&window_for_print, &connection_for_print, requests);
     });
 
     let main_split = adw::OverlaySplitView::new();
