@@ -846,6 +846,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         Rc::new(RefCell::new(None));
     let collage_close_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
         Rc::new(RefCell::new(None));
+    // True while the user is on the photos page picking images for the open
+    // collage. The collage editor must survive that detour; every other
+    // transition away from the collage page tears it down.
+    let collage_add_mode: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let open_collage: Rc<dyn Fn(Vec<i64>)> = {
         let slot = collage_open_slot.clone();
         Rc::new(move |ids| {
@@ -2651,9 +2655,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let collage_editor = collage_editor.clone();
         let collage_add_mode_slot = collage_add_mode_slot.clone();
         let collage_close_slot = collage_close_slot.clone();
+        let collage_add_mode = collage_add_mode.clone();
         collage_open_slot.replace(Some(Rc::new(move |ids| {
             let add_mode_slot = collage_add_mode_slot.clone();
             let close_slot = collage_close_slot.clone();
+            let collage_add_mode = collage_add_mode.clone();
             crate::collage::open(
                 &parent,
                 connection.clone(),
@@ -2663,10 +2669,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     let main_stack = main_stack.clone();
                     let collage_page = collage_page.clone();
                     let collage_editor = collage_editor.clone();
+                    let collage_add_mode = collage_add_mode.clone();
                     move |photos| {
                         while let Some(child) = collage_page.first_child() {
                             collage_page.remove(&child);
                         }
+                        // A fresh editor starts with no add-photos detour
+                        // pending; clear any stale picking state so leaving
+                        // the collage page tears it down normally.
+                        collage_add_mode.set(false);
                         let add_photos = {
                             let slot = add_mode_slot.clone();
                             Rc::new(move || {
@@ -2699,6 +2710,43 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     }
 
     let edit_editor: Rc<RefCell<Option<crate::edit::EditEditor>>> = Rc::new(RefCell::new(None));
+    // Catch-all teardown when the collage/edit pages are left by any path
+    // (sidebar navigation, search, opening the editor mid-collage, ...).
+    // GtkStack reports the maximum minimum size of all its pages, hidden
+    // ones included, so an editor left attached keeps demanding its tall
+    // minimum and pushes the shared bottom bar offscreen on short windows.
+    // The Exit/Done handlers tear down directly; this runs idempotently for
+    // every other transition. The collage editor survives transitions to
+    // the photos page while the user is picking images to add.
+    {
+        let main_stack_for_teardown = main_stack.clone();
+        let collage_page = collage_page.clone();
+        let collage_editor = collage_editor.clone();
+        let edit_page = edit_page.clone();
+        let edit_editor = edit_editor.clone();
+        let collage_add_mode = collage_add_mode.clone();
+        main_stack_for_teardown.connect_visible_child_notify(move |stack| {
+            let visible = stack.visible_child_name();
+            if visible.as_deref() != Some("collage") && !collage_add_mode.get() {
+                // try_borrow: the add-photos handler holds the editor borrow
+                // while switching pages; skip rather than panic.
+                if collage_editor.try_borrow().map(|editor| editor.is_some()).unwrap_or(false) {
+                    while let Some(child) = collage_page.first_child() {
+                        collage_page.remove(&child);
+                    }
+                    collage_editor.replace(None);
+                }
+            }
+            if visible.as_deref() != Some("edit")
+                && edit_editor.try_borrow().map(|editor| editor.is_some()).unwrap_or(false)
+            {
+                while let Some(child) = edit_page.first_child() {
+                    edit_page.remove(&child);
+                }
+                edit_editor.replace(None);
+            }
+        });
+    }
     {
         let parent = window.clone().upcast::<gtk::Window>();
         let connection = connection.clone();
@@ -2727,11 +2775,20 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 let one_to_one = info.one_to_one.clone();
                 let gallery = gallery.clone();
                 let edit_space_slot = edit_space_slot.clone();
+                let edit_page = edit_page.clone();
+                let edit_editor = edit_editor.clone();
                 Rc::new(move || {
                     edit_space_slot.borrow_mut().take();
                     one_to_one.set_active(false);
                     main_stack.set_visible_child_name("photos");
                     gallery.restore_view(id, library_scroll_y);
+                    // Detach the editor so it stops contributing to the
+                    // stack's size request and its preview memory is
+                    // released; the editor is rebuilt on the next open.
+                    while let Some(child) = edit_page.first_child() {
+                        edit_page.remove(&child);
+                    }
+                    edit_editor.replace(None);
                 }) as Rc<dyn Fn()>
             };
             let saved = {
@@ -3856,10 +3913,23 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let main_stack = main_stack.clone();
         let button = add_selected_to_collage.clone();
         let gallery = gallery.clone();
+        let collage_page = collage_page.clone();
+        let collage_editor = collage_editor.clone();
+        let collage_add_mode = collage_add_mode.clone();
         Rc::new(move || {
             gallery.set_collage_selection_mode(false);
+            collage_add_mode.set(false);
             main_stack.set_visible_child_name("photos");
             button.set_visible(false);
+            // Detach the editor so the stack's size request drops back to
+            // normal. GtkStack reports the maximum minimum size of all its
+            // pages (hidden ones included), so a collage page left attached
+            // keeps demanding its tall minimum and pushes the shared bottom
+            // bar offscreen on short windows.
+            while let Some(child) = collage_page.first_child() {
+                collage_page.remove(&child);
+            }
+            collage_editor.replace(None);
         })
     }));
     collage_prepare_add_slot.replace(Some({
@@ -3867,6 +3937,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let button = add_selected_to_collage.clone();
         let gallery = gallery.clone();
         let collage_editor = collage_editor.clone();
+        let collage_add_mode = collage_add_mode.clone();
         Rc::new(move || {
             let editor_handle = collage_editor.borrow();
             let Some(editor) = editor_handle.as_ref() else {
@@ -3874,6 +3945,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             };
             gallery.set_collage_selection_mode(true);
             gallery.set_selected_photo_ids(&editor.photo_ids());
+            // Mark the detour before switching pages so the stack's
+            // visible-child teardown spares the live editor.
+            collage_add_mode.set(true);
             main_stack.set_visible_child_name("photos");
             button.set_visible(true);
         })
@@ -3884,6 +3958,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let gallery = gallery.clone();
         let connection = connection.clone();
         let collage_editor = collage_editor.clone();
+        let collage_add_mode = collage_add_mode.clone();
         add_selected_to_collage.connect_clicked(move |_| {
             let photos = gallery
                 .selected_photo_ids(None)
@@ -3897,6 +3972,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if let Some(editor) = collage_editor.borrow().as_ref() {
                 editor.set_photos(photos);
                 gallery.set_collage_selection_mode(false);
+                collage_add_mode.set(false);
                 main_stack.set_visible_child_name("collage");
                 button.set_visible(false);
             }

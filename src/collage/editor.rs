@@ -509,7 +509,18 @@ pub fn build(
     add_photos.connect_clicked(move |_| on_add_photos());
     close.connect_clicked(move |_| on_close());
 
-    root.append(&controls);
+    // The controls column is the collage editor's only min-height
+    // contributor. Wrap it in a scrolled window so short windows (e.g.
+    // 1366x768) never overflow the shared bottom bar; the column scrolls
+    // instead while remaining fully expanded when space allows.
+    let controls_scroll = gtk::ScrolledWindow::new();
+    controls_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+    controls_scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
+    controls_scroll.set_propagate_natural_width(true);
+    controls_scroll.set_propagate_natural_height(true);
+    controls_scroll.set_min_content_width(230);
+    controls_scroll.set_child(Some(&controls));
+    root.append(&controls_scroll);
     root.append(&aspect_frame);
     CollageEditor {
         root,
@@ -903,7 +914,19 @@ mod sizing_tests {
             .iter()
             .map(|f| f.outer.clone())
             .collect::<Vec<_>>();
-        let controls = editor.root.first_child().unwrap();
+        // The controls column now lives inside a ScrolledWindow (its tall
+        // minimum must not leak into the editor/window request). Descend
+        // through scroll -> viewport -> controls box to find the scale.
+        let controls = editor
+            .root
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::ScrolledWindow>()
+            .unwrap()
+            .child()
+            .and_then(|child| child.downcast::<gtk::Viewport>().ok())
+            .and_then(|viewport| viewport.child())
+            .expect("collage controls box");
         let mut child = controls.first_child();
         let spacing = loop {
             let widget = child.expect("Spacing control");
@@ -922,6 +945,22 @@ mod sizing_tests {
         };
         let toast = adw::ToastOverlay::new();
         toast.set_child(Some(&editor.root));
+        // Regression: the controls column must not leak its tall minimum
+        // into the editor's size request. A 1366x768 window leaves roughly
+        // 660px for the page stack once the header bar and the shared 58px
+        // bottom bar are subtracted; GtkStack requests the max over all
+        // pages (hidden ones included), so an unbounded editor minimum
+        // pushes the bottom bar offscreen. The column scrolls instead.
+        let (min_height, ..) = toast.measure(gtk::Orientation::Vertical, 1200);
+        assert!(
+            min_height <= 200,
+            "collage editor minimum height {min_height} must stay bounded so short windows keep the bottom bar visible"
+        );
+        let (min_width, ..) = toast.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            min_width <= 1200,
+            "collage editor minimum width {min_width} must fit a 1366px window"
+        );
         let baseline = toast.measure(gtk::Orientation::Vertical, 1200).0;
         for (width, height) in [(1200, 800), (900, 720), (1400, 850)] {
             toast.allocate(width, height, -1, None);
