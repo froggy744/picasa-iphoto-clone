@@ -85,9 +85,7 @@ fn collage_css() -> String {
          .collage-dragging { opacity: 0.62; }\
          .collage-drop-target { border: 3px solid #4d9fdb; box-shadow: 0 0 0 3px alpha(#4d9fdb, 0.45), 0 3px 12px alpha(#000000, 0.35); }\
          .collage-photo-rounded { }\
-         .collage-tile { min-height: 36px; }\
          .collage-layout-tile { min-height: 54px; }\
-         .collage-tile:checked { background-color: alpha(@accent_bg_color, 0.38); }\
          .collage-radius-row { margin-top: 2px; }",
     );
     for radius in 0..=MAX_PREVIEW_CORNER_RADIUS {
@@ -212,8 +210,8 @@ pub fn build(
     }
 
     // Row 1 — layout: three equal tiles with icon over title, radio
-    // behaviour and the active tile highlighted (`.collage-tile:checked`).
-    add_section_label(&controls, "Layout");
+    // behaviour; edit-mode tab styling keeps every button row uniform.
+    add_section_label(&controls, "LAYOUT");
     let mosaic_tile = gtk::ToggleButton::new();
     let smart_tile = gtk::ToggleButton::new();
     let grid_tile = gtk::ToggleButton::new();
@@ -243,7 +241,6 @@ pub fn build(
         content.append(&gtk::Label::new(Some(title)));
         tile.set_child(Some(&content));
         tile.set_tooltip_text(Some(tooltip));
-        tile.add_css_class("collage-tile");
         tile.add_css_class("collage-layout-tile");
     }
     smart_tile.set_group(Some(&mosaic_tile));
@@ -255,6 +252,7 @@ pub fn build(
     }
     let layout_tiles = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     layout_tiles.add_css_class("linked");
+    layout_tiles.add_css_class("edit-panel-tabs");
     // Homogeneous thirds so the layout tiles, the fit/orientation row and
     // the bottom actions all align to the same three column edges.
     layout_tiles.set_homogeneous(true);
@@ -289,7 +287,6 @@ pub fn build(
         portrait_btn.set_child(Some(&content));
     }
     portrait_btn.set_tooltip_text(Some("Portrait canvas"));
-    portrait_btn.add_css_class("collage-tile");
     let landscape_btn = gtk::ToggleButton::new();
     {
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -299,7 +296,6 @@ pub fn build(
         landscape_btn.set_child(Some(&content));
     }
     landscape_btn.set_tooltip_text(Some("Landscape canvas"));
-    landscape_btn.add_css_class("collage-tile");
     portrait_btn.set_group(Some(&landscape_btn));
     if matches!(project.borrow().orientation, CollageOrientation::Portrait) {
         portrait_btn.set_active(true);
@@ -308,9 +304,9 @@ pub fn build(
     }
     let fit_orientation_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     fit_orientation_row.add_css_class("linked");
+    fit_orientation_row.add_css_class("edit-panel-tabs");
     fit_orientation_row.set_homogeneous(true);
     for button in [&fit_toggle, &portrait_btn, &landscape_btn] {
-        button.add_css_class("collage-tile");
         fit_orientation_row.append(button);
     }
     controls.append(&fit_orientation_row);
@@ -399,14 +395,17 @@ pub fn build(
         Background::LightGray => 2,
     });
     background.set_tooltip_text(Some("Canvas background"));
-    let aspect_background_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    // Equal halves via a homogeneous grid, matching the edit panel's
+    // aspect-preset grid geometry; each dropdown keeps a small title.
+    let aspect_background_grid = gtk::Grid::new();
+    aspect_background_grid.set_column_homogeneous(true);
+    aspect_background_grid.set_column_spacing(8);
+    aspect_background_grid.set_hexpand(true);
     let aspect_column = titled_control("Aspect ratio", &aspect);
     let background_column = titled_control("Background", &background);
-    aspect_column.set_hexpand(true);
-    background_column.set_hexpand(true);
-    aspect_background_row.append(&aspect_column);
-    aspect_background_row.append(&background_column);
-    controls.append(&aspect_background_row);
+    aspect_background_grid.attach(&aspect_column, 0, 0, 1, 1);
+    aspect_background_grid.attach(&background_column, 1, 0, 1, 1);
+    controls.append(&aspect_background_grid);
     let custom_width = gtk::SpinButton::with_range(1.0, 10_000.0, 1.0);
     custom_width.set_value((project.borrow().custom_aspect * 9.0).round().max(1.0) as f64);
     custom_width.set_numeric(true);
@@ -486,10 +485,13 @@ pub fn build(
         });
     }
 
-    // Corners + slider share a single row: on/off checkbox, then the
-    // radius slider bracketed by sharp/rounded end icons. The icons state
-    // the actual range (0% .. 20% of the tile's short side).
-    let round_corners = gtk::CheckButton::with_label("Round corners");
+    // Corners + slider share a single row under an edit-style heading:
+    // on/off checkbox, then the radius slider bracketed by sharp/rounded
+    // end icons. The icons state the actual range (0% .. 20%).
+    add_section_label(&controls, "ROUND CORNERS");
+    let round_corners = gtk::CheckButton::new();
+    round_corners.set_tooltip_text(Some("Enable rounded corners"));
+    round_corners.set_valign(gtk::Align::Center);
     round_corners.set_active(project.borrow().round_corners);
     let corner_sharp_icon = gtk::Image::from_icon_name("collage-corner-sharp-symbolic");
     corner_sharp_icon.set_tooltip_text(Some("No corner radius (0%)"));
@@ -535,7 +537,7 @@ pub fn build(
         });
     }
 
-    add_section_label(&controls, "Spacing");
+    add_section_label(&controls, "SPACING");
     let spacing = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 0.08, 0.002);
     spacing.set_value(project.borrow().spacing as f64);
     spacing.set_draw_value(false);
@@ -611,10 +613,10 @@ pub fn build(
     }
 
     // Bottom actions share the top rows' look: one linked row of three
-    // equal-width blocks spanning the panel width; Create remains the one
-    // full-width accent button with Exit beside it.
+    // equal-width blocks spanning the panel width.
     let actions_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     actions_row.add_css_class("linked");
+    actions_row.add_css_class("edit-panel-tabs");
     actions_row.set_homogeneous(true);
     let add_photos = icon_label_button("list-add-symbolic", "Add", "Add photos from the library");
     let shuffle = icon_label_button(
@@ -622,10 +624,9 @@ pub fn build(
         "Shuffle",
         "Shuffle photo order",
     );
-    for button in [&reset_defaults, &add_photos, &shuffle] {
-        button.add_css_class("collage-tile");
-        actions_row.append(button);
-    }
+    actions_row.append(&reset_defaults);
+    actions_row.append(&add_photos);
+    actions_row.append(&shuffle);
     controls.append(&actions_row);
     {
         let project = project.clone();
@@ -642,12 +643,11 @@ pub fn build(
     primary_grid.set_column_homogeneous(true);
     primary_grid.set_column_spacing(6);
     primary_grid.set_hexpand(true);
+    primary_grid.add_css_class("edit-panel-tabs");
     let export = gtk::Button::with_label("Create Collage…");
     export.add_css_class("suggested-action");
-    export.add_css_class("collage-tile");
     export.set_tooltip_text(Some("Render and export the collage as a JPEG"));
     let close = icon_label_button("application-exit-symbolic", "Exit", "Exit collage");
-    close.add_css_class("collage-tile");
     primary_grid.attach(&export, 0, 0, 2, 1);
     primary_grid.attach(&close, 2, 0, 1, 1);
     controls.append(&primary_grid);
@@ -693,9 +693,13 @@ pub fn build(
 }
 
 fn add_section_label(parent: &gtk::Box, text: &str) {
+    // Same section heading construction as the edit mode panels: small,
+    // bold, dimmed uppercase text (pass the text already uppercased).
     let label = gtk::Label::new(Some(text));
-    label.set_halign(gtk::Align::Start);
+    label.set_xalign(0.0);
+    label.set_margin_top(8);
     label.add_css_class("heading");
+    label.add_css_class("edit-section-label");
     parent.append(&label);
 }
 
@@ -1123,7 +1127,7 @@ mod sizing_tests {
             if widget
                 .clone()
                 .downcast::<gtk::Label>()
-                .is_ok_and(|l| l.text() == "Spacing")
+                .is_ok_and(|l| l.text() == "SPACING")
             {
                 break widget
                     .next_sibling()
