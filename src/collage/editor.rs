@@ -134,6 +134,11 @@ impl CollageEditor {
             .set_text(&photo_count_text(self.project.borrow().items.len()));
         refresh_preview(&self.canvas, &self.frames, &self.project);
     }
+
+    /// Serialized draft snapshot for persistence (see DRAFT_SETTING_KEY).
+    pub fn draft_json(&self) -> String {
+        super::model::draft_to_json(&self.project.borrow())
+    }
 }
 
 pub fn build(
@@ -141,6 +146,7 @@ pub fn build(
     photos: Vec<crate::photo_object::PhotoObject>,
     on_add_photos: Rc<dyn Fn()>,
     on_close: Rc<dyn Fn()>,
+    draft: Option<super::model::CollageDraft>,
 ) -> CollageEditor {
     let css = gtk::CssProvider::new();
     let css_data = collage_css();
@@ -150,7 +156,12 @@ pub fn build(
         &css,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
-    let project = Rc::new(RefCell::new(CollageProject::new(photos)));
+    let project = Rc::new(RefCell::new(CollageProject::new(photos.clone())));
+    // A resumed draft restores settings and the saved arrangement before
+    // any widget reads project state, so every control reflects it.
+    if let Some(draft) = draft.as_ref() {
+        project.borrow_mut().apply_draft(draft, &photos);
+    }
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.set_hexpand(true);
@@ -723,6 +734,18 @@ fn icon_label_button(icon: &str, label: &str, tooltip: &str) -> gtk::Button {
     button
 }
 
+/// Borderless menu entry for the per-tile popover menu.
+fn flat_menu_button(icon: &str, label: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.set_halign(gtk::Align::Center);
+    content.append(&gtk::Image::from_icon_name(icon));
+    content.append(&gtk::Label::new(Some(label)));
+    button.set_child(Some(&content));
+    button.add_css_class("flat");
+    button
+}
+
 /// A small title above a control, for compact side-by-side rows where a
 /// full-width section label would waste a row.
 fn titled_control(title: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
@@ -936,6 +959,98 @@ fn refresh_preview(
             update_geometry(&canvas_for_end, &frames_for_end, &project);
         });
         frame.add_controller(drag);
+        // Right-click a tile for per-photo actions. The drag gesture above
+        // only claims button 1, so the two controllers coexist.
+        let menu = gtk::GestureClick::new();
+        menu.set_button(3);
+        {
+            let project = project.clone();
+            let canvas = canvas.clone();
+            let frames = frames.clone();
+            let frame_for_menu = frame.clone();
+            menu.connect_pressed(move |_, _, x, y| {
+                let popover = gtk::Popover::new();
+                let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                menu_box.set_margin_top(6);
+                menu_box.set_margin_bottom(6);
+                menu_box.set_margin_start(6);
+                menu_box.set_margin_end(6);
+                let rotate_cw = flat_menu_button(
+                    "object-rotate-right-symbolic",
+                    "Rotate Clockwise",
+                );
+                let rotate_ccw = flat_menu_button(
+                    "object-rotate-left-symbolic",
+                    "Rotate Counter-Clockwise",
+                );
+                let remove = flat_menu_button("edit-delete-symbolic", "Remove Photo");
+                menu_box.append(&rotate_cw);
+                menu_box.append(&rotate_ccw);
+                menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+                menu_box.append(&remove);
+                popover.set_child(Some(&menu_box));
+                popover.set_parent(&frame_for_menu);
+                let pointing = gtk::gdk::Rectangle::new(
+                    x as i32 - 8,
+                    y as i32 - 8,
+                    16,
+                    16,
+                );
+                popover.set_pointing_to(Some(&pointing));
+                popover.connect_closed(|popover| popover.unparent());
+                {
+                    let project = project.clone();
+                    let canvas = canvas.clone();
+                    let frames = frames.clone();
+                    let popover = popover.clone();
+                    rotate_cw.connect_clicked(move |_| {
+                        {
+                            let mut project_data = project.borrow_mut();
+                            if let Some(item) = project_data.items.get_mut(index) {
+                                item.rotation = (item.rotation + 90.0) % 360.0;
+                            }
+                        }
+                        update_geometry(&canvas, &frames, &project.borrow());
+                        popover.popdown();
+                    });
+                }
+                {
+                    let project = project.clone();
+                    let canvas = canvas.clone();
+                    let frames = frames.clone();
+                    let popover = popover.clone();
+                    rotate_ccw.connect_clicked(move |_| {
+                        {
+                            let mut project_data = project.borrow_mut();
+                            if let Some(item) = project_data.items.get_mut(index) {
+                                item.rotation = (item.rotation + 270.0) % 360.0;
+                            }
+                        }
+                        update_geometry(&canvas, &frames, &project.borrow());
+                        popover.popdown();
+                    });
+                }
+                {
+                    let project = project.clone();
+                    let canvas = canvas.clone();
+                    let frames = frames.clone();
+                    let popover = popover.clone();
+                    remove.connect_clicked(move |_| {
+                        {
+                            let mut project_data = project.borrow_mut();
+                            if index < project_data.items.len() {
+                                project_data.items.remove(index);
+                                project_data.relayout();
+                            }
+                        }
+                        refresh_preview(&canvas, &frames, &project);
+                        popover.popdown();
+                    });
+                }
+                popover.popup();
+            });
+        }
+        frame.add_controller(menu);
         frames.borrow_mut().push(PreviewFrame {
             outer: frame.upcast(),
             inner,
@@ -1083,7 +1198,7 @@ mod sizing_tests {
     fn spacing_changes_do_not_propagate_preview_minimum_or_rebuild_tiles() {
         adw::init().expect("GTK display required");
         let window = gtk::Window::new();
-        let editor = build(&window, Vec::new(), Rc::new(|| {}), Rc::new(|| {}));
+        let editor = build(&window, Vec::new(), Rc::new(|| {}), Rc::new(|| {}), None);
         editor.project.borrow_mut().items = (0..9)
             .map(|i| CollageItem {
                 photo: CollagePhoto {
@@ -1194,7 +1309,127 @@ mod sizing_tests {
     }
 }
 
+/// Export options dialog (format, quality, size), then the destination
+/// file chooser, then the background render with a completion dialog.
 fn choose_export_path(window: &gtk::Window, project: Rc<RefCell<CollageProject>>) {
+    let dialog = gtk::Dialog::new();
+    dialog.set_title(Some("Export Collage"));
+    dialog.set_transient_for(Some(window));
+    dialog.set_modal(true);
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    let export_button = dialog.add_button("Export", gtk::ResponseType::Ok);
+    export_button.add_css_class("suggested-action");
+    dialog.set_default_response(gtk::ResponseType::Ok);
+
+    let content = dialog.content_area();
+    content.set_spacing(12);
+    content.set_margin_top(18);
+    content.set_margin_bottom(6);
+    content.set_margin_start(18);
+    content.set_margin_end(18);
+
+    let grid = gtk::Grid::new();
+    grid.set_row_spacing(12);
+    grid.set_column_spacing(12);
+
+    fn grid_label(text: &str) -> gtk::Label {
+        let label = gtk::Label::new(Some(text));
+        label.set_xalign(0.0);
+        label
+    }
+
+    // Format: JPEG (default) or PNG.
+    let jpeg_toggle = gtk::ToggleButton::with_label("JPEG");
+    let png_toggle = gtk::ToggleButton::with_label("PNG");
+    png_toggle.set_group(Some(&jpeg_toggle));
+    let format_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    format_row.add_css_class("linked");
+    format_row.append(&jpeg_toggle);
+    format_row.append(&png_toggle);
+    grid.attach(&grid_label("Format"), 0, 0, 1, 1);
+    grid.attach(&format_row, 1, 0, 1, 1);
+
+    // Quality: JPEG only, dimmed for PNG.
+    let quality_scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 60.0, 100.0, 1.0);
+    quality_scale.set_value(92.0);
+    quality_scale.set_digits(0);
+    quality_scale.set_draw_value(false);
+    quality_scale.set_hexpand(true);
+    let quality_value = gtk::Label::new(Some("92"));
+    quality_value.set_width_request(30);
+    quality_value.add_css_class("dim-label");
+    quality_value.add_css_class("edit-adjustment-value");
+    let quality_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    quality_row.append(&quality_scale);
+    quality_row.append(&quality_value);
+    grid.attach(&grid_label("Quality"), 0, 1, 1, 1);
+    grid.attach(&quality_row, 1, 1, 1, 1);
+    {
+        let quality_scale = quality_scale.clone();
+        let quality_value = quality_value.clone();
+        quality_scale.connect_value_changed(move |scale| {
+            quality_value.set_text(&format!("{:.0}", scale.value()));
+        });
+        let quality_scale = quality_scale.clone();
+        png_toggle.connect_toggled(move |toggle| {
+            quality_scale.set_sensitive(!toggle.is_active());
+        });
+    }
+
+    // Long-edge size presets; the render clamps to the collage aspect.
+    let size = gtk::DropDown::from_strings(&[
+        "4K (3840 px)",
+        "2048 px",
+        "Full HD (1920 px)",
+        "HD (1280 px)",
+    ]);
+    size.set_selected(0);
+    grid.attach(&grid_label("Size"), 0, 2, 1, 1);
+    grid.attach(&size, 1, 2, 1, 1);
+
+    content.append(&grid);
+    {
+        let dialog_for_response = dialog.clone();
+        let window = window.clone();
+        let project = project.clone();
+        let png_toggle = png_toggle.clone();
+        let quality_scale = quality_scale.clone();
+        let size = size.clone();
+        dialog.connect_response(move |_, response| {
+            if response != gtk::ResponseType::Ok {
+                dialog_for_response.destroy();
+                return;
+            }
+            let options = super::render::ExportOptions {
+                max_edge: match size.selected() {
+                    1 => 2048,
+                    2 => 1920,
+                    3 => 1280,
+                    _ => 3840,
+                },
+                format: if png_toggle.is_active() {
+                    super::render::ExportFormat::Png
+                } else {
+                    super::render::ExportFormat::Jpeg
+                },
+                jpeg_quality: quality_scale.value().round().clamp(60.0, 100.0) as u8,
+            };
+            dialog_for_response.destroy();
+            choose_export_destination(&window, project.clone(), options);
+        });
+    }
+    dialog.show();
+}
+
+fn choose_export_destination(
+    window: &gtk::Window,
+    project: Rc<RefCell<CollageProject>>,
+    options: super::render::ExportOptions,
+) {
+    let extension = match options.format {
+        super::render::ExportFormat::Jpeg => "jpg",
+        super::render::ExportFormat::Png => "png",
+    };
     let dialog = gtk::FileChooserNative::new(
         Some("Export Collage"),
         Some(window),
@@ -1202,7 +1437,14 @@ fn choose_export_path(window: &gtk::Window, project: Rc<RefCell<CollageProject>>
         Some("Export"),
         Some("Cancel"),
     );
-    dialog.set_current_name("collage.jpg");
+    dialog.set_current_name(&format!("collage.{extension}"));
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some(match options.format {
+        super::render::ExportFormat::Jpeg => "JPEG image",
+        super::render::ExportFormat::Png => "PNG image",
+    }));
+    filter.add_pattern(&format!("*.{extension}"));
+    dialog.add_filter(&filter);
     let window = window.clone();
     dialog.connect_response(move |dialog, response| {
         if response != gtk::ResponseType::Accept {
@@ -1212,14 +1454,14 @@ fn choose_export_path(window: &gtk::Window, project: Rc<RefCell<CollageProject>>
             return;
         };
         let path = if path.extension().is_none() {
-            path.with_extension("jpg")
+            path.with_extension(extension)
         } else {
             path
         };
         let project = project.borrow().clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let result = super::render::export(&project, &path);
+            let result = super::render::export(&project, &path, &options);
             let _ = sender.send(result.map_err(|error| error.to_string()));
         });
         let window = window.clone();
@@ -1228,7 +1470,7 @@ fn choose_export_path(window: &gtk::Window, project: Rc<RefCell<CollageProject>>
                 Ok(Ok(())) => {
                     let dialog = adw::AlertDialog::builder()
                         .heading("Collage exported")
-                        .body("The JPEG collage was saved successfully.")
+                        .body("The collage was saved successfully.")
                         .close_response("close")
                         .build();
                     dialog.add_response("close", "Close");

@@ -2670,7 +2670,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     let collage_page = collage_page.clone();
                     let collage_editor = collage_editor.clone();
                     let collage_add_mode = collage_add_mode.clone();
-                    move |photos| {
+                    move |photos, draft| {
                         while let Some(child) = collage_page.first_child() {
                             collage_page.remove(&child);
                         }
@@ -2699,6 +2699,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             photos,
                             add_photos,
                             close,
+                            draft,
                         );
                         collage_page.append(&editor.root);
                         collage_editor.replace(Some(editor));
@@ -2725,12 +2726,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let edit_page = edit_page.clone();
         let edit_editor = edit_editor.clone();
         let collage_add_mode = collage_add_mode.clone();
+        let connection_for_teardown = connection.clone();
         main_stack_for_teardown.connect_visible_child_notify(move |stack| {
             let visible = stack.visible_child_name();
             if visible.as_deref() != Some("collage") && !collage_add_mode.get() {
                 // try_borrow: the add-photos handler holds the editor borrow
                 // while switching pages; skip rather than panic.
                 if collage_editor.try_borrow().map(|editor| editor.is_some()).unwrap_or(false) {
+                    // Persist the draft on every path out of the editor.
+                    if let Ok(editor_handle) = collage_editor.try_borrow() {
+                        if let Some(editor) = editor_handle.as_ref() {
+                            let json = editor.draft_json();
+                            let guard = connection_for_teardown.borrow();
+                            let _ =
+                                db::set_setting(&guard, crate::collage::DRAFT_SETTING_KEY, &json);
+                        }
+                    }
                     while let Some(child) = collage_page.first_child() {
                         collage_page.remove(&child);
                     }
@@ -3916,9 +3927,21 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let collage_page = collage_page.clone();
         let collage_editor = collage_editor.clone();
         let collage_add_mode = collage_add_mode.clone();
+        let connection = connection.clone();
         Rc::new(move || {
             gallery.set_collage_selection_mode(false);
             collage_add_mode.set(false);
+            // Persist the draft before teardown so "Resume Collage?" can
+            // restore it the next time the editor opens.
+            {
+                let editor_handle = collage_editor.borrow();
+                if let Some(editor) = editor_handle.as_ref() {
+                    let json = editor.draft_json();
+                    let guard = connection.borrow();
+                    let _ =
+                        db::set_setting(&guard, crate::collage::DRAFT_SETTING_KEY, &json);
+                }
+            }
             main_stack.set_visible_child_name("photos");
             button.set_visible(false);
             // Detach the editor so the stack's size request drops back to
