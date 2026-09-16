@@ -152,7 +152,7 @@ pub fn build(
     );
     let project = Rc::new(RefCell::new(CollageProject::new(photos)));
 
-    let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.set_hexpand(true);
     root.set_vexpand(true);
     let controls = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -642,10 +642,21 @@ pub fn build(
     controls_scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
     controls_scroll.set_propagate_natural_width(true);
     controls_scroll.set_propagate_natural_height(true);
-    controls_scroll.set_min_content_width(250);
+    controls_scroll.set_min_content_width(320);
     controls_scroll.set_child(Some(&controls));
-    root.append(&controls_scroll);
-    root.append(&aspect_frame);
+    // Same adjustable split pane as the edit mode tools panel: users can
+    // drag the divider to give the controls or the canvas more room, the
+    // panel starts at the same 360px width and never shrinks below 320px.
+    let body = gtk::Paned::new(gtk::Orientation::Horizontal);
+    body.set_hexpand(true);
+    body.set_vexpand(true);
+    body.set_position(360);
+    body.set_resize_start_child(false);
+    body.set_shrink_start_child(false);
+    body.set_wide_handle(true);
+    body.set_start_child(Some(&controls_scroll));
+    body.set_end_child(Some(&aspect_frame));
+    root.append(&body);
     CollageEditor {
         root,
         project,
@@ -1062,12 +1073,17 @@ mod sizing_tests {
             .iter()
             .map(|f| f.outer.clone())
             .collect::<Vec<_>>();
-        // The controls column now lives inside a ScrolledWindow (its tall
-        // minimum must not leak into the editor/window request). Descend
-        // through scroll -> viewport -> controls box to find the scale.
+        // The controls column lives in the start pane of the adjustable
+        // split, inside a ScrolledWindow (its tall minimum must not leak
+        // into the editor/window request). Descend through pane -> scroll
+        // -> viewport -> controls box to find the scale.
         let controls = editor
             .root
             .first_child()
+            .unwrap()
+            .downcast::<gtk::Paned>()
+            .unwrap()
+            .start_child()
             .unwrap()
             .downcast::<gtk::ScrolledWindow>()
             .unwrap()
