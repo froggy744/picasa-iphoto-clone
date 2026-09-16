@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+  <!-- Smart Mosaic: one dominant hero photo with satellites. -->
+  <g fill="#2e3436">
+    <rect x="2" y="2" width="12" height="6"/>
+    <rect x="2" y="10" width="5" height="4"/>
+    <rect x="9" y="10" width="5" height="4"/>
+  </g>
+</svg>

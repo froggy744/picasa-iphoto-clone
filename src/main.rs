@@ -50,6 +50,16 @@ const REFERENCED_ICONS: &[&str] = &[
     "edit-redo-symbolic",
     "document-save-symbolic",
     "appointment-soon-symbolic",
+    "application-exit-symbolic",
+    "collage-corner-round-symbolic",
+    "collage-corner-sharp-symbolic",
+    "collage-grid-symbolic",
+    "collage-mosaic-symbolic",
+    "collage-smart-mosaic-symbolic",
+    "media-playlist-shuffle-symbolic",
+    "orientation-landscape-symbolic",
+    "orientation-portrait-left-symbolic",
+    "zoom-fit-best-symbolic",
 ];
 
 /// Register the bundled hicolor icon subset (resources/icons.gresource).

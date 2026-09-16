@@ -84,7 +84,10 @@ fn collage_css() -> String {
          .collage-contained-photo { border: none; box-shadow: none; }\
          .collage-dragging { opacity: 0.62; }\
          .collage-drop-target { border: 3px solid #4d9fdb; box-shadow: 0 0 0 3px alpha(#4d9fdb, 0.45), 0 3px 12px alpha(#000000, 0.35); }\
-         .collage-photo-rounded { }",
+         .collage-photo-rounded { }\
+         .collage-tile { min-height: 36px; }\
+         .collage-tile:checked { background-color: alpha(@accent_bg_color, 0.38); }\
+         .collage-radius-row { margin-top: 2px; }",
     );
     for radius in 0..=MAX_PREVIEW_CORNER_RADIUS {
         css.push_str(&format!(
@@ -153,7 +156,7 @@ pub fn build(
     root.set_hexpand(true);
     root.set_vexpand(true);
     let controls = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    controls.set_width_request(230);
+    controls.set_width_request(250);
     controls.set_margin_top(18);
     controls.set_margin_bottom(18);
     controls.set_margin_start(18);
@@ -207,52 +210,118 @@ pub fn build(
         });
     }
 
-    add_section_label(&controls, "Layout");
-    let layout = gtk::DropDown::from_strings(&["Mosaic", "Smart Mosaic", "Grid"]);
-    layout.set_selected(match project.borrow().layout {
-        LayoutKind::Mosaic => 0,
-        LayoutKind::SmartMosaic => 1,
-        LayoutKind::Grid => 2,
-    });
-    let orientation = gtk::DropDown::from_strings(&["Landscape", "Portrait"]);
-    orientation
-        .set_selected(matches!(project.borrow().orientation, CollageOrientation::Portrait) as u32);
-    let layout_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    layout_controls.append(&layout);
-    layout_controls.append(&orientation);
-    controls.append(&layout_controls);
-    let keep_photo_aspect = gtk::CheckButton::with_label("Keep photo aspect ratio");
-    keep_photo_aspect.set_active(project.borrow().keep_photo_aspect);
-    keep_photo_aspect.set_visible(matches!(
-        project.borrow().layout,
-        LayoutKind::Mosaic | LayoutKind::SmartMosaic
+    // Row 1 — layout: three equal icon tiles with radio behaviour; the
+    // active tile is highlighted (`.collage-tile:checked`).
+    let mosaic_tile = gtk::ToggleButton::new();
+    let smart_tile = gtk::ToggleButton::new();
+    let grid_tile = gtk::ToggleButton::new();
+    for (tile, icon, tooltip) in [
+        (
+            &mosaic_tile,
+            "collage-mosaic-symbolic",
+            "Mosaic: varied tile sizes, no dominant photo",
+        ),
+        (
+            &smart_tile,
+            "collage-smart-mosaic-symbolic",
+            "Smart Mosaic: automatic layout with a dominant photo",
+        ),
+        (
+            &grid_tile,
+            "collage-grid-symbolic",
+            "Grid: uniform tiles, photos crop to fill",
+        ),
+    ] {
+        tile.set_icon_name(icon);
+        tile.set_tooltip_text(Some(tooltip));
+        tile.add_css_class("collage-tile");
+    }
+    smart_tile.set_group(Some(&mosaic_tile));
+    grid_tile.set_group(Some(&mosaic_tile));
+    match project.borrow().layout {
+        LayoutKind::Mosaic => mosaic_tile.set_active(true),
+        LayoutKind::SmartMosaic => smart_tile.set_active(true),
+        LayoutKind::Grid => grid_tile.set_active(true),
+    }
+    let layout_tiles = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    layout_tiles.add_css_class("linked");
+    for tile in [&mosaic_tile, &smart_tile, &grid_tile] {
+        tile.set_hexpand(true);
+        layout_tiles.append(tile);
+    }
+    controls.append(&layout_tiles);
+
+    // Row 2 — fit + orientation. Fit replaces the keep-photo-aspect
+    // checkbox; it stays visible but insensitive for Grid, which always
+    // crops photos to fill their tiles. Portrait/Landscape form a radio
+    // pair of icon buttons.
+    let fit_toggle = gtk::ToggleButton::new();
+    {
+        let fit_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        fit_content.set_halign(gtk::Align::Center);
+        fit_content.append(&gtk::Image::from_icon_name("zoom-fit-best-symbolic"));
+        fit_content.append(&gtk::Label::new(Some("Fit")));
+        fit_toggle.set_child(Some(&fit_content));
+    }
+    fit_toggle.set_tooltip_text(Some(
+        "Fit photos inside their tiles (keep aspect ratio)",
     ));
-    controls.append(&keep_photo_aspect);
+    fit_toggle.set_active(project.borrow().keep_photo_aspect);
+    fit_toggle.set_sensitive(!matches!(project.borrow().layout, LayoutKind::Grid));
+    let portrait_btn = gtk::ToggleButton::new();
+    portrait_btn.set_icon_name("orientation-portrait-left-symbolic");
+    portrait_btn.set_tooltip_text(Some("Portrait canvas"));
+    portrait_btn.add_css_class("collage-tile");
+    let landscape_btn = gtk::ToggleButton::new();
+    landscape_btn.set_icon_name("orientation-landscape-symbolic");
+    landscape_btn.set_tooltip_text(Some("Landscape canvas"));
+    landscape_btn.add_css_class("collage-tile");
+    portrait_btn.set_group(Some(&landscape_btn));
+    if matches!(project.borrow().orientation, CollageOrientation::Portrait) {
+        portrait_btn.set_active(true);
+    } else {
+        landscape_btn.set_active(true);
+    }
+    let fit_orientation_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    fit_orientation_row.add_css_class("linked");
+    for button in [&fit_toggle, &portrait_btn, &landscape_btn] {
+        button.set_hexpand(true);
+        fit_orientation_row.append(button);
+    }
+    controls.append(&fit_orientation_row);
     {
         let project = project.clone();
         let refresh = refresh.clone();
-        let keep_photo_aspect = keep_photo_aspect.clone();
-        layout.connect_selected_notify(move |dropdown| {
-            let layout_kind = match dropdown.selected() {
-                0 => LayoutKind::Mosaic,
-                1 => LayoutKind::SmartMosaic,
-                _ => LayoutKind::Grid,
-            };
-            let mut project_data = project.borrow_mut();
-            project_data.layout = layout_kind;
-            project_data.relayout();
-            drop(project_data);
-            keep_photo_aspect.set_visible(matches!(
-                layout_kind,
-                LayoutKind::Mosaic | LayoutKind::SmartMosaic
-            ));
+        let fit_toggle = fit_toggle.clone();
+        let apply_layout = Rc::new(move |layout_kind: LayoutKind| {
+            {
+                let mut project_data = project.borrow_mut();
+                if project_data.layout == layout_kind {
+                    return;
+                }
+                project_data.layout = layout_kind;
+                project_data.relayout();
+            }
+            fit_toggle.set_sensitive(!matches!(layout_kind, LayoutKind::Grid));
             refresh();
         });
+        for (button, kind) in [
+            (mosaic_tile.clone(), LayoutKind::Mosaic),
+            (smart_tile.clone(), LayoutKind::SmartMosaic),
+            (grid_tile.clone(), LayoutKind::Grid),
+        ] {
+            let apply_layout = apply_layout.clone();
+            button.connect_toggled(move |tile| {
+                if tile.is_active() {
+                    apply_layout(kind);
+                }
+            });
+        }
     }
     {
         let project = project.clone();
         let refresh = refresh.clone();
-        keep_photo_aspect.connect_toggled(move |button| {
+        fit_toggle.connect_toggled(move |button| {
             let mut project_data = project.borrow_mut();
             project_data.keep_photo_aspect = button.is_active();
             if matches!(
@@ -265,8 +334,30 @@ pub fn build(
             }
         });
     }
+    for (button, value) in [
+        (&portrait_btn, CollageOrientation::Portrait),
+        (&landscape_btn, CollageOrientation::Landscape),
+    ] {
+        let project = project.clone();
+        let refresh = refresh.clone();
+        let aspect_frame = aspect_frame.clone();
+        button.connect_toggled(move |btn| {
+            if !btn.is_active() {
+                return;
+            }
+            let ratio = {
+                let mut project_data = project.borrow_mut();
+                project_data.orientation = value;
+                project_data.relayout();
+                project_data.effective_aspect_ratio()
+            };
+            aspect_frame.set_ratio(ratio);
+            refresh();
+        });
+    }
 
-    add_section_label(&controls, "Aspect ratio");
+    // Row 3 — aspect ratio + background side by side; the section labels
+    // are replaced by tooltips.
     let aspect = gtk::DropDown::from_strings(&["Square 1:1", "4:3", "3:2", "16:9", "Custom"]);
     aspect.set_selected(match project.borrow().aspect {
         AspectRatio::Square => 0,
@@ -275,7 +366,20 @@ pub fn build(
         AspectRatio::SixteenNine => 3,
         AspectRatio::Custom => 4,
     });
-    controls.append(&aspect);
+    aspect.set_tooltip_text(Some("Canvas aspect ratio"));
+    let background = gtk::DropDown::from_strings(&["White", "Black", "Light Grey"]);
+    background.set_selected(match project.borrow().background {
+        Background::White => 0,
+        Background::Black => 1,
+        Background::LightGray => 2,
+    });
+    background.set_tooltip_text(Some("Canvas background"));
+    let aspect_background_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    aspect.set_hexpand(true);
+    background.set_hexpand(true);
+    aspect_background_row.append(&aspect);
+    aspect_background_row.append(&background);
+    controls.append(&aspect_background_row);
     let custom_width = gtk::SpinButton::with_range(1.0, 10_000.0, 1.0);
     custom_width.set_value((project.borrow().custom_aspect * 9.0).round().max(1.0) as f64);
     custom_width.set_numeric(true);
@@ -316,26 +420,6 @@ pub fn build(
             refresh();
         });
     }
-    {
-        let project = project.clone();
-        let refresh = refresh.clone();
-        let aspect_frame = aspect_frame.clone();
-        orientation.connect_selected_notify(move |dropdown| {
-            let orientation = if dropdown.selected() == 1 {
-                CollageOrientation::Portrait
-            } else {
-                CollageOrientation::Landscape
-            };
-            let ratio = {
-                let mut project_data = project.borrow_mut();
-                project_data.orientation = orientation;
-                project_data.relayout();
-                project_data.effective_aspect_ratio()
-            };
-            aspect_frame.set_ratio(ratio);
-            refresh();
-        });
-    }
     for custom_control in [&custom_width, &custom_height] {
         let project = project.clone();
         let refresh = refresh.clone();
@@ -360,14 +444,6 @@ pub fn build(
         });
     }
 
-    add_section_label(&controls, "Background");
-    let background = gtk::DropDown::from_strings(&["White", "Black", "Light Grey"]);
-    background.set_selected(match project.borrow().background {
-        Background::White => 0,
-        Background::Black => 1,
-        Background::LightGray => 2,
-    });
-    controls.append(&background);
     {
         let project = project.clone();
         let refresh = refresh.clone();
@@ -383,24 +459,43 @@ pub fn build(
         });
     }
 
-    add_section_label(&controls, "Photo corners");
     let round_corners = gtk::CheckButton::with_label("Round corners");
     round_corners.set_active(project.borrow().round_corners);
     controls.append(&round_corners);
+    // The slider ends carry sharp/rounded corner icons so the control's
+    // purpose is obvious without a section label; they grey out with the
+    // slider while the checkbox is off.
+    let corner_sharp_icon = gtk::Image::from_icon_name("collage-corner-sharp-symbolic");
+    corner_sharp_icon.set_tooltip_text(Some("Square corners"));
+    let corner_round_icon = gtk::Image::from_icon_name("collage-corner-round-symbolic");
+    corner_round_icon.set_tooltip_text(Some("Rounded corners"));
+    let corner_icons_active = project.borrow().round_corners;
+    corner_sharp_icon.set_sensitive(corner_icons_active);
+    corner_round_icon.set_sensitive(corner_icons_active);
     let corner_radius = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 0.12, 0.005);
     corner_radius.set_value(project.borrow().corner_radius as f64);
     corner_radius.set_digits(3);
     corner_radius.set_draw_value(false);
     corner_radius.set_sensitive(project.borrow().round_corners);
     corner_radius.set_tooltip_text(Some("Corner radius"));
-    controls.append(&corner_radius);
+    corner_radius.set_hexpand(true);
+    let radius_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    radius_row.add_css_class("collage-radius-row");
+    radius_row.append(&corner_sharp_icon);
+    radius_row.append(&corner_radius);
+    radius_row.append(&corner_round_icon);
+    controls.append(&radius_row);
     {
         let project = project.clone();
         let refresh = refresh.clone();
         let corner_radius = corner_radius.clone();
+        let corner_sharp_icon = corner_sharp_icon.clone();
+        let corner_round_icon = corner_round_icon.clone();
         round_corners.connect_toggled(move |button| {
             project.borrow_mut().round_corners = button.is_active();
             corner_radius.set_sensitive(button.is_active());
+            corner_sharp_icon.set_sensitive(button.is_active());
+            corner_round_icon.set_sensitive(button.is_active());
             refresh();
         });
     }
@@ -430,14 +525,18 @@ pub fn build(
         });
     }
 
-    let reset_defaults = gtk::Button::with_label("Reset defaults");
-    reset_defaults.set_width_request(120);
-    reset_defaults.set_height_request(30);
-    reset_defaults.set_tooltip_text(Some("Restore default collage settings"));
+    // Bottom actions. Compact icon+label controls grouped right; Create is
+    // the one full-width accent button with Exit beside it.
+    let reset_defaults = icon_label_button(
+        "view-refresh-symbolic",
+        "Reset",
+        "Restore default collage settings",
+    );
     {
         let project = project.clone();
-        let layout = layout.clone();
-        let orientation = orientation.clone();
+        let smart_tile = smart_tile.clone();
+        let landscape_btn = landscape_btn.clone();
+        let fit_toggle = fit_toggle.clone();
         let aspect = aspect.clone();
         let custom_width = custom_width.clone();
         let custom_height = custom_height.clone();
@@ -447,6 +546,8 @@ pub fn build(
         let spacing = spacing.clone();
         let aspect_frame = aspect_frame.clone();
         let custom_ratio = custom_ratio.clone();
+        let corner_sharp_icon = corner_sharp_icon.clone();
+        let corner_round_icon = corner_round_icon.clone();
         reset_defaults.connect_clicked(move |_| {
             {
                 let mut project_data = project.borrow_mut();
@@ -460,8 +561,12 @@ pub fn build(
                 project_data.spacing = 0.018;
                 project_data.keep_photo_aspect = true;
             }
-            layout.set_selected(1);
-            orientation.set_selected(0);
+            smart_tile.set_active(true);
+            landscape_btn.set_active(true);
+            fit_toggle.set_active(true);
+            // The tile handler skips no-op activations, so re-assert the
+            // fit sensitivity explicitly (it may have been greyed by Grid).
+            fit_toggle.set_sensitive(true);
             aspect.set_selected(3);
             custom_width.set_value(16.0);
             custom_height.set_value(9.0);
@@ -471,19 +576,27 @@ pub fn build(
             spacing.set_value(0.018);
             custom_ratio.set_visible(false);
             aspect_frame.set_ratio(16.0 / 9.0);
+            corner_sharp_icon.set_sensitive(false);
+            corner_round_icon.set_sensitive(false);
             let mut project_data = project.borrow_mut();
             project_data.relayout();
         });
     }
 
-    let shuffle = gtk::Button::with_label("Shuffle");
-    shuffle.set_sensitive(true);
-    shuffle.set_hexpand(true);
-    let reset_shuffle_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    reset_shuffle_row.set_hexpand(true);
-    reset_shuffle_row.append(&reset_defaults);
-    reset_shuffle_row.append(&shuffle);
-    controls.append(&reset_shuffle_row);
+    // Bottom actions. Compact icon+label controls grouped right; Create is
+    // the one full-width accent button with Exit beside it.
+    let actions_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    actions_row.set_halign(gtk::Align::End);
+    let add_photos = icon_label_button("list-add-symbolic", "Add", "Add photos from the library");
+    let shuffle = icon_label_button(
+        "media-playlist-shuffle-symbolic",
+        "Shuffle",
+        "Shuffle photo order",
+    );
+    actions_row.append(&reset_defaults);
+    actions_row.append(&add_photos);
+    actions_row.append(&shuffle);
+    controls.append(&actions_row);
     {
         let project = project.clone();
         let refresh = refresh.clone();
@@ -493,14 +606,17 @@ pub fn build(
         });
     }
 
-    let export = gtk::Button::with_label("Create / Export Collage…");
+    let primary_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let export = gtk::Button::with_label("Create Collage…");
     export.add_css_class("suggested-action");
-    controls.append(&export);
-    let add_photos = gtk::Button::with_label("Add Photos…");
-    controls.append(&add_photos);
-    let close = gtk::Button::with_label("Exit Collage");
-    controls.append(&close);
-    controls.append(&gtk::Box::new(gtk::Orientation::Vertical, 0));
+    export.set_hexpand(true);
+    export.set_tooltip_text(Some("Render and export the collage as a JPEG"));
+    let close = gtk::Button::new();
+    close.set_icon_name("application-exit-symbolic");
+    close.set_tooltip_text(Some("Exit collage"));
+    primary_row.append(&export);
+    primary_row.append(&close);
+    controls.append(&primary_row);
     {
         let project = project.clone();
         let parent = parent.clone();
@@ -518,7 +634,7 @@ pub fn build(
     controls_scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
     controls_scroll.set_propagate_natural_width(true);
     controls_scroll.set_propagate_natural_height(true);
-    controls_scroll.set_min_content_width(230);
+    controls_scroll.set_min_content_width(250);
     controls_scroll.set_child(Some(&controls));
     root.append(&controls_scroll);
     root.append(&aspect_frame);
@@ -536,6 +652,17 @@ fn add_section_label(parent: &gtk::Box, text: &str) {
     label.set_halign(gtk::Align::Start);
     label.add_css_class("heading");
     parent.append(&label);
+}
+
+fn icon_label_button(icon: &str, label: &str, tooltip: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.set_halign(gtk::Align::Center);
+    content.append(&gtk::Image::from_icon_name(icon));
+    content.append(&gtk::Label::new(Some(label)));
+    button.set_child(Some(&content));
+    button.set_tooltip_text(Some(tooltip));
+    button
 }
 
 fn refresh_preview(

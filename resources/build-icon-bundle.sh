@@ -90,6 +90,14 @@ if [[ ! -e "${ICON_DIR}/sidebar-hide-symbolic.svg" ]]; then
         "${ICON_DIR}/sidebar-show-symbolic.svg" > "${ICON_DIR}/sidebar-hide-symbolic.svg"
 fi
 
+# Hand-drawn collage icons (resources/custom-icons/ is their source of
+# truth): three layout tiles and the corner-radius slider ends. The import
+# above wiped icons/, so restore ours after it.
+for custom in "${SCRIPT_DIR}/custom-icons"/*.svg; do
+    [[ -e "${custom}" ]] || continue
+    cp "${custom}" "${ICON_DIR}/$(basename "${custom}")"
+done
+
 count="$(find "${ICON_DIR}" -name '*.svg' | wc -l)"
 echo "Imported ${count} icons into resources/icons/"
 

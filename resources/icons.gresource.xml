@@ -44,6 +44,11 @@
     <file compressed="true" preprocess="xml-stripblanks">icons/audio-headset-symbolic.svg</file>
     <file compressed="true" preprocess="xml-stripblanks">icons/audio-headset.svg</file>
     <file compressed="true" preprocess="xml-stripblanks">icons/audio-input-microphone-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/collage-corner-round-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/collage-corner-sharp-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/collage-grid-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/collage-mosaic-symbolic.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks">icons/collage-smart-mosaic-symbolic.svg</file>
     <file compressed="true" preprocess="xml-stripblanks">icons/audio-speakers-rtl-symbolic.svg</file>
     <file compressed="true" preprocess="xml-stripblanks">icons/audio-speakers-symbolic-rtl.svg</file>
     <file compressed="true" preprocess="xml-stripblanks">icons/audio-speakers-symbolic.svg</file>

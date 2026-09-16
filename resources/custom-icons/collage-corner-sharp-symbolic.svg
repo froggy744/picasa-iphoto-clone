@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+  <!-- Sharp corner: zero corner radius. -->
+  <g fill="#2e3436">
+    <path d="M 2 14 V 2 h 2 v 10 h 10 v 2 Z"/>
+  </g>
+</svg>
