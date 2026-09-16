@@ -850,6 +850,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // collage. The collage editor must survive that detour; every other
     // transition away from the collage page tears it down.
     let collage_add_mode: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    // True while the photo editor is editing a photo that belongs to the
+    // open collage. The collage editor survives that detour, and the
+    // editor's Back/Done return to the collage instead of the photos page.
+    let collage_editing: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let open_collage: Rc<dyn Fn(Vec<i64>)> = {
         let slot = collage_open_slot.clone();
         Rc::new(move |ids| {
@@ -2656,6 +2660,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let collage_add_mode_slot = collage_add_mode_slot.clone();
         let collage_close_slot = collage_close_slot.clone();
         let collage_add_mode = collage_add_mode.clone();
+        // Opens the photo editor while marking the trip as collage-owned so
+        // the collage editor survives and Back/Done return to the collage.
+        let open_edit_from_collage = {
+            let open_edit = open_edit.clone();
+            let collage_editing = collage_editing.clone();
+            Rc::new(move |id: i64| {
+                collage_editing.set(true);
+                open_edit(id);
+            }) as Rc<dyn Fn(i64)>
+        };
         collage_open_slot.replace(Some(Rc::new(move |ids| {
             let add_mode_slot = collage_add_mode_slot.clone();
             let close_slot = collage_close_slot.clone();
@@ -2670,7 +2684,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     let collage_page = collage_page.clone();
                     let collage_editor = collage_editor.clone();
                     let collage_add_mode = collage_add_mode.clone();
-                    move |photos| {
+                    let open_edit_from_collage = open_edit_from_collage.clone();
+                    move |photos, draft| {
                         while let Some(child) = collage_page.first_child() {
                             collage_page.remove(&child);
                         }
@@ -2699,6 +2714,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             photos,
                             add_photos,
                             close,
+                            draft,
+                            open_edit_from_collage.clone(),
                         );
                         collage_page.append(&editor.root);
                         collage_editor.replace(Some(editor));
@@ -2725,12 +2742,30 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let edit_page = edit_page.clone();
         let edit_editor = edit_editor.clone();
         let collage_add_mode = collage_add_mode.clone();
+        let collage_editing = collage_editing.clone();
+        let gallery = gallery.clone();
+        let connection_for_teardown = connection.clone();
         main_stack_for_teardown.connect_visible_child_notify(move |stack| {
             let visible = stack.visible_child_name();
-            if visible.as_deref() != Some("collage") && !collage_add_mode.get() {
+            if visible.as_deref() != Some("collage")
+                && !collage_add_mode.get()
+                && !collage_editing.get()
+            {
                 // try_borrow: the add-photos handler holds the editor borrow
                 // while switching pages; skip rather than panic.
                 if collage_editor.try_borrow().map(|editor| editor.is_some()).unwrap_or(false) {
+                    // Persist the draft on every path out of the editor.
+                    if let Ok(editor_handle) = collage_editor.try_borrow() {
+                        if let Some(editor) = editor_handle.as_ref() {
+                            let json = editor.draft_json();
+                            let guard = connection_for_teardown.borrow();
+                            let _ =
+                                db::set_setting(&guard, crate::collage::DRAFT_SETTING_KEY, &json);
+                        }
+                    }
+                    // Clear the grid selection so the next toolbar collage
+                    // click is a blank start and can offer the resume prompt.
+                    gallery.set_selected_photo_ids(&[]);
                     while let Some(child) = collage_page.first_child() {
                         collage_page.remove(&child);
                     }
@@ -2740,6 +2775,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if visible.as_deref() != Some("edit")
                 && edit_editor.try_borrow().map(|editor| editor.is_some()).unwrap_or(false)
             {
+                // Any exit from the photo editor ends the collage detour.
+                collage_editing.set(false);
                 while let Some(child) = edit_page.first_child() {
                     edit_page.remove(&child);
                 }
@@ -2758,8 +2795,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let info = info.clone();
         let lightbox = lightbox.clone();
         let edit_space_slot = edit_space_slot.clone();
+        let collage_editing = collage_editing.clone();
+        let collage_editor = collage_editor.clone();
         edit_open_slot.replace(Some(Rc::new(move |id| {
             let Some(db_photo) = db::photo(&connection.borrow(), id).ok().flatten() else {
+                // The open failed; drop any pending collage-edit marker so
+                // the flag cannot get stuck and spare the collage forever.
+                collage_editing.set(false);
                 return;
             };
             edit_space_slot.borrow_mut().take();
@@ -2777,11 +2819,32 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 let edit_space_slot = edit_space_slot.clone();
                 let edit_page = edit_page.clone();
                 let edit_editor = edit_editor.clone();
+                let collage_editing = collage_editing.clone();
+                let collage_editor = collage_editor.clone();
+                let connection = connection.clone();
                 Rc::new(move || {
                     edit_space_slot.borrow_mut().take();
                     one_to_one.set_active(false);
-                    main_stack.set_visible_child_name("photos");
-                    gallery.restore_view(id, library_scroll_y);
+                    let returning_to_collage = collage_editing.get();
+                    if returning_to_collage {
+                        // Bring the collage tile up to date with any edits
+                        // saved during this detour.
+                        if let Ok(editor_handle) = collage_editor.try_borrow() {
+                            if let Some(collage) = editor_handle.as_ref() {
+                                if let Some(updated) =
+                                    db::photo(&connection.borrow(), id).ok().flatten()
+                                {
+                                    collage.refresh_photo_metadata(&[
+                                        crate::photo_object::PhotoObject::from_photo(&updated),
+                                    ]);
+                                }
+                            }
+                        }
+                        main_stack.set_visible_child_name("collage");
+                    } else {
+                        main_stack.set_visible_child_name("photos");
+                        gallery.restore_view(id, library_scroll_y);
+                    }
                     // Detach the editor so it stops contributing to the
                     // stack's size request and its preview memory is
                     // released; the editor is rebuilt on the next open.
@@ -2813,6 +2876,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 editor.set_one_to_one_sync_handler(move |enabled| {
                     one_to_one.set_active(enabled);
                 });
+            }
+            // Make the way back explicit when the editor was opened from a
+            // collage tile; Done saves and follows the same return path.
+            if collage_editing.get() {
+                editor.set_back_label("Back to Collage", "Return to the collage");
             }
             edit_page.append(&editor.root);
             edit_editor.replace(Some(editor));
@@ -3916,9 +3984,25 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let collage_page = collage_page.clone();
         let collage_editor = collage_editor.clone();
         let collage_add_mode = collage_add_mode.clone();
+        let connection = connection.clone();
         Rc::new(move || {
             gallery.set_collage_selection_mode(false);
+            // Drop the grid selection too: otherwise the collage photos
+            // stay selected and the next toolbar click reads as an
+            // explicit selection, silently skipping "Resume Collage?".
+            gallery.set_selected_photo_ids(&[]);
             collage_add_mode.set(false);
+            // Persist the draft before teardown so "Resume Collage?" can
+            // restore it the next time the editor opens.
+            {
+                let editor_handle = collage_editor.borrow();
+                if let Some(editor) = editor_handle.as_ref() {
+                    let json = editor.draft_json();
+                    let guard = connection.borrow();
+                    let _ =
+                        db::set_setting(&guard, crate::collage::DRAFT_SETTING_KEY, &json);
+                }
+            }
             main_stack.set_visible_child_name("photos");
             button.set_visible(false);
             // Detach the editor so the stack's size request drops back to
@@ -3983,13 +4067,28 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let selected_photo = selected_photo.clone();
         let main_stack = main_stack.clone();
         let one_to_one = info.one_to_one.clone();
+        let collage_editing = collage_editing.clone();
+        let collage_editor = collage_editor.clone();
         info.edit.connect_clicked(move |_| {
             // The bottom Edit button is a true open/close toggle. This keeps
             // the editing workspace optional instead of forcing users to use
             // Back/Done just to return to normal browsing.
             if main_stack.visible_child_name().as_deref() == Some("edit") {
                 one_to_one.set_active(false);
-                main_stack.set_visible_child_name("photos");
+                if collage_editing.get() {
+                    // The edit session belongs to a collage: return there.
+                    collage_editing.set(false);
+                    if let Some(photo) = selected_photo.borrow().as_ref() {
+                        if let Ok(editor_handle) = collage_editor.try_borrow() {
+                            if let Some(collage) = editor_handle.as_ref() {
+                                collage.refresh_photo_metadata(std::slice::from_ref(photo));
+                            }
+                        }
+                    }
+                    main_stack.set_visible_child_name("collage");
+                } else {
+                    main_stack.set_visible_child_name("photos");
+                }
                 return;
             }
             if let Some(photo) = selected_photo.borrow().as_ref() {

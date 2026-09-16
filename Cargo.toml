@@ -22,6 +22,8 @@ libadwaita = { version = "0.8", features = ["v1_5"] }
 rayon = "1"
 rawler = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake"] }
 walkdir = "2"
 

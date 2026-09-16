@@ -14,6 +14,7 @@ use super::model::{CropRect, EditRecipe, EditSession};
 pub struct EditEditor {
     pub root: gtk::Box,
     photo_id: i64,
+    back_button: gtk::Button,
     zoom_in_action: Rc<dyn Fn()>,
     zoom_out_action: Rc<dyn Fn()>,
     fit_action: Rc<dyn Fn()>,
@@ -25,6 +26,13 @@ pub struct EditEditor {
 impl EditEditor {
     pub fn photo_id(&self) -> i64 {
         self.photo_id
+    }
+
+    /// Relabels the toolbar Back button for the context the editor was
+    /// opened from (e.g. "Back to Collage").
+    pub fn set_back_label(&self, label: &str, tooltip: &str) {
+        self.back_button.set_label(label);
+        self.back_button.set_tooltip_text(Some(tooltip));
     }
 
     pub fn zoom_in(&self) {
@@ -2323,6 +2331,7 @@ pub fn build(
     EditEditor {
         root,
         photo_id: photo.id(),
+        back_button: back,
         zoom_in_action,
         zoom_out_action,
         fit_action,
