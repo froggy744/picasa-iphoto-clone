@@ -57,6 +57,8 @@ const REFERENCED_ICONS: &[&str] = &[
     "collage-mosaic-symbolic",
     "collage-smart-mosaic-symbolic",
     "media-playlist-shuffle-symbolic",
+    "orientation-landscape-symbolic",
+    "orientation-portrait-left-symbolic",
     "zoom-fit-best-symbolic",
 ];
 

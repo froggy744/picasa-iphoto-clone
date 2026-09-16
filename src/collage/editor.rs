@@ -280,10 +280,24 @@ pub fn build(
     ));
     fit_toggle.set_active(project.borrow().keep_photo_aspect);
     fit_toggle.set_sensitive(!matches!(project.borrow().layout, LayoutKind::Grid));
-    let portrait_btn = gtk::ToggleButton::with_label("Portrait");
+    let portrait_btn = gtk::ToggleButton::new();
+    {
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        content.set_halign(gtk::Align::Center);
+        content.append(&gtk::Image::from_icon_name("orientation-portrait-left-symbolic"));
+        content.append(&gtk::Label::new(Some("Portrait")));
+        portrait_btn.set_child(Some(&content));
+    }
     portrait_btn.set_tooltip_text(Some("Portrait canvas"));
     portrait_btn.add_css_class("collage-tile");
-    let landscape_btn = gtk::ToggleButton::with_label("Landscape");
+    let landscape_btn = gtk::ToggleButton::new();
+    {
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        content.set_halign(gtk::Align::Center);
+        content.append(&gtk::Image::from_icon_name("orientation-landscape-symbolic"));
+        content.append(&gtk::Label::new(Some("Landscape")));
+        landscape_btn.set_child(Some(&content));
+    }
     landscape_btn.set_tooltip_text(Some("Landscape canvas"));
     landscape_btn.add_css_class("collage-tile");
     portrait_btn.set_group(Some(&landscape_btn));
@@ -472,28 +486,28 @@ pub fn build(
         });
     }
 
+    // Corners + slider share a single row: on/off checkbox, then the
+    // radius slider bracketed by sharp/rounded end icons. The icons state
+    // the actual range (0% .. 20% of the tile's short side).
     let round_corners = gtk::CheckButton::with_label("Round corners");
     round_corners.set_active(project.borrow().round_corners);
-    controls.append(&round_corners);
-    // The slider ends carry sharp/rounded corner icons so the control's
-    // purpose is obvious without a section label; they grey out with the
-    // slider while the checkbox is off.
     let corner_sharp_icon = gtk::Image::from_icon_name("collage-corner-sharp-symbolic");
-    corner_sharp_icon.set_tooltip_text(Some("Square corners"));
+    corner_sharp_icon.set_tooltip_text(Some("No corner radius (0%)"));
     let corner_round_icon = gtk::Image::from_icon_name("collage-corner-round-symbolic");
-    corner_round_icon.set_tooltip_text(Some("Rounded corners"));
+    corner_round_icon.set_tooltip_text(Some("Maximum corner radius (20%)"));
     let corner_icons_active = project.borrow().round_corners;
     corner_sharp_icon.set_sensitive(corner_icons_active);
     corner_round_icon.set_sensitive(corner_icons_active);
-    let corner_radius = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 0.12, 0.005);
+    let corner_radius = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 0.2, 0.005);
     corner_radius.set_value(project.borrow().corner_radius as f64);
     corner_radius.set_digits(3);
     corner_radius.set_draw_value(false);
     corner_radius.set_sensitive(project.borrow().round_corners);
-    corner_radius.set_tooltip_text(Some("Corner radius"));
+    corner_radius.set_tooltip_text(Some("Corner radius (0% to 20% of the tile's short side)"));
     corner_radius.set_hexpand(true);
     let radius_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     radius_row.add_css_class("collage-radius-row");
+    radius_row.append(&round_corners);
     radius_row.append(&corner_sharp_icon);
     radius_row.append(&corner_radius);
     radius_row.append(&corner_round_icon);
@@ -622,15 +636,21 @@ pub fn build(
         });
     }
 
-    let primary_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    // Create spans the first two thirds; Exit occupies the last third at
+    // exactly the same block size as Shuffle in the row above.
+    let primary_grid = gtk::Grid::new();
+    primary_grid.set_column_homogeneous(true);
+    primary_grid.set_column_spacing(6);
+    primary_grid.set_hexpand(true);
     let export = gtk::Button::with_label("Create Collage…");
     export.add_css_class("suggested-action");
-    export.set_hexpand(true);
+    export.add_css_class("collage-tile");
     export.set_tooltip_text(Some("Render and export the collage as a JPEG"));
     let close = icon_label_button("application-exit-symbolic", "Exit", "Exit collage");
-    primary_row.append(&export);
-    primary_row.append(&close);
-    controls.append(&primary_row);
+    close.add_css_class("collage-tile");
+    primary_grid.attach(&export, 0, 0, 2, 1);
+    primary_grid.attach(&close, 2, 0, 1, 1);
+    controls.append(&primary_grid);
     {
         let project = project.clone();
         let parent = parent.clone();
