@@ -3,8 +3,9 @@
 //
 // The bottom bar's print button renders the selected photo (library rotation,
 // crops and filters applied) on a worker thread, shows an Adwaita photo
-// options dialog (exact print size, shrink-to-fit vs crop-to-fill, 1-4 prints
-// per page) and then pops the standard GTK print dialog. Choices persist
+// options dialog with a live page preview (exact print size, shrink-to-fit vs
+// crop-to-fill, 1-4 prints per page) and then pops the standard GTK print
+// dialog. Choices persist
 // across sessions via the settings table, together with the GTK
 // printer/paper selections.
 //
@@ -163,6 +164,62 @@ fn find_size_preset(id: &str) -> &'static SizePreset {
         .unwrap_or(&SIZE_PRESETS[0])
 }
 
+/// One photo rectangle on the page, in points measured from the page origin.
+struct PagePlacement {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// Lay out one page: split it into cells for the prints-per-page setting and
+/// return the photo rectangle for every cell. Shared by the printer drawing
+/// and the dialog preview so the two can never drift apart.
+fn page_placements(page_width: f64, page_height: f64, extras: &PrintExtras) -> Vec<PagePlacement> {
+    let (columns, rows) = cell_grid(extras.per_page);
+    let cell_width = page_width / f64::from(columns);
+    let cell_height = page_height / f64::from(rows);
+    // A small gutter keeps multi-up prints from touching; single prints use
+    // the driver's own margins.
+    let gutter = if extras.per_page > 1 {
+        3.0 * PT_PER_MM
+    } else {
+        0.0
+    };
+    let preset = find_size_preset(&extras.size_id);
+
+    let mut placements = Vec::with_capacity((columns * rows) as usize);
+    for row in 0..rows {
+        for column in 0..columns {
+            let x = f64::from(column) * cell_width + gutter / 2.0;
+            let y = f64::from(row) * cell_height + gutter / 2.0;
+            let cell_width_here = cell_width - gutter;
+            let cell_height_here = cell_height - gutter;
+            if cell_width_here <= 0.0 || cell_height_here <= 0.0 {
+                continue;
+            }
+
+            // Full page fills the cell; a physical size keeps its exact
+            // aspect ratio, scaled down only when the cell is smaller.
+            let (box_width, box_height) = if preset.width_pt > 0.0 && preset.height_pt > 0.0 {
+                let scale = (cell_width_here / preset.width_pt)
+                    .min(cell_height_here / preset.height_pt)
+                    .min(1.0);
+                (preset.width_pt * scale, preset.height_pt * scale)
+            } else {
+                (cell_width_here, cell_height_here)
+            };
+            placements.push(PagePlacement {
+                x: x + (cell_width_here - box_width) / 2.0,
+                y: y + (cell_height_here - box_height) / 2.0,
+                width: box_width,
+                height: box_height,
+            });
+        }
+    }
+    placements
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -266,16 +323,29 @@ fn run_print_dialog(
     };
     let extras = Rc::new(RefCell::new(initial_extras));
 
+    // One Cairo surface backs both the live preview and the final print. The
+    // raw photo raster is released as soon as it has been converted.
+    let photo_surface = build_page_surface(&image);
+    drop(image);
+
     let dialog = adw::AlertDialog::new(Some("Print photo"), Some(&job_name));
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("print", "Print");
     dialog.set_response_appearance("print", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("print"));
     dialog.set_close_response("cancel");
-    dialog.set_extra_child(Some(&build_extras_widget(&extras)));
+    dialog.set_content_width(440);
+    // The preview mirrors the exact page layout the printer will receive:
+    // same paper (from the previous print, or the system default) and the
+    // same placement math as draw_print_page.
+    dialog.set_extra_child(Some(&build_extras_widget(
+        &extras,
+        photo_surface.clone(),
+        preview_paper_size(saved_config.as_deref()),
+    )));
 
     let extras_for_response = extras.clone();
-    let image_for_print = image;
+    let surface_for_print = photo_surface;
     let job_name_for_print = job_name;
     let parent_for_print = weak_parent;
     let config_for_print = saved_config;
@@ -284,7 +354,7 @@ fn run_print_dialog(
             run_print_operation(
                 &parent_for_print,
                 &extras_for_response,
-                image_for_print,
+                surface_for_print,
                 &job_name_for_print,
                 config_for_print.as_deref(),
             );
@@ -298,7 +368,7 @@ fn run_print_dialog(
 fn run_print_operation(
     weak_parent: &glib::SendWeakRef<gtk::Window>,
     extras: &Rc<RefCell<PrintExtras>>,
-    image: Rc<image::RgbaImage>,
+    photo_surface: Option<gtk::cairo::ImageSurface>,
     job_name: &str,
     saved_config: Option<&str>,
 ) {
@@ -326,10 +396,9 @@ fn run_print_operation(
     }
 
     let extras_for_draw = extras.clone();
-    let image_for_draw = image;
     operation.connect_draw_page(move |_operation, context, page_number| {
         if page_number == 0 {
-            draw_print_page(context, &image_for_draw, &extras_for_draw.borrow());
+            draw_print_page(context, photo_surface.as_ref(), &extras_for_draw.borrow());
         }
     });
 
@@ -378,14 +447,44 @@ fn persist_print_state(config_key_file: Option<&glib::KeyFile>, extras: &PrintEx
     }
 }
 
-fn build_extras_widget(extras: &Rc<RefCell<PrintExtras>>) -> gtk::Widget {
+fn build_extras_widget(
+    extras: &Rc<RefCell<PrintExtras>>,
+    photo_surface: Option<gtk::cairo::ImageSurface>,
+    paper: (f64, f64),
+) -> gtk::Widget {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+
+    // Live page preview. It shares the page_placements math with the printer
+    // drawing and is redrawn whenever any option below changes.
+    let preview = gtk::DrawingArea::new();
+    preview.set_height_request(PREVIEW_HEIGHT);
+    preview.set_width_request(PREVIEW_WIDTH);
+    preview.set_hexpand(true);
+    let extras_for_preview = extras.clone();
+    let surface_for_preview = photo_surface;
+    preview.set_draw_func(move |_area, cairo, width, height| {
+        draw_page_preview(
+            &cairo,
+            f64::from(width),
+            f64::from(height),
+            surface_for_preview.as_ref(),
+            &extras_for_preview.borrow(),
+            paper,
+        );
+    });
+    let redraw_preview: Rc<dyn Fn()> = {
+        let preview = preview.clone();
+        Rc::new(move || preview.queue_draw())
+    };
+    content.append(&preview);
+
     let grid = gtk::Grid::new();
     grid.set_row_spacing(10);
     grid.set_column_spacing(12);
-    grid.set_margin_top(12);
-    grid.set_margin_bottom(12);
-    grid.set_margin_start(12);
-    grid.set_margin_end(12);
 
     let size_label = gtk::Label::with_mnemonic("Print _size:");
     size_label.set_halign(gtk::Align::End);
@@ -400,6 +499,7 @@ fn build_extras_widget(extras: &Rc<RefCell<PrintExtras>>) -> gtk::Widget {
     size_combo.set_selected(active_index as u32);
     size_label.set_mnemonic_widget(Some(&size_combo));
     let extras_for_size = extras.clone();
+    let redraw_for_size = redraw_preview.clone();
     size_combo.connect_selected_notify(move |dropdown| {
         // try_borrow_mut: the dialog may emit changed signals while the page
         // draw borrows `extras`; dropping the write then is harmless because
@@ -410,6 +510,7 @@ fn build_extras_widget(extras: &Rc<RefCell<PrintExtras>>) -> gtk::Widget {
                 current.size_id = preset.id.to_string();
             }
         }
+        redraw_for_size();
     });
 
     let sizing_label = gtk::Label::with_mnemonic("_Sizing:");
@@ -425,19 +526,23 @@ fn build_extras_widget(extras: &Rc<RefCell<PrintExtras>>) -> gtk::Widget {
         shrink_radio.set_active(true);
     }
     let extras_for_shrink = extras.clone();
+    let redraw_for_shrink = redraw_preview.clone();
     shrink_radio.connect_toggled(move |button| {
         if button.is_active() {
             if let Ok(mut current) = extras_for_shrink.try_borrow_mut() {
                 current.crop_to_fill = false;
             }
+            redraw_for_shrink();
         }
     });
     let extras_for_crop = extras.clone();
+    let redraw_for_crop = redraw_preview.clone();
     crop_radio.connect_toggled(move |button| {
         if button.is_active() {
             if let Ok(mut current) = extras_for_crop.try_borrow_mut() {
                 current.crop_to_fill = true;
             }
+            redraw_for_crop();
         }
     });
     sizing_box.append(&shrink_radio);
@@ -455,11 +560,13 @@ fn build_extras_widget(extras: &Rc<RefCell<PrintExtras>>) -> gtk::Widget {
     per_page_combo.set_selected(extras.borrow().per_page.clamp(1, 4) - 1);
     per_page_label.set_mnemonic_widget(Some(&per_page_combo));
     let extras_for_per_page = extras.clone();
+    let redraw_for_per_page = redraw_preview.clone();
     per_page_combo.connect_selected_notify(move |dropdown| {
         let count = dropdown.selected().clamp(1, 4);
         if let Ok(mut current) = extras_for_per_page.try_borrow_mut() {
             current.per_page = count;
         }
+        redraw_for_per_page();
     });
 
     grid.attach(&size_label, 0, 0, 1, 1);
@@ -469,7 +576,103 @@ fn build_extras_widget(extras: &Rc<RefCell<PrintExtras>>) -> gtk::Widget {
     grid.attach(&per_page_label, 0, 2, 1, 1);
     grid.attach(&per_page_combo, 1, 2, 1, 1);
 
-    grid.upcast()
+    content.append(&grid);
+    content.upcast()
+}
+
+// ---------------------------------------------------------------------------
+// Live page preview
+// ---------------------------------------------------------------------------
+
+/// Live preview geometry inside the photo options dialog (logical pixels).
+const PREVIEW_HEIGHT: i32 = 260;
+const PREVIEW_WIDTH: i32 = 360;
+/// Blank margin between the preview widget edge and the paper rectangle.
+const PREVIEW_MARGIN: f64 = 10.0;
+
+/// Paper size for the preview, in points, honouring the printer, paper and
+/// orientation chosen on the previous print. Falls back to the system
+/// default paper (A4 or Letter, portrait).
+fn preview_paper_size(saved_config: Option<&str>) -> (f64, f64) {
+    if let Some(config) = saved_config {
+        let key_file = glib::KeyFile::new();
+        if key_file.load_from_data(config, glib::KeyFileFlags::NONE).is_ok() {
+            if let Ok(setup) = gtk::PageSetup::from_key_file(&key_file, PRINT_PAGE_SETUP_GROUP) {
+                let width = setup.paper_width(gtk::Unit::Points);
+                let height = setup.paper_height(gtk::Unit::Points);
+                if width > 0.0 && height > 0.0 {
+                    return (width, height);
+                }
+            }
+        }
+    }
+    let default_setup = gtk::PageSetup::new();
+    (
+        default_setup.paper_width(gtk::Unit::Points),
+        default_setup.paper_height(gtk::Unit::Points),
+    )
+}
+
+/// Draw the preview: a white paper rectangle scaled into the widget, with
+/// the photo placed exactly where draw_print_page will place it on paper.
+fn draw_page_preview(
+    cairo: &gtk::cairo::Context,
+    area_width: f64,
+    area_height: f64,
+    photo_surface: Option<&gtk::cairo::ImageSurface>,
+    extras: &PrintExtras,
+    paper: (f64, f64),
+) {
+    let (paper_width, paper_height) = paper;
+    if paper_width <= 0.0 || paper_height <= 0.0 {
+        return;
+    }
+    let available_width = area_width - 2.0 * PREVIEW_MARGIN;
+    let available_height = area_height - 2.0 * PREVIEW_MARGIN;
+    if available_width <= 0.0 || available_height <= 0.0 {
+        return;
+    }
+    let scale = (available_width / paper_width).min(available_height / paper_height);
+    let page_width = paper_width * scale;
+    let page_height = paper_height * scale;
+    let origin_x = (area_width - page_width) / 2.0;
+    let origin_y = (area_height - page_height) / 2.0;
+
+    // Paper: white with a thin border so it reads against dark themes.
+    cairo.set_source_rgb(1.0, 1.0, 1.0);
+    cairo.rectangle(origin_x, origin_y, page_width, page_height);
+    let _ = cairo.fill();
+    cairo.set_source_rgb(0.55, 0.55, 0.55);
+    cairo.set_line_width(1.0);
+    cairo.rectangle(
+        origin_x + 0.5,
+        origin_y + 0.5,
+        page_width - 1.0,
+        page_height - 1.0,
+    );
+    let _ = cairo.stroke();
+
+    let Some(surface) = photo_surface else {
+        return;
+    };
+    let image_width = f64::from(surface.width());
+    let image_height = f64::from(surface.height());
+    if image_width < 1.0 || image_height < 1.0 {
+        return;
+    }
+    for placement in page_placements(paper_width, paper_height, extras) {
+        draw_image_into(
+            cairo,
+            surface,
+            image_width,
+            image_height,
+            origin_x + placement.x * scale,
+            origin_y + placement.y * scale,
+            placement.width * scale,
+            placement.height * scale,
+            extras.crop_to_fill,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -478,9 +681,16 @@ fn build_extras_widget(extras: &Rc<RefCell<PrintExtras>>) -> gtk::Widget {
 
 /// Draw the photo onto the print page: split the printable area into cells,
 /// then place the photo in every cell at the requested size and fit mode.
-fn draw_print_page(context: &gtk::PrintContext, image: &image::RgbaImage, extras: &PrintExtras) {
-    let image_width = image.width() as f64;
-    let image_height = image.height() as f64;
+fn draw_print_page(
+    context: &gtk::PrintContext,
+    photo_surface: Option<&gtk::cairo::ImageSurface>,
+    extras: &PrintExtras,
+) {
+    let Some(surface) = photo_surface else {
+        return;
+    };
+    let image_width = f64::from(surface.width());
+    let image_height = f64::from(surface.height());
     if image_width < 1.0 || image_height < 1.0 {
         return;
     }
@@ -490,59 +700,19 @@ fn draw_print_page(context: &gtk::PrintContext, image: &image::RgbaImage, extras
         return;
     }
 
-    let surface = match build_page_surface(image) {
-        Some(surface) => surface,
-        None => return,
-    };
-
-    let (columns, rows) = cell_grid(extras.per_page);
-    let cell_width = page_width / f64::from(columns);
-    let cell_height = page_height / f64::from(rows);
-    // A small gutter keeps multi-up prints from touching; single prints use
-    // the driver's own margins.
-    let gutter = if extras.per_page > 1 {
-        3.0 * PT_PER_MM
-    } else {
-        0.0
-    };
-    let preset = find_size_preset(&extras.size_id);
-
     let cairo = context.cairo_context();
-    for row in 0..rows {
-        for column in 0..columns {
-            let x = f64::from(column) * cell_width + gutter / 2.0;
-            let y = f64::from(row) * cell_height + gutter / 2.0;
-            let cell_width_here = cell_width - gutter;
-            let cell_height_here = cell_height - gutter;
-            if cell_width_here <= 0.0 || cell_height_here <= 0.0 {
-                continue;
-            }
-
-            // Full page fills the cell; a physical size keeps its exact
-            // aspect ratio, scaled down only when the cell is smaller.
-            let (box_width, box_height) = if preset.width_pt > 0.0 && preset.height_pt > 0.0 {
-                let scale = (cell_width_here / preset.width_pt)
-                    .min(cell_height_here / preset.height_pt)
-                    .min(1.0);
-                (preset.width_pt * scale, preset.height_pt * scale)
-            } else {
-                (cell_width_here, cell_height_here)
-            };
-            let box_x = x + (cell_width_here - box_width) / 2.0;
-            let box_y = y + (cell_height_here - box_height) / 2.0;
-
-            draw_image_into(
-                &cairo,
-                &surface,
-                image_width,
-                image_height,
-                box_x,
-                box_y,
-                box_width,
-                box_height,
-                extras.crop_to_fill,
-            );
-        }
+    for placement in page_placements(page_width, page_height, extras) {
+        draw_image_into(
+            &cairo,
+            surface,
+            image_width,
+            image_height,
+            placement.x,
+            placement.y,
+            placement.width,
+            placement.height,
+            extras.crop_to_fill,
+        );
     }
 }
 
@@ -661,5 +831,41 @@ mod print_extras_tests {
         assert!((ten_by_fifteen.width_pt - 100.0 * PT_PER_MM).abs() < 0.01);
         // Full page has no fixed dimensions.
         assert_eq!(find_size_preset("full").width_pt, 0.0);
+    }
+
+    /// A4 portrait in points — the layout math must work for any paper.
+    const A4: (f64, f64) = (595.28, 841.89);
+
+    #[test]
+    fn page_layout_matches_what_the_printer_will_draw() {
+        let mut extras = PrintExtras::default();
+
+        // Full page, one per page: the photo box covers the whole page.
+        let placements = page_placements(A4.0, A4.1, &extras);
+        assert_eq!(placements.len(), 1);
+        assert!((placements[0].width - A4.0).abs() < 0.01);
+        assert!((placements[0].height - A4.1).abs() < 0.01);
+
+        // Four per page: a 2 x 2 grid, each box filling its guttered cell.
+        extras.per_page = 4;
+        let placements = page_placements(A4.0, A4.1, &extras);
+        assert_eq!(placements.len(), 4);
+        let cell_width = A4.0 / 2.0 - 3.0 * PT_PER_MM;
+        let cell_height = A4.1 / 2.0 - 3.0 * PT_PER_MM;
+        for placement in &placements {
+            assert!((placement.width - cell_width).abs() < 0.01);
+            assert!((placement.height - cell_height).abs() < 0.01);
+        }
+
+        // A physical size keeps its exact point dimensions when the cell is
+        // larger, and stays centred in the page.
+        extras.per_page = 1;
+        extras.size_id = "wallet".to_string();
+        let placements = page_placements(A4.0, A4.1, &extras);
+        assert_eq!(placements.len(), 1);
+        assert!((placements[0].width - 2.5 * PT_PER_INCH).abs() < 0.01);
+        assert!((placements[0].height - 3.5 * PT_PER_INCH).abs() < 0.01);
+        assert!((placements[0].x + placements[0].width / 2.0 - A4.0 / 2.0).abs() < 0.01);
+        assert!((placements[0].y + placements[0].height / 2.0 - A4.1 / 2.0).abs() < 0.01);
     }
 }
