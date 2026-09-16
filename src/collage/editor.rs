@@ -86,6 +86,7 @@ fn collage_css() -> String {
          .collage-drop-target { border: 3px solid #4d9fdb; box-shadow: 0 0 0 3px alpha(#4d9fdb, 0.45), 0 3px 12px alpha(#000000, 0.35); }\
          .collage-photo-rounded { }\
          .collage-tile { min-height: 36px; }\
+         .collage-layout-tile { min-height: 54px; }\
          .collage-tile:checked { background-color: alpha(@accent_bg_color, 0.38); }\
          .collage-radius-row { margin-top: 2px; }",
     );
@@ -243,6 +244,7 @@ pub fn build(
         tile.set_child(Some(&content));
         tile.set_tooltip_text(Some(tooltip));
         tile.add_css_class("collage-tile");
+        tile.add_css_class("collage-layout-tile");
     }
     smart_tile.set_group(Some(&mosaic_tile));
     grid_tile.set_group(Some(&mosaic_tile));
@@ -253,8 +255,10 @@ pub fn build(
     }
     let layout_tiles = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     layout_tiles.add_css_class("linked");
+    // Homogeneous thirds so the layout tiles, the fit/orientation row and
+    // the bottom actions all align to the same three column edges.
+    layout_tiles.set_homogeneous(true);
     for tile in [&mosaic_tile, &smart_tile, &grid_tile] {
-        tile.set_hexpand(true);
         layout_tiles.append(tile);
     }
     controls.append(&layout_tiles);
@@ -290,8 +294,9 @@ pub fn build(
     }
     let fit_orientation_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     fit_orientation_row.add_css_class("linked");
+    fit_orientation_row.set_homogeneous(true);
     for button in [&fit_toggle, &portrait_btn, &landscape_btn] {
-        button.set_hexpand(true);
+        button.add_css_class("collage-tile");
         fit_orientation_row.append(button);
     }
     controls.append(&fit_orientation_row);
@@ -591,19 +596,22 @@ pub fn build(
         });
     }
 
-    // Bottom actions. Compact icon+label controls grouped right; Create is
-    // the one full-width accent button with Exit beside it.
-    let actions_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    actions_row.set_halign(gtk::Align::End);
+    // Bottom actions share the top rows' look: one linked row of three
+    // equal-width blocks spanning the panel width; Create remains the one
+    // full-width accent button with Exit beside it.
+    let actions_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    actions_row.add_css_class("linked");
+    actions_row.set_homogeneous(true);
     let add_photos = icon_label_button("list-add-symbolic", "Add", "Add photos from the library");
     let shuffle = icon_label_button(
         "media-playlist-shuffle-symbolic",
         "Shuffle",
         "Shuffle photo order",
     );
-    actions_row.append(&reset_defaults);
-    actions_row.append(&add_photos);
-    actions_row.append(&shuffle);
+    for button in [&reset_defaults, &add_photos, &shuffle] {
+        button.add_css_class("collage-tile");
+        actions_row.append(button);
+    }
     controls.append(&actions_row);
     {
         let project = project.clone();
@@ -619,9 +627,7 @@ pub fn build(
     export.add_css_class("suggested-action");
     export.set_hexpand(true);
     export.set_tooltip_text(Some("Render and export the collage as a JPEG"));
-    let close = gtk::Button::new();
-    close.set_icon_name("application-exit-symbolic");
-    close.set_tooltip_text(Some("Exit collage"));
+    let close = icon_label_button("application-exit-symbolic", "Exit", "Exit collage");
     primary_row.append(&export);
     primary_row.append(&close);
     controls.append(&primary_row);
