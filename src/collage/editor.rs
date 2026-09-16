@@ -210,29 +210,37 @@ pub fn build(
         });
     }
 
-    // Row 1 — layout: three equal icon tiles with radio behaviour; the
-    // active tile is highlighted (`.collage-tile:checked`).
+    // Row 1 — layout: three equal tiles with icon over title, radio
+    // behaviour and the active tile highlighted (`.collage-tile:checked`).
+    add_section_label(&controls, "Layout");
     let mosaic_tile = gtk::ToggleButton::new();
     let smart_tile = gtk::ToggleButton::new();
     let grid_tile = gtk::ToggleButton::new();
-    for (tile, icon, tooltip) in [
+    for (tile, icon, title, tooltip) in [
         (
             &mosaic_tile,
             "collage-mosaic-symbolic",
+            "Mosaic",
             "Mosaic: varied tile sizes, no dominant photo",
         ),
         (
             &smart_tile,
             "collage-smart-mosaic-symbolic",
+            "Smart",
             "Smart Mosaic: automatic layout with a dominant photo",
         ),
         (
             &grid_tile,
             "collage-grid-symbolic",
+            "Grid",
             "Grid: uniform tiles, photos crop to fill",
         ),
     ] {
-        tile.set_icon_name(icon);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 3);
+        content.set_halign(gtk::Align::Center);
+        content.append(&gtk::Image::from_icon_name(icon));
+        content.append(&gtk::Label::new(Some(title)));
+        tile.set_child(Some(&content));
         tile.set_tooltip_text(Some(tooltip));
         tile.add_css_class("collage-tile");
     }
@@ -254,7 +262,7 @@ pub fn build(
     // Row 2 — fit + orientation. Fit replaces the keep-photo-aspect
     // checkbox; it stays visible but insensitive for Grid, which always
     // crops photos to fill their tiles. Portrait/Landscape form a radio
-    // pair of icon buttons.
+    // pair of labelled buttons (icon+label would not fit the column).
     let fit_toggle = gtk::ToggleButton::new();
     {
         let fit_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -268,12 +276,10 @@ pub fn build(
     ));
     fit_toggle.set_active(project.borrow().keep_photo_aspect);
     fit_toggle.set_sensitive(!matches!(project.borrow().layout, LayoutKind::Grid));
-    let portrait_btn = gtk::ToggleButton::new();
-    portrait_btn.set_icon_name("orientation-portrait-left-symbolic");
+    let portrait_btn = gtk::ToggleButton::with_label("Portrait");
     portrait_btn.set_tooltip_text(Some("Portrait canvas"));
     portrait_btn.add_css_class("collage-tile");
-    let landscape_btn = gtk::ToggleButton::new();
-    landscape_btn.set_icon_name("orientation-landscape-symbolic");
+    let landscape_btn = gtk::ToggleButton::with_label("Landscape");
     landscape_btn.set_tooltip_text(Some("Landscape canvas"));
     landscape_btn.add_css_class("collage-tile");
     portrait_btn.set_group(Some(&landscape_btn));
@@ -356,8 +362,8 @@ pub fn build(
         });
     }
 
-    // Row 3 — aspect ratio + background side by side; the section labels
-    // are replaced by tooltips.
+    // Row 3 — aspect ratio + background side by side, each with a small
+    // title above the dropdown.
     let aspect = gtk::DropDown::from_strings(&["Square 1:1", "4:3", "3:2", "16:9", "Custom"]);
     aspect.set_selected(match project.borrow().aspect {
         AspectRatio::Square => 0,
@@ -375,10 +381,12 @@ pub fn build(
     });
     background.set_tooltip_text(Some("Canvas background"));
     let aspect_background_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    aspect.set_hexpand(true);
-    background.set_hexpand(true);
-    aspect_background_row.append(&aspect);
-    aspect_background_row.append(&background);
+    let aspect_column = titled_control("Aspect ratio", &aspect);
+    let background_column = titled_control("Background", &background);
+    aspect_column.set_hexpand(true);
+    background_column.set_hexpand(true);
+    aspect_background_row.append(&aspect_column);
+    aspect_background_row.append(&background_column);
     controls.append(&aspect_background_row);
     let custom_width = gtk::SpinButton::with_range(1.0, 10_000.0, 1.0);
     custom_width.set_value((project.borrow().custom_aspect * 9.0).round().max(1.0) as f64);
@@ -663,6 +671,19 @@ fn icon_label_button(icon: &str, label: &str, tooltip: &str) -> gtk::Button {
     button.set_child(Some(&content));
     button.set_tooltip_text(Some(tooltip));
     button
+}
+
+/// A small title above a control, for compact side-by-side rows where a
+/// full-width section label would waste a row.
+fn titled_control(title: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    let label = gtk::Label::new(Some(title));
+    label.set_halign(gtk::Align::Start);
+    label.add_css_class("dim-label");
+    label.add_css_class("caption");
+    column.append(&label);
+    column.append(control);
+    column
 }
 
 fn refresh_preview(
