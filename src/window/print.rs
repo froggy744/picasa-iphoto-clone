@@ -127,6 +127,14 @@ const SIZE_PRESETS: &[SizePreset] = &[
 ];
 
 /// The photo-specific options shown in the print dialog's custom tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum PageOrientation {
+    #[default]
+    Portrait,
+    Landscape,
+}
+
+/// The photo-specific options shown in the print dialog's custom tab.
 #[derive(Clone, Debug, PartialEq)]
 struct PrintExtras {
     size_id: String,
@@ -138,6 +146,7 @@ struct PrintExtras {
     /// true = fill the box and centre-crop the overflow.
     crop_to_fill: bool,
     per_page: u32,
+    orientation: PageOrientation,
 }
 
 impl Default for PrintExtras {
@@ -148,6 +157,7 @@ impl Default for PrintExtras {
             custom_height_pt: 6.0 * PT_PER_INCH,
             crop_to_fill: false,
             per_page: 1,
+            orientation: PageOrientation::Portrait,
         }
     }
 }
@@ -191,6 +201,13 @@ fn parse_extras(raw: Option<&str>) -> PrintExtras {
                     extras.per_page = count.clamp(1, 4);
                 }
             }
+            "orient" => {
+                extras.orientation = if value == "landscape" {
+                    PageOrientation::Landscape
+                } else {
+                    PageOrientation::Portrait
+                };
+            }
             _ => {}
         }
     }
@@ -199,13 +216,26 @@ fn parse_extras(raw: Option<&str>) -> PrintExtras {
 
 fn extras_to_string(extras: &PrintExtras) -> String {
     format!(
-        "size={};w={:.2};h={:.2};crop={};per={}",
+        "size={};w={:.2};h={:.2};crop={};per={};orient={}",
         extras.size_id,
         extras.custom_width_pt,
         extras.custom_height_pt,
         u8::from(extras.crop_to_fill),
-        extras.per_page
+        extras.per_page,
+        match extras.orientation {
+            PageOrientation::Landscape => "landscape",
+            PageOrientation::Portrait => "portrait",
+        }
     )
+}
+
+/// Paper dimensions with the chosen orientation applied: landscape swaps
+/// the saved paper's width and height.
+fn oriented_paper(paper: (f64, f64), orientation: PageOrientation) -> (f64, f64) {
+    match orientation {
+        PageOrientation::Portrait => paper,
+        PageOrientation::Landscape => (paper.1, paper.0),
+    }
 }
 
 /// Column/row split for the requested prints-per-page. 2 and 3 prints sit
@@ -495,7 +525,9 @@ fn run_print_operation(
     operation.set_n_pages(print_page_count(surfaces.len(), extras.borrow().per_page) as i32);
 
     // Restore the printer, paper and orientation choices from the previous
-    // print so the system dialog opens ready-to-go.
+    // print so the system dialog opens ready-to-go. This dialog's own
+    // orientation choice always wins over the saved page setup's.
+    let mut setup = gtk::PageSetup::new();
     if let Some(config) = saved_config {
         let key_file = glib::KeyFile::new();
         if key_file
@@ -507,11 +539,16 @@ fn run_print_operation(
             {
                 operation.set_print_settings(Some(&settings));
             }
-            if let Ok(setup) = gtk::PageSetup::from_key_file(&key_file, PRINT_PAGE_SETUP_GROUP) {
-                operation.set_default_page_setup(Some(&setup));
+            if let Ok(saved) = gtk::PageSetup::from_key_file(&key_file, PRINT_PAGE_SETUP_GROUP) {
+                setup = saved;
             }
         }
     }
+    setup.set_orientation(match extras.borrow().orientation {
+        PageOrientation::Landscape => gtk::PageOrientation::Landscape,
+        PageOrientation::Portrait => gtk::PageOrientation::Portrait,
+    });
+    operation.set_default_page_setup(Some(&setup));
 
     let extras_for_draw = extras.clone();
     let surfaces_for_draw = surfaces;
@@ -801,6 +838,40 @@ fn build_extras_widget(
         redraw_for_per_page();
     });
 
+    let orientation_label = gtk::Label::with_mnemonic("_Orientation:");
+    orientation_label.set_halign(gtk::Align::End);
+    let orientation_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let portrait_radio = gtk::CheckButton::with_label("Portrait");
+    let landscape_radio = gtk::CheckButton::with_label("Landscape");
+    landscape_radio.set_group(Some(&portrait_radio));
+    if extras.borrow().orientation == PageOrientation::Landscape {
+        landscape_radio.set_active(true);
+    } else {
+        portrait_radio.set_active(true);
+    }
+    let extras_for_portrait = extras.clone();
+    let redraw_for_portrait = redraw_preview.clone();
+    portrait_radio.connect_toggled(move |button| {
+        if button.is_active() {
+            if let Ok(mut current) = extras_for_portrait.try_borrow_mut() {
+                current.orientation = PageOrientation::Portrait;
+            }
+            redraw_for_portrait();
+        }
+    });
+    let extras_for_landscape = extras.clone();
+    let redraw_for_landscape = redraw_preview.clone();
+    landscape_radio.connect_toggled(move |button| {
+        if button.is_active() {
+            if let Ok(mut current) = extras_for_landscape.try_borrow_mut() {
+                current.orientation = PageOrientation::Landscape;
+            }
+            redraw_for_landscape();
+        }
+    });
+    orientation_box.append(&portrait_radio);
+    orientation_box.append(&landscape_radio);
+
     grid.attach(&size_label, 0, 0, 1, 1);
     grid.attach(&size_combo, 1, 0, 1, 1);
     grid.attach(&custom_box, 1, 1, 1, 1);
@@ -808,6 +879,8 @@ fn build_extras_widget(
     grid.attach(&sizing_box, 1, 2, 1, 1);
     grid.attach(&per_page_label, 0, 3, 1, 1);
     grid.attach(&per_page_combo, 1, 3, 1, 1);
+    grid.attach(&orientation_label, 0, 4, 1, 1);
+    grid.attach(&orientation_box, 1, 4, 1, 1);
 
     content.append(&grid);
     content.upcast()
@@ -852,11 +925,12 @@ fn preview_paper_size(saved_config: Option<&str>) -> (f64, f64) {
 /// preview height; the scrolled window grows or scrolls accordingly.
 fn preview_width_request(photo_count: usize, extras: &PrintExtras, paper: (f64, f64)) -> i32 {
     let pages = print_page_count(photo_count, extras.per_page).max(1) as f64;
+    let (paper_width, paper_height) = oriented_paper(paper, extras.orientation);
     let usable_height = f64::from(PREVIEW_HEIGHT) - 2.0 * PREVIEW_MARGIN;
-    if usable_height <= 0.0 || paper.1 <= 0.0 {
+    if usable_height <= 0.0 || paper_height <= 0.0 {
         return PREVIEW_WIDTH;
     }
-    let page_width = paper.0 * (usable_height / paper.1);
+    let page_width = paper_width * (usable_height / paper_height);
     let total = 2.0 * PREVIEW_MARGIN + pages * (page_width + PREVIEW_PAGE_GAP) - PREVIEW_PAGE_GAP;
     (total.ceil() as i32).max(PREVIEW_WIDTH)
 }
@@ -872,9 +946,10 @@ fn draw_pages_preview(
     extras: &PrintExtras,
     paper: (f64, f64),
 ) {
-    let (paper_width, paper_height) = paper;
+    let (saved_paper_width, saved_paper_height) = paper;
+    let (paper_width, paper_height) = oriented_paper(paper, extras.orientation);
     let usable_height = area_height - 2.0 * PREVIEW_MARGIN;
-    if paper_width <= 0.0 || paper_height <= 0.0 || usable_height <= 0.0 {
+    if saved_paper_width <= 0.0 || saved_paper_height <= 0.0 || usable_height <= 0.0 {
         return;
     }
     let page_count = print_page_count(surfaces.len(), extras.per_page);
@@ -1107,9 +1182,31 @@ mod print_extras_tests {
             custom_height_pt: 6.0 * PT_PER_INCH,
             crop_to_fill: true,
             per_page: 2,
+            orientation: PageOrientation::Landscape,
         };
         let parsed = parse_extras(Some(&extras_to_string(&extras)));
         assert_eq!(parsed, extras);
+    }
+
+    #[test]
+    fn orientation_parses_and_applies_to_paper() {
+        // Missing / garbage orient falls back to portrait.
+        let portrait = parse_extras(Some("size=full;orient=nonsense"));
+        assert_eq!(portrait.orientation, PageOrientation::Portrait);
+        let landscape = parse_extras(Some("size=full;orient=landscape"));
+        assert_eq!(landscape.orientation, PageOrientation::Landscape);
+
+        // Landscape swaps the paper; portrait keeps it as saved.
+        let a4 = (595.28, 841.89);
+        assert_eq!(oriented_paper(a4, PageOrientation::Portrait), a4);
+        assert_eq!(oriented_paper(a4, PageOrientation::Landscape), (a4.1, a4.0));
+
+        // The preview layout math works with the swapped paper: one full
+        // page print now covers the whole landscape sheet.
+        let placements = page_placements(a4.1, a4.0, &landscape);
+        assert_eq!(placements.len(), 1);
+        assert!((placements[0].width - a4.1).abs() < 0.01);
+        assert!((placements[0].height - a4.0).abs() < 0.01);
     }
 
     #[test]
