@@ -5,6 +5,24 @@ pub fn apply(project: &mut CollageProject) {
         LayoutKind::Grid => grid(project),
         LayoutKind::Mosaic => mosaic(project),
         LayoutKind::SmartMosaic => super::smart_mosaic::apply(project),
+        LayoutKind::Filmstrip => filmstrip(project),
+    }
+}
+
+/// A single-row strip: equal-width tiles spanning the canvas. Photos crop
+/// to fill (render treats Filmstrip like Grid for the contain decision).
+fn filmstrip(project: &mut CollageProject) {
+    let count = project.items.len().max(1);
+    let gap = project.spacing.clamp(0.0, 0.12);
+    let width = (1.0 - gap * (count + 1) as f32) / count as f32;
+    let height = (1.0 - gap * 2.0).max(0.01);
+    for (index, item) in project.items.iter_mut().enumerate() {
+        item.x = gap + index as f32 * (width + gap);
+        item.y = gap;
+        item.width = width;
+        item.height = height;
+        item.rotation = 0.0;
+        item.z = index;
     }
 }
 
