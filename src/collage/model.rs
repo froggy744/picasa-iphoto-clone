@@ -37,7 +37,6 @@ pub enum LayoutKind {
     Mosaic,
     SmartMosaic,
     Grid,
-    Filmstrip,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

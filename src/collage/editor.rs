@@ -10,26 +10,6 @@ use super::model::{AspectRatio, Background, CollageOrientation, CollageProject, 
 
 const MAX_PREVIEW_CORNER_RADIUS: i32 = 48;
 
-/// Undo history kinds. Consecutive pushes of the same kind within a short
-/// burst (continuous slider drags) coalesce into a single undo step.
-const KIND_LAYOUT: u32 = 1;
-const KIND_FIT: u32 = 2;
-const KIND_ORIENTATION: u32 = 3;
-const KIND_ASPECT: u32 = 4;
-const KIND_CUSTOM_ASPECT: u32 = 5;
-const KIND_BACKGROUND: u32 = 6;
-const KIND_CORNERS: u32 = 7;
-const KIND_RADIUS: u32 = 8;
-const KIND_SPACING: u32 = 9;
-const KIND_SHUFFLE: u32 = 10;
-const KIND_RESET: u32 = 11;
-const KIND_SWAP: u32 = 12;
-const KIND_ROTATE: u32 = 13;
-const KIND_REMOVE: u32 = 14;
-const KIND_TEMPLATE: u32 = 15;
-const HISTORY_LIMIT: usize = 50;
-const BURST_MICROS: i64 = 800_000;
-
 thread_local! {
     // Bumped on every preview rebuild so late decode results from an older
     // preview are discarded.
@@ -107,7 +87,6 @@ fn collage_css() -> String {
          .collage-photo-rounded { }\
          .collage-layout-tile { min-height: 54px; }\
          .collage-radius-row { margin-top: 2px; }\
-         .collage-template-button { min-height: 32px; padding: 3px 8px; }\
          .collage-tabs button { min-height: 34px; padding: 4px 10px; }",
     );
     for radius in 0..=MAX_PREVIEW_CORNER_RADIUS {
@@ -124,27 +103,12 @@ struct PreviewFrame {
     photo: gtk::Frame,
 }
 
-/// Undo-history handles threaded into refresh_preview so tile-level
-/// actions (rotate, remove, drag-swap) can snapshot before mutating.
-#[derive(Clone)]
-struct HistoryHandles {
-    begin_edit: Rc<dyn Fn(u32)>,
-    syncing: Rc<Cell<bool>>,
-}
-
-impl HistoryHandles {
-    fn begin_edit(&self, kind: u32) {
-        (self.begin_edit)(kind);
-    }
-}
-
 pub struct CollageEditor {
     pub root: gtk::Box,
     project: Rc<RefCell<CollageProject>>,
     canvas: gtk::Fixed,
     frames: Rc<RefCell<Vec<PreviewFrame>>>,
     status: gtk::Label,
-    history: HistoryHandles,
 }
 
 impl CollageEditor {
@@ -161,14 +125,14 @@ impl CollageEditor {
         self.project.borrow_mut().add_photos(photos);
         self.status
             .set_text(&photo_count_text(self.project.borrow().items.len()));
-        refresh_preview(&self.canvas, &self.frames, &self.project, &self.history);
+        refresh_preview(&self.canvas, &self.frames, &self.project);
     }
 
     pub fn set_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
         self.project.borrow_mut().set_photos(photos);
         self.status
             .set_text(&photo_count_text(self.project.borrow().items.len()));
-        refresh_preview(&self.canvas, &self.frames, &self.project, &self.history);
+        refresh_preview(&self.canvas, &self.frames, &self.project);
     }
 
     /// Serialized draft snapshot for persistence (see DRAFT_SETTING_KEY).
@@ -199,15 +163,6 @@ pub fn build(
         project.borrow_mut().apply_draft(draft, &photos);
     }
 
-    // Undo/redo history. Snapshots are cheap full project clones; bursts
-    // of the same kind (slider drags) coalesce into one step.
-    let undo_stack: Rc<RefCell<Vec<CollageProject>>> = Rc::new(RefCell::new(Vec::new()));
-    let redo_stack: Rc<RefCell<Vec<CollageProject>>> = Rc::new(RefCell::new(Vec::new()));
-    let last_burst: Rc<Cell<(i64, u32)>> = Rc::new(Cell::new((0, 0)));
-    // While true, control handlers ignore programmatic changes made while
-    // restoring a snapshot or applying a template/reset.
-    let syncing = Rc::new(Cell::new(false));
-
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.set_hexpand(true);
     root.set_vexpand(true);
@@ -225,56 +180,7 @@ pub fn build(
     let status = gtk::Label::new(Some(&photo_count_text(project.borrow().items.len())));
     status.set_halign(gtk::Align::Start);
     status.add_css_class("dim-label");
-    let undo_button = gtk::Button::from_icon_name("edit-undo-symbolic");
-    undo_button.set_tooltip_text(Some("Undo (Ctrl+Z)"));
-    undo_button.set_sensitive(false);
-    let redo_button = gtk::Button::from_icon_name("edit-redo-symbolic");
-    redo_button.set_tooltip_text(Some("Redo (Ctrl+Y)"));
-    redo_button.set_sensitive(false);
-    let status_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    status.set_valign(gtk::Align::Center);
-    status.set_hexpand(true);
-    status_row.append(&status);
-    status_row.append(&undo_button);
-    status_row.append(&redo_button);
-    controls.append(&status_row);
-
-    let update_history_buttons = {
-        let undo_stack = undo_stack.clone();
-        let redo_stack = redo_stack.clone();
-        let undo_button = undo_button.clone();
-        let redo_button = redo_button.clone();
-        move || {
-            undo_button.set_sensitive(!undo_stack.borrow().is_empty());
-            redo_button.set_sensitive(!redo_stack.borrow().is_empty());
-        }
-    };
-    let begin_edit: Rc<dyn Fn(u32)> = Rc::new({
-        let project = project.clone();
-        let undo_stack = undo_stack.clone();
-        let redo_stack = redo_stack.clone();
-        let last_burst = last_burst.clone();
-        let update_history_buttons = update_history_buttons.clone();
-        move |kind: u32| {
-            let before = project.borrow().clone();
-            let now = glib::monotonic_time();
-            let (last_time, last_kind) = last_burst.get();
-            if !(last_kind == kind && now - last_time < BURST_MICROS) {
-                let mut undo = undo_stack.borrow_mut();
-                undo.push(before);
-                if undo.len() > HISTORY_LIMIT {
-                    undo.remove(0);
-                }
-                redo_stack.borrow_mut().clear();
-            }
-            last_burst.set((now, kind));
-            update_history_buttons();
-        }
-    });
-    let history = HistoryHandles {
-        begin_edit: begin_edit.clone(),
-        syncing: syncing.clone(),
-    };
+    controls.append(&status);
 
     let canvas = gtk::Fixed::new();
     canvas.set_hexpand(true);
@@ -282,29 +188,22 @@ pub fn build(
     canvas.add_css_class("collage-canvas");
     let aspect_frame =
         gtk::AspectFrame::new(0.5, 0.5, project.borrow().effective_aspect_ratio(), false);
+    aspect_frame.set_hexpand(true);
+    aspect_frame.set_vexpand(true);
     aspect_frame.set_halign(gtk::Align::Fill);
     aspect_frame.set_valign(gtk::Align::Fill);
+    aspect_frame.set_margin_top(24);
+    aspect_frame.set_margin_bottom(24);
+    aspect_frame.set_margin_start(24);
+    aspect_frame.set_margin_end(24);
     aspect_frame.set_child(Some(&preview_bounds(&canvas)));
-    // Ctrl+wheel zoom: the aspect frame's size request grows above the
-    // viewport so the ScrolledWindow pans around the larger collage; at
-    // 1.0 the frame fits the viewport exactly (no scrollbars).
-    let zoom_factor: Rc<Cell<f64>> = Rc::new(Cell::new(1.0));
-    let zoom_scroll = gtk::ScrolledWindow::new();
-    zoom_scroll.set_hscrollbar_policy(gtk::PolicyType::Automatic);
-    zoom_scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
-    zoom_scroll.set_margin_top(24);
-    zoom_scroll.set_margin_bottom(24);
-    zoom_scroll.set_margin_start(24);
-    zoom_scroll.set_margin_end(24);
-    zoom_scroll.set_child(Some(&aspect_frame));
     let frames: Rc<RefCell<Vec<PreviewFrame>>> = Rc::new(RefCell::new(Vec::new()));
 
     let refresh = {
         let project = project.clone();
         let canvas = canvas.clone();
         let frames = frames.clone();
-        let history = history.clone();
-        Rc::new(move || refresh_preview(&canvas, &frames, &project, &history))
+        Rc::new(move || refresh_preview(&canvas, &frames, &project))
     };
     refresh();
     {
@@ -312,34 +211,7 @@ pub fn build(
         let canvas_for_callback = canvas.clone();
         let frames = frames.clone();
         let project = project.clone();
-        let zoom_factor = zoom_factor.clone();
-        let zoom_scroll = zoom_scroll.clone();
-        let aspect_frame_for_zoom = aspect_frame.clone();
         canvas.add_tick_callback(move |canvas, _| {
-            // Keep the zoomed size request in sync with the viewport and
-            // the collage aspect: frame size = fit_size * zoom.
-            if zoom_scroll.width() > 0 {
-                let viewport_w = (zoom_scroll.width() - 48).max(1);
-                let viewport_h = (zoom_scroll.height() - 48).max(1);
-                let ratio = project.borrow().effective_aspect_ratio() as f64;
-                let (fit_w, fit_h) = if ratio >= 1.0 {
-                    (viewport_w as f64, viewport_w as f64 / ratio)
-                } else {
-                    (viewport_h as f64 * ratio, viewport_h as f64)
-                };
-                let zoom = zoom_factor.get();
-                let want = (
-                    (fit_w * zoom).round() as i32,
-                    (fit_h * zoom).round() as i32,
-                );
-                if aspect_frame_for_zoom.size_request() != want {
-                    aspect_frame_for_zoom.set_size_request(want.0, want.1);
-                    if zoom <= 1.0 {
-                        zoom_scroll.hadjustment().set_value(0.0);
-                        zoom_scroll.vadjustment().set_value(0.0);
-                    }
-                }
-            }
             let size = (canvas.width(), canvas.height());
             if last_size.get() != size {
                 last_size.set(size);
@@ -347,31 +219,6 @@ pub fn build(
             }
             glib::ControlFlow::Continue
         });
-    }
-    {
-        let zoom_factor = zoom_factor.clone();
-        let zoom_scroll = zoom_scroll.clone();
-        let scroll_controller = gtk::EventControllerScroll::new(
-            gtk::EventControllerScrollFlags::VERTICAL
-                | gtk::EventControllerScrollFlags::HORIZONTAL,
-        );
-        scroll_controller.connect_scroll(move |controller, _dx, dy| {
-            let control = controller
-                .current_event_state()
-                .contains(gtk::gdk::ModifierType::CONTROL_MASK);
-            if !control {
-                return glib::Propagation::Proceed;
-            }
-            let step = if dy < 0.0 { 1.1 } else { 1.0 / 1.1 };
-            let next = (zoom_factor.get() * step).clamp(1.0, 4.0);
-            zoom_factor.set(next);
-            if next <= 1.0 + f64::EPSILON {
-                zoom_scroll.hadjustment().set_value(0.0);
-                zoom_scroll.vadjustment().set_value(0.0);
-            }
-            glib::Propagation::Stop
-        });
-        canvas.add_controller(scroll_controller);
     }
 
     // Row 1 — layout: three equal tiles with icon over title, radio
@@ -410,13 +257,11 @@ pub fn build(
     }
     smart_tile.set_group(Some(&mosaic_tile));
     grid_tile.set_group(Some(&mosaic_tile));
-            match project.borrow().layout {
-                LayoutKind::Mosaic => mosaic_tile.set_active(true),
-                LayoutKind::SmartMosaic => smart_tile.set_active(true),
-                LayoutKind::Grid => grid_tile.set_active(true),
-                // Filmstrip is reachable via templates only; no tile active.
-                LayoutKind::Filmstrip => {}
-            }
+    match project.borrow().layout {
+        LayoutKind::Mosaic => mosaic_tile.set_active(true),
+        LayoutKind::SmartMosaic => smart_tile.set_active(true),
+        LayoutKind::Grid => grid_tile.set_active(true),
+    }
     let layout_tiles = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     layout_tiles.add_css_class("linked");
     layout_tiles.add_css_class("collage-tabs");
@@ -444,8 +289,7 @@ pub fn build(
         "Fit photos inside their tiles (keep aspect ratio)",
     ));
     fit_toggle.set_active(project.borrow().keep_photo_aspect);
-    fit_toggle
-        .set_sensitive(!matches!(project.borrow().layout, LayoutKind::Grid | LayoutKind::Filmstrip));
+    fit_toggle.set_sensitive(!matches!(project.borrow().layout, LayoutKind::Grid));
     let portrait_btn = gtk::ToggleButton::new();
     {
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -482,25 +326,16 @@ pub fn build(
         let project = project.clone();
         let refresh = refresh.clone();
         let fit_toggle = fit_toggle.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
         let apply_layout = Rc::new(move |layout_kind: LayoutKind| {
-            if syncing.get() {
-                return;
-            }
             {
                 let mut project_data = project.borrow_mut();
                 if project_data.layout == layout_kind {
                     return;
                 }
-                begin_edit(KIND_LAYOUT);
                 project_data.layout = layout_kind;
                 project_data.relayout();
             }
-            fit_toggle.set_sensitive(!matches!(
-                layout_kind,
-                LayoutKind::Grid | LayoutKind::Filmstrip
-            ));
+            fit_toggle.set_sensitive(!matches!(layout_kind, LayoutKind::Grid));
             refresh();
         });
         for (button, kind) in [
@@ -519,13 +354,7 @@ pub fn build(
     {
         let project = project.clone();
         let refresh = refresh.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
         fit_toggle.connect_toggled(move |button| {
-            if syncing.get() {
-                return;
-            }
-            begin_edit(KIND_FIT);
             let mut project_data = project.borrow_mut();
             project_data.keep_photo_aspect = button.is_active();
             if matches!(
@@ -545,13 +374,10 @@ pub fn build(
         let project = project.clone();
         let refresh = refresh.clone();
         let aspect_frame = aspect_frame.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
         button.connect_toggled(move |btn| {
-            if !btn.is_active() || syncing.get() {
+            if !btn.is_active() {
                 return;
             }
-            begin_edit(KIND_ORIENTATION);
             let ratio = {
                 let mut project_data = project.borrow_mut();
                 project_data.orientation = value;
@@ -613,13 +439,7 @@ pub fn build(
         let refresh = refresh.clone();
         let aspect_frame = aspect_frame.clone();
         let custom_ratio = custom_ratio.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
         aspect.connect_selected_notify(move |dropdown| {
-            if syncing.get() {
-                return;
-            }
-            begin_edit(KIND_ASPECT);
             let value = match dropdown.selected() {
                 0 => AspectRatio::Square,
                 1 => AspectRatio::FourThree,
@@ -644,13 +464,7 @@ pub fn build(
         let aspect_frame = aspect_frame.clone();
         let custom_width = custom_width.clone();
         let custom_height = custom_height.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
         custom_control.connect_value_changed(move |_| {
-            if syncing.get() {
-                return;
-            }
-            begin_edit(KIND_CUSTOM_ASPECT);
             let ratio = custom_width.value() as f32 / custom_height.value().max(1.0) as f32;
             let is_custom = {
                 let mut project_data = project.borrow_mut();
@@ -671,13 +485,7 @@ pub fn build(
     {
         let project = project.clone();
         let refresh = refresh.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
         background.connect_selected_notify(move |dropdown| {
-            if syncing.get() {
-                return;
-            }
-            begin_edit(KIND_BACKGROUND);
             project.borrow_mut().background = if dropdown.selected() == 1 {
                 Background::Black
             } else if dropdown.selected() == 2 {
@@ -724,13 +532,7 @@ pub fn build(
         let corner_radius = corner_radius.clone();
         let corner_sharp_icon = corner_sharp_icon.clone();
         let corner_round_icon = corner_round_icon.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
         round_corners.connect_toggled(move |button| {
-            if syncing.get() {
-                return;
-            }
-            begin_edit(KIND_CORNERS);
             project.borrow_mut().round_corners = button.is_active();
             corner_radius.set_sensitive(button.is_active());
             corner_sharp_icon.set_sensitive(button.is_active());
@@ -741,13 +543,7 @@ pub fn build(
     {
         let project = project.clone();
         let refresh = refresh.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
         corner_radius.connect_value_changed(move |scale| {
-            if syncing.get() {
-                return;
-            }
-            begin_edit(KIND_RADIUS);
             project.borrow_mut().corner_radius = scale.value() as f32;
             refresh();
         });
@@ -762,13 +558,7 @@ pub fn build(
         let project = project.clone();
         let canvas = canvas.clone();
         let frames = frames.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
         spacing.connect_value_changed(move |scale| {
-            if syncing.get() {
-                return;
-            }
-            begin_edit(KIND_SPACING);
             let mut project = project.borrow_mut();
             project.spacing = scale.value() as f32;
             project.relayout();
@@ -778,235 +568,6 @@ pub fn build(
 
     // Bottom actions. Compact icon+label controls grouped right; Create is
     // the one full-width accent button with Exit beside it.
-    // Restores every control from project state (undo/redo, templates and
-    // reset all funnel through here). Runs with `syncing` set so the
-    // programmatic changes do not re-enter the handlers.
-    let sync_widgets: Rc<dyn Fn()> = Rc::new({
-        let project = project.clone();
-        let syncing = syncing.clone();
-        let mosaic_tile = mosaic_tile.clone();
-        let smart_tile = smart_tile.clone();
-        let grid_tile = grid_tile.clone();
-        let fit_toggle = fit_toggle.clone();
-        let portrait_btn = portrait_btn.clone();
-        let landscape_btn = landscape_btn.clone();
-        let aspect = aspect.clone();
-        let background = background.clone();
-        let custom_width = custom_width.clone();
-        let custom_height = custom_height.clone();
-        let custom_ratio = custom_ratio.clone();
-        let round_corners = round_corners.clone();
-        let corner_radius = corner_radius.clone();
-        let corner_sharp_icon = corner_sharp_icon.clone();
-        let corner_round_icon = corner_round_icon.clone();
-        let spacing = spacing.clone();
-        let aspect_frame = aspect_frame.clone();
-        let canvas = canvas.clone();
-        let frames = frames.clone();
-        let status = status.clone();
-        let history = history.clone();
-        move || {
-            syncing.set(true);
-            let data = project.borrow();
-            match data.layout {
-                LayoutKind::Mosaic => mosaic_tile.set_active(true),
-                LayoutKind::SmartMosaic => smart_tile.set_active(true),
-                // The tile row has three layouts; Filmstrip is reachable
-                // via templates only, so no tile is active for it.
-                LayoutKind::Grid | LayoutKind::Filmstrip => {}
-            }
-            fit_toggle.set_active(data.keep_photo_aspect);
-            fit_toggle.set_sensitive(!matches!(
-                data.layout,
-                LayoutKind::Grid | LayoutKind::Filmstrip
-            ));
-            if matches!(data.orientation, CollageOrientation::Portrait) {
-                portrait_btn.set_active(true);
-            } else {
-                landscape_btn.set_active(true);
-            }
-            aspect.set_selected(match data.aspect {
-                AspectRatio::Square => 0,
-                AspectRatio::FourThree => 1,
-                AspectRatio::ThreeTwo => 2,
-                AspectRatio::SixteenNine => 3,
-                AspectRatio::Custom => 4,
-            });
-            background.set_selected(match data.background {
-                Background::White => 0,
-                Background::Black => 1,
-                Background::LightGray => 2,
-            });
-            custom_width.set_value((data.custom_aspect * 9.0).round().max(1.0) as f64);
-            custom_height.set_value(9.0);
-            custom_ratio.set_visible(data.aspect == AspectRatio::Custom);
-            round_corners.set_active(data.round_corners);
-            corner_radius.set_value(data.corner_radius as f64);
-            corner_radius.set_sensitive(data.round_corners);
-            corner_sharp_icon.set_sensitive(data.round_corners);
-            corner_round_icon.set_sensitive(data.round_corners);
-            spacing.set_value(data.spacing as f64);
-            aspect_frame.set_ratio(data.effective_aspect_ratio());
-            status.set_text(&photo_count_text(data.items.len()));
-            drop(data);
-            refresh_preview(&canvas, &frames, &project, &history);
-            syncing.set(false);
-        }
-    });
-
-    let perform_undo: Rc<dyn Fn()> = Rc::new({
-        let project = project.clone();
-        let undo_stack = undo_stack.clone();
-        let redo_stack = redo_stack.clone();
-        let last_burst = last_burst.clone();
-        let sync_widgets = sync_widgets.clone();
-        let update_history_buttons = update_history_buttons.clone();
-        move || {
-            let Some(snapshot) = undo_stack.borrow_mut().pop() else {
-                return;
-            };
-            let current = project.borrow().clone();
-            redo_stack.borrow_mut().push(current);
-            last_burst.set((0, 0));
-            sync_widgets();
-            update_history_buttons();
-        }
-    });
-    let perform_redo: Rc<dyn Fn()> = Rc::new({
-        let project = project.clone();
-        let undo_stack = undo_stack.clone();
-        let redo_stack = redo_stack.clone();
-        let last_burst = last_burst.clone();
-        let sync_widgets = sync_widgets.clone();
-        let update_history_buttons = update_history_buttons.clone();
-        move || {
-            let Some(snapshot) = redo_stack.borrow_mut().pop() else {
-                return;
-            };
-            let current = project.borrow().clone();
-            undo_stack.borrow_mut().push(current);
-            last_burst.set((0, 0));
-            sync_widgets();
-            update_history_buttons();
-        }
-    });
-    {
-        let perform_undo = perform_undo.clone();
-        let perform_redo = perform_redo.clone();
-        let key = gtk::EventControllerKey::new();
-        key.connect_key_pressed(move |_, keyval, _, state| {
-            if !state.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
-                return glib::Propagation::Proceed;
-            }
-            let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
-            match keyval {
-                gtk::gdk::Key::z | gtk::gdk::Key::Z => {
-                    if shift {
-                        perform_redo();
-                    } else {
-                        perform_undo();
-                    }
-                    glib::Propagation::Stop
-                }
-                gtk::gdk::Key::y | gtk::gdk::Key::Y => {
-                    perform_redo();
-                    glib::Propagation::Stop
-                }
-                _ => glib::Propagation::Proceed,
-            }
-        });
-        root.add_controller(key);
-    }
-    {
-        let perform_undo = perform_undo.clone();
-        let perform_redo = perform_redo.clone();
-        undo_button.connect_clicked(move |_| perform_undo());
-        redo_button.connect_clicked(move |_| perform_redo());
-    }
-
-    // Templates: one click sets layout + aspect + spacing + corners.
-    add_section_label(&controls, "TEMPLATES");
-    let template_grid = gtk::Grid::new();
-    template_grid.set_column_homogeneous(true);
-    template_grid.set_row_spacing(6);
-    template_grid.set_column_spacing(6);
-    let template_specs: [(&str, u8); 4] = [
-        ("Picture Pile", 0),
-        ("Grid 2\u{d7}2", 1),
-        ("Filmstrip", 2),
-        ("Center Focus", 3),
-    ];
-    {
-        let apply_template = {
-            let project = project.clone();
-            let begin_edit = begin_edit.clone();
-            let sync_widgets = sync_widgets.clone();
-            let syncing = syncing.clone();
-            move |template: u8| {
-                if syncing.get() {
-                    return;
-                }
-                begin_edit(KIND_TEMPLATE);
-                {
-                    let mut data = project.borrow_mut();
-                    match template {
-                        0 => {
-                            data.layout = LayoutKind::Mosaic;
-                            data.aspect = AspectRatio::Square;
-                            data.custom_aspect = 1.0;
-                            data.orientation = CollageOrientation::Landscape;
-                            data.spacing = 0.03;
-                            data.round_corners = false;
-                            data.keep_photo_aspect = true;
-                        }
-                        1 => {
-                            data.layout = LayoutKind::Grid;
-                            data.aspect = AspectRatio::Square;
-                            data.custom_aspect = 1.0;
-                            data.orientation = CollageOrientation::Landscape;
-                            data.spacing = 0.02;
-                            data.round_corners = false;
-                        }
-                        2 => {
-                            data.layout = LayoutKind::Filmstrip;
-                            data.aspect = AspectRatio::Custom;
-                            data.custom_aspect = 3.0;
-                            data.orientation = CollageOrientation::Landscape;
-                            data.spacing = 0.015;
-                            data.round_corners = false;
-                        }
-                        _ => {
-                            data.layout = LayoutKind::SmartMosaic;
-                            data.aspect = AspectRatio::FourThree;
-                            data.custom_aspect = 4.0 / 3.0;
-                            data.orientation = CollageOrientation::Landscape;
-                            data.spacing = 0.015;
-                            data.round_corners = true;
-                            data.corner_radius = 0.06;
-                            data.keep_photo_aspect = true;
-                        }
-                    }
-                    data.relayout();
-                }
-                sync_widgets();
-            }
-        };
-        for (index, (label, id)) in template_specs.iter().copied().enumerate() {
-            let button = gtk::Button::with_label(label);
-            button.add_css_class("collage-template-button");
-            let apply_template = apply_template.clone();
-            button.connect_clicked(move |_| apply_template(id));
-            template_grid.attach(
-                &button,
-                (index % 2) as i32,
-                (index / 2) as i32,
-                1,
-                1,
-            );
-        }
-    }
-    controls.append(&template_grid);
-
     let reset_defaults = icon_label_button(
         "view-refresh-symbolic",
         "Reset",
@@ -1014,14 +575,21 @@ pub fn build(
     );
     {
         let project = project.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
-        let sync_widgets = sync_widgets.clone();
+        let smart_tile = smart_tile.clone();
+        let landscape_btn = landscape_btn.clone();
+        let fit_toggle = fit_toggle.clone();
+        let aspect = aspect.clone();
+        let custom_width = custom_width.clone();
+        let custom_height = custom_height.clone();
+        let background = background.clone();
+        let round_corners = round_corners.clone();
+        let corner_radius = corner_radius.clone();
+        let spacing = spacing.clone();
+        let aspect_frame = aspect_frame.clone();
+        let custom_ratio = custom_ratio.clone();
+        let corner_sharp_icon = corner_sharp_icon.clone();
+        let corner_round_icon = corner_round_icon.clone();
         reset_defaults.connect_clicked(move |_| {
-            if syncing.get() {
-                return;
-            }
-            begin_edit(KIND_RESET);
             {
                 let mut project_data = project.borrow_mut();
                 project_data.layout = LayoutKind::SmartMosaic;
@@ -1033,9 +601,26 @@ pub fn build(
                 project_data.corner_radius = 0.06;
                 project_data.spacing = 0.018;
                 project_data.keep_photo_aspect = true;
-                project_data.relayout();
             }
-            sync_widgets();
+            smart_tile.set_active(true);
+            landscape_btn.set_active(true);
+            fit_toggle.set_active(true);
+            // The tile handler skips no-op activations, so re-assert the
+            // fit sensitivity explicitly (it may have been greyed by Grid).
+            fit_toggle.set_sensitive(true);
+            aspect.set_selected(3);
+            custom_width.set_value(16.0);
+            custom_height.set_value(9.0);
+            background.set_selected(0);
+            round_corners.set_active(false);
+            corner_radius.set_value(0.06);
+            spacing.set_value(0.018);
+            custom_ratio.set_visible(false);
+            aspect_frame.set_ratio(16.0 / 9.0);
+            corner_sharp_icon.set_sensitive(false);
+            corner_round_icon.set_sensitive(false);
+            let mut project_data = project.borrow_mut();
+            project_data.relayout();
         });
     }
 
@@ -1058,13 +643,7 @@ pub fn build(
     {
         let project = project.clone();
         let refresh = refresh.clone();
-        let syncing = syncing.clone();
-        let begin_edit = begin_edit.clone();
         shuffle.connect_clicked(move |_| {
-            if syncing.get() {
-                return;
-            }
-            begin_edit(KIND_SHUFFLE);
             project.borrow_mut().shuffle();
             refresh();
         });
@@ -1114,7 +693,7 @@ pub fn build(
     body.set_shrink_start_child(false);
     body.set_wide_handle(true);
     body.set_start_child(Some(&controls_scroll));
-    body.set_end_child(Some(&zoom_scroll));
+    body.set_end_child(Some(&aspect_frame));
     root.append(&body);
     CollageEditor {
         root,
@@ -1122,7 +701,6 @@ pub fn build(
         canvas,
         frames,
         status,
-        history,
     }
 }
 
@@ -1185,7 +763,6 @@ fn refresh_preview(
     canvas: &gtk::Fixed,
     frames: &Rc<RefCell<Vec<PreviewFrame>>>,
     project: &Rc<RefCell<CollageProject>>,
-    history: &HistoryHandles,
 ) {
     let generation = PREVIEW_GENERATION.with(|cell| {
         let value = cell.get().wrapping_add(1);
@@ -1344,7 +921,6 @@ fn refresh_preview(
         let frames_for_end = frames.clone();
         let frame_for_end = frame.clone();
         let drop_target_for_end = drop_target.clone();
-        let begin_edit = history.begin_edit.clone();
         drag.connect_drag_end(move |_, offset_x, offset_y| {
             frame_for_end.set_cursor_from_name(Some("grab"));
             frame_for_end.remove_css_class("collage-dragging");
@@ -1378,7 +954,6 @@ fn refresh_preview(
                 })
                 .map(|(candidate, _)| candidate);
             if let Some(target) = target {
-                begin_edit(KIND_SWAP);
                 project.swap_item_positions(index, target);
             }
             update_geometry(&canvas_for_end, &frames_for_end, &project);
@@ -1393,8 +968,6 @@ fn refresh_preview(
             let canvas = canvas.clone();
             let frames = frames.clone();
             let frame_for_menu = frame.clone();
-            let begin_edit = history.begin_edit.clone();
-            let history = history.clone();
             menu.connect_pressed(move |_, _, x, y| {
                 let popover = gtk::Popover::new();
                 let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1430,12 +1003,10 @@ fn refresh_preview(
                     let canvas = canvas.clone();
                     let frames = frames.clone();
                     let popover = popover.clone();
-                    let begin_edit = begin_edit.clone();
                     rotate_cw.connect_clicked(move |_| {
                         {
                             let mut project_data = project.borrow_mut();
                             if let Some(item) = project_data.items.get_mut(index) {
-                                begin_edit(KIND_ROTATE);
                                 item.rotation = (item.rotation + 90.0) % 360.0;
                             }
                         }
@@ -1448,12 +1019,10 @@ fn refresh_preview(
                     let canvas = canvas.clone();
                     let frames = frames.clone();
                     let popover = popover.clone();
-                    let begin_edit = begin_edit.clone();
                     rotate_ccw.connect_clicked(move |_| {
                         {
                             let mut project_data = project.borrow_mut();
                             if let Some(item) = project_data.items.get_mut(index) {
-                                begin_edit(KIND_ROTATE);
                                 item.rotation = (item.rotation + 270.0) % 360.0;
                             }
                         }
@@ -1466,18 +1035,15 @@ fn refresh_preview(
                     let canvas = canvas.clone();
                     let frames = frames.clone();
                     let popover = popover.clone();
-                    let begin_edit = begin_edit.clone();
-                    let history = history.clone();
                     remove.connect_clicked(move |_| {
                         {
                             let mut project_data = project.borrow_mut();
                             if index < project_data.items.len() {
-                                begin_edit(KIND_REMOVE);
                                 project_data.items.remove(index);
                                 project_data.relayout();
                             }
                         }
-                        refresh_preview(&canvas, &frames, &project, &history);
+                        refresh_preview(&canvas, &frames, &project);
                         popover.popdown();
                     });
                 }
@@ -1654,7 +1220,7 @@ mod sizing_tests {
             })
             .collect();
         editor.project.borrow_mut().relayout();
-        refresh_preview(&editor.canvas, &editor.frames, &editor.project, &editor.history);
+        refresh_preview(&editor.canvas, &editor.frames, &editor.project);
         let tiles = editor
             .frames
             .borrow()
