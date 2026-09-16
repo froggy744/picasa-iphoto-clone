@@ -1,5 +1,6 @@
 mod albums_view;
 mod collage;
+mod css;
 mod db;
 mod diagnostics;
 mod edit;
@@ -9,6 +10,7 @@ mod infobar;
 mod lightbox;
 mod photo_object;
 mod photo_texture;
+mod platform;
 mod scanner;
 mod settings;
 mod sidebar;
@@ -153,8 +155,4 @@ fn main() {
     application.run();
 }
 
-#[cfg(unix)]
-fn init_trace_log() {}
-
-#[cfg(not(unix))]
 fn init_trace_log() {}

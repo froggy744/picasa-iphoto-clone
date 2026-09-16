@@ -117,74 +117,7 @@ fn show_photo_context_menu(
     // padding.  Apply a small context-menu-specific CSS class so rows look
     // and measure like menu items instead of large push buttons.
     let css = gtk::CssProvider::new();
-    css.load_from_data(
-        ".photo-context-menu {
-             padding: 6px;
-             border-radius: 12px;
-             border: 1px solid alpha(currentColor, 0.10);
-             background-color: @popover_bg_color;
-             box-shadow: 0 4px 14px alpha(black, 0.16);
-         }
-         .photo-context-item {
-             min-height: 28px;
-             padding: 0 12px;
-             margin: 0;
-             border: 0;
-             border-radius: 6px;
-             background: transparent;
-             box-shadow: none;
-             font-size: 14px;
-             font-weight: 400;
-         }
-         .photo-context-item:hover {
-             background-color: alpha(currentColor, 0.07);
-         }
-         .photo-context-item:disabled {
-             background: transparent;
-             box-shadow: none;
-             opacity: 0.45;
-         }
-         .photo-context-item > label {
-             padding: 0;
-             margin: 0;
-             font-size: 14px;
-             font-weight: 400;
-         }
-         .photo-context-submenu {
-             min-height: 28px;
-             padding: 0;
-             margin: 0;
-             background: transparent;
-             box-shadow: none;
-         }
-         .photo-context-submenu > button {
-             min-height: 28px;
-             padding: 0 12px;
-             margin: 0;
-             border: 0;
-             border-radius: 6px;
-             background: transparent;
-             box-shadow: none;
-             font-size: 14px;
-             font-weight: 400;
-         }
-         .photo-context-submenu > button:hover {
-             background-color: alpha(currentColor, 0.07);
-         }
-         .photo-context-submenu label {
-             font-size: 14px;
-             font-weight: 400;
-         }
-         .photo-context-submenu > button > box {
-             padding: 0;
-             margin: 0;
-         }
-         .photo-context-separator {
-             min-height: 1px;
-             padding: 0;
-             margin: 4px 8px;
-         }"
-    );
+    css.load_from_data(crate::css::PHOTO_CONTEXT_MENU);
     gtk::style_context_add_provider_for_display(
         &host.display(),
         &css,
@@ -544,11 +477,27 @@ fn show_photo_context_menu(
     let photo_for_open = photo.clone();
     let dismiss_menu_for_open = dismiss_menu.clone();
     let lightbox_for_open = context.lightbox.clone();
+    let gallery_for_open = context.gallery.clone();
     open.connect_clicked(move |_| {
-        if let Some(lightbox) = lightbox_for_open.upgrade() {
-            lightbox.open(vec![photo_for_open.clone()], 0);
-        }
+        // Remove the menu before opening so unparenting it cannot steal focus
+        // from the newly opened lightbox. Keep the gallery's current photo
+        // collection so wheel/arrow navigation continues normally.
         dismiss_menu_for_open();
+        if let Some(lightbox) = lightbox_for_open.upgrade() {
+            let photos = gallery_for_open
+                .borrow()
+                .upgrade()
+                .map(|gallery| gallery.photo_objects())
+                .unwrap_or_default();
+            if let Some(index) = photos
+                .iter()
+                .position(|item| item.id() == photo_for_open.id())
+            {
+                lightbox.open(photos, index);
+            } else {
+                lightbox.open(vec![photo_for_open.clone()], 0);
+            }
+        }
     });
 
     let file = crate::source::file(&photo.path());
@@ -761,10 +710,13 @@ fn show_photo_context_menu(
         .max(1)
         .min(menu_host.max_content_height().max(1));
 
+    const MENU_EDGE_INSET: i32 = 4;
+    let max_x = (host.width() - measured_width - MENU_EDGE_INSET).max(MENU_EDGE_INSET);
+    let max_y = (host.height() - measured_height - MENU_EDGE_INSET).max(MENU_EDGE_INSET);
     let menu_x = (click_point.x().round() as i32 - measured_width / 2)
-        .clamp(0, (host.width() - measured_width).max(0));
+        .clamp(MENU_EDGE_INSET, max_x);
     let menu_y = (click_point.y().round() as i32 - measured_height / 2)
-        .clamp(0, (host.height() - measured_height).max(0));
+        .clamp(MENU_EDGE_INSET, max_y);
     menu_host.set_margin_start(menu_x);
     menu_host.set_margin_top(menu_y);
 
@@ -794,26 +746,7 @@ fn show_photo_context_menu(
 }
 
 fn open_file_in_manager(file: &gio::File) {
-    if let Some(path) = file.path() {
-        // Nautilus is the only file manager whose selection option is verified
-        // in the supported Linux environment. Spawn it so the GTK main thread
-        // remains responsive while it opens and selects the file.
-        if std::process::Command::new("nautilus")
-            .arg("--select")
-            .arg(path)
-            .spawn()
-            .is_ok()
-        {
-            return;
-        }
-    }
-
-    if let Some(parent) = file.parent() {
-        let _ = gio::AppInfo::launch_default_for_uri(
-            &parent.uri(),
-            None::<&gio::AppLaunchContext>,
-        );
-    }
+    crate::platform::reveal_file(file);
 }
 
 fn prepare_wallpaper(

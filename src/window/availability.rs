@@ -51,10 +51,7 @@ fn mounted_source_roots() -> std::collections::HashSet<String> {
             roots.insert(gio::File::for_path(path).uri().to_string());
         }
     }
-    #[cfg(unix)]
-    for mount in gio::UnixMountEntry::mounts().0 {
-        roots.insert(gio::File::for_path(mount.mount_path()).uri().to_string());
-    }
+    roots.extend(crate::platform::extra_mounted_roots());
     roots
 }
 
