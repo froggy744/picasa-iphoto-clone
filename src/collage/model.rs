@@ -211,6 +211,17 @@ impl CollageProject {
         self.relayout();
     }
 
+    /// Refresh embedded photo metadata (edits, rotations, thumbnails) for
+    /// matching ids without touching the saved arrangement. Used when
+    /// returning from the photo editor so tiles reflect latest edits.
+    pub fn refresh_photo_metadata(&mut self, photos: &[PhotoObject]) {
+        for item in self.items.iter_mut() {
+            if let Some(photo) = photos.iter().find(|photo| photo.id() == item.photo.id) {
+                item.photo = collage_photo_from_object(photo);
+            }
+        }
+    }
+
     pub fn shuffle(&mut self) {
         self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         let mut random = self.seed;

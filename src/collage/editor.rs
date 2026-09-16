@@ -103,12 +103,21 @@ struct PreviewFrame {
     photo: gtk::Frame,
 }
 
+/// Host-application hooks for tile interactions (threaded into
+/// refresh_preview so per-tile menus can act on the library).
+#[derive(Clone)]
+struct TileHooks {
+    /// Opens the photo editor for a library photo id.
+    open_edit: Rc<dyn Fn(i64)>,
+}
+
 pub struct CollageEditor {
     pub root: gtk::Box,
     project: Rc<RefCell<CollageProject>>,
     canvas: gtk::Fixed,
     frames: Rc<RefCell<Vec<PreviewFrame>>>,
     status: gtk::Label,
+    hooks: TileHooks,
 }
 
 impl CollageEditor {
@@ -125,19 +134,26 @@ impl CollageEditor {
         self.project.borrow_mut().add_photos(photos);
         self.status
             .set_text(&photo_count_text(self.project.borrow().items.len()));
-        refresh_preview(&self.canvas, &self.frames, &self.project);
+        refresh_preview(&self.canvas, &self.frames, &self.project, &self.hooks);
     }
 
     pub fn set_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
         self.project.borrow_mut().set_photos(photos);
         self.status
             .set_text(&photo_count_text(self.project.borrow().items.len()));
-        refresh_preview(&self.canvas, &self.frames, &self.project);
+        refresh_preview(&self.canvas, &self.frames, &self.project, &self.hooks);
     }
 
     /// Serialized draft snapshot for persistence (see DRAFT_SETTING_KEY).
     pub fn draft_json(&self) -> String {
         super::model::draft_to_json(&self.project.borrow())
+    }
+
+    /// Refresh embedded photo metadata for the given ids (used when
+    /// returning from the photo editor) and redraw the preview.
+    pub fn refresh_photo_metadata(&self, photos: &[crate::photo_object::PhotoObject]) {
+        self.project.borrow_mut().refresh_photo_metadata(photos);
+        refresh_preview(&self.canvas, &self.frames, &self.project, &self.hooks);
     }
 }
 
@@ -147,6 +163,7 @@ pub fn build(
     on_add_photos: Rc<dyn Fn()>,
     on_close: Rc<dyn Fn()>,
     draft: Option<super::model::CollageDraft>,
+    on_edit_photo: Rc<dyn Fn(i64)>,
 ) -> CollageEditor {
     let css = gtk::CssProvider::new();
     let css_data = collage_css();
@@ -162,6 +179,9 @@ pub fn build(
     if let Some(draft) = draft.as_ref() {
         project.borrow_mut().apply_draft(draft, &photos);
     }
+    let hooks = TileHooks {
+        open_edit: on_edit_photo,
+    };
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.set_hexpand(true);
@@ -203,7 +223,8 @@ pub fn build(
         let project = project.clone();
         let canvas = canvas.clone();
         let frames = frames.clone();
-        Rc::new(move || refresh_preview(&canvas, &frames, &project))
+        let hooks = hooks.clone();
+        Rc::new(move || refresh_preview(&canvas, &frames, &project, &hooks))
     };
     refresh();
     {
@@ -701,6 +722,7 @@ pub fn build(
         canvas,
         frames,
         status,
+        hooks,
     }
 }
 
@@ -763,6 +785,7 @@ fn refresh_preview(
     canvas: &gtk::Fixed,
     frames: &Rc<RefCell<Vec<PreviewFrame>>>,
     project: &Rc<RefCell<CollageProject>>,
+    hooks: &TileHooks,
 ) {
     let generation = PREVIEW_GENERATION.with(|cell| {
         let value = cell.get().wrapping_add(1);
@@ -968,6 +991,9 @@ fn refresh_preview(
             let canvas = canvas.clone();
             let frames = frames.clone();
             let frame_for_menu = frame.clone();
+            let open_edit = hooks.open_edit.clone();
+            let hooks = hooks.clone();
+            let photo_id = item.photo.id;
             menu.connect_pressed(move |_, _, x, y| {
                 let popover = gtk::Popover::new();
                 let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -975,6 +1001,10 @@ fn refresh_preview(
                 menu_box.set_margin_bottom(6);
                 menu_box.set_margin_start(6);
                 menu_box.set_margin_end(6);
+                let edit_photo = flat_menu_button(
+                    "document-edit-symbolic",
+                    "Edit Photo",
+                );
                 let rotate_cw = flat_menu_button(
                     "object-rotate-right-symbolic",
                     "Rotate Clockwise",
@@ -984,6 +1014,7 @@ fn refresh_preview(
                     "Rotate Counter-Clockwise",
                 );
                 let remove = flat_menu_button("edit-delete-symbolic", "Remove Photo");
+                menu_box.append(&edit_photo);
                 menu_box.append(&rotate_cw);
                 menu_box.append(&rotate_ccw);
                 menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
@@ -998,6 +1029,14 @@ fn refresh_preview(
                 );
                 popover.set_pointing_to(Some(&pointing));
                 popover.connect_closed(|popover| popover.unparent());
+                {
+                    let open_edit = open_edit.clone();
+                    let popover = popover.clone();
+                    edit_photo.connect_clicked(move |_| {
+                        popover.popdown();
+                        open_edit(photo_id);
+                    });
+                }
                 {
                     let project = project.clone();
                     let canvas = canvas.clone();
@@ -1035,6 +1074,7 @@ fn refresh_preview(
                     let canvas = canvas.clone();
                     let frames = frames.clone();
                     let popover = popover.clone();
+                    let hooks = hooks.clone();
                     remove.connect_clicked(move |_| {
                         {
                             let mut project_data = project.borrow_mut();
@@ -1043,7 +1083,7 @@ fn refresh_preview(
                                 project_data.relayout();
                             }
                         }
-                        refresh_preview(&canvas, &frames, &project);
+                        refresh_preview(&canvas, &frames, &project, &hooks);
                         popover.popdown();
                     });
                 }
@@ -1198,7 +1238,14 @@ mod sizing_tests {
     fn spacing_changes_do_not_propagate_preview_minimum_or_rebuild_tiles() {
         adw::init().expect("GTK display required");
         let window = gtk::Window::new();
-        let editor = build(&window, Vec::new(), Rc::new(|| {}), Rc::new(|| {}), None);
+        let editor = build(
+            &window,
+            Vec::new(),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+            None,
+            Rc::new(|_| {}),
+        );
         editor.project.borrow_mut().items = (0..9)
             .map(|i| CollageItem {
                 photo: CollagePhoto {
@@ -1220,7 +1267,12 @@ mod sizing_tests {
             })
             .collect();
         editor.project.borrow_mut().relayout();
-        refresh_preview(&editor.canvas, &editor.frames, &editor.project);
+        refresh_preview(
+            &editor.canvas,
+            &editor.frames,
+            &editor.project,
+            &editor.hooks,
+        );
         let tiles = editor
             .frames
             .borrow()
