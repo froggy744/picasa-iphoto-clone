@@ -73,9 +73,12 @@ When the base theme itself is selected, no overlay provider is added.
 ## Shipped themes
 
 Folder ids match the values older releases saved, so existing installs keep
-their selection: `standard` (Standard GTK4), `iphone` (iPhoto Dark, base),
-`teal` (Teal), `blue` (Deep Ocean), `glass` (Apple Glass), `superman`
-(Superman), `tron` (TRON Legacy, dark).
+their selection. Current shipped set: `standard` (Standard GTK4), `iphone`
+(iPhoto Dark, base), `teal` (Teal), `blue` (Deep Ocean), `glass` (Glass),
+`tron` (TRON Legacy, dark), `claude` (Orange), `archive ledger` (Archive
+Ledger), `green` (Green), `retro` (Retro), `aqua-garageband-v2` (Aqua
+GarageBand v2) and `aqua-garageband-lights` (Aqua GarageBand Lights,
+traffic-light window controls).
 
 ## Authoring tips
 
@@ -93,6 +96,17 @@ their selection: `standard` (Standard GTK4), `iphone` (iPhoto Dark, base),
   `.collage-layout-tile:checked`, `.collage-tabs > button:checked`) — they are
   separate mechanisms from `row:selected` and otherwise fall through to the
   built-in base theme's styling.
+- **Always neutralize the search entry's own background**: the inner
+  `GtkSearchEntry` paints its system view background over the themed wrapper,
+  which produces light-on-light or dark-on-dark text depending on the
+  system appearance. Keep `.search-field entry { background: transparent;
+  color: <your contrast color>; caret-color: <same>; }`.
+- **GTK CSS is not web CSS.** Unsupported properties (width, height,
+  transform, filter values other than blur(), flex/grid, …) produce parser
+  warnings and are silently dropped. Use min-width/min-height, and build
+  hover "lifts" from box-shadow instead of transforms.
+- The metadata block must be the **first comment in the file**; only that
+  block is parsed.
 - Themes only style widgets; layout and behaviour live in the app. After
   editing a theme, reopen Settings → Themes (or toggle the theme) to reload
   the stylesheet.

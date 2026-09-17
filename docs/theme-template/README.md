@@ -24,6 +24,7 @@ rename it, recolor the palette — done.
       name: My Theme
       dark: false
       mode: overlay
+      window-controls: native
    */
    ```
 
@@ -33,13 +34,19 @@ rename it, recolor the palette — done.
 
 ## Rules of the road
 
+- **The metadata block must be the first comment in the file.** Only the
+  first `/* … */` block is parsed; a marker in a later block is ignored.
 - **Folder name = theme id.** It is what PIC stores in its settings, so never
   rename a folder that people already use — bump the `name:` instead.
 - **`theme.css` required.** Extra files (previews, notes) are allowed; a
   second `*.css` file without a `theme.css` makes the folder invisible.
-- **Keep valid CSS.** PIC loads themes through GTK's CSS parser; malformed
-  rules are skipped with a GTK warning, not a crash — but a theme that fails
-  to parse just looks broken.
+- **Keep valid GTK CSS.** PIC loads themes through GTK's CSS parser;
+  malformed rules and unsupported properties (width, height, transform,
+  filter values other than blur(), flex/grid, …) are dropped with a parser
+  warning, not a crash — but the effect simply won't appear.
+- **Neutralize the search entry's background** (the template already does):
+  the inner `GtkSearchEntry` paints its system view background over your
+  wrapper, causing light-on-light or dark-on-dark text.
 - **Unstyled surfaces fall through to the dark base theme.** Light themes
   should keep the Surfaces section; dark themes should recolor it.
 - **Badges and favourites** ship with conventional colors (amber offline,
@@ -48,11 +55,12 @@ rename it, recolor the palette — done.
 ## Metadata reference
 
 | Key | Values | Meaning |
-|-----|--------|---------|
+|-----|--------|------------------|
 | `version` | `1` | Theme contract version of this file. Current is 1. |
 | `name` | any text | Label in Settings → Themes. Defaults to the folder name. |
 | `dark` | `true` / `false` | Dark themes prefer the dark color scheme and the dark lightbox backdrop; the header icon shows a moon. |
 | `mode` | `overlay` / `base` | Leave `overlay`. `base` themes replace the built-in dark foundation — advanced use only. |
+| `window-controls` | `native` / `traffic-light` | `traffic-light` swaps the native GTK minimize/maximize/close buttons for PIC's gel-style traffic lights while your theme is active (style them via the section 10 block in `theme.css`). |
 
 Unknown keys are ignored, so adding `version: 1` today is forward-compatible.
 
