@@ -392,31 +392,6 @@ fn pixel_count(width: Option<i64>, height: Option<i64>) -> Option<i128> {
     }
 }
 
-fn confirm_action(
-    parent: &adw::ApplicationWindow,
-    title: &str,
-    message: &str,
-    action: impl Fn() + 'static,
-) {
-    let dialog = gtk::MessageDialog::builder()
-        .transient_for(parent)
-        .modal(true)
-        .message_type(gtk::MessageType::Warning)
-        .buttons(gtk::ButtonsType::Cancel)
-        .text(title)
-        .secondary_text(message)
-        .build();
-    dialog.add_button("Continue", gtk::ResponseType::Accept);
-
-    dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept {
-            action();
-        }
-        dialog.close();
-    });
-    dialog.present();
-}
-
 #[cfg(test)]
 mod photo_action_tests {
     use super::{

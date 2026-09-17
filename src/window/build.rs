@@ -452,6 +452,78 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     configure_infobar_album_menu(&info.add_to_album, action_context.clone());
 
+    // Destructive maintenance actions for the Settings → Library page. The
+    // settings window owns the buttons and confirmation dialogs; the actual
+    // behaviour stays here where the gallery and refresh context live.
+    let settings_maintenance = crate::settings::LibraryMaintenance {
+        clear_thumbnails: {
+            let connection = connection.clone();
+            let gallery = gallery.clone();
+            let filter = filter.clone();
+            let search = search_text.clone();
+            let sort = sort.clone();
+            let availability_refresh = availability_refresh.clone();
+            Rc::new(move || {
+                if let Err(error) = crate::thumbnail::clear_cache() {
+                    eprintln!("Could not clear thumbnails: {error}");
+                }
+                refresh_grid(
+                    &connection,
+                    filter.get(),
+                    &search.borrow(),
+                    sort.get(),
+                    &gallery,
+                );
+                availability_refresh();
+            })
+        },
+        clear_database: {
+            let connection = connection.clone();
+            let gallery = gallery.clone();
+            let filter = filter.clone();
+            let search = search_text.clone();
+            let sort = sort.clone();
+            let availability_refresh = availability_refresh.clone();
+            Rc::new(move || {
+                if let Err(error) = db::clear_photos(&connection.borrow()) {
+                    eprintln!("Could not clear database: {error}");
+                }
+                refresh_grid(
+                    &connection,
+                    filter.get(),
+                    &search.borrow(),
+                    sort.get(),
+                    &gallery,
+                );
+                availability_refresh();
+            })
+        },
+        clear_all: {
+            let connection = connection.clone();
+            let gallery = gallery.clone();
+            let filter = filter.clone();
+            let search = search_text.clone();
+            let sort = sort.clone();
+            let availability_refresh = availability_refresh.clone();
+            Rc::new(move || {
+                if let Err(error) = db::clear_all(&connection.borrow()) {
+                    eprintln!("Could not clear database: {error}");
+                }
+                if let Err(error) = crate::thumbnail::clear_cache() {
+                    eprintln!("Could not clear thumbnails: {error}");
+                }
+                refresh_grid(
+                    &connection,
+                    filter.get(),
+                    &search.borrow(),
+                    sort.get(),
+                    &gallery,
+                );
+                availability_refresh();
+            })
+        },
+    };
+
     let settings_window = crate::settings::SettingsWindow::default();
     let settings_parent = window.clone();
     let settings_connection = connection.clone();
@@ -478,6 +550,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let watch_connection = settings_connection.clone();
         let watch_sidebar = settings_sidebar.clone();
         let watch_on_unavailable = settings_on_unavailable.clone();
+        let maintenance = settings_maintenance.clone();
         settings_window.present(
             &settings_parent,
             settings_connection.clone(),
@@ -520,6 +593,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     }
                 })
             },
+            maintenance,
             initial_page,
         );
     });
@@ -2297,11 +2371,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         superman_theme_provider,
         display,
         saved_theme,
-        clear_thumbnails,
-        clear_database,
-        clear_all,
     ) = include!("theme.rs");
-    let (import, refresh) = include!("toolbar.rs");
+    let refresh = include!("toolbar.rs");
 
     right_column.append(&right_header);
     right_column.append(&content);
@@ -2653,9 +2724,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         dialog.show();
     })));
 
-    let import_folder_for_header = import_folder.clone();
-    import.connect_clicked(move |_| import_folder_for_header());
-
     let scan_job_for_refresh = scan_job.clone();
     let refresh_prepare_sender_for_click = refresh_prepare_sender.clone();
     let recovery_requested_for_refresh = thumbnail_recovery_requested.clone();
@@ -2712,111 +2780,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 roots,
             });
         });
-    });
-
-    let parent_for_settings = window.clone();
-    let connection_for_clear_thumbnails = connection.clone();
-    let gallery_for_clear_thumbnails = gallery.clone();
-    let filter_for_clear_thumbnails = filter.clone();
-    let search_for_clear_thumbnails = search_text.clone();
-    let sort_for_clear_thumbnails = sort.clone();
-    let availability_refresh_for_clear_thumbnails = availability_refresh.clone();
-    clear_thumbnails.connect_clicked(move |_| {
-        let availability_refresh = availability_refresh_for_clear_thumbnails.clone();
-        let connection = connection_for_clear_thumbnails.clone();
-        let gallery = gallery_for_clear_thumbnails.clone();
-        let filter = filter_for_clear_thumbnails.clone();
-        let search = search_for_clear_thumbnails.clone();
-        let sort = sort_for_clear_thumbnails.clone();
-        confirm_action(
-            &parent_for_settings,
-            "Clear thumbnails?",
-            "Cached thumbnails will be deleted. Your photos and database will remain.",
-            move || {
-                if let Err(error) = crate::thumbnail::clear_cache() {
-                    eprintln!("Could not clear thumbnails: {error}");
-                }
-                refresh_grid(
-                    &connection,
-                    filter.get(),
-                    &search.borrow(),
-                    sort.get(),
-                    &gallery,
-                );
-                availability_refresh();
-            },
-        );
-    });
-
-    let parent_for_clear_database = window.clone();
-    let connection_for_clear_database = connection.clone();
-    let gallery_for_clear_database = gallery.clone();
-    let filter_for_clear_database = filter.clone();
-    let search_for_clear_database = search_text.clone();
-    let sort_for_clear_database = sort.clone();
-    let availability_refresh_for_clear_database = availability_refresh.clone();
-    clear_database.connect_clicked(move |_| {
-        let availability_refresh = availability_refresh_for_clear_database.clone();
-        let connection = connection_for_clear_database.clone();
-        let gallery = gallery_for_clear_database.clone();
-        let filter = filter_for_clear_database.clone();
-        let search = search_for_clear_database.clone();
-        let sort = sort_for_clear_database.clone();
-        confirm_action(
-            &parent_for_clear_database,
-            "Clear database?",
-            "Indexed photos and album links will be removed. Registered folders will remain.",
-            move || {
-                if let Err(error) = db::clear_photos(&connection.borrow()) {
-                    eprintln!("Could not clear database: {error}");
-                }
-                refresh_grid(
-                    &connection,
-                    filter.get(),
-                    &search.borrow(),
-                    sort.get(),
-                    &gallery,
-                );
-                availability_refresh();
-            },
-        );
-    });
-
-    let parent_for_clear_all = window.clone();
-    let connection_for_clear_all = connection.clone();
-    let gallery_for_clear_all = gallery.clone();
-    let filter_for_clear_all = filter.clone();
-    let search_for_clear_all = search_text.clone();
-    let sort_for_clear_all = sort.clone();
-    let availability_refresh_for_clear_all = availability_refresh.clone();
-    clear_all.connect_clicked(move |_| {
-        let availability_refresh = availability_refresh_for_clear_all.clone();
-        let connection = connection_for_clear_all.clone();
-        let gallery = gallery_for_clear_all.clone();
-        let filter = filter_for_clear_all.clone();
-        let search = search_for_clear_all.clone();
-        let sort = sort_for_clear_all.clone();
-        confirm_action(
-            &parent_for_clear_all,
-            "Clear everything?",
-            "Indexed photos, albums, registered folders, and cached thumbnails will be deleted.",
-            move || {
-                if let Err(error) = db::clear_all(&connection.borrow()) {
-                    eprintln!("Could not clear database: {error}");
-                }
-                if let Err(error) = crate::thumbnail::clear_cache() {
-                    eprintln!("Could not clear thumbnails: {error}");
-                }
-                refresh_grid(
-                    &connection,
-                    filter.get(),
-                    &search.borrow(),
-                    sort.get(),
-                    &gallery,
-                );
-                availability_refresh();
-            },
-        );
     });
 
     let gallery_for_events = gallery.clone();

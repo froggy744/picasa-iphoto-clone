@@ -1,8 +1,4 @@
 {
-    let import = gtk::Button::from_icon_name("folder-open-symbolic");
-    import.set_tooltip_text(Some("Add Folder to Library"));
-    right_header.pack_end(&import);
-
     let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
     refresh.set_tooltip_text(Some("Refresh library"));
     right_header.pack_end(&refresh);
@@ -234,17 +230,16 @@
     header_tools.append(&settings);
     right_header.pack_end(&header_tools);
 
-    // Keep the search field usable on phone-sized windows. Import and refresh
-    // remain available from the sidebar/context actions, while the sort and
-    // settings menus stay in the header.
+    // Keep the search field usable on phone-sized windows. Refresh remains
+    // available from the sidebar/context actions, while the sort and settings
+    // menus stay in the header.
     let tiny_header = adw::Breakpoint::new(
         adw::BreakpointCondition::parse("max-width: 1050px")
             .expect("valid tiny header breakpoint"),
     );
-    tiny_header.add_setter(&import, "visible", Some(&false.to_value()));
     tiny_header.add_setter(&refresh, "visible", Some(&false.to_value()));
     tiny_header.add_setter(&header_tools, "visible", Some(&false.to_value()));
     window.add_breakpoint(tiny_header);
 
-    (import, refresh)
+    refresh
 }

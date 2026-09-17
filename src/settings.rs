@@ -6,6 +6,16 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 use rusqlite::Connection;
 
+/// Destructive library maintenance actions. The settings window only owns the
+/// buttons and their confirmation dialogs; the behaviour lives in the main
+/// window (build.rs) where the gallery, filter, and refresh context exist.
+#[derive(Clone)]
+pub struct LibraryMaintenance {
+    pub clear_thumbnails: Rc<dyn Fn()>,
+    pub clear_database: Rc<dyn Fn()>,
+    pub clear_all: Rc<dyn Fn()>,
+}
+
 #[derive(Clone, Default)]
 pub struct SettingsWindow {
     window: Rc<RefCell<glib::WeakRef<adw::Window>>>,
@@ -20,6 +30,7 @@ impl SettingsWindow {
         formats_changed: Rc<dyn Fn()>,
         theme_changed: Rc<dyn Fn()>,
         folder_watch_changed: Rc<dyn Fn()>,
+        maintenance: LibraryMaintenance,
         initial_page: Option<&str>,
     ) {
         if let Some(window) = self.window.borrow().upgrade() {
@@ -64,7 +75,7 @@ impl SettingsWindow {
         );
         stack.add_titled(&albums_page(&connection.borrow()), Some("albums"), "Albums");
         stack.add_titled(
-            &library_page(connection.clone(), formats_changed),
+            &library_page(connection.clone(), formats_changed, maintenance, &window),
             Some("library"),
             "Library",
         );
@@ -234,6 +245,8 @@ fn albums_page(connection: &Connection) -> gtk::ScrolledWindow {
 fn library_page(
     connection: Rc<RefCell<Connection>>,
     recently_added_changed: Rc<dyn Fn()>,
+    maintenance: LibraryMaintenance,
+    parent_window: &adw::Window,
 ) -> gtk::ScrolledWindow {
     let content = page_content("Library", "Current library statistics.");
     let list = settings_list();
@@ -341,6 +354,39 @@ fn library_page(
              Offline photos keep their thumbnails, and subdirectories and originals are never touched.",
         ),
         Some(clean_button.upcast_ref()),
+    );
+
+    // Destructive maintenance. The settings window owns only the buttons and
+    // confirmations; each action callback is provided by the main window so
+    // the gallery and refresh paths stay in one place.
+    let clear_thumbnails_button = gtk::Button::with_label("Clear");
+    clear_thumbnails_button.set_valign(gtk::Align::Center);
+    clear_thumbnails_button.add_css_class("clear-action-button");
+    append_row(
+        &list,
+        "Clear thumbnails",
+        Some("Deletes every cached thumbnail. Photos and the database remain."),
+        Some(clear_thumbnails_button.upcast_ref()),
+    );
+    let clear_database_button = gtk::Button::with_label("Clear");
+    clear_database_button.set_valign(gtk::Align::Center);
+    clear_database_button.add_css_class("clear-action-button");
+    append_row(
+        &list,
+        "Clear database",
+        Some("Indexed photos and album links are removed. Registered folders remain."),
+        Some(clear_database_button.upcast_ref()),
+    );
+    let clear_all_button = gtk::Button::with_label("Clear All");
+    clear_all_button.set_valign(gtk::Align::Center);
+    clear_all_button.add_css_class("clear-action-button");
+    append_row(
+        &list,
+        "Clear all",
+        Some(
+            "Indexed photos, albums, registered folders, and cached thumbnails are all deleted.",
+        ),
+        Some(clear_all_button.upcast_ref()),
     );
     content.append(&list);
 
@@ -456,7 +502,96 @@ fn library_page(
             });
         });
     }
+    // Confirmations are parented to the settings window so they appear above
+    // it while it is open.
+    let parent_window = parent_window.clone();
+    let refresh_stats: Rc<dyn Fn()> = {
+        let connection = connection.clone();
+        let cached_label = cached_label.clone();
+        let required_label = required_label.clone();
+        let unused_label = unused_label.clone();
+        let cache_size_label = cache_size_label.clone();
+        Rc::new(move || {
+            refresh_thumbnail_cache_stats(
+                connection.clone(),
+                cached_label.clone(),
+                required_label.clone(),
+                unused_label.clone(),
+                cache_size_label.clone(),
+            );
+        })
+    };
+    {
+        let maintenance = maintenance.clone();
+        let refresh_stats = refresh_stats.clone();
+        let parent_window = parent_window.clone();
+        clear_thumbnails_button.connect_clicked(move |_| {
+            let action = {
+                let maintenance = maintenance.clone();
+                let refresh_stats = refresh_stats.clone();
+                Rc::new(move || {
+                    (maintenance.clear_thumbnails)();
+                    refresh_stats();
+                })
+            };
+            confirm_destructive(
+                &parent_window,
+                "Clear thumbnails?",
+                "Cached thumbnails will be deleted. Your photos and database will remain.",
+                action,
+            );
+        });
+    }
+    {
+        let maintenance = maintenance.clone();
+        let parent_window = parent_window.clone();
+        clear_database_button.connect_clicked(move |_| {
+            let maintenance = maintenance.clone();
+            confirm_destructive(
+                &parent_window,
+                "Clear database?",
+                "Indexed photos and album links will be removed. Registered folders will remain.",
+                Rc::new(move || (maintenance.clear_database)()),
+            );
+        });
+    }
+    clear_all_button.connect_clicked(move |_| {
+        let action = {
+            let maintenance = maintenance.clone();
+            let refresh_stats = refresh_stats.clone();
+            Rc::new(move || {
+                (maintenance.clear_all)();
+                refresh_stats();
+            })
+        };
+        confirm_destructive(
+            &parent_window,
+            "Clear everything?",
+            "Indexed photos, albums, registered folders, and cached thumbnails will be deleted.",
+            action,
+        );
+    });
     scroll_page(content)
+}
+
+/// Destructive-action confirmation dialog parented to the settings window.
+fn confirm_destructive(parent: &adw::Window, title: &str, message: &str, action: Rc<dyn Fn()>) {
+    let dialog = gtk::MessageDialog::builder()
+        .transient_for(parent)
+        .modal(true)
+        .message_type(gtk::MessageType::Warning)
+        .buttons(gtk::ButtonsType::Cancel)
+        .text(title)
+        .secondary_text(message)
+        .build();
+    dialog.add_button("Continue", gtk::ResponseType::Accept);
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            action();
+        }
+        dialog.close();
+    });
+    dialog.present();
 }
 
 /// Load the thumbnail cache statistics in the background and fill the Library

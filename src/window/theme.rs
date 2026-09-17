@@ -1,7 +1,10 @@
 {
     let settings = gtk::MenuButton::new();
-    settings.set_icon_name("emblem-system-symbolic");
-    settings.set_tooltip_text(Some("Settings"));
+    // The button reflects the active appearance: moon for iPhoto Dark, sun
+    // for the light themes. Both icons ship in the bundled gresource so they
+    // resolve on Linux and on the Windows/macOS icon-less bundles.
+    settings.set_icon_name("weather-clear-symbolic");
+    settings.set_tooltip_text(Some("Appearance"));
 
     // The iPhone presentation is the app's default. Keep the stock GTK4 /
     // libadwaita presentation immediately available as an opt-in overlay,
@@ -47,6 +50,21 @@
     glass_theme.set_group(Some(&iphone_theme));
     let superman_theme = gtk::CheckButton::with_label("Superman");
     superman_theme.set_group(Some(&iphone_theme));
+    // Keep the header icon in sync with the dark/light appearance. iPhoto
+    // Dark is the app's only dark theme; every other theme is light.
+    let update_appearance_icon: Rc<dyn Fn()> = {
+        let settings = settings.clone();
+        let iphone_theme = iphone_theme.clone();
+        Rc::new(move || {
+            let dark = iphone_theme.is_active();
+            settings.set_icon_name(if dark {
+                "weather-clear-night-symbolic"
+            } else {
+                "weather-clear-symbolic"
+            });
+        })
+    };
+    update_appearance_icon();
     if saved_theme == "iphone" {
         iphone_theme.set_active(true);
     } else if saved_theme == "teal" {
@@ -121,7 +139,9 @@
     let lightbox_for_standard = lightbox.clone();
     let style_manager_for_standard = style_manager.clone();
     let albums_for_standard = albums_home_refresh_slot.clone();
+    let icon_for_standard = update_appearance_icon.clone();
     standard_theme.connect_toggled(move |button| {
+        icon_for_standard();
         if button.is_active() {
             gtk::style_context_remove_provider_for_display(
                 &display_for_standard,
@@ -170,7 +190,9 @@
     let lightbox_for_teal = lightbox.clone();
     let albums_for_teal = albums_home_refresh_slot.clone();
     let style_manager_for_teal = style_manager.clone();
+    let icon_for_teal = update_appearance_icon.clone();
     teal_theme.connect_toggled(move |button| {
+        icon_for_teal();
         if button.is_active() {
             gtk::style_context_remove_provider_for_display(
                 &display_for_teal,
@@ -219,7 +241,9 @@
     let lightbox_for_blue = lightbox.clone();
     let albums_for_blue = albums_home_refresh_slot.clone();
     let style_manager_for_blue = style_manager.clone();
+    let icon_for_blue = update_appearance_icon.clone();
     blue_theme.connect_toggled(move |button| {
+        icon_for_blue();
         if button.is_active() {
             gtk::style_context_remove_provider_for_display(
                 &display_for_blue,
@@ -268,7 +292,9 @@
     let lightbox_for_glass = lightbox.clone();
     let albums_for_glass = albums_home_refresh_slot.clone();
     let style_manager_for_glass = style_manager.clone();
+    let icon_for_glass = update_appearance_icon.clone();
     glass_theme.connect_toggled(move |button| {
+        icon_for_glass();
         if button.is_active() {
             gtk::style_context_remove_provider_for_display(
                 &display_for_glass,
@@ -317,7 +343,9 @@
     let lightbox_for_superman = lightbox.clone();
     let albums_for_superman = albums_home_refresh_slot.clone();
     let style_manager_for_superman = style_manager.clone();
+    let icon_for_superman = update_appearance_icon.clone();
     superman_theme.connect_toggled(move |button| {
+        icon_for_superman();
         if button.is_active() {
             gtk::style_context_remove_provider_for_display(
                 &display_for_superman,
@@ -366,7 +394,9 @@
     let lightbox_for_iphone = lightbox.clone();
     let albums_for_iphone = albums_home_refresh_slot.clone();
     let style_manager_for_iphone = style_manager.clone();
+    let icon_for_iphone = update_appearance_icon.clone();
     iphone_theme.connect_toggled(move |button| {
+        icon_for_iphone();
         if button.is_active() {
             gtk::style_context_remove_provider_for_display(
                 &display_for_iphone,
@@ -410,15 +440,6 @@
         }
     });
 
-    let clear_thumbnails = gtk::Button::with_label("Clear thumbnails");
-    clear_thumbnails.set_halign(gtk::Align::Fill);
-    clear_thumbnails.add_css_class("clear-action-button");
-    let clear_database = gtk::Button::with_label("Clear database");
-    clear_database.set_halign(gtk::Align::Fill);
-    clear_database.add_css_class("clear-action-button");
-    let clear_all = gtk::Button::with_label("Clear all");
-    clear_all.set_halign(gtk::Align::Fill);
-    clear_all.add_css_class("clear-action-button");
     settings_box.append(&appearance);
     settings_box.append(&iphone_theme);
     settings_box.append(&standard_theme);
@@ -427,9 +448,6 @@
     settings_box.append(&glass_theme);
     settings_box.append(&superman_theme);
     settings_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    settings_box.append(&clear_thumbnails);
-    settings_box.append(&clear_database);
-    settings_box.append(&clear_all);
     settings_popover.set_child(Some(&settings_box));
     settings.set_popover(Some(&settings_popover));
 
@@ -442,8 +460,5 @@
         superman_theme_provider,
         display,
         saved_theme,
-        clear_thumbnails,
-        clear_database,
-        clear_all,
     )
 }
