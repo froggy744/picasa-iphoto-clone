@@ -485,7 +485,13 @@
 
     let left_header = adw::HeaderBar::new();
     left_header.set_height_request(46);
-    left_header.set_show_start_title_buttons(false);
+    // Left-side window controls (macOS traffic lights, Linux left button
+    // layout) must live in the sidebar header while the sidebar is visible so
+    // they stay at the window's top-left corner. While the sidebar is hidden
+    // the show-sidebar handler below moves them to the right header, which
+    // then spans the full window width. End-side buttons (Windows-style top
+    // right) stay in the right header only.
+    left_header.set_show_start_title_buttons(true);
     left_header.set_show_end_title_buttons(false);
     left_header.add_css_class("layout-left-header");
 
@@ -732,7 +738,7 @@
     let right_header = adw::HeaderBar::new();
     right_header.set_height_request(46);
     right_header.set_hexpand(true);
-    right_header.set_show_start_title_buttons(true);
+    right_header.set_show_start_title_buttons(!main_split.shows_sidebar());
     right_header.set_show_end_title_buttons(true);
     right_header.add_css_class("layout-right-header");
 
@@ -761,8 +767,16 @@
     right_header.pack_start(&show_sidebar);
 
     let show_sidebar_for_state = show_sidebar.clone();
+    let left_header_for_controls = left_header.clone();
+    let right_header_for_controls = right_header.clone();
     main_split.connect_show_sidebar_notify(move |split| {
-        show_sidebar_for_state.set_visible(!split.shows_sidebar());
+        let sidebar_visible = split.shows_sidebar();
+        show_sidebar_for_state.set_visible(!sidebar_visible);
+        // Keep left-side window controls at the window's top-left corner in
+        // every sidebar state, and never render them in both headers at once
+        // (which would also duplicate them mid-slide during the animation).
+        left_header_for_controls.set_show_start_title_buttons(sidebar_visible);
+        right_header_for_controls.set_show_start_title_buttons(!sidebar_visible);
     });
 
     let search = gtk::SearchEntry::new();
