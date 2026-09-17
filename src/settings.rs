@@ -75,7 +75,7 @@ impl SettingsWindow {
             "File Formats",
         );
         stack.add_titled(
-            &themes_page(connection.clone(), theme_changed),
+            &themes_page(connection.clone(), theme_changed, thumbnail_changed.clone()),
             Some("themes"),
             "Themes",
         );
@@ -86,13 +86,7 @@ impl SettingsWindow {
         );
         stack.add_titled(&albums_page(&connection.borrow()), Some("albums"), "Albums");
         stack.add_titled(
-            &library_page(
-                connection.clone(),
-                formats_changed,
-                thumbnail_changed,
-                maintenance,
-                &window,
-            ),
+            &library_page(connection.clone(), formats_changed, maintenance, &window),
             Some("library"),
             "Library",
         );
@@ -262,7 +256,6 @@ fn albums_page(connection: &Connection) -> gtk::ScrolledWindow {
 fn library_page(
     connection: Rc<RefCell<Connection>>,
     recently_added_changed: Rc<dyn Fn()>,
-    thumbnail_changed: Rc<dyn Fn()>,
     maintenance: LibraryMaintenance,
     parent_window: &adw::Window,
 ) -> gtk::ScrolledWindow {
@@ -292,67 +285,6 @@ fn library_page(
         Some(recent_limit.upcast_ref()),
     );
 
-    // Thumbnail appearance toggles. Both apply live through thumbnail_changed
-    // and are re-read at startup.
-    let square_corners = gtk::Switch::new();
-    square_corners.set_valign(gtk::Align::Center);
-    square_corners.set_active(
-        saved_bool(&connection.borrow(), crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY)
-            .unwrap_or(false),
-    );
-    {
-        let connection = connection.clone();
-        let thumbnail_changed = thumbnail_changed.clone();
-        square_corners.connect_active_notify(move |toggle| {
-            let state = toggle.is_active();
-            crate::window::debug_log(&format!("SETTINGS: square corners switch -> {state}"));
-            if let Err(error) = crate::db::set_setting(
-                &connection.borrow(),
-                crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY,
-                &state.to_string(),
-            ) {
-                eprintln!("Could not save square thumbnail corners: {error}");
-                return;
-            }
-            thumbnail_changed();
-        });
-    }
-    append_row(
-        &list,
-        "Square thumbnail corners",
-        Some("Show thumbnails without rounded corners."),
-        Some(square_corners.upcast_ref()),
-    );
-
-    let fit_whole_photo = gtk::Switch::new();
-    fit_whole_photo.set_valign(gtk::Align::Center);
-    fit_whole_photo.set_active(
-        saved_bool(&connection.borrow(), crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY)
-            .unwrap_or(false),
-    );
-    {
-        let connection = connection.clone();
-        let thumbnail_changed = thumbnail_changed.clone();
-        fit_whole_photo.connect_active_notify(move |toggle| {
-            let state = toggle.is_active();
-            crate::window::debug_log(&format!("SETTINGS: fit whole photo switch -> {state}"));
-            if let Err(error) = crate::db::set_setting(
-                &connection.borrow(),
-                crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
-                &state.to_string(),
-            ) {
-                eprintln!("Could not save thumbnail photo fit: {error}");
-                return;
-            }
-            thumbnail_changed();
-        });
-    }
-    append_row(
-        &list,
-        "Show entire photo in thumbnails",
-        Some("Letterbox landscape and portrait photos instead of cropping them to the tile."),
-        Some(fit_whole_photo.upcast_ref()),
-    );
     let counts = crate::db::library_counts(&connection.borrow()).unwrap_or_default();
     let database_size = crate::db::database_size(&connection.borrow()).unwrap_or_default();
     let available = crate::db::setting(
@@ -1038,8 +970,80 @@ fn set_album_view_style(connection: &Connection, style: AlbumViewStyle) -> anyho
 fn themes_page(
     connection: Rc<RefCell<Connection>>,
     theme_changed: Rc<dyn Fn()>,
+    thumbnail_changed: Rc<dyn Fn()>,
 ) -> gtk::ScrolledWindow {
     let content = page_content("Themes", "Customize theme options.");
+
+    // Thumbnail appearance toggles. Both apply live through thumbnail_changed
+    // and are re-read at startup. They sit above the album theme options so
+    // every visual style choice is grouped on the Themes tab.
+    let thumbnail_heading = gtk::Label::new(Some("Thumbnails"));
+    thumbnail_heading.set_halign(gtk::Align::Start);
+    thumbnail_heading.add_css_class("heading");
+    content.append(&thumbnail_heading);
+
+    let thumbnail_list = settings_list();
+    let square_corners = gtk::Switch::new();
+    square_corners.set_valign(gtk::Align::Center);
+    square_corners.set_active(
+        saved_bool(&connection.borrow(), crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY)
+            .unwrap_or(false),
+    );
+    {
+        let connection = connection.clone();
+        let thumbnail_changed = thumbnail_changed.clone();
+        square_corners.connect_active_notify(move |toggle| {
+            let state = toggle.is_active();
+            crate::window::debug_log(&format!("SETTINGS: square corners switch -> {state}"));
+            if let Err(error) = crate::db::set_setting(
+                &connection.borrow(),
+                crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY,
+                &state.to_string(),
+            ) {
+                eprintln!("Could not save square thumbnail corners: {error}");
+                return;
+            }
+            thumbnail_changed();
+        });
+    }
+    append_row(
+        &thumbnail_list,
+        "Square thumbnail corners",
+        Some("Show thumbnails without rounded corners."),
+        Some(square_corners.upcast_ref()),
+    );
+
+    let fit_whole_photo = gtk::Switch::new();
+    fit_whole_photo.set_valign(gtk::Align::Center);
+    fit_whole_photo.set_active(
+        saved_bool(&connection.borrow(), crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY)
+            .unwrap_or(false),
+    );
+    {
+        let connection = connection.clone();
+        let thumbnail_changed = thumbnail_changed.clone();
+        fit_whole_photo.connect_active_notify(move |toggle| {
+            let state = toggle.is_active();
+            crate::window::debug_log(&format!("SETTINGS: fit whole photo switch -> {state}"));
+            if let Err(error) = crate::db::set_setting(
+                &connection.borrow(),
+                crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+                &state.to_string(),
+            ) {
+                eprintln!("Could not save thumbnail photo fit: {error}");
+                return;
+            }
+            thumbnail_changed();
+        });
+    }
+    append_row(
+        &thumbnail_list,
+        "Show entire photo in thumbnails",
+        Some("Letterbox landscape and portrait photos instead of cropping them to the tile."),
+        Some(fit_whole_photo.upcast_ref()),
+    );
+    content.append(&thumbnail_list);
+
     let heading = gtk::Label::new(Some("Albums"));
     heading.set_halign(gtk::Align::Start);
     heading.add_css_class("heading");
@@ -1652,6 +1656,7 @@ mod tests {
         let page = themes_page(
             connection.clone(),
             Rc::new(move || notified_for_callback.set(notified_for_callback.get() + 1)),
+            Rc::new(|| {}),
         );
         let mut switches = Vec::new();
         let mut buttons = Vec::new();
@@ -1668,15 +1673,19 @@ mod tests {
                 "Reset All Theme Settings",
             ],
         );
-        assert_eq!(switches.len(), 2);
+        // Switch order: the two thumbnail toggles above the Albums section,
+        // then bookshelf and album covers.
+        assert_eq!(switches.len(), 4);
         assert!(!switches[0].is_active());
         assert!(!switches[1].is_active());
+        assert!(!switches[2].is_active());
+        assert!(!switches[3].is_active());
 
-        switches[1].set_active(true);
+        switches[3].set_active(true);
         assert_eq!(notified.get(), 1);
         buttons[0].emit_clicked();
         assert_eq!(notified.get(), 2);
-        assert!(switches[0].is_active());
+        assert!(switches[2].is_active());
         assert_eq!(
             album_appearance(&connection.borrow()),
             AlbumAppearance {
@@ -1703,8 +1712,8 @@ mod tests {
 
         buttons[3].emit_clicked();
         assert_eq!(notified.get(), 5);
-        assert!(!switches[0].is_active());
-        assert!(!switches[1].is_active());
+        assert!(!switches[2].is_active());
+        assert!(!switches[3].is_active());
         assert_eq!(
             album_appearance(&connection.borrow()),
             AlbumAppearance::default()
