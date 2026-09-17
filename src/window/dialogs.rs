@@ -51,6 +51,18 @@ fn format_folder_bytes(bytes: u64) -> String {
     }
 }
 
+pub(crate) fn debug_log(message: &str) {
+    use std::io::Write;
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/pic-ui-debug.log")
+    else {
+        return;
+    };
+    let _ = writeln!(file, "{message}");
+}
+
 fn install_close_confirmation(window: &adw::ApplicationWindow) {
     let close_confirmation_open = Rc::new(Cell::new(false));
     let close_confirmation_allowed = Rc::new(Cell::new(false));

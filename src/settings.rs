@@ -29,6 +29,7 @@ impl SettingsWindow {
         connection: Rc<RefCell<Connection>>,
         formats_changed: Rc<dyn Fn()>,
         theme_changed: Rc<dyn Fn()>,
+        thumbnail_changed: Rc<dyn Fn()>,
         folder_watch_changed: Rc<dyn Fn()>,
         maintenance: LibraryMaintenance,
         initial_page: Option<&str>,
@@ -47,6 +48,16 @@ impl SettingsWindow {
         window.set_transient_for(Some(parent));
         window.set_destroy_with_parent(true);
         window.set_modal(false);
+        // Hide instead of destroy: closing settings must never depend on
+        // widget teardown order, and reopening reuses the built pages.
+        {
+            let window_for_close = window.clone();
+            window.connect_close_request(move |window| {
+                crate::window::debug_log("SETTINGS: close requested -> hiding");
+                window.hide();
+                glib::Propagation::Stop
+            });
+        }
 
         let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let header = adw::HeaderBar::new();
@@ -75,7 +86,13 @@ impl SettingsWindow {
         );
         stack.add_titled(&albums_page(&connection.borrow()), Some("albums"), "Albums");
         stack.add_titled(
-            &library_page(connection.clone(), formats_changed, maintenance, &window),
+            &library_page(
+                connection.clone(),
+                formats_changed,
+                thumbnail_changed,
+                maintenance,
+                &window,
+            ),
             Some("library"),
             "Library",
         );
@@ -245,6 +262,7 @@ fn albums_page(connection: &Connection) -> gtk::ScrolledWindow {
 fn library_page(
     connection: Rc<RefCell<Connection>>,
     recently_added_changed: Rc<dyn Fn()>,
+    thumbnail_changed: Rc<dyn Fn()>,
     maintenance: LibraryMaintenance,
     parent_window: &adw::Window,
 ) -> gtk::ScrolledWindow {
@@ -272,6 +290,68 @@ fn library_page(
         "Recently Added limit",
         Some("Maximum number of photos shown in the Recently Added view."),
         Some(recent_limit.upcast_ref()),
+    );
+
+    // Thumbnail appearance toggles. Both apply live through thumbnail_changed
+    // and are re-read at startup.
+    let square_corners = gtk::Switch::new();
+    square_corners.set_valign(gtk::Align::Center);
+    square_corners.set_active(
+        saved_bool(&connection.borrow(), crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY)
+            .unwrap_or(false),
+    );
+    {
+        let connection = connection.clone();
+        let thumbnail_changed = thumbnail_changed.clone();
+        square_corners.connect_active_notify(move |toggle| {
+            let state = toggle.is_active();
+            crate::window::debug_log(&format!("SETTINGS: square corners switch -> {state}"));
+            if let Err(error) = crate::db::set_setting(
+                &connection.borrow(),
+                crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY,
+                &state.to_string(),
+            ) {
+                eprintln!("Could not save square thumbnail corners: {error}");
+                return;
+            }
+            thumbnail_changed();
+        });
+    }
+    append_row(
+        &list,
+        "Square thumbnail corners",
+        Some("Show thumbnails without rounded corners."),
+        Some(square_corners.upcast_ref()),
+    );
+
+    let fit_whole_photo = gtk::Switch::new();
+    fit_whole_photo.set_valign(gtk::Align::Center);
+    fit_whole_photo.set_active(
+        saved_bool(&connection.borrow(), crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY)
+            .unwrap_or(false),
+    );
+    {
+        let connection = connection.clone();
+        let thumbnail_changed = thumbnail_changed.clone();
+        fit_whole_photo.connect_active_notify(move |toggle| {
+            let state = toggle.is_active();
+            crate::window::debug_log(&format!("SETTINGS: fit whole photo switch -> {state}"));
+            if let Err(error) = crate::db::set_setting(
+                &connection.borrow(),
+                crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+                &state.to_string(),
+            ) {
+                eprintln!("Could not save thumbnail photo fit: {error}");
+                return;
+            }
+            thumbnail_changed();
+        });
+    }
+    append_row(
+        &list,
+        "Show entire photo in thumbnails",
+        Some("Letterbox landscape and portrait photos instead of cropping them to the tile."),
+        Some(fit_whole_photo.upcast_ref()),
     );
     let counts = crate::db::library_counts(&connection.borrow()).unwrap_or_default();
     let database_size = crate::db::database_size(&connection.borrow()).unwrap_or_default();
@@ -845,7 +925,7 @@ pub(crate) fn album_view_style(connection: &Connection) -> AlbumViewStyle {
     }
 }
 
-fn saved_bool(connection: &Connection, key: &str) -> Option<bool> {
+pub(crate) fn saved_bool(connection: &Connection, key: &str) -> Option<bool> {
     crate::db::setting(connection, key)
         .ok()
         .flatten()

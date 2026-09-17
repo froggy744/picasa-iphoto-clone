@@ -1,6 +1,8 @@
 pub const RECENTLY_ADDED_LIMIT_SETTING_KEY: &str = "recently-added-limit";
 pub const DEFAULT_RECENTLY_ADDED_LIMIT: usize = 100;
 const MAX_RECENTLY_ADDED_LIMIT: usize = 1_000_000;
+pub const THUMBNAIL_SQUARE_CORNERS_SETTING_KEY: &str = "thumbnail-square-corners";
+pub const THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY: &str = "thumbnail-fit-whole-photo";
 pub const LIBRARY_AVAILABLE_SETTING_KEY: &str = "library-stats-available";
 pub const LIBRARY_UNAVAILABLE_SETTING_KEY: &str = "library-stats-unavailable";
 pub const LIBRARY_STATS_UPDATED_SETTING_KEY: &str = "library-stats-updated";

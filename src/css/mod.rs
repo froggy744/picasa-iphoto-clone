@@ -2,6 +2,7 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 
 pub(crate) const BASE: &str = include_str!("base.css");
+pub(crate) const SQUARE_CORNERS: &str = include_str!("square_corners.css");
 pub(crate) const ALBUMS: &str = include_str!("components/albums.css");
 pub(crate) const PHOTO_CONTEXT_MENU: &str = include_str!("components/photo_context_menu.css");
 
@@ -37,5 +38,16 @@ pub(crate) fn install_foundation(display: &gtk::gdk::Display) {
         display,
         &platform,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 10,
+    );
+
+    // Always loaded; rules only match while the main window carries the
+    // "square-corners" class (Settings > Library). Priority sits above the
+    // theme (+1) and album (+3) providers so border-radius: 0 wins.
+    let square_corners = gtk::CssProvider::new();
+    square_corners.load_from_data(SQUARE_CORNERS);
+    gtk::style_context_add_provider_for_display(
+        display,
+        &square_corners,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 4,
     );
 }

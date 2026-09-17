@@ -248,6 +248,32 @@ impl Gallery {
         self.auto_default_zoom.set(true);
     }
 
+    /// Letterbox whole photos (Contain) instead of cropping them to the tile
+    /// (Cover), so portrait thumbnails show portrait, not a centre strip.
+    /// Applies to realized tiles immediately and to future tiles via the
+    /// factory.
+    pub fn set_fit_whole_photo(self: &Rc<Self>, fit: bool) {
+        if self.fit_whole_photo.get() == fit {
+            return;
+        }
+        self.fit_whole_photo.set(fit);
+        let content_fit = if fit {
+            gtk::ContentFit::Contain
+        } else {
+            gtk::ContentFit::Cover
+        };
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        crate::window::debug_log(&format!(
+            "GALLERY: set_fit_whole_photo({fit}) applying to {} realized tiles",
+            tiles.len()
+        ));
+        for tile in tiles {
+            tile.set_content_fit(content_fit);
+        }
+    }
+
     /// Record a zoom request. Isolated clicks apply immediately; a rapid
     /// Ctrl+wheel spin coalesces its extra notches into one trailing reflow so
     /// crossing several column boundaries does not rebuild the Folder rows per

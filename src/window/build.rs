@@ -406,6 +406,25 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     }
     // Resolved size for views that only need a number (album covers).
     let grid_thumbnail_size = saved_grid_thumbnail_size.unwrap_or(DEFAULT_GRID_THUMBNAIL_SIZE);
+
+    // Thumbnail appearance (Settings > Library). Square corners toggle a CSS
+    // class on the main window; whole-photo fit is applied to the gallery and
+    // re-applied live when the toggles change.
+    if crate::settings::saved_bool(
+        &connection.borrow(),
+        crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY,
+    )
+    .unwrap_or(false)
+    {
+        window.add_css_class("square-corners");
+    }
+    gallery.set_fit_whole_photo(
+        crate::settings::saved_bool(
+            &connection.borrow(),
+            crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+        )
+        .unwrap_or(false),
+    );
     gallery_for_actions.replace(Rc::downgrade(&gallery));
     apply_gallery_grouping(&gallery, filter.get(), sort.get(), group_mode.get());
 
@@ -533,6 +552,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let settings_window = crate::settings::SettingsWindow::default();
     let settings_parent = window.clone();
+    let settings_surface = window.clone();
+    let settings_gallery_for_thumbs = gallery.clone();
     let settings_connection = connection.clone();
     let settings_gallery = gallery.clone();
     let settings_filter = filter.clone();
@@ -558,6 +579,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let watch_sidebar = settings_sidebar.clone();
         let watch_on_unavailable = settings_on_unavailable.clone();
         let maintenance = settings_maintenance.clone();
+        let thumbs_window = settings_surface.clone();
+        let thumbs_gallery = settings_gallery_for_thumbs.clone();
+        let thumbs_connection = settings_connection.clone();
         settings_window.present(
             &settings_parent,
             settings_connection.clone(),
@@ -584,6 +608,36 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 if let Some(refresh) = theme_albums_refresh.borrow().as_ref() {
                     refresh(&albums);
                 }
+            }),
+            Rc::new(move || {
+                crate::window::debug_log("THUMB SETTINGS: apply callback entered");
+                let square = crate::settings::saved_bool(
+                    &thumbs_connection.borrow(),
+                    crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY,
+                )
+                .unwrap_or(false);
+                let fit = crate::settings::saved_bool(
+                    &thumbs_connection.borrow(),
+                    crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+                )
+                .unwrap_or(false);
+                if square {
+                    thumbs_window.add_css_class("square-corners");
+                } else {
+                    thumbs_window.remove_css_class("square-corners");
+                }
+                crate::window::debug_log(&format!(
+                    "THUMB SETTINGS: css class applied (square={square}), deferring fit={fit} to idle"
+                ));
+                // Defer the tile walk out of the switch notification so the
+                // settings UI settles before the gallery relayouts.
+                let gallery_for_fit = thumbs_gallery.clone();
+                glib::idle_add_local_once(move || {
+                    crate::window::debug_log("THUMB SETTINGS: set_fit_whole_photo begin");
+                    gallery_for_fit.set_fit_whole_photo(fit);
+                    crate::window::debug_log("THUMB SETTINGS: set_fit_whole_photo end");
+                });
+                crate::window::debug_log("THUMB SETTINGS: apply callback exit");
             }),
             {
                 let rebuild_folder_watches = settings_rebuild_folder_watches.clone();
@@ -3300,3 +3354,4 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     window
 }
+

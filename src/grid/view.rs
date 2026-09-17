@@ -63,6 +63,9 @@ pub struct Gallery {
     // Set when no user-chosen thumbnail size exists: the first real layout
     // adopts the ~4-thumbnails-per-row default instead of a fixed pixel size.
     auto_default_zoom: Cell<bool>,
+    // Letterbox whole photos (Contain) instead of cropping to the tile
+    // (Cover), so portrait thumbnails show portrait, not a centre strip.
+    fit_whole_photo: Rc<Cell<bool>>,
     on_zoom_changed: Rc<dyn Fn(i32)>,
 }
 
@@ -126,6 +129,8 @@ impl Gallery {
         let tile_width_for_setup = tile_width.clone();
         let tile_height_for_setup = tile_height.clone();
         let unavailable_for_setup = unavailable.clone();
+        let fit_whole_photo = Rc::new(Cell::new(false));
+        let fit_whole_photo_for_setup = fit_whole_photo.clone();
         factory.connect_setup(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
@@ -137,7 +142,11 @@ impl Gallery {
             frame.add_css_class("photo-tile");
 
             let picture = gtk::Picture::new();
-            picture.set_content_fit(gtk::ContentFit::Cover);
+            picture.set_content_fit(if fit_whole_photo_for_setup.get() {
+                gtk::ContentFit::Contain
+            } else {
+                gtk::ContentFit::Cover
+            });
             picture.set_can_shrink(true);
             picture.set_size_request(1, 1);
             picture.set_hexpand(true);
@@ -724,6 +733,7 @@ impl Gallery {
             pending_zoom_width: Rc::new(Cell::new(None)),
             zoom_reflow_source: Rc::new(RefCell::new(None)),
             auto_default_zoom: Cell::new(false),
+            fit_whole_photo,
             on_zoom_changed,
         };
         gallery.replace(photos);

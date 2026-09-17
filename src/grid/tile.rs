@@ -186,6 +186,18 @@ impl SquareTile {
         self.queue_resize();
     }
 
+    /// Switch between cropping photos to the tile (Cover, the default) and
+    /// letterboxing the whole photo (Contain) so portrait and landscape
+    /// thumbnails both show the complete picture.
+    fn set_content_fit(&self, fit: gtk::ContentFit) {
+        let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+        if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
+            picture.set_content_fit(fit);
+        }
+    }
+
     /// Remember how to open the unavailable dialog so the offline badge can be
     /// created lazily instead of on every folder tile.
     fn set_unavailable_handler(&self, handler: Rc<dyn Fn(PhotoObject, gtk::Widget)>) {
