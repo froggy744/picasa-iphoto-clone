@@ -372,7 +372,6 @@ fn load_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
     let mut image = match image::open(path) {
         Ok(image) => image.to_rgba8(),
         Err(error) => {
-            
             // This is PIC's own cache file. A decode failure means the cache is
             // unusable, not that the original is corrupt. Remove it and let the
             // normal priority generator rebuild it from the source in the

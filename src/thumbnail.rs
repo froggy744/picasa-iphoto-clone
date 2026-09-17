@@ -86,7 +86,10 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
     drop(pending);
 
     let queue = PRIORITY_QUEUE.get_or_init(|| {
-        let queue = Arc::new((Mutex::new(VecDeque::<PriorityRequest>::new()), Condvar::new()));
+        let queue = Arc::new((
+            Mutex::new(VecDeque::<PriorityRequest>::new()),
+            Condvar::new(),
+        ));
         for _ in 0..PRIORITY_WORKERS {
             let queue = queue.clone();
             std::thread::spawn(move || loop {
@@ -120,7 +123,8 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
                     if create(&path, mtime, size_bytes).is_err() {
                         break;
                     }
-                    if destination.is_file() || failure_marker.is_file()
+                    if destination.is_file()
+                        || failure_marker.is_file()
                         || std::time::Instant::now() >= deadline
                     {
                         break;
@@ -135,7 +139,6 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
                         completions.push(PathBuf::from(&path));
                     }
                 }
-                
             });
         }
         queue
@@ -155,7 +158,6 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
     }
     queue.push_front((path, mtime, size_bytes, destination.clone()));
     wake.notify_one();
-    
 }
 
 /// Return the source paths whose foreground thumbnails finished since the last UI poll.

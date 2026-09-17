@@ -305,7 +305,6 @@ pub fn build(
             {
                 saved_position.set(position);
             }
-
         });
     }
 
@@ -523,10 +522,7 @@ pub fn build(
             let album_list = album_list.clone();
             let saved_position = saved_position.clone();
             glib::idle_add_local_once(move || {
-                let desired = list_natural_height_for_rows(
-                    &album_list,
-                    STARTUP_VISIBLE_ALBUM_ROWS,
-                );
+                let desired = list_natural_height_for_rows(&album_list, STARTUP_VISIBLE_ALBUM_ROWS);
                 if desired <= 0 {
                     return;
                 }

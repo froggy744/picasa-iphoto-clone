@@ -85,7 +85,6 @@ fn scan_with_control(
     events: Option<&Sender<ScanEvent>>,
     control: &ScanControl,
 ) -> Result<usize> {
-    
     if !root_is_available(root) {
         anyhow::bail!("scan root is unavailable: {root}");
     }
@@ -104,7 +103,6 @@ fn scan_with_control(
         send(events, ScanEvent::Cancelled { imported: 0 });
         return Ok(0);
     }
-    
 
     // Only reconcile deletions after the complete tree was enumerated and the
     // root is still available. If a removable drive went offline, discovery
@@ -117,9 +115,7 @@ fn scan_with_control(
         .map(|(file, _, _)| crate::source::reference(file))
         .collect::<HashSet<_>>();
     let removed = db::remove_missing_photos(&connection, folder_id, &present_paths)?;
-    if removed > 0 {
-        
-    }
+    if removed > 0 {}
 
     let mut imported = 0;
     let mut failed = 0;
@@ -137,7 +133,7 @@ fn scan_with_control(
             .copied()
             .unwrap_or(folder_id);
         let id = db::insert_discovered_folder(transaction.as_ref().unwrap(), &path, parent_id)?;
-        
+
         folder_ids.insert(path, id);
     }
     for (file, info, folder_path) in files {
@@ -239,7 +235,7 @@ fn scan_with_control(
             for event in indexed_events.drain(..) {
                 send(events, event);
             }
-            
+
             transaction = Some(connection.unchecked_transaction()?);
         }
     }
@@ -265,7 +261,6 @@ fn scan_with_control(
     if let Some(sender) = events.cloned() {
         let control = control.clone();
         std::thread::spawn(move || {
-            
             let progress_sender = sender.clone();
             let thumbnail_results = thumbnail::create_many_cancellable(
                 &thumbnails,
@@ -357,7 +352,7 @@ fn collect_files(
         if control.is_cancelled() {
             break;
         }
-        
+
         folders.push((folder_path.clone(), parent_path));
         let enumerator = directory
             .enumerate_children(

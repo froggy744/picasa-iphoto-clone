@@ -383,9 +383,7 @@ fn library_page(
     append_row(
         &list,
         "Clear all",
-        Some(
-            "Indexed photos, albums, registered folders, and cached thumbnails are all deleted.",
-        ),
+        Some("Indexed photos, albums, registered folders, and cached thumbnails are all deleted."),
         Some(clear_all_button.upcast_ref()),
     );
     content.append(&list);
@@ -786,7 +784,6 @@ pub fn refresh_library_availability_stats(_connection: Rc<RefCell<Connection>>) 
         ) {
             eprintln!("Could not save library stats timestamp: {error}");
         }
-        
     });
 }
 

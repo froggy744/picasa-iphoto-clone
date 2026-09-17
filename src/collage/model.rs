@@ -101,7 +101,6 @@ pub struct CollageProject {
 
 impl CollageProject {
     pub fn new(photos: Vec<PhotoObject>) -> Self {
-        
         let mut project = Self {
             aspect: AspectRatio::SixteenNine,
             custom_aspect: 16.0 / 9.0,

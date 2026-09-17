@@ -366,10 +366,7 @@ mod tests {
     #[test]
     fn taken_date_renders_dd_mmm_yyyy_without_time() {
         // mtime fallback (RFC3339)
-        assert_eq!(
-            format_date("2026-09-17T14:46:00+02:00"),
-            "17 Sep 2026"
-        );
+        assert_eq!(format_date("2026-09-17T14:46:00+02:00"), "17 Sep 2026");
         // canonical scanner format
         assert_eq!(format_date("2026-09-17 14:46:00"), "17 Sep 2026");
         // EXIF-derived format: missing this made camera photos fall back to

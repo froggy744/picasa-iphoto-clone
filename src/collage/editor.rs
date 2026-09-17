@@ -1087,7 +1087,7 @@ fn refresh_preview(
             photo: photo_frame,
         });
     }
-    
+
     update_geometry(canvas, frames, &project_data);
 }
 

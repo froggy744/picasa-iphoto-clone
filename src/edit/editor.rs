@@ -692,58 +692,70 @@ pub fn build(
                                                 pending_one_to_one_anchor.borrow_mut().take();
                                             let picture_scroll_for_restore = picture_scroll.clone();
                                             let picture_scroll_for_tick = picture_scroll.clone();
-                                            picture_scroll_for_restore.add_tick_callback(move |_, _| {
-                                            let hadj = picture_scroll_for_tick.hadjustment();
-                                            let vadj = picture_scroll_for_tick.vadjustment();
-                                            if hadj.upper() < width as f64 && vadj.upper() < height as f64 {
-                                                return glib::ControlFlow::Continue;
-                                            }
-                                            let h_max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
-                                            let v_max = (vadj.upper() - vadj.page_size()).max(vadj.lower());
-                                            let (target_h, target_v) = match anchor {
-                                                Some(OneToOneAnchor::Cursor {
-                                                    normalized_x,
-                                                    normalized_y,
-                                                    pointer_x,
-                                                    pointer_y,
-                                                }) => (
-                                                    normalized_scroll_target(
-                                                        normalized_x,
-                                                        pointer_x,
-                                                        hadj.page_size(),
-                                                        width as f64,
-                                                    ),
-                                                    normalized_scroll_target(
-                                                        normalized_y,
-                                                        pointer_y,
-                                                        vadj.page_size(),
-                                                        height as f64,
-                                                    ),
-                                                ),
-                                                _ => (
-                                                    one_to_one_scroll_target(
-                                                        0.0,
-                                                        0.0,
-                                                        hadj.page_size(),
-                                                        1.0,
-                                                        width as f64,
-                                                        false,
-                                                    ),
-                                                    one_to_one_scroll_target(
-                                                        0.0,
-                                                        0.0,
-                                                        vadj.page_size(),
-                                                        1.0,
-                                                        height as f64,
-                                                        false,
-                                                    ),
-                                                ),
-                                            };
-                                            hadj.set_value(target_h.clamp(hadj.lower(), h_max));
-                                            vadj.set_value(target_v.clamp(vadj.lower(), v_max));
-                                            
-                                            glib::ControlFlow::Break
-                                        });
+                                            picture_scroll_for_restore.add_tick_callback(
+                                                move |_, _| {
+                                                    let hadj =
+                                                        picture_scroll_for_tick.hadjustment();
+                                                    let vadj =
+                                                        picture_scroll_for_tick.vadjustment();
+                                                    if hadj.upper() < width as f64
+                                                        && vadj.upper() < height as f64
+                                                    {
+                                                        return glib::ControlFlow::Continue;
+                                                    }
+                                                    let h_max = (hadj.upper() - hadj.page_size())
+                                                        .max(hadj.lower());
+                                                    let v_max = (vadj.upper() - vadj.page_size())
+                                                        .max(vadj.lower());
+                                                    let (target_h, target_v) = match anchor {
+                                                        Some(OneToOneAnchor::Cursor {
+                                                            normalized_x,
+                                                            normalized_y,
+                                                            pointer_x,
+                                                            pointer_y,
+                                                        }) => (
+                                                            normalized_scroll_target(
+                                                                normalized_x,
+                                                                pointer_x,
+                                                                hadj.page_size(),
+                                                                width as f64,
+                                                            ),
+                                                            normalized_scroll_target(
+                                                                normalized_y,
+                                                                pointer_y,
+                                                                vadj.page_size(),
+                                                                height as f64,
+                                                            ),
+                                                        ),
+                                                        _ => (
+                                                            one_to_one_scroll_target(
+                                                                0.0,
+                                                                0.0,
+                                                                hadj.page_size(),
+                                                                1.0,
+                                                                width as f64,
+                                                                false,
+                                                            ),
+                                                            one_to_one_scroll_target(
+                                                                0.0,
+                                                                0.0,
+                                                                vadj.page_size(),
+                                                                1.0,
+                                                                height as f64,
+                                                                false,
+                                                            ),
+                                                        ),
+                                                    };
+                                                    hadj.set_value(
+                                                        target_h.clamp(hadj.lower(), h_max),
+                                                    );
+                                                    vadj.set_value(
+                                                        target_v.clamp(vadj.lower(), v_max),
+                                                    );
+
+                                                    glib::ControlFlow::Break
+                                                },
+                                            );
                                         } else {
                                             apply_canvas_zoom(
                                                 &picture,
@@ -1287,7 +1299,6 @@ pub fn build(
                     let v_max = (vadj.upper() - vadj.page_size()).max(vadj.lower());
                     hadj.set_value(target_h.clamp(hadj.lower(), h_max));
                     vadj.set_value(target_v.clamp(vadj.lower(), v_max));
-                    
                 });
             }
 
@@ -1356,7 +1367,6 @@ pub fn build(
                 );
 
                 let anchor = if let Some((normalized_x, normalized_y)) = normalized {
-                    
                     OneToOneAnchor::Cursor {
                         normalized_x,
                         normalized_y,
@@ -1686,7 +1696,6 @@ pub fn build(
 
         glib::timeout_add_local_once(Duration::from_millis(300), move || {
             if cached_preview_base(&cache, &path, rotation, target_width, target_height).is_some() {
-                
                 return;
             }
 

@@ -42,8 +42,6 @@ pub fn open(
         .and_then(|json| draft_from_json(&json))
         .filter(|draft| !draft.items.is_empty());
 
-    
-
     let Some(draft) = saved_draft else {
         if had_selection && photos.is_empty() {
             let dialog = adw::AlertDialog::builder()
@@ -77,7 +75,6 @@ pub fn open(
         let on_open = on_open.clone();
         let draft = draft.clone();
         dialog.connect_response(Some("resume"), move |_, _| {
-            
             // Re-fetch photos from the library so edits, rotations and
             // thumbnails are current; missing photos are dropped silently.
             let draft_photos: Vec<PhotoObject> = draft
@@ -97,7 +94,6 @@ pub fn open(
         let on_open = on_open.clone();
         let fresh_photos = photos.clone();
         dialog.connect_response(Some("fresh"), move |_, _| {
-            
             on_open(fresh_photos.clone(), None);
         });
     }
