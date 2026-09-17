@@ -448,6 +448,42 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    /// The community template in docs/theme-template must stay a valid,
+    /// discoverable theme: its metadata header parses and it carries the
+    /// selectors the app exercises. Guards docs drift. Simulates the
+    /// documented install: copying the template into a themes root as
+    /// `my-theme/`.
+    #[test]
+    fn the_community_theme_template_is_a_valid_theme() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/theme-template/theme.css");
+        let css = std::fs::read_to_string(&source)
+            .expect("docs/theme-template/theme.css must exist");
+
+        let root = unique_temp_dir("community-template");
+        write(&root.join("my-theme/theme.css"), &css);
+
+        let themes = discover(&root);
+        assert_eq!(themes.len(), 1, "template must discover as one theme");
+        let theme = &themes[0];
+        assert_eq!(theme.id, "my-theme");
+        assert_eq!(theme.name, "My Theme");
+        assert!(!theme.dark);
+        assert!(!theme.is_base);
+        for selector in [
+            ".photo-tile",
+            ".navigation-sidebar row.sidebar-scroll-location",
+            ".crop-aspect-button:checked",
+            ".collage-layout-tile:checked",
+        ] {
+            assert!(
+                theme.css.contains(selector),
+                "template must style {selector}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn multiple_base_themes_still_discover_deterministically() {
         let root = unique_temp_dir("multi-base");

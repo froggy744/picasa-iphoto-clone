@@ -33,6 +33,7 @@ the stylesheet:
 
 ```css
 /* picasa-theme
+   version: 1
    name: Deep Ocean
    dark: false
    mode: overlay
@@ -41,6 +42,7 @@ the stylesheet:
 
 | Key | Values | Default | Meaning |
 |-----|--------|---------|---------|
+| `version` | `1` | — | Theme contract version of this file. Unknown keys are ignored; current contract is 1. |
 | `name` | any text | folder name, humanized | Label shown in the picker. |
 | `dark` | `true`/`false` (also `yes`/`on`/`1`) | `false` | Dark themes force the app-wide color scheme to prefer dark and use the dark lightbox backdrop; the header icon switches to a moon. |
 | `mode` | `overlay` or `base` | `overlay` | `base` marks the one theme that is always loaded beneath every overlay theme (the shipped iPhoto Dark). |
@@ -76,9 +78,20 @@ their selection: `standard` (Standard GTK4), `iphone` (iPhoto Dark, base),
 
 ## Authoring tips
 
-- Start from `css/themes/standard/theme.css` — it resets the dark base back
-  to the stock libadwaita look and is the shortest complete example.
-- `blue/theme.css` shows a fully self-contained palette.
+- **Start from the community template: `docs/theme-template/`** — a complete,
+  commented theme with every selector the app exercises (surfaces, photo
+  tiles, sidebar selected + scroll-follow marker, segmented toggles, info
+  bar, context menu). Copy it to `css/themes/<your-id>/` and recolor the
+  palette block. See its README for the three-step install.
+- `css/themes/standard/theme.css` is the shortest real example: it resets the
+  dark base back to the stock libadwaita look.
+- `css/themes/blue/theme.css` shows a fully self-contained palette.
+- Always style the scroll-follow folder marker
+  (`.navigation-sidebar row.sidebar-scroll-location`) and the segmented
+  toggles (`.crop-aspect-button:checked`, `.crop-orientation-row button:checked`,
+  `.collage-layout-tile:checked`, `.collage-tabs > button:checked`) — they are
+  separate mechanisms from `row:selected` and otherwise fall through to the
+  built-in base theme's styling.
 - Themes only style widgets; layout and behaviour live in the app. After
   editing a theme, reopen Settings → Themes (or toggle the theme) to reload
   the stylesheet.
