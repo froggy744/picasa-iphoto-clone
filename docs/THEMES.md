@@ -74,7 +74,7 @@ When the base theme itself is selected, no overlay provider is added.
 Folder ids match the values older releases saved, so existing installs keep
 their selection: `standard` (Standard GTK4), `iphone` (iPhoto Dark, base),
 `teal` (Teal), `blue` (Deep Ocean), `glass` (Apple Glass), `superman`
-(Superman).
+(Superman), `tron` (TRON Legacy, dark).
 
 ## Authoring tips
 

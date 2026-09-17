@@ -1,0 +1,224 @@
+/* PIC theme: "Liquid Glass" — translucent frosted panels over the photo
+   grid, cool blue-violet accent, soft inset highlights on every glass
+   surface. Built on the same selectors as standard.css.
+
+   Notes on GTK support:
+   - `filter: blur()` on a widget's own paint is supported from GTK 4.16.
+     If your runtime is older, the blur() calls below are simply ignored
+     and the surfaces fall back to plain translucency, which still reads
+     as "glass" thanks to the alpha() backgrounds and inset highlights.
+   - True backdrop-blur (blurring the CONTENT behind a widget, e.g. the
+     photo grid behind the header bar) isn't yet standard GTK CSS, so the
+     "glass" here comes from layered alpha + highlight/shadow insets
+     rather than real-time refraction. */
+
+@define-color window_bg_color #EDEEF3;
+@define-color theme_fg_color #1B1E27;
+@define-color headerbar_bg_color #FFFFFF;
+@define-color view_bg_color #F6F7FA;
+@define-color accent_bg_color #6C63FF;
+@define-color accent_fg_color #FFFFFF;
+@define-color glass_highlight #FFFFFF;
+@define-color glass_shadow #0B0B14;
+
+window, .layout-left-column, .navigation-sidebar { background: @window_bg_color; color: @theme_fg_color; }
+    .layout-left-column {
+        background: alpha(@headerbar_bg_color, 0.55);
+        border-right: 1px solid alpha(@glass_highlight, 0.5);
+        box-shadow: inset -1px 0 0 alpha(@glass_shadow, 0.04);
+    }
+    .layout-left-header, .layout-right-header {
+        background: alpha(@headerbar_bg_color, 0.62);
+        filter: blur(0.01px); /* forces GTK to composite this layer distinctly where supported */
+        border-bottom: 1px solid alpha(@glass_highlight, 0.55);
+        box-shadow: inset 0 1px 0 alpha(@glass_highlight, 0.6), inset 0 -1px 8px alpha(@glass_shadow, 0.03);
+        color: @theme_fg_color;
+    }
+    .app-title { color: @theme_fg_color; text-shadow: none; font-weight: 600; }
+    .layout-left-header button, .layout-right-header button { color: @theme_fg_color; }
+    .layout-left-header .sidebar-toggle-button, .layout-left-header .sidebar-toggle-button image { color: @theme_fg_color; opacity: 1; }
+    .layout-left-header button:hover, .layout-right-header button:hover {
+        background: alpha(@glass_highlight, 0.5);
+        box-shadow: inset 0 0 0 1px alpha(@glass_highlight, 0.7);
+    }
+    .search-field {
+        min-height: 34px;
+        border-radius: 9999px;
+        background: alpha(@glass_highlight, 0.45);
+        border: 1px solid alpha(@glass_highlight, 0.6);
+        box-shadow: inset 0 1px 1px alpha(@glass_highlight, 0.8), inset 0 -6px 12px alpha(@theme_fg_color, 0.03);
+        color: @theme_fg_color;
+    }
+    .search-field image { color: alpha(@theme_fg_color, 0.65); }
+    .search-field entry { color: @theme_fg_color; }
+    .photo-grid { background: @view_bg_color; }
+    listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }
+    listview.folder-stream > row {
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        background-image: none;
+        box-shadow: none;
+    }
+    listview.folder-stream > row:hover,
+    listview.folder-stream > row:selected,
+    listview.folder-stream > row:focus,
+    listview.folder-stream > row:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .folder-section-header { background: transparent; }
+    .folder-section-title { color: @theme_fg_color; font-weight: 700; font-size: 14px; text-shadow: none; }
+    .folder-section-count { color: alpha(@theme_fg_color, 0.58); font-size: 12px; }
+    .folder-section-icon { color: alpha(@theme_fg_color, 0.75); }
+    .folder-section-separator { margin-top: 7px; opacity: 0.35; }
+    .folder-photo-row { background: transparent; }
+    gridview.section-grid > child,
+    gridview.section-grid > item {
+        padding: 6px;
+        margin: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+    gridview.section-grid > child:hover,
+    gridview.section-grid > item:hover {
+        background: alpha(@glass_highlight, 0.30);
+        border-radius: 14px;
+        box-shadow: inset 0 0 0 1px alpha(@glass_highlight, 0.5);
+    }
+    gridview.section-grid > child:selected,
+    gridview.section-grid > child:focus,
+    gridview.section-grid > child:active,
+    gridview.section-grid > item:selected,
+    gridview.section-grid > item:focus,
+    gridview.section-grid > item:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .group-heading-bar { background: transparent; padding: 0; }
+    .photo-frame { box-shadow: none; }
+    .photo-tile {
+        border-radius: 16px;
+        border: 1.5px solid transparent;
+        background: alpha(@glass_highlight, 0.10);
+        box-shadow: none;
+    }
+    .photo-tile:hover {
+        border-color: alpha(@accent_bg_color, 0.45);
+        box-shadow: inset 0 0 0 1px alpha(@glass_highlight, 0.5), 0 6px 18px alpha(@glass_shadow, 0.10);
+    }
+    .folder-photo-flow > flowboxchild { padding: 6px; margin: 0; min-height: 0; background: transparent; background-image: none; box-shadow: none; }
+    .folder-photo-flow > flowboxchild:hover,
+    .folder-photo-flow > flowboxchild:focus,
+    .folder-photo-flow > flowboxchild:active,
+    .folder-photo-flow > flowboxchild:selected { background: transparent; background-image: none; outline: none; box-shadow: none; }
+    .folder-photo-selected.photo-tile {
+        border-color: @accent_bg_color;
+        box-shadow: inset 0 0 0 1px alpha(@glass_highlight, 0.6), 0 0 0 3px alpha(@accent_bg_color, 0.20);
+    }
+    .folder-photo-selected .selection-badge { opacity: 1; }
+    .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }
+    button.album-card { min-width: 0; padding: 0; margin: 0; background: transparent; background-image: none; border: none; box-shadow: none; }
+    button.album-card:hover, button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }
+    gridview.section-grid > child:selected .photo-tile,
+    gridview.section-grid > item:selected .photo-tile {
+        border-color: @accent_bg_color;
+        box-shadow: inset 0 0 0 1px alpha(@glass_highlight, 0.6);
+    }
+    .selection-badge {
+        background: alpha(@accent_bg_color, 0.85);
+        box-shadow: inset 0 0 0 1px alpha(@glass_highlight, 0.6), 0 1px 3px alpha(@glass_shadow, 0.25);
+    }
+    .offline-badge { min-width: 20px; min-height: 20px; padding: 0; border-radius: 9999px; color: #2a1a00; background: #f2c14e; font-weight: 700; }
+    .sidebar-offline-badge { min-width: 16px; min-height: 16px; padding: 0; border-radius: 9999px; color: #2a1a00; background: #f2c14e; font-weight: 700; font-size: 10px; }
+    .folder-disclosure { opacity: 0.68; }
+    .navigation-sidebar .folder-count { color: alpha(@theme_fg_color, 0.68); }
+    .thumbnail { border-radius: 12px; }
+    .missing-thumbnail { background: alpha(@theme_fg_color, 0.06); }
+    .section-heading-box { margin-top: 16px; margin-bottom: 8px; }
+    .section-heading { color: @theme_fg_color; font-size: 15px; text-shadow: none; }
+    .section-more-btn { color: @theme_fg_color; }
+    .section-more-btn:hover { background: alpha(@glass_highlight, 0.5); }
+    .photo-info-bar {
+        background: alpha(@headerbar_bg_color, 0.62);
+        border-top: 1px solid alpha(@glass_highlight, 0.55);
+        box-shadow: inset 0 1px 0 alpha(@glass_highlight, 0.6);
+        color: @theme_fg_color;
+    }
+    .info-preview { border-radius: 12px; background: alpha(@glass_highlight, 0.35); border: 1px solid alpha(@glass_highlight, 0.6); }
+    .info-title, .metric-val { color: @theme_fg_color; }
+    .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: alpha(@theme_fg_color, 0.55); }
+    .photo-action-button {
+        border-radius: 9999px;
+        color: @theme_fg_color;
+        background: alpha(@glass_highlight, 0.40);
+        border: 1px solid alpha(@glass_highlight, 0.6);
+        box-shadow: inset 0 1px 0 alpha(@glass_highlight, 0.7);
+    }
+    .photo-action-button:hover { background: alpha(@glass_highlight, 0.65); }
+    .photo-context-menu, .photo-context-menu viewport { background: alpha(@window_bg_color, 0.85); }
+    .photo-context-menu {
+        border: 1px solid alpha(@glass_highlight, 0.5);
+        border-radius: 14px;
+        box-shadow: inset 0 1px 0 alpha(@glass_highlight, 0.6), 0 8px 24px alpha(@glass_shadow, 0.22);
+    }
+    .photo-context-menu button { color: @theme_fg_color; min-height: 32px; padding: 6px 10px; }
+    .photo-context-menu button:hover { background: alpha(@accent_bg_color, 0.12); }
+    button.clear-action-button { color: #2e3436; background: #e6e6e6; border: 1px solid #9a9a9a; }
+    button.clear-action-button:hover { color: #1f2325; background: #f0f0f0; border-color: #777777; }
+    button.clear-action-button:active { background: #d2d2d2; }
+    .favorite-btn.active, .favorite-btn.active image { color: #FF4D6D; }
+    .favorite-badge { color: #FF4D6D; }
+    .edited-badge { color: @theme_fg_color; }
+    .one-to-one-btn:checked { color: @accent_fg_color; background: @accent_bg_color; }
+    .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; }
+    .section-count { font-size: 13px; }
+    .scroll-scrub-date {
+        padding: 7px 14px;
+        border-radius: 9999px;
+        background: alpha(@glass_highlight, 0.55);
+        border: 1px solid alpha(@glass_highlight, 0.7);
+        color: @theme_fg_color;
+        font-weight: 700;
+        box-shadow: inset 0 1px 0 alpha(@glass_highlight, 0.8), 0 4px 14px alpha(@glass_shadow, 0.18);
+    }
+    .navigation-sidebar row { color: @theme_fg_color; }
+    .navigation-sidebar row:hover { background: alpha(@glass_highlight, 0.35); border-radius: 10px; }
+    .navigation-sidebar .sidebar-section-heading { margin-top: 8px; padding-top: 0; }
+    .navigation-sidebar .sidebar-section-heading-title { color: alpha(@theme_fg_color, 0.88); font-size: inherit; font-weight: 700; }
+    .navigation-sidebar row:selected {
+        background: alpha(@accent_bg_color, 0.16);
+        border-radius: 10px;
+        box-shadow: inset 0 0 0 1px alpha(@accent_bg_color, 0.30);
+        color: @theme_fg_color;
+    }
+    /* Folder being browsed uses a separate marker class from ListBox
+       selection; the base theme hardcodes it blue, so override here. */
+    .navigation-sidebar row.sidebar-scroll-location {
+        background: alpha(@accent_bg_color, 0.14);
+        border-radius: 10px;
+        box-shadow: inset 3px 0 0 0 @accent_bg_color, inset 0 0 0 1px alpha(@glass_highlight, 0.30);
+        color: @theme_fg_color;
+    }
+    .navigation-sidebar .heading { color: alpha(@theme_fg_color, 0.55); }
+
+    /* Segmented toggle groups (Collage tabs, Crop aspect/orientation)
+       had no :checked styling and fell through to stock gray. */
+    .crop-aspect-button:checked,
+    .crop-orientation-row:checked,
+    .collage-layout-tile:checked,
+    .collage-tabs:checked {
+        background: @accent_bg_color;
+        color: @accent_fg_color;
+        box-shadow: inset 0 0 0 1px alpha(@glass_highlight, 0.5);
+    }
+    .crop-aspect-button:checked:hover,
+    .crop-orientation-row:checked:hover,
+    .collage-layout-tile:checked:hover,
+    .collage-tabs:checked:hover {
+        background: shade(@accent_bg_color, 0.90);
+    }
