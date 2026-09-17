@@ -884,6 +884,12 @@
         });
     }
     {
+        let info = info.clone();
+        main_stack.connect_visible_child_notify(move |stack| {
+            info.set_collage_active(stack.visible_child_name().as_deref() == Some("collage"));
+        });
+    }
+    {
         let open_edit = open_edit.clone();
         let selected_photo = selected_photo.clone();
         let main_stack = main_stack.clone();
@@ -891,6 +897,13 @@
         let collage_editing = collage_editing.clone();
         let collage_editor = collage_editor.clone();
         info.edit.connect_clicked(move |_| {
+            // The bottom Edit button is only for normal photo editing. Collage
+            // photos use the collage editor's own Edit Photo action, which
+            // preserves the return-to-collage state.
+            if main_stack.visible_child_name().as_deref() == Some("collage") {
+                return;
+            }
+
             // The bottom Edit button is a true open/close toggle. This keeps
             // the editing workspace optional instead of forcing users to use
             // Back/Done just to return to normal browsing.
@@ -912,8 +925,12 @@
                 }
                 return;
             }
-            if let Some(photo) = selected_photo.borrow().as_ref() {
-                open_edit(photo.id());
+            // Copy the id out before open_edit(). That call changes the stack
+            // synchronously, which may trigger a gallery selection callback
+            // that mutably borrows selected_photo.
+            let photo_id = selected_photo.borrow().as_ref().map(|photo| photo.id());
+            if let Some(id) = photo_id {
+                open_edit(id);
             }
         });
     }

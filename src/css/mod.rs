@@ -8,7 +8,11 @@ pub(crate) const PHOTO_CONTEXT_MENU: &str = include_str!("components/photo_conte
 pub(crate) mod themes {
     pub(crate) const STANDARD: &str = include_str!("themes/standard.css");
     pub(crate) const IPHONE: &str = include_str!("themes/iphone.css");
+    pub(crate) const TEAL: &str = include_str!("themes/teal.css");
+    pub(crate) const BLUE: &str = include_str!("themes/blue.css");
+    pub(crate) const GLASS: &str = include_str!("themes/glass.css");
     pub(crate) const AQUA: &str = include_str!("themes/aqua.css");
+    pub(crate) const SUPERMAN: &str = include_str!("themes/superman.css");
 }
 
 #[cfg(target_os = "windows")]

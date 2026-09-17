@@ -2490,6 +2490,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let (
         settings,
         standard_theme_provider,
+        teal_theme_provider,
+        blue_theme_provider,
+        glass_theme_provider,
+        superman_theme_provider,
         display,
         saved_theme,
         clear_thumbnails,
@@ -2550,7 +2554,31 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
     // Apply the persisted choice before the window's first rendered frame.
-    if saved_theme != "iphone" {
+    if saved_theme == "teal" {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &teal_theme_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+    } else if saved_theme == "blue" {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &blue_theme_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+    } else if saved_theme == "glass" {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &glass_theme_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+    } else if saved_theme == "superman" {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &superman_theme_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+    } else if saved_theme != "iphone" {
         gtk::style_context_add_provider_for_display(
             &display,
             &standard_theme_provider,

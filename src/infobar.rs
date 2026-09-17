@@ -27,6 +27,7 @@ pub struct InfoBar {
     pub grid_zoom_reset: gtk::Button,
     pub grid_zoom_in: gtk::Button,
     has_photo: Rc<Cell<bool>>,
+    collage_active: Rc<Cell<bool>>,
 }
 
 impl InfoBar {
@@ -205,6 +206,7 @@ impl InfoBar {
         // from filename/preview presentation. This prevents the bar's natural
         // minimum width from making the application appear clipped.
         let has_photo = Rc::new(Cell::new(false));
+        let collage_active = Rc::new(Cell::new(false));
         let has_photo_for_resize = has_photo.clone();
         let details_for_resize = details.clone();
         let text_for_resize = text.clone();
@@ -239,7 +241,14 @@ impl InfoBar {
             grid_zoom_reset,
             grid_zoom_in,
             has_photo,
+            collage_active,
         }
+    }
+
+    pub fn set_collage_active(&self, active: bool) {
+        self.collage_active.set(active);
+        self.edit
+            .set_sensitive(edit_button_sensitive(self.has_photo.get(), active));
     }
 
     pub fn set_photo(&self, photo: Option<&PhotoObject>) {
@@ -251,7 +260,8 @@ impl InfoBar {
             self.details.set_visible(false);
             set_metric_values(&self.details, ["—", "—", "—", "—"]);
             self.favorite.set_sensitive(false);
-            self.edit.set_sensitive(false);
+            self.edit
+                .set_sensitive(edit_button_sensitive(false, self.collage_active.get()));
             self.add_to_album.set_sensitive(false);
             self.rotate.set_sensitive(false);
             self.export.set_sensitive(false);
@@ -300,7 +310,8 @@ impl InfoBar {
         set_metric_values(&self.details, [formatted_date, camera, dimensions, size]);
 
         self.favorite.set_sensitive(true);
-        self.edit.set_sensitive(true);
+        self.edit
+            .set_sensitive(edit_button_sensitive(true, self.collage_active.get()));
         self.add_to_album.set_sensitive(true);
         self.rotate.set_sensitive(true);
         self.export.set_sensitive(true);
@@ -317,6 +328,23 @@ impl InfoBar {
             self.favorite.remove_css_class("active");
             self.favorite.set_tooltip_text(Some("Add to Favourites"));
         }
+    }
+}
+
+fn edit_button_sensitive(has_photo: bool, collage_active: bool) -> bool {
+    has_photo && !collage_active
+}
+
+#[cfg(test)]
+mod tests {
+    use super::edit_button_sensitive;
+
+    #[test]
+    fn edit_is_disabled_while_collage_is_active() {
+        assert!(edit_button_sensitive(true, false));
+        assert!(!edit_button_sensitive(true, true));
+        assert!(!edit_button_sensitive(false, false));
+        assert!(!edit_button_sensitive(false, true));
     }
 }
 

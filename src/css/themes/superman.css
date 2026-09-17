@@ -1,0 +1,297 @@
+/* Superman theme — iconic blue, red, and gold with heroic aesthetic.
+   Mirrors Standard structure with Superman colour palette. */
+@define-color accent_bg_color #E47600;
+@define-color accent_color #ffffff;
+@define-color accent_fg_color #ffffff;
+
+/* Superman colour scheme — deep blue base, red accents, gold highlights */
+@define-color window_bg_color #0A1931;
+@define-color view_bg_color #0D1F3D;
+@define-color headerbar_bg_color #0F2344;
+@define-color theme_fg_color #D0D8E8;
+@define-color theme_bg_color #0A1931;
+
+window, .layout-left-column, .navigation-sidebar {
+    background: @window_bg_color;
+    color: @theme_fg_color;
+}
+    .layout-left-column {
+        border-right: 1px solid rgba(228, 118, 0, 0.25);
+        box-shadow: inset -1px 0 0 rgba(228, 118, 0, 0.15);
+    }
+    .layout-left-header, .layout-right-header {
+        background: @headerbar_bg_color;
+        border-bottom: none;
+        color: @theme_fg_color;
+        box-shadow: 0 2px 0 #E47600,
+                    0 3px 0 rgba(0, 69, 146, 0.50);
+    }
+    .app-title {
+        color: @theme_fg_color;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.50);
+    }
+    .layout-left-header button, .layout-right-header button {
+        color: @theme_fg_color;
+    }
+    .layout-left-header .sidebar-toggle-button,
+    .layout-left-header .sidebar-toggle-button image {
+        color: @theme_fg_color;
+        opacity: 1;
+    }
+    .layout-left-header button:hover, .layout-right-header button:hover {
+        background: rgba(228, 118, 0, 0.20);
+        box-shadow: 0 1px 0 rgba(228, 118, 0, 0.30);
+    }
+    .layout-left-header button:active {
+        background: rgba(228, 118, 0, 0.30);
+    }
+    .search-field {
+        min-height: 34px;
+        border-radius: 8px;
+        background: rgba(15, 35, 68, 0.80);
+        border: 1px solid rgba(228, 118, 0, 0.35);
+        color: @theme_fg_color;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.30);
+    }
+    .search-field image { color: rgba(228, 118, 0, 0.70); }
+    .search-field entry { color: @theme_fg_color; }
+    .photo-grid { background: @view_bg_color; }
+    listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }
+    listview.folder-stream > row {
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        background-image: none;
+        box-shadow: none;
+    }
+    listview.folder-stream > row:hover,
+    listview.folder-stream > row:selected,
+    listview.folder-stream > row:focus,
+    listview.folder-stream > row:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .folder-section-header { background: transparent; }
+    .folder-section-title {
+        color: @theme_fg_color;
+        font-weight: 700;
+        font-size: 14px;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.50);
+    }
+    .folder-section-count { color: rgba(228, 118, 0, 0.70); font-size: 12px; }
+    .folder-section-icon { color: rgba(228, 118, 0, 0.80); }
+    .folder-section-separator { margin-top: 7px; opacity: 0.30; }
+    .folder-photo-row { background: transparent; }
+    /* GtkGridView uses CSS child nodes for its cells. Keep the old `item`
+       selector too so this stays harmless across GTK minor-version styling. */
+    gridview.section-grid > child,
+    gridview.section-grid > item {
+        padding: 6px;
+        margin: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+    gridview.section-grid > child:hover,
+    gridview.section-grid > child:selected,
+    gridview.section-grid > child:focus,
+    gridview.section-grid > child:active,
+    gridview.section-grid > item:hover,
+    gridview.section-grid > item:selected,
+    gridview.section-grid > item:focus,
+    gridview.section-grid > item:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .group-heading-bar { background: transparent; padding: 0; }
+    .photo-frame { box-shadow: none; }
+    .photo-tile {
+        border-radius: 8px;
+        border: 2px solid transparent;
+        background: rgba(15, 35, 68, 0.60);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    }
+    .photo-tile:hover {
+        border-color: rgba(228, 118, 0, 0.50);
+        box-shadow: 0 3px 12px rgba(228, 118, 0, 0.20);
+    }
+    .folder-photo-flow > flowboxchild {
+        padding: 6px;
+        margin: 0;
+        min-height: 0;
+        background: transparent;
+        background-image: none;
+        box-shadow: none;
+    }
+    .folder-photo-flow > flowboxchild:hover,
+    .folder-photo-flow > flowboxchild:focus,
+    .folder-photo-flow > flowboxchild:active,
+    .folder-photo-flow > flowboxchild:selected {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .folder-photo-selected.photo-tile {
+        border-color: #E47600;
+        box-shadow: 0 3px 12px rgba(228, 118, 0, 0.30);
+    }
+    .folder-photo-selected .selection-badge { opacity: 1; }
+    .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }
+    button.album-card {
+        min-width: 0;
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        background-image: none;
+        border: none;
+        box-shadow: none;
+    }
+    button.album-card:hover, button.album-card:focus, button.album-card:active {
+        background: transparent;
+        background-image: none;
+        box-shadow: none;
+    }
+    gridview.section-grid > child:selected .photo-tile,
+    gridview.section-grid > item:selected .photo-tile {
+        border-color: #E47600;
+        box-shadow: 0 3px 12px rgba(228, 118, 0, 0.30);
+    }
+    .selection-badge {
+        background: #E47600;
+        box-shadow: 0 2px 6px rgba(228, 118, 0, 0.40);
+    }
+    .offline-badge {
+        min-width: 20px;
+        min-height: 20px;
+        padding: 0;
+        border-radius: 9999px;
+        color: #2a1a00;
+        background: #FFD900;
+        font-weight: 700;
+    }
+    .sidebar-offline-badge {
+        min-width: 16px;
+        min-height: 16px;
+        padding: 0;
+        border-radius: 9999px;
+        color: #2a1a00;
+        background: #FFD900;
+        font-weight: 700;
+        font-size: 10px;
+    }
+    .folder-disclosure { opacity: 0.65; }
+    .navigation-sidebar .folder-count { color: rgba(228, 118, 0, 0.70); }
+    .thumbnail { border-radius: 8px; }
+    .missing-thumbnail { background: rgba(228, 118, 0, 0.15); }
+    .section-heading-box { margin-top: 16px; margin-bottom: 8px; }
+    .section-heading {
+        color: @theme_fg_color;
+        font-size: 15px;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.50);
+    }
+    .section-more-btn { color: @theme_fg_color; }
+    .section-more-btn:hover {
+        background: rgba(228, 118, 0, 0.20);
+        box-shadow: 0 1px 0 rgba(228, 118, 0, 0.30);
+    }
+    .photo-info-bar {
+        background: @window_bg_color;
+        border-top: 1px solid rgba(228, 118, 0, 0.25);
+        color: @theme_fg_color;
+        box-shadow: 0 -1px 0 rgba(228, 118, 0, 0.15);
+    }
+    .info-preview {
+        border-radius: 8px;
+        background: rgba(15, 35, 68, 0.60);
+        border: 1px solid rgba(228, 118, 0, 0.25);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    }
+    .info-title, .metric-val { color: @theme_fg_color; }
+    .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label {
+        color: rgba(228, 118, 0, 0.65);
+    }
+    .photo-action-button {
+        border-radius: 8px;
+        color: @theme_fg_color;
+        background: rgba(15, 35, 68, 0.60);
+        border: 1px solid rgba(228, 118, 0, 0.30);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    }
+    .photo-action-button:hover {
+        background: rgba(228, 118, 0, 0.15);
+        box-shadow: 0 3px 10px rgba(228, 118, 0, 0.20);
+    }
+    .photo-context-menu, .photo-context-menu viewport {
+        background: #0A1931;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.40);
+    }
+    .photo-context-menu {
+        border: 1px solid rgba(228, 118, 0, 0.35);
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.40);
+    }
+    .photo-context-menu button {
+        color: @theme_fg_color;
+        min-height: 32px;
+        padding: 6px 10px;
+        border-radius: 6px;
+    }
+    .photo-context-menu button:hover {
+        background: rgba(228, 118, 0, 0.20);
+        box-shadow: 0 1px 0 rgba(228, 118, 0, 0.30);
+    }
+    button.clear-action-button {
+        color: #D0D8E8;
+        background: #0F2344;
+        border: 1px solid rgba(228, 118, 0, 0.35);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    }
+    button.clear-action-button:hover {
+        color: #FFFFFF;
+        background: #152B4D;
+        border-color: rgba(228, 118, 0, 0.50);
+        box-shadow: 0 3px 10px rgba(228, 118, 0, 0.20);
+    }
+    button.clear-action-button:active {
+        background: #1A3560;
+    }
+    .favorite-btn.active, .favorite-btn.active image { color: #FFD900; }
+    .favorite-badge { color: #FFD900; }
+    .edited-badge { color: @theme_fg_color; }
+    .one-to-one-btn:checked {
+        color: @accent_fg_color;
+        background: #E47600;
+        box-shadow: 0 2px 8px rgba(228, 118, 0, 0.40);
+    }
+    .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; }
+    .section-count { font-size: 13px; }
+    .scroll-scrub-date {
+        padding: 7px 10px;
+        border-radius: 8px;
+        background: rgba(15, 35, 68, 0.85);
+        color: @theme_fg_color;
+        font-weight: 700;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.30),
+                    0 1px 0 rgba(228, 118, 0, 0.25);
+    }
+    .navigation-sidebar row { color: @theme_fg_color; }
+    .navigation-sidebar row:hover {
+        background: rgba(228, 118, 0, 0.15);
+        box-shadow: inset 0 1px 0 rgba(228, 118, 0, 0.20);
+    }
+    .navigation-sidebar .sidebar-section-heading { margin-top: 8px; padding-top: 0; }
+    .navigation-sidebar .sidebar-section-heading-title {
+        color: rgba(228, 118, 0, 0.85);
+        font-size: inherit;
+        font-weight: 700;
+    }
+    .navigation-sidebar row:selected {
+        background: rgba(228, 118, 0, 0.25);
+        color: @theme_fg_color;
+        box-shadow: inset 0 1px 0 rgba(228, 118, 0, 0.30);
+    }
+    .navigation-sidebar .heading { color: rgba(228, 118, 0, 0.65); }
