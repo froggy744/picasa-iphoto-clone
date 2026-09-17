@@ -386,6 +386,38 @@ button.album-card:active {
     box-shadow: inset 0 2px 3px rgba(0,0,0,0.28);
 }
 
+/* Joined segmented rows are capsules: fully rounded outer ends, straight
+   shared edges. Without these overrides the row's outer corners render
+   square while the checked gel pill floats round inside the row. */
+.crop-orientation-row button,
+.collage-tabs > button {
+    border-radius: 0;
+}
+.crop-orientation-row button:first-child,
+.collage-tabs > button:first-child {
+    border-radius: 16px 0 0 16px;
+}
+.crop-orientation-row button:last-child,
+.collage-tabs > button:last-child {
+    border-radius: 0 16px 16px 0;
+}
+.crop-orientation-row button:only-child,
+.collage-tabs > button:only-child {
+    border-radius: 16px;
+}
+.crop-orientation-row button:first-child:checked,
+.collage-tabs > button:first-child:checked {
+    border-radius: 16px 0 0 16px;
+}
+.crop-orientation-row button:last-child:checked,
+.collage-tabs > button:last-child:checked {
+    border-radius: 0 16px 16px 0;
+}
+.crop-orientation-row button:only-child:checked,
+.collage-tabs > button:only-child:checked {
+    border-radius: 16px;
+}
+
 /* Default silver controls used by the info/action bar. */
 .photo-action-button,
 button.clear-action-button {
