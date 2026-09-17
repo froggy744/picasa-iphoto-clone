@@ -505,7 +505,9 @@
     menu.add_css_class("flat");
     menu.add_css_class("sidebar-toggle-button");
     menu.set_size_request(28, 28);
-    left_header.pack_start(&menu);
+    // Keep the sidebar pin on the right edge of the sidebar header so the
+    // left edge remains clear for macOS-style or Linux-left window controls.
+    left_header.pack_end(&menu);
 
     let left_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     left_column.set_vexpand(true);
