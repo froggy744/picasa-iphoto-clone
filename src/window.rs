@@ -16,12 +16,7 @@ use crate::{db, grid, infobar::InfoBar, lightbox::Lightbox, scanner, sidebar};
 mod layout_settle;
 use layout_settle::{should_observe_width, WidthSettleGate};
 
-// Appearance CSS lives in src/css/themes; platform typography is loaded separately.
-const STANDARD_GTK4_CSS: &str = crate::css::themes::STANDARD;
-const TEAL_GTK4_CSS: &str = crate::css::themes::TEAL;
-const BLUE_GTK4_CSS: &str = crate::css::themes::BLUE;
-const GLASS_GTK4_CSS: &str = crate::css::themes::GLASS;
-const SUPERMAN_GTK4_CSS: &str = crate::css::themes::SUPERMAN;
+pub(crate) mod theme;
 
 const THEME_SETTING_KEY: &str = "appearance-theme";
 

@@ -68,6 +68,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let lightbox = Rc::new(Lightbox::new());
     let info_for_lightbox = info.clone();
     let selected_photo_for_lightbox = selected_photo.clone();
+
+    // Appearance themes are discovered from css/themes at runtime; the
+    // engine applies them, persists the choice, and is shared with the
+    // Settings → Themes picker (the single theme list in the app).
+    let display = gtk::gdk::Display::default().expect("a display is required");
+    let theme_engine = crate::window::theme::ThemeEngine::new(
+        display.clone(),
+        connection.clone(),
+        lightbox.clone(),
+    );
     lightbox.set_photo_changed_handler(move |photo| {
         info_for_lightbox.set_photo(Some(&photo));
         // Navigating to another photo restores the viewer's normal fit state.
@@ -564,6 +574,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let settings_on_unavailable = availability_refresh.clone();
     let settings_albums_refresh = albums_home_refresh_slot.clone();
     let settings_rebuild_folder_watches = rebuild_folder_watches.clone();
+    let settings_theme_engine = theme_engine.clone();
     let present_settings: Rc<dyn Fn(Option<&'static str>)> = Rc::new(move |initial_page| {
         let connection = settings_connection.clone();
         let gallery = settings_gallery.clone();
@@ -655,6 +666,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 })
             },
             maintenance,
+            settings_theme_engine.clone(),
             initial_page,
         );
     });
@@ -1855,6 +1867,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         })
     };
+    // Clone for the theme engine: the original is captured by the layout.rs
+    // include below.
+    let theme_post_apply = album_theme_changed.clone();
     let albums_home = albums_view::build(
         &albums,
         connection.clone(),
@@ -2423,16 +2438,19 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         search,
     ) = include!("layout.rs");
 
-    let (
-        settings,
-        standard_theme_provider,
-        teal_theme_provider,
-        blue_theme_provider,
-        glass_theme_provider,
-        superman_theme_provider,
-        display,
-        saved_theme,
-    ) = include!("theme.rs");
+    // Appearance button: opens Settings → Themes, where the theme list is
+    // built from the css/themes folders on disk. toolbar.rs appends the
+    // `settings` button to the header tools.
+    let settings = crate::window::theme::appearance_button();
+    theme_engine.set_appearance_button(&settings);
+    // Theme switches redraw the albums home so covers pick up the palette.
+    theme_engine.set_post_apply(theme_post_apply);
+    {
+        let present_settings_for_appearance = present_settings.clone();
+        settings.connect_clicked(move |_| {
+            present_settings_for_appearance(Some("themes"));
+        });
+    }
     let refresh = include!("toolbar.rs");
 
     right_column.append(&right_header);
@@ -2478,46 +2496,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     window.add_breakpoint(compact);
 
     crate::css::install_foundation(&display);
-
-    let provider = gtk::CssProvider::new();
-    provider.load_from_data(crate::css::themes::IPHONE);
-    gtk::style_context_add_provider_for_display(
-        &display,
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-    // Apply the persisted choice before the window's first rendered frame.
-    if saved_theme == "teal" {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &teal_theme_provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-    } else if saved_theme == "blue" {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &blue_theme_provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-    } else if saved_theme == "glass" {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &glass_theme_provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-    } else if saved_theme == "superman" {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &superman_theme_provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-    } else if saved_theme != "iphone" {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &standard_theme_provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-    }
+    // Apply the persisted theme (and the base layer) before the window's
+    // first rendered frame. Must run after the foundation so the base theme
+    // is added after base.css at the same priority and wins.
+    theme_engine.startup();
 
     let (scan_sender, scan_receiver) = std::sync::mpsc::channel::<ScanUiEvent>();
     let (refresh_prepare_sender, refresh_prepare_receiver) =

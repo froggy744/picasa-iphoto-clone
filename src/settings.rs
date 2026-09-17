@@ -20,6 +20,10 @@ pub struct LibraryMaintenance {
 pub struct SettingsWindow {
     window: Rc<RefCell<glib::WeakRef<adw::Window>>>,
     stack: Rc<RefCell<glib::WeakRef<gtk::Stack>>>,
+    /// Rebuilds the Appearance section on the Themes page from a fresh scan
+    /// of css/themes, so themes dropped into the folder appear the next time
+    /// the window is presented. Set when the page is first built.
+    refresh_appearance: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
 }
 
 impl SettingsWindow {
@@ -32,11 +36,17 @@ impl SettingsWindow {
         thumbnail_changed: Rc<dyn Fn()>,
         folder_watch_changed: Rc<dyn Fn()>,
         maintenance: LibraryMaintenance,
+        theme_engine: Rc<crate::window::theme::ThemeEngine>,
         initial_page: Option<&str>,
     ) {
         if let Some(window) = self.window.borrow().upgrade() {
             if let (Some(page), Some(stack)) = (initial_page, self.stack.borrow().upgrade()) {
                 stack.set_visible_child_name(page);
+            }
+            // The pages are built once and reused; rescan the theme folders
+            // so newly dropped themes show up on the next open.
+            if let Some(refresh) = self.refresh_appearance.borrow().as_ref() {
+                refresh();
             }
             window.present();
             return;
@@ -74,11 +84,16 @@ impl SettingsWindow {
             Some("formats"),
             "File Formats",
         );
-        stack.add_titled(
-            &themes_page(connection.clone(), theme_changed, thumbnail_changed.clone()),
-            Some("themes"),
-            "Themes",
+        let (themes_page, refresh_appearance) = themes_page(
+            connection.clone(),
+            theme_changed,
+            thumbnail_changed.clone(),
+            theme_engine,
         );
+        self.refresh_appearance
+            .borrow_mut()
+            .replace(refresh_appearance);
+        stack.add_titled(&themes_page, Some("themes"), "Themes");
         stack.add_titled(
             &folders_page(connection.clone(), folder_watch_changed),
             Some("folders"),
@@ -971,8 +986,58 @@ fn themes_page(
     connection: Rc<RefCell<Connection>>,
     theme_changed: Rc<dyn Fn()>,
     thumbnail_changed: Rc<dyn Fn()>,
-) -> gtk::ScrolledWindow {
+    theme_engine: Rc<crate::window::theme::ThemeEngine>,
+) -> (gtk::ScrolledWindow, Rc<dyn Fn()>) {
     let content = page_content("Themes", "Customize theme options.");
+
+    // Appearance: one radio row per theme folder found in css/themes. The
+    // section is rebuilt from a fresh scan every time the settings window is
+    // presented, so new folders appear without a restart.
+    let appearance_section = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.append(&appearance_section);
+    let rebuild_appearance: Rc<dyn Fn()> = {
+        let engine = theme_engine.clone();
+        let section = appearance_section.clone();
+        Rc::new(move || {
+            while let Some(child) = section.first_child() {
+                section.remove(&child);
+            }
+
+            let heading = gtk::Label::new(Some("Appearance"));
+            heading.set_halign(gtk::Align::Start);
+            heading.add_css_class("heading");
+            section.append(&heading);
+
+            let themes = engine.themes();
+            let list = settings_list();
+            let mut group_leader: Option<gtk::CheckButton> = None;
+            for theme in &themes {
+                let check = gtk::CheckButton::with_label(&theme.name);
+                check.set_tooltip_text(Some(&theme.id));
+                if let Some(leader) = group_leader.as_ref() {
+                    check.set_group(Some(leader));
+                } else {
+                    group_leader = Some(check.clone());
+                }
+                // Set the active state before connecting the handler so a
+                // rebuild never re-applies the already-active theme.
+                check.set_active(theme.id == engine.active_id());
+                {
+                    let engine = engine.clone();
+                    let theme = theme.clone();
+                    check.connect_toggled(move |button| {
+                        if button.is_active() {
+                            engine.select(&theme);
+                        }
+                    });
+                }
+                append_row(&list, &theme.name, None, Some(check.upcast_ref()));
+            }
+            append_empty_state(&list, "No themes found in css/themes", themes.is_empty());
+            section.append(&list);
+        })
+    };
+    rebuild_appearance();
 
     // Thumbnail appearance toggles. Both apply live through thumbnail_changed
     // and are re-read at startup. They sit above the album theme options so
@@ -1229,7 +1294,7 @@ fn themes_page(
         });
     }
     content.append(&list);
-    scroll_page(content)
+    (scroll_page(content), rebuild_appearance)
 }
 
 fn page_content(title: &str, subtitle: &str) -> gtk::Box {
@@ -1653,10 +1718,18 @@ mod tests {
             .unwrap();
         let notified = Rc::new(Cell::new(0));
         let notified_for_callback = notified.clone();
-        let page = themes_page(
+        let display = gtk::gdk::Display::default().unwrap();
+        let lightbox = Rc::new(crate::lightbox::Lightbox::new());
+        let engine = crate::window::theme::ThemeEngine::new(
+            display,
+            connection.clone(),
+            lightbox,
+        );
+        let (page, _refresh_appearance) = themes_page(
             connection.clone(),
             Rc::new(move || notified_for_callback.set(notified_for_callback.get() + 1)),
             Rc::new(|| {}),
+            engine,
         );
         let mut switches = Vec::new();
         let mut buttons = Vec::new();
@@ -1673,19 +1746,19 @@ mod tests {
                 "Reset All Theme Settings",
             ],
         );
-        // Switch order: the two thumbnail toggles above the Albums section,
-        // then bookshelf and album covers.
-        assert_eq!(switches.len(), 4);
-        assert!(!switches[0].is_active());
-        assert!(!switches[1].is_active());
-        assert!(!switches[2].is_active());
-        assert!(!switches[3].is_active());
+        // Switch order: the runtime-discovered appearance radios first
+        // (their count follows the css/themes folder contents), then the two
+        // thumbnail toggles, then bookshelf and album covers at the end.
+        let album_switches = &switches[switches.len() - 2..];
+        assert_eq!(album_switches.len(), 2);
+        assert!(!album_switches[0].is_active());
+        assert!(!album_switches[1].is_active());
 
-        switches[3].set_active(true);
+        album_switches[1].set_active(true);
         assert_eq!(notified.get(), 1);
         buttons[0].emit_clicked();
         assert_eq!(notified.get(), 2);
-        assert!(switches[2].is_active());
+        assert!(album_switches[0].is_active());
         assert_eq!(
             album_appearance(&connection.borrow()),
             AlbumAppearance {
@@ -1712,8 +1785,8 @@ mod tests {
 
         buttons[3].emit_clicked();
         assert_eq!(notified.get(), 5);
-        assert!(!switches[2].is_active());
-        assert!(!switches[3].is_active());
+        assert!(!album_switches[0].is_active());
+        assert!(!album_switches[1].is_active());
         assert_eq!(
             album_appearance(&connection.borrow()),
             AlbumAppearance::default()

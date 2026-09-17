@@ -1,3 +1,9 @@
+/* picasa-theme
+   name: iPhoto Dark
+   dark: true
+   mode: base
+*/
+
 /* iPhoto-inspired dark appearance. Typography is supplied separately by platform CSS. */
 window, .layout-left-column, .navigation-sidebar { background: #252525; color: #f2f2f2; }
 .layout-left-column { min-width: 200px; border-right: 1px solid #101010; }
