@@ -808,26 +808,6 @@ impl Gallery {
         let target_start = (view_start - photo_row_height).max(0.0);
         let target_end = view_end + photo_row_height;
 
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            let mut section_y = 0.0_f64;
-            eprintln!(
-                "GRID GROUP GEOMETRY summary columns={} tile_height={} header_height={} photo_row_height={} ranges={}",
-                columns, tile_height, header_height as i32, photo_row_height as i32, ranges.len(),
-            );
-            for (section_index, range) in ranges.iter().take(12).enumerate() {
-                let photo_count = range.end.saturating_sub(range.start);
-                let photo_rows = photo_count.div_ceil(columns);
-                let section_height = header_height + photo_rows as f64 * photo_row_height;
-                eprintln!(
-                    "GRID GROUP GEOMETRY section={} folder_id={} label={:?} photos={} photo_rows={} header_height={} photo_row_height={} section_y={:.0} section_height={:.0} next_y={:.0}",
-                    section_index, range.folder_id, range.label, photo_count, photo_rows,
-                    header_height as i32, photo_row_height as i32, section_y, section_height,
-                    section_y + section_height,
-                );
-                section_y += section_height;
-            }
-        }
-
         let mut y = 0.0_f64;
         let mut indexes = Vec::<usize>::new();
 

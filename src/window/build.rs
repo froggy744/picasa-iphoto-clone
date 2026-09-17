@@ -1321,16 +1321,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     .as_ref()
                     .map(|last| now.duration_since(*last) >= Duration::from_millis(40))
                     .unwrap_or(true);
-                let queued = if should_queue {
+                if should_queue {
                     *grid_scrub_last_queue_for_event.borrow_mut() = Some(now);
                     gallery_for_group_scroll.queue_grid_scroll_target_cached_tiles_async(
                         value,
                         adjustment.page_size(),
                         192,
-                    )
-                } else {
-                    0
-                };
+                    );
+                }
 
                 // End scrub mode only after the adjustment has stayed quiet for
                 // a short interval. Old timeout callbacks are ignored by the
@@ -1352,7 +1350,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                     // Force the final destination once more. The user may have
                     // released the thumb less than 40 ms after our last sample.
-                    let final_queued = gallery.queue_grid_scroll_target_cached_tiles_async(
+                    gallery.queue_grid_scroll_target_cached_tiles_async(
                         latest_value_cell.get(),
                         latest_page_cell.get(),
                         192,
@@ -1360,21 +1358,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     *last_queue_cell.borrow_mut() = None;
                     scrub_active_cell.set(false);
                     crate::grid::set_grid_scrub_active(false);
-                    let refreshed = gallery.refresh_visible_grid_tiles();
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "UI PERF grid_scroll_scrub_settled final_queued={} refreshed={}",
-                            final_queued, refreshed
-                        );
-                    }
+                    gallery.refresh_visible_grid_tiles();
                 });
 
-                if std::env::var_os("PICASA_TRACE").is_some() && should_queue {
-                    eprintln!(
-                        "UI PERF grid_scroll_scrub_sample delta={:.0} target_queued={} page={:.0}",
-                        delta, queued, adjustment.page_size()
-                    );
-                }
             }
 
 
@@ -1398,15 +1384,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         // completes, and the completion drain misses tiles that were recycled
         // again before the decode arrived. Re-checking visible tiles against
         // the RAM cache every frame heals exactly those tiles.
-        let visible_queued;
-        let mut scrub_ram_applied = 0usize;
         if grid_scrub_active_for_tick.get() {
-            scrub_ram_applied =
-                gallery_for_grid_motion_tick.apply_visible_grid_cached_paintables();
-            visible_queued = 0;
+            gallery_for_grid_motion_tick.apply_visible_grid_cached_paintables();
         } else {
-            visible_queued =
-                gallery_for_grid_motion_tick.queue_visible_grid_cached_tiles_async(128);
+            gallery_for_grid_motion_tick.queue_visible_grid_cached_tiles_async(128);
         }
 
         let scrub_left = grid_scrub_frames_for_tick.get();
@@ -1419,30 +1400,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         // During a scrollbar teleport, all decode capacity belongs to the
         // target viewport. Normal directional warming resumes once GTK has had
         // several frames to rebind the destination cells.
-        let ahead_queued = if scrub_left == 0 && phase % 3 == 0 {
+        if scrub_left == 0 && phase % 3 == 0 {
             gallery_for_grid_motion_tick
-                .prefetch_grid_cached_tiles(32, grid_scroll_direction_for_tick.get())
-        } else {
-            0
-        };
-
-        if std::env::var_os("PICASA_TRACE").is_some()
-            && (visible_queued > 0 || ahead_queued > 0 || scrub_ram_applied > 0)
-        {
-            eprintln!(
-                "UI PERF grid_motion_thumb_pump visible={} ahead={} scrub_ram={} frames_left={}",
-                visible_queued,
-                ahead_queued,
-                scrub_ram_applied,
-                frames_left.saturating_sub(1)
-            );
+                .prefetch_grid_cached_tiles(32, grid_scroll_direction_for_tick.get());
         }
 
         glib::ControlFlow::Continue
     });
 
     let gallery_for_folder_scroll = gallery.clone();
-    let filter_for_scroll_location = filter.clone();
     let latest_folder_scroll_y = Rc::new(Cell::new(0.0_f64));
     // Last scroll direction, used to warm thumbnails ahead of the user rather
     // than both sides equally.
@@ -1495,8 +1461,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         // Always prioritise the tiles actually visible in the frame GTK is
         // about to paint. queue_visible... uses reserved async capacity, so
         // stale prefetch requests cannot starve a scrollbar jump.
-        let visible_queued;
-        let mut scrub_ram_applied = 0usize;
         if folder_direct_scrub_active_for_tick.get() {
             // The model-derived scrub target is authoritative while the thumb is
             // teleporting. GtkListView may still expose rows from the previous
@@ -1506,12 +1470,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             // before their decode completes, and the completion drain misses
             // rows recycled again mid-scrub. Applying RAM hits every frame
             // heals those rows without touching the decode queue.
-            scrub_ram_applied =
-                gallery_for_thumbnail_motion_tick.apply_visible_folder_cached_paintables();
-            visible_queued = 0;
+            gallery_for_thumbnail_motion_tick.apply_visible_folder_cached_paintables();
         } else {
-            visible_queued =
-                gallery_for_thumbnail_motion_tick.queue_visible_folder_cached_tiles_async(96);
+            gallery_for_thumbnail_motion_tick.queue_visible_folder_cached_tiles_async(96);
         }
 
         // Scrub decode targets are frame-driven: the first sample fires in the
@@ -1525,19 +1486,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 .sample_due(Instant::now())
         {
             let page = folder_vadjustment.page_size().max(1.0);
-            let queued = gallery_for_thumbnail_motion_tick
-                .queue_folder_scroll_target_cached_tiles_async(
-                    latest_folder_scroll_y_for_tick.get(),
-                    page,
-                    192,
-                );
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "UI PERF folder_scrub_target queued={} page={:.0}",
-                    queued, page
-                );
-            }
-            queued
+            gallery_for_thumbnail_motion_tick.queue_folder_scroll_target_cached_tiles_async(
+                latest_folder_scroll_y_for_tick.get(),
+                page,
+                192,
+            )
         } else {
             0
         };
@@ -1549,41 +1502,19 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             .get()
             .wrapping_add(1);
         folder_thumbnail_motion_phase_for_tick.set(phase);
-        let ahead_queued = if !folder_direct_scrub_active_for_tick.get() && phase % 3 == 0 {
+        if !folder_direct_scrub_active_for_tick.get() && phase % 3 == 0 {
             gallery_for_thumbnail_motion_tick.prefetch_folder_cached_tiles(
                 24,
                 folder_scroll_direction_for_tick.get(),
-            )
-        } else {
-            0
-        };
-
-        if std::env::var_os("PICASA_TRACE").is_some()
-            && (visible_queued > 0 || ahead_queued > 0 || scrub_ram_applied > 0)
-        {
-            eprintln!(
-                "UI PERF folder_motion_thumb_pump visible={} ahead={} scrub_ram={} frames_left={}",
-                visible_queued,
-                ahead_queued,
-                scrub_ram_applied,
-                frames_left.saturating_sub(1)
             );
         }
 
         glib::ControlFlow::Continue
     });
 
-    let scroll_handler_calls = Rc::new(Cell::new(0u64));
-    let scroll_handler_calls_for_event = scroll_handler_calls.clone();
     folder_scroll
         .vadjustment()
         .connect_value_changed(move |adjustment| {
-            let trace = std::env::var_os("PICASA_TRACE").is_some();
-            let handler_started = trace.then(Instant::now);
-            if trace {
-                scroll_handler_calls_for_event
-                    .set(scroll_handler_calls_for_event.get().wrapping_add(1));
-            }
             let raw_scroll_y = adjustment.value();
             // GtkListView keeps its scroll anchor on device-pixel boundaries
             // (same reason the wheel path quantizes in
@@ -1665,7 +1596,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 // tiles that never received their thumbnail drop the stale
                 // backstop image and return to the normal placeholder state.
                 crate::grid::set_grid_scrub_active(false);
-                let final_queued = gallery_for_visible.queue_folder_scroll_target_cached_tiles_async(
+                gallery_for_visible.queue_folder_scroll_target_cached_tiles_async(
                     final_scroll_y.get(),
                     final_page_size,
                     192,
@@ -1678,13 +1609,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 // Queueing decodes stays inline; it does not touch widgets.
                 let gallery_for_settle_refresh = gallery_for_visible.clone();
                 glib::timeout_add_local_once(Duration::ZERO, move || {
-                    let refreshed = gallery_for_settle_refresh.refresh_visible_folder_tiles();
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "UI PERF folder_scroll_settled target_queued={} refreshed={}",
-                            final_queued, refreshed
-                        );
-                    }
+                    gallery_for_settle_refresh.refresh_visible_folder_tiles();
                 });
 
                 // GtkListView can realize the last destination row a few frames
@@ -1701,15 +1626,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     move || {
                         let frames_left = catchup_frames_for_tick.get();
                         if frames_left > 0 {
-                            let refreshed = gallery_for_prefetch.refresh_visible_folder_tiles();
+                            gallery_for_prefetch.refresh_visible_folder_tiles();
                             catchup_frames_for_tick.set(frames_left - 1);
-                            if std::env::var_os("PICASA_TRACE").is_some() && refreshed > 0 {
-                                eprintln!(
-                                    "UI PERF folder_post_settle_catchup refreshed={} frames_left={}",
-                                    refreshed,
-                                    frames_left - 1
-                                );
-                            }
                             return glib::ControlFlow::Continue;
                         }
 
@@ -1728,34 +1646,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             });
             folder_thumbnail_debounce_for_event.replace(Some(source));
 
-
-            if let Some(started) = handler_started {
-                let total_ms = started.elapsed().as_millis();
-                if total_ms >= 8 {
-                    eprintln!(
-                        "UI PERF scroll_handler_slow total_ms={} y={}",
-                        total_ms,
-                        scroll_y
-                    );
-                }
-            }
         });
 
     if std::env::var_os("PICASA_TRACE").is_some() {
-        let scroll_handler_calls = scroll_handler_calls.clone();
-        glib::timeout_add_local(Duration::from_secs(2), move || {
-            let calls = scroll_handler_calls.replace(0);
-            let (loads, reloads, max_ms, fs_ms, apply_ms) =
-                crate::grid::take_thumb_load_stats();
-            if calls > 0 || loads > 0 {
-                eprintln!(
-                    "UI PERF folder_activity scroll_calls={} thumb_loads={} reloads={} max_thumb_ms={} fs_ms={} apply_ms={}",
-                    calls, loads, reloads, max_ms, fs_ms, apply_ms
-                );
-            }
-            glib::ControlFlow::Continue
-        });
-
         // Phase 3 lightbox counters. Drained every 2 s so a summary is emitted
         // only while the viewer is actually doing work.
         glib::timeout_add_local(Duration::from_secs(2), move || {

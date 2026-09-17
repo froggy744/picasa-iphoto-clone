@@ -164,12 +164,6 @@
                 };
 
                 if open_in_folder_should_stop(building, revealed, attempt) {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "UI TRACE open_in_folder_done id={} attempt={} building={} revealed={}",
-                            photo_id, attempt, building, revealed
-                        );
-                    }
                     // Keep the exact target around long enough for the sidebar's
                     // own Tree-mode/ancestor expansion callbacks to settle.
                     // Those callbacks may reorder Folder rows, but will reassert

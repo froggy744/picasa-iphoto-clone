@@ -1640,30 +1640,6 @@ fn populate_folders(
     }
 
     let roots = children.get(&None).cloned().unwrap_or_default();
-    if std::env::var_os("PICASA_TRACE_VERBOSE").is_some() {
-        let imported_roots = folders.iter().filter(|folder| folder.imported_root).count();
-        eprintln!(
-            "FOLDER TRACE sidebar folders={} root_count={} imported_roots={}",
-            folders.len(),
-            roots.len(),
-            imported_roots
-        );
-    }
-    if std::env::var_os("PICASA_TRACE_VERBOSE").is_some() {
-        eprintln!(
-            "FOLDER TRACE sidebar_detail roots={:?} relationships={:?}",
-            roots,
-            folders
-                .iter()
-                .map(|folder| (
-                    folder.id,
-                    folder.path.clone(),
-                    folder.parent_id,
-                    folder.imported_root
-                ))
-                .collect::<Vec<_>>()
-        );
-    }
     for id in roots {
         append_folder_branch(list, id, 0, &by_id, &children, state, on_unavailable);
     }

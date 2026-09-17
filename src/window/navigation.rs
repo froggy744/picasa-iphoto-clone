@@ -104,22 +104,9 @@ fn install_smooth_gallery_scroll(
                     && animated.is_finite()
                     && (value - animated).abs() <= adjustment.page_size() * 2.0
                 {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "UI PERF smooth_scroll_rebase delta={:.2} target={:.2}",
-                            value - animated,
-                            target.get() + (value - animated)
-                        );
-                    }
                     target.set(target.get() + (value - animated));
                     last_animation_value.set(value);
                     return;
-                }
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "UI PERF smooth_scroll_external_cancel value={:.2} animated={:.2} threshold={:.2}",
-                        value, animated, threshold
-                    );
                 }
                 active.set(false);
                 velocity.set(0.0);
@@ -260,20 +247,8 @@ fn install_smooth_gallery_scroll(
                 let near_pin = error_abs <= 12.0;
                 if stalled >= if near_pin { 2 } else { 8 } {
                     if near_pin {
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!(
-                                "UI PERF smooth_scroll_pinned destination={:.2} accepted={:.2} error={:.2}",
-                                destination, current, error_abs
-                            );
-                        }
                         last_animation_value.set(current);
                     } else {
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!(
-                                "UI PERF smooth_scroll_stall destination={:.2} current={:.2} error={:.2}",
-                                destination, current, error_abs
-                            );
-                        }
                         last_animation_value.set(destination);
                         adjustment.set_value(destination);
                     }
