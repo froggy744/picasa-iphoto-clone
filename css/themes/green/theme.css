@@ -1,5 +1,6 @@
 /* picasa-theme
-   name: Superman
+   version: 1
+   name: Green
    dark: false
    mode: overlay
 */
@@ -24,7 +25,7 @@ window, .layout-left-column, .navigation-sidebar { background: @window_bg_color;
     .layout-left-header button:hover, .layout-right-header button:hover { background: alpha(@theme_fg_color, 0.08); }
     .search-field { min-height: 34px; border-radius: 9999px; background: alpha(@theme_fg_color, 0.10); border: none; color: @theme_fg_color; box-shadow: none; }
     .search-field image { color: alpha(@theme_fg_color, 0.70); }
-    .search-field entry { color: @theme_fg_color; }
+    .search-field entry { background: transparent; color: @theme_fg_color; }
     .photo-grid { background: @view_bg_color; }
     listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }
     listview.folder-stream > row {

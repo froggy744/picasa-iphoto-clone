@@ -90,7 +90,7 @@ window {
                     inset 0 0 12px alpha(@accent_bg_color, 0.15);
     }
     .search-field image { color: @accent_color; text-shadow: 0 0 6px alpha(@accent_bg_color, 0.65); }
-    .search-field entry { color: @theme_fg_color; }
+    .search-field entry { background: transparent; color: @theme_fg_color; }
 
 /* --------------------------------------------------------------------------
    4. PHOTO GRID — group headers, tiles, selection.

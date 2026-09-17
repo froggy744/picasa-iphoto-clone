@@ -133,7 +133,7 @@ window,
 }
 
 .search-field image { color: #565A60; }
-.search-field entry { color: #25282C; }
+.search-field entry { background: transparent; color: #25282C; }
 
 /* ------------------------------------------------------------------------
    4. PHOTO GRID + GROUPS
@@ -689,12 +689,17 @@ button.traffic-light-zoom {
 button.traffic-light-close:hover,
 button.traffic-light-minimize:hover,
 button.traffic-light-zoom:hover {
-    filter: brightness(1.12);
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.65), 0 1px 3px rgba(0, 0, 0, 0.50);
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.75), 0 1px 4px rgba(0, 0, 0, 0.55);
 }
 
-button.traffic-light-close:active,
-button.traffic-light-minimize:active,
+button.traffic-light-close:active {
+    background: linear-gradient(to bottom, #e33e37 0%, #c02e28 100%);
+}
+
+button.traffic-light-minimize:active {
+    background: linear-gradient(to bottom, #d99a18 0%, #b57e10 100%);
+}
+
 button.traffic-light-zoom:active {
-    filter: brightness(0.88);
+    background: linear-gradient(to bottom, #169c2a 0%, #0f7a1f 100%);
 }

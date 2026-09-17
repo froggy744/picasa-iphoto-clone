@@ -1,5 +1,6 @@
 /* picasa-theme
-   name: Apple Glass
+   version: 1
+   name: Glass
    dark: false
    mode: overlay
 */
@@ -297,7 +298,7 @@ window {
 }
 
 
-.search-field entry {
+.search-field entry { background: transparent;
 
     color:
         @primary_text;

@@ -132,7 +132,7 @@ window,
 }
 
 .search-field image { color: #C9CCD1; }
-.search-field entry { color: #F2F3F4; caret-color: #F2F3F4; }
+.search-field entry { background: transparent; color: #F2F3F4; caret-color: #F2F3F4; }
 
 /* ------------------------------------------------------------------------
    4. PHOTO GRID + GROUPS

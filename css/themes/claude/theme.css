@@ -1,5 +1,6 @@
 /* picasa-theme
-   name: Studio
+   version: 1
+   name: Orange
    dark: false
    mode: overlay
 */
@@ -41,7 +42,7 @@ window, .layout-left-column, .navigation-sidebar { background: @window_bg_color;
     }
     .search-field:focus-within { background: @headerbar_bg_color; border-color: alpha(@accent_bg_color, 0.45); box-shadow: 0 0 0 3px alpha(@accent_bg_color, 0.12); }
     .search-field image { color: alpha(@theme_fg_color, 0.55); }
-    .search-field entry { color: @theme_fg_color; }
+    .search-field entry { background: transparent; color: @theme_fg_color; }
     .photo-grid { background: @view_bg_color; }
     listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }
     listview.folder-stream > row {
@@ -93,7 +94,7 @@ window, .layout-left-column, .navigation-sidebar { background: @window_bg_color;
         border: 2px solid transparent;
         background: alpha(@theme_fg_color, 0.04);
         box-shadow: none;
-        transition: box-shadow 150ms ease, transform 150ms ease;
+        transition: box-shadow 150ms ease;
     }
     .photo-tile:hover {
         border-color: transparent;
@@ -111,9 +112,10 @@ window, .layout-left-column, .navigation-sidebar { background: @window_bg_color;
         min-width: 0; padding: 0; margin: 0;
         background: transparent; background-image: none;
         border: none; box-shadow: none;
-        transition: transform 150ms ease;
+        transition: box-shadow 150ms ease;
     }
-    button.album-card:hover { transform: translateY(-2px); background: transparent; background-image: none; box-shadow: none; }
+    /* GTK CSS has no transform property; the lift is a soft drop shadow. */
+    button.album-card:hover { background: transparent; background-image: none; box-shadow: 0 6px 16px alpha(@theme_fg_color, 0.18); }
     button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }
     gridview.section-grid > child:selected .photo-tile,
     gridview.section-grid > item:selected .photo-tile {
