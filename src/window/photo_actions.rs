@@ -661,12 +661,14 @@ fn show_photo_context_menu(
     let photo_for_delete = photo;
     let anchor_for_delete = anchor.clone();
     let context_for_delete = context;
+    let delete_selection = selection_ids;
     let dismiss_menu_for_delete = dismiss_menu.clone();
     delete.connect_clicked(move |_| {
         dismiss_menu_for_delete();
         show_delete_confirmation(
             &anchor_for_delete,
             photo_for_delete.clone(),
+            delete_selection.clone(),
             context_for_delete.clone(),
         );
     });
@@ -1051,11 +1053,25 @@ fn valid_file_name(name: &str) -> bool {
 fn show_delete_confirmation(
     parent: &gtk::Widget,
     photo: crate::photo_object::PhotoObject,
+    selection: Vec<i64>,
     context: PhotoActionContext,
 ) {
+    // The selection always contains the clicked photo (selected_photo_ids
+    // falls back to it), so the single-photo heading can stay personalized.
+    let single = selection.len() <= 1;
+    let heading = if single {
+        format!("Move “{}” to Trash?", photo.filename())
+    } else {
+        format!("Move {} photos to Trash?", selection.len())
+    };
+    let body = if single {
+        "The photo will be removed from the library and moved to the system Trash."
+    } else {
+        "The photos will be removed from the library and moved to the system Trash."
+    };
     let dialog = adw::AlertDialog::builder()
-        .heading(format!("Move “{}” to Trash?", photo.filename()))
-        .body("The photo will be removed from the library and moved to the system Trash.")
+        .heading(heading)
+        .body(body)
         .close_response("cancel")
         .default_response("cancel")
         .build();
@@ -1065,23 +1081,40 @@ fn show_delete_confirmation(
 
     let parent_for_response = parent.clone();
     dialog.connect_response(Some("delete"), move |_, _| {
-        if let Err(error) = db::set_trashed(&context.connection.borrow(), photo.id(), true) {
-            show_error(
-                &parent_for_response,
-                "Could not delete photo",
-                &error.to_string(),
-            );
-            return;
-        }
+        for id in &selection {
+            // Resolve the on-disk path from the database instead of trusting
+            // grid tiles: menu actions must not depend on tile recycling.
+            let path = match db::photo(&context.connection.borrow(), *id) {
+                Ok(Some(record)) => record.path,
+                Ok(None) => continue,
+                Err(error) => {
+                    show_error(
+                        &parent_for_response,
+                        "Could not delete photo",
+                        &error.to_string(),
+                    );
+                    return;
+                }
+            };
 
-        if let Err(error) = crate::source::file(&photo.path()).trash(gio::Cancellable::NONE) {
-            let _ = db::set_trashed(&context.connection.borrow(), photo.id(), false);
-            show_error(
-                &parent_for_response,
-                "Could not move photo to Trash",
-                &error.to_string(),
-            );
-            return;
+            if let Err(error) = db::set_trashed(&context.connection.borrow(), *id, true) {
+                show_error(
+                    &parent_for_response,
+                    "Could not delete photo",
+                    &error.to_string(),
+                );
+                return;
+            }
+
+            if let Err(error) = crate::source::file(&path).trash(gio::Cancellable::NONE) {
+                let _ = db::set_trashed(&context.connection.borrow(), *id, false);
+                show_error(
+                    &parent_for_response,
+                    "Could not move photo to Trash",
+                    &error.to_string(),
+                );
+                return;
+            }
         }
 
         if let Some(lightbox) = context.lightbox.upgrade() {
