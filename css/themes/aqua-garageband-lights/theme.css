@@ -119,7 +119,7 @@ window,
 
 .search-field {
     min-height: 32px;
-    border-radius: 9999px;
+    border-radius: 16px;
     color: @theme_fg_color;
     background: linear-gradient(to bottom, #C6C8CB 0%, #F4F5F6 28%, #FFFFFF 44%, #ECEEF0 100%);
     border: 1px solid #2E3033;
@@ -365,7 +365,7 @@ button.album-card:active {
         #3B8BE7 72%,
         #8CC7FF 100%);
     border: 1px solid @aqua_gel_edge;
-    border-radius: 9999px;
+    border-radius: 10px;
     box-shadow: inset 0 1px rgba(255,255,255,0.90), inset 0 -1px rgba(255,255,255,0.35), 0 1px 2px rgba(0,0,0,0.24);
     text-shadow: 0 -1px rgba(0,0,0,0.28);
 }
@@ -391,7 +391,7 @@ button.album-card:active {
 .photo-action-button,
 button.clear-action-button {
     color: #F2F3F4;
-    border-radius: 9999px;
+    border-radius: 12px;
     background: linear-gradient(to bottom, #85888C 0%, #717478 42%, #4F5256 50%, #66696D 100%);
     border: 1px solid #2C2E31;
     box-shadow: inset 0 1px rgba(255,255,255,0.30), inset 0 -1px rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.42);
@@ -473,7 +473,7 @@ button.clear-action-button:active {
 
 .scroll-scrub-date {
     padding: 7px 12px;
-    border-radius: 9999px;
+    border-radius: 14px;
     color: #F2F3F4;
     background: linear-gradient(to bottom, rgba(128,131,135,0.98) 0%, rgba(73,76,80,0.98) 100%);
     border: 1px solid #282A2D;
@@ -529,7 +529,7 @@ button.clear-action-button:active {
     color: #2A1A00;
     background: linear-gradient(to bottom, #FFF1B8 0%, #FFE088 38%, #F2C14E 100%);
     border: 1px solid #B98718;
-    border-radius: 9999px;
+    border-radius: 10px;
     font-weight: 700;
     box-shadow: inset 0 1px rgba(255,255,255,0.72), 0 1px 2px rgba(0,0,0,0.16);
 }
@@ -552,7 +552,7 @@ button.clear-action-button:active {
 scrollbar {
     background: linear-gradient(to right, #4A4C50 0%, #5B5E62 50%, #44464A 100%);
     border: 1px solid #2B2D30;
-    border-radius: 9999px;
+    border-radius: 6px;
     box-shadow: inset 0 1px 2px rgba(0,0,0,0.44), inset 1px 0 rgba(255,255,255,0.08);
 }
 
@@ -565,7 +565,7 @@ scrollbar.horizontal {
 }
 
 scrollbar trough {
-    border-radius: 9999px;
+    border-radius: 6px;
     background: linear-gradient(to bottom, #3C3E42 0%, #54575B 100%);
     box-shadow: inset 0 1px 3px rgba(0,0,0,0.50);
 }
@@ -574,7 +574,7 @@ scrollbar slider {
     min-width: 9px;
     min-height: 9px;
     margin: 2px;
-    border-radius: 9999px;
+    border-radius: 4px;
     border: 1px solid #2A2C2F;
     background: linear-gradient(to right,
         #8D9094 0%,
@@ -633,7 +633,7 @@ button.traffic-light {
     min-height: 13px;
     padding: 0;
     margin: 0 3px;
-    border-radius: 9999px;
+    border-radius: 6px;
 }
 
 button.traffic-light-close {
