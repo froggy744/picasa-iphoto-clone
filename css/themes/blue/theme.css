@@ -136,3 +136,29 @@ window, .layout-left-column, .navigation-sidebar { background: @window_bg_color;
     .navigation-sidebar .sidebar-section-heading-title { color: alpha(@accent_bg_color, 0.85); font-size: inherit; font-weight: 700; }
     .navigation-sidebar row:selected { background: alpha(@accent_bg_color, 0.35); color: @theme_fg_color; }
     .navigation-sidebar .heading { color: alpha(@accent_bg_color, 0.70); }
+
+    /* Scroll-follow folder marker (sidebar.rs set_scroll_location). It is
+       deliberately not row:selected, so without its own rule the base
+       theme's blue marker shows through. */
+    .navigation-sidebar row.sidebar-scroll-location {
+        background: alpha(@accent_bg_color, 0.10);
+        box-shadow: inset 3px 0 0 0 @accent_bg_color;
+        color: @theme_fg_color;
+    }
+
+    /* Segmented toggle groups: crop aspect presets (Free/Original/1:1…),
+       crop orientation (Landscape/Portrait), and the collage layout tiles
+       and fit/orientation row. Checked state follows the accent. */
+    .crop-aspect-button:checked,
+    .crop-orientation-row button:checked,
+    .collage-layout-tile:checked,
+    .collage-tabs > button:checked {
+        background: @accent_bg_color;
+        color: @accent_fg_color;
+    }
+    .crop-aspect-button:checked:hover,
+    .crop-orientation-row button:checked:hover,
+    .collage-layout-tile:checked:hover,
+    .collage-tabs > button:checked:hover {
+        background: alpha(@accent_bg_color, 0.85);
+    }

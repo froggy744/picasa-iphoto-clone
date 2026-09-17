@@ -1,0 +1,210 @@
+/* picasa-theme
+   name: Studio
+   dark: false
+   mode: overlay
+*/
+
+/* PIC theme: "Studio" — warm paper-white surfaces, near-black ink, and a
+   single confident vermillion accent carried through selection states,
+   favorites, and primary actions. Built on the same selectors as
+   standard.css, with a few tasteful additions (pill toolbars, an accent
+   rail on the active sidebar row, layered shadows, smooth transitions)
+   for a more premium, "creative tool" feel. */
+
+@define-color window_bg_color #FAFAF8;
+@define-color theme_fg_color #16181C;
+@define-color headerbar_bg_color #FFFFFF;
+@define-color view_bg_color #F2F2EF;
+@define-color accent_bg_color #E14313;
+@define-color accent_fg_color #FFFFFF;
+
+window, .layout-left-column, .navigation-sidebar { background: @window_bg_color; color: @theme_fg_color; }
+    .layout-left-column { border-right: 1px solid alpha(@theme_fg_color, 0.08); }
+    .layout-left-header, .layout-right-header {
+        background: @headerbar_bg_color;
+        border-bottom: 1px solid alpha(@theme_fg_color, 0.07);
+        box-shadow: 0 1px 0 alpha(@theme_fg_color, 0.02);
+        color: @theme_fg_color;
+    }
+    .app-title { color: @theme_fg_color; text-shadow: none; font-weight: 700; letter-spacing: -0.01em; }
+    .layout-left-header button, .layout-right-header button { color: @theme_fg_color; transition: background 150ms ease; }
+    .layout-left-header .sidebar-toggle-button, .layout-left-header .sidebar-toggle-button image { color: @theme_fg_color; opacity: 1; }
+    .layout-left-header button:hover, .layout-right-header button:hover { background: alpha(@theme_fg_color, 0.06); border-radius: 8px; }
+    .search-field {
+        min-height: 36px;
+        border-radius: 9999px;
+        background: alpha(@theme_fg_color, 0.055);
+        border: 1px solid transparent;
+        color: @theme_fg_color;
+        box-shadow: none;
+        transition: background 150ms ease, border-color 150ms ease;
+    }
+    .search-field:focus-within { background: @headerbar_bg_color; border-color: alpha(@accent_bg_color, 0.45); box-shadow: 0 0 0 3px alpha(@accent_bg_color, 0.12); }
+    .search-field image { color: alpha(@theme_fg_color, 0.55); }
+    .search-field entry { color: @theme_fg_color; }
+    .photo-grid { background: @view_bg_color; }
+    listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }
+    listview.folder-stream > row {
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        background-image: none;
+        box-shadow: none;
+    }
+    listview.folder-stream > row:hover,
+    listview.folder-stream > row:selected,
+    listview.folder-stream > row:focus,
+    listview.folder-stream > row:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .folder-section-header { background: transparent; }
+    .folder-section-title { color: @theme_fg_color; font-weight: 800; font-size: 14px; text-shadow: none; letter-spacing: -0.01em; }
+    .folder-section-count { color: alpha(@theme_fg_color, 0.48); font-size: 12px; }
+    .folder-section-icon { color: alpha(@theme_fg_color, 0.70); }
+    .folder-section-separator { margin-top: 7px; opacity: 0.28; }
+    .folder-photo-row { background: transparent; }
+    gridview.section-grid > child,
+    gridview.section-grid > item {
+        padding: 6px;
+        margin: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+    gridview.section-grid > child:hover,
+    gridview.section-grid > child:selected,
+    gridview.section-grid > child:focus,
+    gridview.section-grid > child:active,
+    gridview.section-grid > item:hover,
+    gridview.section-grid > item:selected,
+    gridview.section-grid > item:focus,
+    gridview.section-grid > item:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .group-heading-bar { background: transparent; padding: 0; }
+    .photo-frame { box-shadow: none; }
+    .photo-tile {
+        border-radius: 12px;
+        border: 2px solid transparent;
+        background: alpha(@theme_fg_color, 0.04);
+        box-shadow: none;
+        transition: box-shadow 150ms ease, transform 150ms ease;
+    }
+    .photo-tile:hover {
+        border-color: transparent;
+        box-shadow: 0 0 0 2px alpha(@accent_bg_color, 0.30), 0 8px 20px alpha(@theme_fg_color, 0.10);
+    }
+    .folder-photo-flow > flowboxchild { padding: 6px; margin: 0; min-height: 0; background: transparent; background-image: none; box-shadow: none; }
+    .folder-photo-flow > flowboxchild:hover,
+    .folder-photo-flow > flowboxchild:focus,
+    .folder-photo-flow > flowboxchild:active,
+    .folder-photo-flow > flowboxchild:selected { background: transparent; background-image: none; outline: none; box-shadow: none; }
+    .folder-photo-selected.photo-tile { border-color: @accent_bg_color; box-shadow: 0 0 0 4px alpha(@accent_bg_color, 0.18); }
+    .folder-photo-selected .selection-badge { opacity: 1; }
+    .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }
+    button.album-card {
+        min-width: 0; padding: 0; margin: 0;
+        background: transparent; background-image: none;
+        border: none; box-shadow: none;
+        transition: transform 150ms ease;
+    }
+    button.album-card:hover { transform: translateY(-2px); background: transparent; background-image: none; box-shadow: none; }
+    button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }
+    gridview.section-grid > child:selected .photo-tile,
+    gridview.section-grid > item:selected .photo-tile {
+        border-color: @accent_bg_color;
+        box-shadow: 0 0 0 4px alpha(@accent_bg_color, 0.18);
+    }
+    .selection-badge { background: @accent_bg_color; box-shadow: 0 0 0 2px @headerbar_bg_color, 0 1px 3px alpha(@theme_fg_color, 0.25); }
+    .offline-badge { min-width: 20px; min-height: 20px; padding: 0; border-radius: 9999px; color: #2a1a00; background: #f2c14e; font-weight: 700; }
+    .sidebar-offline-badge { min-width: 16px; min-height: 16px; padding: 0; border-radius: 9999px; color: #2a1a00; background: #f2c14e; font-weight: 700; font-size: 10px; }
+    .folder-disclosure { opacity: 0.60; }
+    .navigation-sidebar .folder-count { color: alpha(@theme_fg_color, 0.55); font-variant-numeric: tabular-nums; }
+    .thumbnail { border-radius: 10px; }
+    .missing-thumbnail { background: alpha(@theme_fg_color, 0.05); }
+    .section-heading-box { margin-top: 18px; margin-bottom: 8px; }
+    .section-heading { color: @theme_fg_color; font-size: 15px; font-weight: 700; text-shadow: none; }
+    .section-more-btn { color: alpha(@theme_fg_color, 0.65); font-weight: 600; }
+    .section-more-btn:hover { background: alpha(@theme_fg_color, 0.06); color: @theme_fg_color; }
+    .photo-info-bar { background: @headerbar_bg_color; border-top: 1px solid alpha(@theme_fg_color, 0.07); color: @theme_fg_color; }
+    .info-preview { border-radius: 10px; background: alpha(@theme_fg_color, 0.04); border: 1px solid alpha(@theme_fg_color, 0.08); }
+    .info-title, .metric-val { color: @theme_fg_color; font-weight: 600; }
+    .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: alpha(@theme_fg_color, 0.48); }
+    .photo-action-button {
+        border-radius: 9999px;
+        color: @theme_fg_color;
+        background: transparent;
+        border: 1px solid alpha(@theme_fg_color, 0.10);
+        box-shadow: none;
+        transition: background 150ms ease, border-color 150ms ease;
+    }
+    .photo-action-button:hover { background: alpha(@theme_fg_color, 0.06); border-color: alpha(@theme_fg_color, 0.16); }
+    .photo-context-menu, .photo-context-menu viewport { background: @headerbar_bg_color; }
+    .photo-context-menu {
+        border: 1px solid alpha(@theme_fg_color, 0.08);
+        border-radius: 12px;
+        box-shadow: 0 12px 32px alpha(@theme_fg_color, 0.16), 0 2px 6px alpha(@theme_fg_color, 0.06);
+    }
+    .photo-context-menu button { color: @theme_fg_color; min-height: 34px; padding: 6px 12px; border-radius: 7px; }
+    .photo-context-menu button:hover { background: alpha(@accent_bg_color, 0.10); }
+    button.clear-action-button { color: #2e3436; background: #e6e6e6; border: 1px solid #9a9a9a; }
+    button.clear-action-button:hover { color: #1f2325; background: #f0f0f0; border-color: #777777; }
+    button.clear-action-button:active { background: #d2d2d2; }
+    .favorite-btn.active, .favorite-btn.active image { color: @accent_bg_color; }
+    .favorite-badge { color: @accent_bg_color; }
+    .edited-badge { color: @theme_fg_color; }
+    .one-to-one-btn:checked { color: @accent_fg_color; background: @accent_bg_color; box-shadow: 0 2px 6px alpha(@accent_bg_color, 0.35); }
+    .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; color: alpha(@theme_fg_color, 0.45); }
+    .section-count { font-size: 13px; color: alpha(@theme_fg_color, 0.55); }
+    .scroll-scrub-date {
+        padding: 8px 16px;
+        border-radius: 9999px;
+        background: @headerbar_bg_color;
+        color: @theme_fg_color;
+        font-weight: 700;
+        box-shadow: 0 8px 24px alpha(@theme_fg_color, 0.16), 0 0 0 1px alpha(@theme_fg_color, 0.06);
+    }
+    .navigation-sidebar row { color: @theme_fg_color; border-radius: 8px; transition: background 150ms ease; }
+    .navigation-sidebar row:hover { background: alpha(@theme_fg_color, 0.045); }
+    .navigation-sidebar .sidebar-section-heading { margin-top: 10px; padding-top: 0; }
+    .navigation-sidebar .sidebar-section-heading-title { color: alpha(@theme_fg_color, 0.42); font-size: 11px; font-weight: 800; letter-spacing: 0.06em; }
+    .navigation-sidebar row:selected {
+        background: alpha(@accent_bg_color, 0.09);
+        box-shadow: inset 3px 0 0 0 @accent_bg_color;
+        border-radius: 0 8px 8px 0;
+        color: @theme_fg_color;
+        font-weight: 700;
+    }
+    .navigation-sidebar .heading { color: alpha(@theme_fg_color, 0.45); }
+
+    /* Scroll-follow folder marker (sidebar.rs set_scroll_location). It is
+       deliberately not row:selected, so without its own rule the base
+       theme's blue marker shows through. */
+    .navigation-sidebar row.sidebar-scroll-location {
+        background: alpha(@accent_bg_color, 0.08);
+        box-shadow: inset 3px 0 0 0 @accent_bg_color;
+        color: @theme_fg_color;
+        font-weight: 600;
+    }
+
+    /* Segmented toggle groups: crop aspect presets (Free/Original/1:1…),
+       crop orientation (Landscape/Portrait), and the collage layout tiles
+       and fit/orientation row. Checked state follows the accent. */
+    .crop-aspect-button:checked,
+    .crop-orientation-row button:checked,
+    .collage-layout-tile:checked,
+    .collage-tabs > button:checked {
+        background: @accent_bg_color;
+        color: @accent_fg_color;
+    }
+    .crop-aspect-button:checked:hover,
+    .crop-orientation-row button:checked:hover,
+    .collage-layout-tile:checked:hover,
+    .collage-tabs > button:checked:hover {
+        background: alpha(@accent_bg_color, 0.85);
+    }
