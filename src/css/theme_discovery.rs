@@ -110,6 +110,13 @@ fn theme_css_in(directory: &Path) -> Option<PathBuf> {
     if candidates.len() == 1 {
         candidates.pop()
     } else {
+        if candidates.len() > 1 {
+            eprintln!(
+                "Skipping theme folder {}: contains {} stylesheets and no theme.css; rename one to theme.css and keep the rest elsewhere",
+                directory.display(),
+                candidates.len()
+            );
+        }
         None
     }
 }
@@ -151,12 +158,29 @@ fn metadata_from_css(css: &str) -> ThemeMetadata {
         match key.as_str() {
             "name" if !value.is_empty() => metadata.name = Some(value.to_string()),
             "dark" => {
-                metadata.dark = matches!(
-                    value.to_ascii_lowercase().as_str(),
-                    "true" | "yes" | "on" | "1"
-                )
+                metadata.dark = match value.to_ascii_lowercase().as_str() {
+                    "true" | "yes" | "on" | "1" => true,
+                    "false" | "no" | "off" | "0" | "" => false,
+                    other => {
+                        eprintln!(
+                            "Theme metadata: ignoring unrecognized dark value '{other}' (expected true or false)"
+                        );
+                        false
+                    }
+                }
             }
-            "mode" => metadata.is_base = value.eq_ignore_ascii_case("base"),
+            "mode" => {
+                metadata.is_base = if value.eq_ignore_ascii_case("base") {
+                    true
+                } else if value.is_empty() || value.eq_ignore_ascii_case("overlay") {
+                    false
+                } else {
+                    eprintln!(
+                        "Theme metadata: ignoring unrecognized mode value '{value}' (expected overlay or base)"
+                    );
+                    false
+                }
+            }
             _ => {}
         }
     }
@@ -178,6 +202,24 @@ fn humanize_id(id: &str) -> String {
         .join(" ")
 }
 
+/// Resolve the theme to activate from the persisted selection. Order: the
+/// saved id, else the default id, else the first discovered theme. Returns
+/// `None` only when no themes exist at all, which leaves the stock GTK
+/// appearance in place. Used for the deleted-selected-theme and restart
+/// fallback paths; pure so it can be tested without a display.
+pub(crate) fn resolve_active(
+    themes: &[DiscoveredTheme],
+    saved: &str,
+    default: &str,
+) -> Option<DiscoveredTheme> {
+    themes
+        .iter()
+        .find(|theme| theme.id == saved)
+        .or_else(|| themes.iter().find(|theme| theme.id == default))
+        .or_else(|| themes.first())
+        .cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +236,11 @@ mod tests {
     }
 
     fn write(path: &Path, content: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    fn write_bytes(path: &Path, content: &[u8]) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, content).unwrap();
     }
@@ -301,6 +348,121 @@ mod tests {
             theme_css_in(&root.join("both")).unwrap(),
             root.join("both/theme.css")
         );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn invalid_dark_and_mode_values_are_rejected_with_a_fallback() {
+        let metadata = metadata_from_css(
+            "/* picasa-theme\n   dark: maybe\n   mode: basse\n*/\n.x {}",
+        );
+        assert!(!metadata.dark);
+        assert!(!metadata.is_base);
+
+        // The recognized spellings all keep working.
+        for truthy in ["true", "YES", "on", "1"] {
+            let metadata = metadata_from_css(&format!(
+                "/* picasa-theme\n   dark: {truthy}\n   mode: BASE\n*/"
+            ));
+            assert!(metadata.dark, "{truthy}");
+            assert!(metadata.is_base, "{truthy}");
+        }
+    }
+
+    #[test]
+    fn unreadable_and_non_utf8_stylesheets_are_skipped_without_panicking() {
+        let root = unique_temp_dir("unreadable");
+        let theme_dir = root.join("locked");
+        write(&theme_dir.join("theme.css"), ".locked {}");
+        let css_path = theme_dir.join("theme.css");
+        let mut permissions = std::fs::metadata(&css_path).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(0o000);
+        std::fs::set_permissions(&css_path, permissions).unwrap();
+        // Running as root would still read the locked file; only assert the
+        // skip when the permission actually applies to this user.
+        let locked_is_unreadable = std::fs::read_to_string(&css_path).is_err();
+        // Non-UTF8 bytes are not valid CSS text either.
+        write_bytes(&root.join("binary/theme.css"), &[0xFF, 0xFE, 0x00, 0xC3]);
+
+        let themes = discover(&root);
+        if locked_is_unreadable {
+            assert!(themes.is_empty(), "{themes:?}");
+        } else {
+            assert_eq!(themes.len(), 1, "binary theme must still be skipped");
+            assert_eq!(themes[0].id, "locked");
+        }
+
+        // Restore access so cleanup can remove the file.
+        let mut permissions = std::fs::metadata(&css_path).unwrap().permissions();
+        permissions.set_mode(0o644);
+        std::fs::set_permissions(&css_path, permissions).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resolve_active_falls_back_when_the_saved_theme_is_deleted() {
+        let theme = |id: &str| DiscoveredTheme {
+            id: id.to_string(),
+            name: id.to_string(),
+            dark: false,
+            is_base: false,
+            css: String::new(),
+        };
+        let themes = [theme("superman"), theme("standard"), theme("teal")];
+
+        // Saved theme still exists.
+        assert_eq!(resolve_active(&themes, "teal", "standard").unwrap().id, "teal");
+        // Saved theme deleted: fall back to the default id.
+        assert_eq!(
+            resolve_active(&themes, "deleted-theme", "standard").unwrap().id,
+            "standard"
+        );
+        // Default missing too: first discovered theme.
+        assert_eq!(
+            resolve_active(&themes, "deleted-theme", "missing").unwrap().id,
+            "superman"
+        );
+        // No themes at all: no activation, stock GTK look.
+        assert!(resolve_active(&[], "anything", "standard").is_none());
+    }
+
+    #[test]
+    fn rescan_picks_up_a_theme_folder_added_after_the_first_scan() {
+        let root = unique_temp_dir("rescan");
+        write(&root.join("first/theme.css"), ".first {}");
+        assert_eq!(discover(&root).len(), 1);
+
+        // Simulates a user dropping a theme in while the app is running; the
+        // next settings scan must list it.
+        write(
+            &root.join("second/theme.css"),
+            "/* picasa-theme\n   name: Second\n*/\n.second {}",
+        );
+        let themes = discover(&root);
+        assert_eq!(themes.len(), 2);
+        assert_eq!(themes[0].id, "first");
+        assert_eq!(themes[1].name, "Second");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn multiple_base_themes_still_discover_deterministically() {
+        let root = unique_temp_dir("multi-base");
+        write(
+            &root.join("base-one/theme.css"),
+            "/* picasa-theme\n   name: Zeta Base\n   mode: base\n*/",
+        );
+        write(
+            &root.join("base-two/theme.css"),
+            "/* picasa-theme\n   name: Alpha Base\n   mode: base\n*/",
+        );
+        let themes = discover(&root);
+        // Sorted by display name; the engine loads the first entry as base.
+        assert_eq!(themes[0].name, "Alpha Base");
+        assert!(themes[0].is_base && themes[1].is_base);
 
         std::fs::remove_dir_all(&root).unwrap();
     }

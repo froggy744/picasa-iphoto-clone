@@ -14,6 +14,9 @@ thread_local! {
     // Bumped on every preview rebuild so late decode results from an older
     // preview are discarded.
     static PREVIEW_GENERATION: Cell<u64> = const { Cell::new(0) };
+    // The collage stylesheet is installed once per process; build() runs per
+    // collage session and must not stack a new display provider each time.
+    static COLLAGE_CSS_INSTALLED: Cell<bool> = const { Cell::new(false) };
     // Sharper preview textures keyed by (path, rotation, recipe). Reused across
     // preview rebuilds so dragging does not re-decode every photo.
     static PREVIEW_SHARP_CACHE: RefCell<std::collections::HashMap<(String, i32, String), gtk::gdk::Paintable>> =
@@ -165,14 +168,18 @@ pub fn build(
     draft: Option<super::model::CollageDraft>,
     on_edit_photo: Rc<dyn Fn(i64)>,
 ) -> CollageEditor {
-    let css = gtk::CssProvider::new();
-    let css_data = collage_css();
-    css.load_from_data(&css_data);
-    gtk::style_context_add_provider_for_display(
-        &gtk::prelude::WidgetExt::display(parent),
-        &css,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+    let display = gtk::prelude::WidgetExt::display(parent);
+    if !COLLAGE_CSS_INSTALLED.with(Cell::get) {
+        let css = gtk::CssProvider::new();
+        let css_data = collage_css();
+        css.load_from_data(&css_data);
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        COLLAGE_CSS_INSTALLED.with(|cell| cell.set(true));
+    }
     let project = Rc::new(RefCell::new(CollageProject::new(photos.clone())));
     // A resumed draft restores settings and the saved arrangement before
     // any widget reads project state, so every control reflects it.

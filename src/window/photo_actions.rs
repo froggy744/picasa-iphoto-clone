@@ -2,6 +2,24 @@ use gio::prelude::{AppInfoExt, SettingsExt};
 
 thread_local! {
     static ACTIVE_PHOTO_MENU: RefCell<Option<gtk::Widget>> = RefCell::new(None);
+    static CONTEXT_MENU_CSS_INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Installs the context-menu stylesheet exactly once per process. The menu
+/// opens on every right-click, so installing here would add a new display
+/// provider each time and accumulate them over a session.
+fn ensure_context_menu_css(display: &gtk::gdk::Display) {
+    if CONTEXT_MENU_CSS_INSTALLED.with(std::cell::Cell::get) {
+        return;
+    }
+    let css = gtk::CssProvider::new();
+    css.load_from_data(crate::css::PHOTO_CONTEXT_MENU);
+    gtk::style_context_add_provider_for_display(
+        display,
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    CONTEXT_MENU_CSS_INSTALLED.with(|cell| cell.set(true));
 }
 
 fn dismiss_active_photo_context_menu() -> bool {
@@ -114,13 +132,7 @@ fn show_photo_context_menu(
     // theme would otherwise give every GtkButton regular toolbar/dialog
     // padding.  Apply a small context-menu-specific CSS class so rows look
     // and measure like menu items instead of large push buttons.
-    let css = gtk::CssProvider::new();
-    css.load_from_data(crate::css::PHOTO_CONTEXT_MENU);
-    gtk::style_context_add_provider_for_display(
-        &host.display(),
-        &css,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+    ensure_context_menu_css(&host.display());
 
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
     menu.set_width_request(236);
