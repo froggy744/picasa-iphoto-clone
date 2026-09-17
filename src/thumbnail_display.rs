@@ -372,12 +372,7 @@ fn load_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
     let mut image = match image::open(path) {
         Ok(image) => image.to_rgba8(),
         Err(error) => {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "THUMB DISPLAY corrupt_cache cache={} source={} error={}",
-                    request.cached_path, request.source_path, error
-                );
-            }
+            
             // This is PIC's own cache file. A decode failure means the cache is
             // unusable, not that the original is corrupt. Remove it and let the
             // normal priority generator rebuild it from the source in the

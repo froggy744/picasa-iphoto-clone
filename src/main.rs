@@ -19,53 +19,6 @@ mod thumbnail;
 mod thumbnail_display;
 mod window;
 
-/// Icons the app references by name (all Adwaita symbolic names). Keep in
-/// sync with resources/icons.gresource.xml.
-const REFERENCED_ICONS: &[&str] = &[
-    "pan-end-symbolic",
-    "pan-down-symbolic",
-    "pan-start-symbolic",
-    "emote-love-symbolic",
-    "image-x-generic-symbolic",
-    "folder-symbolic",
-    "object-select-symbolic",
-    "folder-pictures-symbolic",
-    "document-edit-symbolic",
-    "document-print-symbolic",
-    "view-sort-descending-symbolic",
-    "view-sort-ascending-symbolic",
-    "view-sidebar-symbolic",
-    "view-list-symbolic",
-    "sidebar-hide-symbolic",
-    "emblem-system-symbolic",
-    "view-refresh-symbolic",
-    "view-grid-symbolic",
-    "view-app-grid-symbolic",
-    "sidebar-show-symbolic",
-    "process-stop-symbolic",
-    "object-rotate-right-symbolic",
-    "list-add-symbolic",
-    "go-previous-symbolic",
-    "folder-open-symbolic",
-    "folder-new-symbolic",
-    "edit-undo-symbolic",
-    "edit-redo-symbolic",
-    "document-save-symbolic",
-    "appointment-soon-symbolic",
-    "application-exit-symbolic",
-    "collage-corner-round-symbolic",
-    "collage-corner-sharp-symbolic",
-    "collage-grid-symbolic",
-    "collage-mosaic-symbolic",
-    "collage-smart-mosaic-symbolic",
-    "media-playlist-shuffle-symbolic",
-    "object-rotate-left-symbolic",
-    "orientation-landscape-symbolic",
-    "orientation-portrait-left-symbolic",
-    "edit-delete-symbolic",
-    "zoom-fit-best-symbolic",
-];
-
 /// Register the bundled hicolor icon subset (resources/icons.gresource).
 /// Linux picks icons from the system Adwaita theme, but Windows/macOS
 /// bundles ship no icon theme at all, leaving every symbolic icon blank.
@@ -77,41 +30,11 @@ fn register_bundled_icons() {
     gio::resources_register(&resource);
 }
 
-/// Log which referenced icons the display can actually resolve. Run with
-/// PICASA_TRACE=1 to debug missing icons on platform bundles. The bundle
-/// carries the full Adwaita SVG set plus the view-sidebar/sidebar-hide
-/// stand-ins, so every name in this list resolves everywhere.
-pub fn trace_icon_resolution() {
-    if std::env::var_os("PICASA_TRACE").is_none() {
-        return;
-    }
-    let Some(display) = gtk4::gdk::Display::default() else {
-        eprintln!("ICONS TRACE no display; cannot check icon theme");
-        return;
-    };
-    let theme = gtk4::IconTheme::for_display(&display);
-    let missing: Vec<&str> = REFERENCED_ICONS
-        .iter()
-        .filter(|name| !theme.has_icon(name))
-        .copied()
-        .collect();
-    if missing.is_empty() {
-        eprintln!(
-            "ICONS TRACE all {} referenced icons resolve",
-            REFERENCED_ICONS.len()
-        );
-    } else {
-        eprintln!("ICONS TRACE missing {} icons: {missing:?}", missing.len());
-    }
-}
-
 fn main() {
     use gio::prelude::*;
     use gtk::prelude::*;
     use gtk4 as gtk;
     use libadwaita as adw;
-
-    init_trace_log();
 
     std::panic::set_hook(Box::new(|panic| {
         eprintln!("PICASA PANIC: {panic}");
@@ -134,7 +57,6 @@ fn main() {
         if let Some(display) = gtk::gdk::Display::default() {
             gtk::IconTheme::for_display(&display).add_resource_path("/picrs/icons");
         }
-        trace_icon_resolution();
         // Startup loads indexed rows and recovers missing cached previews.
         // Folder discovery runs only through explicit import/refresh actions.
         match db::open_default() {
@@ -155,4 +77,3 @@ fn main() {
     application.run();
 }
 
-fn init_trace_log() {}

@@ -263,8 +263,6 @@ impl Gallery {
     /// Zoom is driven by width. Height scales by the same factor, preserving
     /// the custom width/height shape configured above.
     fn apply_zoom(&self, width: i32) {
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let zoom_started = trace.then(Instant::now);
         let old_width = self.tile_width.get().max(1);
         let old_height = self.tile_height.get().max(1);
         let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
@@ -284,87 +282,34 @@ impl Gallery {
 
         let scale = width as f64 / old_width as f64;
         let height = ((old_height as f64) * scale).round().max(1.0) as i32;
-        if trace {
-            eprintln!(
-                "UI PERF folder_zoom_begin mode={:?} old_tile={}x{} new_tile={}x{} photos={} folders={} columns={} folder_rows={}",
-                self.group_mode.get(),
-                old_width,
-                old_height,
-                width,
-                height,
-                self.current_photos.borrow().len(),
-                self.group_ranges.borrow().len(),
-                self.current_columns.get(),
-                self.folder_store.n_items()
-            );
-        }
+
 
         self.tile_width.set(width);
         self.tile_height.set(height);
-        let callback_started = trace.then(Instant::now);
         (self.on_zoom_changed)(width);
-        if trace {
-            eprintln!(
-                "UI PERF folder_zoom_setting_callback ms={}",
-                callback_started
-                    .map(|value| value.elapsed().as_millis())
-                    .unwrap_or(0)
-            );
-        }
 
-        let collect_started = trace.then(Instant::now);
+
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
-        let grid_tiles = tiles.len();
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        let total_tiles = tiles.len();
-        if trace {
-            eprintln!(
-                "UI PERF folder_zoom_collect_tiles grid={} folder={} total={} ms={}",
-                grid_tiles,
-                total_tiles.saturating_sub(grid_tiles),
-                total_tiles,
-                collect_started
-                    .map(|value| value.elapsed().as_millis())
-                    .unwrap_or(0)
-            );
-        }
-        let resize_started = trace.then(Instant::now);
+
         for tile in tiles {
             tile.set_tile_size(width, height);
         }
-        if trace {
-            eprintln!(
-                "UI PERF folder_zoom_resize_tiles count={} ms={}",
-                total_tiles,
-                resize_started
-                    .map(|value| value.elapsed().as_millis())
-                    .unwrap_or(0)
-            );
-        }
+
 
         let root_width = if self.group_mode.get() == GroupMode::Folder {
             self.folder_root.width()
         } else {
             self.root.width()
         };
-        let layout_started = trace.then(Instant::now);
         if root_width > 100 {
             self.update_layout(root_width, true);
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
         self.zoom_anchor.set(None);
-        if trace {
-            eprintln!(
-                "UI PERF folder_zoom_end root_width={} columns={} folder_rows={} layout_ms={} total_ms={}",
-                root_width,
-                self.current_columns.get(),
-                self.folder_store.n_items(),
-                layout_started.map(|value| value.elapsed().as_millis()).unwrap_or(0),
-                zoom_started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
-            );
-        }
+
     }
 
     /// After Folder scrolling settles, load only cached thumbnails for tiles
@@ -376,13 +321,9 @@ impl Gallery {
             return 0;
         }
 
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let started = trace.then(Instant::now);
         let viewport = self.folder_root.height() as f32;
         let mut tiles = Vec::new();
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        let realized = tiles.len();
-        let mut near = 0usize;
         let mut loaded = 0usize;
 
         for tile in tiles {
@@ -397,7 +338,6 @@ impl Gallery {
                         && bounds.y() <= viewport * 1.25
                 });
             if is_near {
-                near += 1;
                 if !tile.imp().visual_loaded.get() {
                     loaded += 1;
                 }
@@ -407,15 +347,6 @@ impl Gallery {
             }
         }
 
-        if let Some(started) = started {
-            let elapsed_ms = started.elapsed().as_millis();
-            if elapsed_ms >= 16 {
-                eprintln!(
-                    "UI PERF folder_visible_refresh_slow realized={} near={} loaded={} elapsed_ms={}",
-                    realized, near, loaded, elapsed_ms
-                );
-            }
-        }
 
         loaded
     }
@@ -964,9 +895,6 @@ impl Gallery {
             indexes.extend((behind_start..first_visible).rev());
         }
 
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let started = trace.then(Instant::now);
-        let candidate_count = indexes.len();
         let mut queued = 0usize;
         for index in indexes {
             if queued >= budget {
@@ -979,20 +907,7 @@ impl Gallery {
                 queued += 1;
             }
         }
-        if let Some(started) = started {
-            let ms = started.elapsed().as_millis();
-            if ms >= 8 {
-                eprintln!(
-                    "UI PERF folder_model_prefetch_slow visible={}..{} candidates={} queued={} pending={} ms={}",
-                    first_visible,
-                    last_visible,
-                    candidate_count,
-                    queued,
-                    crate::thumbnail_display::pending_count(),
-                    ms
-                );
-            }
-        }
+
         queued
     }
 
@@ -1064,22 +979,13 @@ impl Gallery {
     }
 
     pub fn refresh_thumbnails(&self) {
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let started = trace.then(Instant::now);
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        let count = tiles.len();
         for tile in tiles {
             tile.refresh_thumbnail();
         }
-        if let Some(started) = started {
-            eprintln!(
-                "UI PERF refresh_thumbnails tiles={} ms={}",
-                count,
-                started.elapsed().as_millis()
-            );
-        }
+
     }
 
     pub fn set_favorite_indicators_visible(&self, visible: bool) {
@@ -1277,7 +1183,6 @@ impl Gallery {
             if current_generation.get() != generation || !is_current() {
                 return glib::ControlFlow::Break;
             }
-            let started = Instant::now();
             let end = (offset + 128).min(photos.len());
             for photo in &photos[offset..end] {
                 if let Some(available) = updates.get(&photo.folder_id()) {
@@ -1287,14 +1192,7 @@ impl Gallery {
                     photo.set_original_checked_at(Some(Instant::now()));
                 }
             }
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "REFRESH availability_batch count={} remaining={} elapsed_ms={}",
-                    end - offset,
-                    photos.len() - end,
-                    started.elapsed().as_millis()
-                );
-            }
+
             offset = end;
             if offset < photos.len() {
                 return glib::ControlFlow::Continue;
@@ -1314,9 +1212,6 @@ impl Gallery {
     }
 
     pub fn replace(&self, photos: &[Photo]) {
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let replace_started = trace.then(Instant::now);
-        let profile_started = crate::diagnostics::refresh_started(photos.len());
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
         // Assume a build is in progress until each completion path clears it.
@@ -1341,13 +1236,7 @@ impl Gallery {
                 self.rebuild_group_ranges();
                 self.rebuild_folder_rows();
             }
-            if let Some(started) = replace_started {
-                eprintln!(
-                    "UI PERF gallery_replace photos={} unchanged=true ms={}",
-                    photos.len(),
-                    started.elapsed().as_millis()
-                );
-            }
+
             self.stream_building.set(false);
             return;
         }
@@ -1378,7 +1267,6 @@ impl Gallery {
             if !self.collage_selection_mode.get() {
                 (self.selected)(None);
             }
-            crate::diagnostics::refresh_first_batch(profile_started, reordered.len());
             self.current_photos.replace(reordered.clone());
             self.store.splice(0, self.store.n_items(), &reordered);
             if self.collage_selection_mode.get() {
@@ -1396,14 +1284,7 @@ impl Gallery {
                     self.update_group_header_for_scroll(self.last_scroll_y.get());
                 }
             }
-            if let Some(started) = replace_started {
-                eprintln!(
-                    "UI PERF gallery_replace photos={} same_set_reorder ms={}",
-                    reordered.len(),
-                    started.elapsed().as_millis()
-                );
-            }
-            crate::diagnostics::refresh_finished(profile_started, reordered.len());
+
             self.stream_building.set(false);
             return;
         }
@@ -1414,14 +1295,8 @@ impl Gallery {
         // batches for library-sized replacements.
         const PROGRESSIVE_REPLACE_THRESHOLD: usize = 1_000;
         if photos.len() > PROGRESSIVE_REPLACE_THRESHOLD {
-            if let Some(started) = replace_started {
-                eprintln!(
-                    "UI PERF gallery_replace photos={} progressive=true ms={}",
-                    photos.len(),
-                    started.elapsed().as_millis()
-                );
-            }
-            self.replace_progressive(photos.to_vec(), generation, profile_started);
+
+            self.replace_progressive(photos.to_vec(), generation);
             return;
         }
 
@@ -1429,7 +1304,6 @@ impl Gallery {
             (self.selected)(None);
         }
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
-        crate::diagnostics::refresh_first_batch(profile_started, objects.len());
         self.current_photos.replace(objects.clone());
         self.store.splice(0, self.store.n_items(), &objects);
         if self.collage_selection_mode.get() {
@@ -1447,14 +1321,7 @@ impl Gallery {
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
             }
         }
-        if let Some(started) = replace_started {
-            eprintln!(
-                "UI PERF gallery_replace photos={} unchanged=false ms={}",
-                objects.len(),
-                started.elapsed().as_millis()
-            );
-        }
-        crate::diagnostics::refresh_finished(profile_started, objects.len());
+
         self.stream_building.set(false);
     }
 
@@ -1462,7 +1329,6 @@ impl Gallery {
         &self,
         photos: Vec<Photo>,
         generation: u64,
-        profile_started: Option<Instant>,
     ) {
         // Larger batches finish the model build in far fewer main-loop hops.
         // Each hop is scheduled at idle priority, so with 500-photo batches a
@@ -1496,25 +1362,17 @@ impl Gallery {
         let replace_generation = self.replace_generation.clone();
         let stream_building = self.stream_building.clone();
 
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let build_started = trace.then(Instant::now);
         glib::idle_add_local(move || {
             if replace_generation.get() != generation {
                 return glib::ControlFlow::Break;
             }
 
-            let batch_started = trace.then(Instant::now);
             let start = offset.get();
             let end = (start + BATCH_SIZE).min(photos.len());
-            let create_started = trace.then(Instant::now);
             let objects: Vec<PhotoObject> = photos[start..end]
                 .iter()
                 .map(PhotoObject::from_photo)
                 .collect();
-            let create_ms = create_started
-                .map(|value| value.elapsed().as_millis())
-                .unwrap_or(0);
-            let splice_started = trace.then(Instant::now);
             offset.set(end);
 
             if !initialized.replace(true) {
@@ -1523,39 +1381,15 @@ impl Gallery {
                 }
                 current_photos.replace(objects.clone());
                 store.splice(0, store.n_items(), &objects);
-                crate::diagnostics::refresh_first_batch(profile_started, objects.len());
             } else {
                 current_photos.borrow_mut().extend(objects.iter().cloned());
                 store.splice(store.n_items(), 0, &objects);
             }
 
-            if let (Some(batch_started), Some(splice_started)) = (batch_started, splice_started) {
-                let splice_ms = splice_started.elapsed().as_millis();
-                let total_ms = batch_started.elapsed().as_millis();
-                // Log sparsely so the trace itself does not dominate the build.
-                if end == photos.len() || end % 10000 == 0 {
-                    eprintln!(
-                        "UI PERF progressive offset={} size={} create_ms={} splice_ms={} batch_ms={} wall_ms={}",
-                        end,
-                        photos.len(),
-                        create_ms,
-                        splice_ms,
-                        total_ms,
-                        build_started
-                            .map(|value| value.elapsed().as_millis())
-                            .unwrap_or(0)
-                    );
-                }
-            }
 
             if end >= photos.len() {
-                let ranges_started = trace.then(Instant::now);
                 rebuild_group_ranges_for(&current_photos, &group_mode, &group_date, &group_ranges);
-                let ranges_ms = ranges_started
-                    .map(|value| value.elapsed().as_millis())
-                    .unwrap_or(0);
                 if group_mode.get() == GroupMode::Folder {
-                    let rows_started = trace.then(Instant::now);
                     rebuild_folder_rows_for(
                         &current_photos,
                         &group_ranges,
@@ -1573,13 +1407,7 @@ impl Gallery {
                             &folder_order,
                         );
                     }
-                    if let Some(value) = rows_started {
-                        eprintln!(
-                            "UI PERF folder_rows_build ranges_ms={} rows_ms={}",
-                            ranges_ms,
-                            value.elapsed().as_millis()
-                        );
-                    }
+
                     group_header.set_visible(false);
                     group_title.set_text("");
                     group_count.set_text("");
@@ -1615,18 +1443,7 @@ impl Gallery {
             if end < photos.len() {
                 glib::ControlFlow::Continue
             } else {
-                crate::diagnostics::refresh_finished(
-                    profile_started,
-                    current_photos.borrow().len(),
-                );
-                if let Some(value) = build_started {
-                    eprintln!(
-                        "UI PERF progressive_done photos={} wall_ms={} folder_rows={}",
-                        current_photos.borrow().len(),
-                        value.elapsed().as_millis(),
-                        folder_store.n_items()
-                    );
-                }
+
                 // Folder rows (and therefore folder navigation targets) only
                 // exist once every batch has been applied.
                 stream_building.set(false);
@@ -1639,8 +1456,6 @@ impl Gallery {
         if photos.is_empty() {
             return;
         }
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let append_started = trace.then(Instant::now);
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
         self.current_photos
             .borrow_mut()
@@ -1654,14 +1469,7 @@ impl Gallery {
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
             }
         }
-        if let Some(started) = append_started {
-            eprintln!(
-                "UI PERF gallery_append photos={} total={} ms={}",
-                photos.len(),
-                self.current_photos.borrow().len(),
-                started.elapsed().as_millis()
-            );
-        }
+
     }
 
     /// Stop a progressive replacement that is no longer the active view.
@@ -1823,8 +1631,6 @@ fn rebuild_folder_rows_for(
     folder_catalog: &Rc<RefCell<Vec<FolderCatalogEntry>>>,
     folder_store: &gio::ListStore,
 ) {
-    let trace = std::env::var_os("PICASA_TRACE_VERBOSE").is_some();
-    let started = trace.then(Instant::now);
     let ranges = group_ranges.borrow();
     let photos = current_photos.borrow();
     let old_rows = folder_store.n_items();
@@ -1833,18 +1639,6 @@ fn rebuild_folder_rows_for(
     let order = folder_order.borrow();
     let new_rows = build_folder_virtual_objects(&ranges, &photos, line_size, &catalog, &order);
 
-    if trace {
-        eprintln!(
-            "UI PERF folder_line_plan photos={} folders={} line_size={} columns={} model_rows={} old_store_rows={} ms={}",
-            photos.len(),
-            ranges.len(),
-            line_size,
-            current_columns.get().max(1),
-            new_rows.len(),
-            old_rows,
-            started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
-        );
-    }
 
     let old_len = old_rows as usize;
     let new_len = new_rows.len();
@@ -1873,45 +1667,12 @@ fn rebuild_folder_rows_for(
         suffix += 1;
     }
 
-    if trace && prefix < old_len && prefix < new_len {
-        if let Some(old_row) = folder_store
-            .item(prefix as u32)
-            .and_downcast::<FolderRowObject>()
-        {
-            let old_data = old_row.data();
-            let new_data = new_rows[prefix].data();
-            eprintln!(
-                "UI PERF folder_store_first_row index={} old_kind={:?} new_kind={:?} old_folder_id={} new_folder_id={} old_label={:?} new_label={:?} old_count={} new_count={} old_range={}..{} new_range={}..{}",
-                prefix,
-                old_data.kind,
-                new_data.kind,
-                old_data.folder_id,
-                new_data.folder_id,
-                old_data.label,
-                new_data.label,
-                old_data.count,
-                new_data.count,
-                old_data.start,
-                old_data.end,
-                new_data.start,
-                new_data.end,
-            );
-        }
-    }
 
     if prefix == old_len && prefix == new_len {
-        if trace {
-            eprintln!(
-                "UI PERF folder_store_update strategy=unchanged old_rows={} new_rows={} total_ms={}",
-                old_rows,
-                new_len,
-                started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
-            );
-        }
+
         return;
     }
 
-    let update_started = trace.then(Instant::now);
     let removed = (old_len - prefix - suffix) as u32;
     let inserted = &new_rows[prefix..new_len - suffix];
     // Keep the ListView attached. Fixed-height photo lines give GTK a stable
@@ -1927,15 +1688,5 @@ fn rebuild_folder_rows_for(
     // therefore requires reusing an already-populated folder model instead of
     // rebuilding it.
     folder_store.splice(prefix as u32, removed, inserted);
-    if trace {
-        eprintln!(
-            "UI PERF folder_store_update strategy=fixed_lines_attached old_rows={} new_rows={} prefix={} suffix={} model_ms={} total_ms={}",
-            old_rows,
-            folder_store.n_items(),
-            prefix,
-            suffix,
-            update_started.map(|value| value.elapsed().as_millis()).unwrap_or(0),
-            started.map(|value| value.elapsed().as_millis()).unwrap_or(0)
-        );
-    }
+
 }

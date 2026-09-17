@@ -42,14 +42,7 @@ pub fn open(
         .and_then(|json| draft_from_json(&json))
         .filter(|draft| !draft.items.is_empty());
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "COLLAGE TRACE start had_selection={} selected_photos={} saved_draft={}",
-            had_selection,
-            photos.len(),
-            saved_draft.is_some()
-        );
-    }
+    
 
     let Some(draft) = saved_draft else {
         if had_selection && photos.is_empty() {
@@ -84,12 +77,7 @@ pub fn open(
         let on_open = on_open.clone();
         let draft = draft.clone();
         dialog.connect_response(Some("resume"), move |_, _| {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "COLLAGE TRACE resume_choice=resume draft_photos={}",
-                    draft.items.len()
-                );
-            }
+            
             // Re-fetch photos from the library so edits, rotations and
             // thumbnails are current; missing photos are dropped silently.
             let draft_photos: Vec<PhotoObject> = draft
@@ -109,12 +97,7 @@ pub fn open(
         let on_open = on_open.clone();
         let fresh_photos = photos.clone();
         dialog.connect_response(Some("fresh"), move |_, _| {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "COLLAGE TRACE resume_choice=fresh selected_photos={}",
-                    fresh_photos.len()
-                );
-            }
+            
             on_open(fresh_photos.clone(), None);
         });
     }

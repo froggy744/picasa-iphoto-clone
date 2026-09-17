@@ -50,17 +50,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     );
     sort_photos(&mut photos, sort.get());
     let startup_photos = Rc::new(photos);
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "STARTUP cold_start_ms={} photos={} displayed={} folders={} albums={} scan=disabled rss_mb={}",
-            build_started.elapsed().as_millis(),
-            sidebar_counts.photos,
-            startup_photos.len(),
-            folders.len(),
-            albums.len(),
-            crate::diagnostics::rss_mb()
-        );
-    }
+    eprintln!(
+        "STARTUP cold_start_ms={} photos={} displayed={} folders={} albums={} scan=disabled rss_mb={}",
+        build_started.elapsed().as_millis(),
+        sidebar_counts.photos,
+        startup_photos.len(),
+        folders.len(),
+        albums.len(),
+        crate::diagnostics::rss_mb()
+    );
 
     let info = Rc::new(InfoBar::new());
     info.set_photo(None);
@@ -171,9 +169,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             pending.borrow_mut().clear();
 
             if !db::folder_watching_enabled(&connection.borrow()) {
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!("WATCH TRACE rebuild enabled=false monitors=0");
-                }
+                
                 return;
             }
 
@@ -181,15 +177,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 eprintln!("WATCH ERROR could not read folders");
                 return;
             };
-            let mut installed = 0usize;
             for folder in folders.iter().filter(|folder| folder.watched && folder.available) {
                 let Some(scan_root) = watch_scan_root(&folders, folder.id) else {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "WATCH TRACE skip folder={} path={} reason=no_imported_root",
-                            folder.id, folder.path
-                        );
-                    }
+                    
                     continue;
                 };
                 let watched_path = folder.path.clone();
@@ -208,7 +198,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     }
                 };
                 let pending_for_event = pending.clone();
-                let watched_path_for_event = watched_path.clone();
                 let scan_root_for_event = scan_root.clone();
                 monitor.connect_changed(move |_, file, other_file, event| {
                     // Ignore metadata-only monitor noise. Content changes are
@@ -224,25 +213,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     pending_for_event
                         .borrow_mut()
                         .insert(scan_root_for_event.clone(), Instant::now());
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "WATCH TRACE event watched={} root={} event={:?} file={} other={}",
-                            watched_path_for_event,
-                            scan_root_for_event,
-                            event,
-                            crate::source::reference(file),
-                            other_file
-                                .map(crate::source::reference)
-                                .unwrap_or_default()
-                        );
-                    }
+                    
                 });
                 monitors.borrow_mut().push(monitor);
-                installed += 1;
             }
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("WATCH TRACE rebuild enabled=true monitors={installed}");
-            }
+            
         })
     };
     let import_folder: Rc<dyn Fn()> = {
@@ -273,9 +248,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let import_folder = import_folder.clone();
         let delete_album = delete_album.clone();
         Rc::new(move || {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("AVAILABILITY request reason=availability_update scan=false");
-            }
+            
             debug_assert!(PhotoScanRequestReason::AvailabilityUpdate
                 .scan_kind()
                 .is_none());
@@ -370,9 +343,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     cleared_query_for_timeout.replace(None);
                 }
             });
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("SEARCH TRACE result_clear_silent");
-            }
+            
         })
     };
 
@@ -1648,16 +1619,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
         });
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        // Phase 3 lightbox counters. Drained every 2 s so a summary is emitted
-        // only while the viewer is actually doing work.
-        glib::timeout_add_local(Duration::from_secs(2), move || {
-            if let Some(summary) = crate::lightbox::take_lightbox_stats() {
-                eprintln!("UI PERF lightbox_activity {summary}");
-            }
-            glib::ControlFlow::Continue
-        });
-    }
+    
 
     install_smooth_gallery_scroll(&grid_scroll, gallery.clone(), true);
     // Folder mode uses a variable-height GtkListView. Use relative wheel
@@ -1685,7 +1647,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let sidebar_hover_layout_freeze_for_tick = sidebar_hover_layout_freeze.clone();
     let sidebar_layout_settle_for_tick = sidebar_layout_settle.clone();
     gallery_scroll_stack.add_tick_callback(move |surface, _clock| {
-        crate::diagnostics::scroll_tick();
         gallery_for_resize.drain_thumbnail_display_completions();
         if should_observe_width(
             sidebar_resize_active_for_tick.get(),
@@ -2085,15 +2046,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 );
             }
         }
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE photo_favourite_changed id={} favourite={} filter={:?} lightbox_visible={}",
-                photo.id(),
-                favorite,
-                filter_for_favorite.get(),
-                lightbox_for_favorite.root.is_visible()
-            );
-        }
+        
     });
 
     let lightbox_for_one_to_one = lightbox.clone();
@@ -2222,13 +2175,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
             }
         }
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE photo_rotated id={} rotation={}",
-                photo.id(),
-                rotation
-            );
-        }
+        
     });
 
     let selected_for_export = selected_photo.clone();
@@ -2484,11 +2431,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let Some((root, generation, kind)) = next else {
                 return;
             };
-            if matches!(kind, Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh))
-                && std::env::var_os("PICASA_TRACE").is_some()
-            {
-                eprintln!("REFRESH folder_start generation={} root={}", generation, root);
-            }
+            
             let control = spawn_tagged_scan(root, generation, scan_sender.clone());
             scan_job.borrow_mut().active = Some(control);
         })
@@ -2503,24 +2446,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let stop_scan = stop_scan.clone();
         let refresh = refresh.clone();
         Rc::new(move |reason: PhotoScanRequestReason, path: String| {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("REFRESH request reason={} path={path}", reason.trace_label());
-            }
+            
             if reason.scan_kind().is_none() {
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "REFRESH request_ignored reason={} authorized=false path={path}",
-                        reason.trace_label()
-                    );
-                }
+                
                 return;
             }
             if scan_job.borrow().kind.is_some() {
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "REFRESH request_ignored reason=user_click active_job=true path={path}"
-                    );
-                }
+                
                 refresh_status_label.set_text("Refresh already running…");
                 refresh_status_spinner.set_spinning(true);
                 refresh_status_box.set_visible(true);
@@ -2543,7 +2475,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             };
             let sender = refresh_prepare_sender.clone();
             std::thread::spawn(move || {
-                let started = Instant::now();
                 let imported_root = db::open_default()
                     .and_then(|connection| db::folders(&connection))
                     .map(|folders| {
@@ -2552,12 +2483,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             .any(|folder| folder.path == path && folder.imported_root)
                     })
                     .map_err(|error| error.to_string());
-                let elapsed_ms = started.elapsed().as_millis();
                 let _ = sender.send(RefreshPrepareEvent::FolderReady {
                     generation,
                     path,
                     imported_root,
-                    elapsed_ms,
                 });
             });
         })
@@ -2584,9 +2513,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 });
             if let Some(path) = ready {
                 pending.borrow_mut().remove(&path);
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!("WATCH TRACE dispatch root={path}");
-                }
+                
                 if let Some(callback) = refresh_folder_slot.borrow().as_ref() {
                     callback(PhotoScanRequestReason::DebouncedWatchRefresh, path);
                 }
@@ -2700,9 +2627,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if response == gtk::ResponseType::Accept {
                 if let Some(file) = dialog.file() {
                     let root = crate::source::reference(&file);
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("IMPORT request reason=user_click path={root}");
-                    }
+                    
                     if let Err(error) = db::mark_import_root(&connection.borrow(), &root) {
                         eprintln!("Could not register imported folder {root}: {error}");
                         return;
@@ -2740,24 +2665,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let stop_scan_for_refresh_click = stop_scan.clone();
 
     refresh.connect_clicked(move |button| {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("REFRESH request reason=manual_refresh path=<library>");
-        }
+        
         let maintenance_was_active = scan_job_for_refresh
             .borrow()
             .kind
             == Some(ScanJobKind::Maintenance);
         if maintenance_was_active {
             scan_job_for_refresh.borrow_mut().preempt_maintenance();
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("REFRESH startup_thumbnail_recovery_preempted");
-            }
+            
         } else if scan_job_for_refresh.borrow().kind.is_some() {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "REFRESH request_ignored reason=manual_refresh active_job=true path=<library>"
-                );
-            }
+            
             refresh_status_label_for_click.set_text("Refresh already running…");
             refresh_status_spinner_for_click.set_spinning(true);
             refresh_status_box_for_click.set_visible(true);
@@ -2774,9 +2691,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         refresh_status_spinner_for_click.set_spinning(true);
         refresh_status_box_for_click.set_visible(true);
         stop_scan_for_refresh_click.set_visible(true);
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("REFRESH ui_shown");
-        }
+        
 
         let generation = {
             let mut job = scan_job_for_refresh.borrow_mut();
@@ -2786,25 +2701,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
         let sender = refresh_prepare_sender_for_click.clone();
         std::thread::spawn(move || {
-            let started = Instant::now();
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("REFRESH prepare_worker_start generation={generation}");
-            }
+            
             let roots = db::open_default()
                 .and_then(|connection| db::imported_root_paths(&connection))
                 .map_err(|error| error.to_string());
-            let elapsed_ms = started.elapsed().as_millis();
             let count = roots.as_ref().map(|roots| roots.len()).unwrap_or(0);
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "REFRESH prepare_worker_done folders={} elapsed_ms={}",
-                    count, elapsed_ms
-                );
-            }
+            
             let _ = sender.send(RefreshPrepareEvent::LibraryReady {
                 generation,
                 roots,
-                elapsed_ms,
             });
         });
     });
@@ -2945,20 +2850,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         priority_thumbnail_paths.extend(crate::thumbnail::take_priority_completions());
         let priority_completions = priority_thumbnail_paths.len();
         let priority_pending = crate::thumbnail::priority_pending_count();
-        if std::env::var_os("PICASA_TRACE").is_some()
-            && (priority_completions > 0 || priority_pending > 0)
-        {
-            eprintln!(
-                "THUMB PRIORITY ui_poll completions={} pending={}",
-                priority_completions, priority_pending
-            );
-        }
+        
         while let Ok(prepare_event) = refresh_prepare_receiver.try_recv() {
             match prepare_event {
                 RefreshPrepareEvent::LibraryReady {
                     generation,
                     roots,
-                    elapsed_ms,
                 } => {
                     if generation != scan_job_for_events.borrow().generation {
                         continue;
@@ -2982,14 +2879,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             continue;
                         }
                     };
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "REFRESH prepare_result generation={} folders={} elapsed_ms={}",
-                            generation,
-                            roots.len(),
-                            elapsed_ms
-                        );
-                    }
+                    
                     if roots.is_empty() {
                         let mut job = scan_job_for_events.borrow_mut();
                         job.kind = None;
@@ -3034,19 +2924,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     generation,
                     path,
                     imported_root,
-                    elapsed_ms,
                 } => {
                     if generation != scan_job_for_events.borrow().generation {
                         continue;
                     }
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "REFRESH folder_prepare_done generation={} ok={} elapsed_ms={}",
-                            generation,
-                            imported_root.as_ref().copied().unwrap_or(false),
-                            elapsed_ms
-                        );
-                    }
+                    
                     let ok = match imported_root {
                         Ok(ok) => ok,
                         Err(error) => {
@@ -3090,7 +2972,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         } else if priority_completions > 0 && thumbnail_total == 0 {
             refresh_status_box_for_events.set_visible(false);
         }
-        let callback_started = Instant::now();
         // Never monopolize the GTK loop when a fast scanner has queued many
         // results. Leaving some events queued lets GTK process input, redraws,
         // scrolling, and folder changes between import batches.
@@ -3109,13 +2990,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             // finish in their worker threads, but they must never overwrite
             // the progress UI or completion state of the newer job.
             if ui_event.generation != scan_job_for_events.borrow().generation {
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "SCAN stale event ignored generation={} current={}",
-                        ui_event.generation,
-                        scan_job_for_events.borrow().generation
-                    );
-                }
+                
                 continue;
             }
 
@@ -3129,8 +3004,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let event = ui_event.event;
             match &event {
                 scanner::ScanEvent::Started { root } => {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                    }
+                    
                     scan_count = 0;
                     thumbnail_total = 0;
                     let is_user_job = !matches!(
@@ -3149,8 +3023,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
 
                 scanner::ScanEvent::FolderStarted { folder } => {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                    }
+                    
                     // Only imports should append rows immediately. Refreshing an
                     // existing library/folder after Refresh All was appending
                     // duplicate sidebar rows; right-clicking those stale rows
@@ -3173,14 +3046,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     ..
                 } => {
                     scan_count += 1;
-                    if std::env::var_os("PICASA_TRACE").is_some() && scan_count.is_multiple_of(128)
-                    {
-                        eprintln!(
-                            "SCAN PhotoIndexed count={} latest={}",
-                            scan_count,
-                            path.display()
-                        );
-                    }
+                    
                     let search_active = !search_for_events.borrow().is_empty();
                     if !search_active {
                         if *newly_discovered
@@ -3235,13 +3101,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                 scanner::ScanEvent::ThumbnailsDeferred { total } => {
                     thumbnail_recovery_deferred.set(*total > 0);
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("THUMB RECOVERY deferred_offline={total}");
-                    }
+                    
                 }
                 scanner::ScanEvent::ThumbnailsStarted { total } => {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                    }
+                    
                     scan_count = 0;
                     thumbnail_total = *total;
                     refresh_status_label_for_events
@@ -3253,14 +3116,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                 scanner::ScanEvent::ThumbnailCreated { path } => {
                     scan_count += 1;
-                    if std::env::var_os("PICASA_TRACE").is_some() && scan_count.is_multiple_of(128)
-                    {
-                        eprintln!(
-                            "SCAN ThumbnailCreated count={} latest={}",
-                            scan_count,
-                            path.display()
-                        );
-                    }
+                    
                     // Coalesce source paths received in this timer tick and
                     // refresh only matching realized tiles. Non-realized rows
                     // will discover the new cache entry through the background
@@ -3289,8 +3145,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
 
                 scanner::ScanEvent::Finished { imported, failed } => {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                    }
+                    
                     eprintln!(
                         "===== SCAN COMPLETE: imported={} failed={} | progressive gallery updates complete =====",
                         imported,
@@ -3387,12 +3242,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     if kind != Some(ScanJobKind::FolderRefresh) {
                         availability_refresh_for_events();
                     }
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "REFRESH complete imported={} failed={}",
-                            total_imported, total_failed
-                        );
-                    }
+                    
                     refresh_status_label_for_events.set_text(&message);
                     refresh_status_box_for_events.set_visible(true);
                     let panel = refresh_status_box_for_events.clone();
@@ -3422,9 +3272,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         }
                         _ => format!("Import stopped · {imported} photos added"),
                     };
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("REFRESH cancelled imported={imported}");
-                    }
+                    
                     refresh_status_label_for_events.set_text(&message);
                     refresh_status_box_for_events.set_visible(true);
                     let panel = refresh_status_box_for_events.clone();
@@ -3435,13 +3283,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         }
 
-        if std::env::var_os("PICASA_TRACE").is_some() && handled_events > 0 {
-            eprintln!(
-                "REFRESH gtk_events processed={} pending=unknown elapsed_ms={}",
-                handled_events,
-                callback_started.elapsed().as_millis()
-            );
-        }
+        
 
         const PHOTO_APPEND_BATCH: usize = 192;
         if !search_for_events.borrow().is_empty() {
@@ -3450,7 +3292,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             pending_photos.clear();
         }
         if !pending_photos.is_empty() {
-            let batch_started = Instant::now();
             let mut batch = Vec::with_capacity(PHOTO_APPEND_BATCH.min(pending_photos.len()));
             for _ in 0..PHOTO_APPEND_BATCH {
                 let Some(photo) = pending_photos.pop_front() else {
@@ -3458,18 +3299,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 };
                 batch.push(photo);
             }
-            let count = batch.len();
             run_ui_guarded("photo batch append", || {
                 gallery_for_events.append_photos(&batch)
             });
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "REFRESH gallery_batch count={} remaining={} elapsed_ms={}",
-                    count,
-                    pending_photos.len(),
-                    batch_started.elapsed().as_millis()
-                );
-            }
+            
         }
         for path in priority_thumbnail_paths.drain(..) {
             if thumbnail_dirty_seen.insert(path.clone()) {
@@ -3478,7 +3311,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }
         const THUMBNAIL_REFRESH_BATCH: usize = 128;
         if !thumbnail_dirty_paths.is_empty() {
-            let batch_started = Instant::now();
             let mut paths = Vec::with_capacity(THUMBNAIL_REFRESH_BATCH.min(thumbnail_dirty_paths.len()));
             for _ in 0..THUMBNAIL_REFRESH_BATCH {
                 let Some(path) = thumbnail_dirty_paths.pop_front() else {
@@ -3487,18 +3319,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 thumbnail_dirty_seen.remove(&path);
                 paths.push(path);
             }
-            let count = paths.len();
             run_ui_guarded("targeted thumbnail refresh", || {
                 gallery_for_events.refresh_thumbnails_for_paths(&paths)
             });
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "REFRESH thumbnail_batch count={} remaining={} elapsed_ms={}",
-                    count,
-                    thumbnail_dirty_paths.len(),
-                    batch_started.elapsed().as_millis()
-                );
-            }
+            
         }
 
         glib::ControlFlow::Continue

@@ -115,8 +115,7 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
         if let Some(sibling_parent) = sibling_parent {
             let parent_id = insert_folder(connection, &sibling_parent)?;
             imported_parent = Some(parent_id);
-            if std::env::var_os("PICASA_TRACE").is_some() {
-            }
+            
         }
     }
     let (parent_id, imported_root) = match existing {
@@ -133,8 +132,7 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
             (parent_id, parent_id.is_none())
         }
     };
-    if std::env::var_os("PICASA_TRACE").is_some() {
-    }
+    
     connection.execute(
         "INSERT INTO folders(path, name, parent_id, imported_root) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(path) DO UPDATE SET name = excluded.name,
@@ -154,8 +152,7 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
     } else {
         0
     };
-    if std::env::var_os("PICASA_TRACE").is_some() {
-    }
+    
     repair_existing_folder_parents(connection)?;
     Ok(id)
 }
@@ -188,8 +185,7 @@ pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: 
         params![path, name, parent_id],
     )?;
     let id = connection.query_row("SELECT id FROM folders WHERE path = ?1", [path], |row| row.get(0))?;
-    if std::env::var_os("PICASA_TRACE").is_some() {
-    }
+    
     Ok(id)
 }
 

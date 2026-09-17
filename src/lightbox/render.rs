@@ -22,7 +22,6 @@ fn show_photo(
     fit_geometry_fixed: bool,
     cache_hit: bool,
 ) {
-    let started = std::time::Instant::now();
     let Some(photo) = photos.get(index) else {
         return;
     };
@@ -36,8 +35,7 @@ fn show_photo(
         previous.store(true, Ordering::Release);
     }
     if cache_hit {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-        }
+
         return;
     }
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -49,24 +47,9 @@ fn show_photo(
     let rotation = photo.rotation();
     let edit_recipe_text = photo.edit_recipe();
     let edit_recipe = crate::edit::EditRecipe::decode(&edit_recipe_text);
-    let target_started = std::time::Instant::now();
-    let (target_width, target_height, logical_width, logical_height, scale_factor, fallback) =
+    let (target_width, target_height, _, _, _, _) =
         viewer_decode_target(root, rotation, zoom.get() < 0.0);
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "UI PERF lightbox_target_calculation_ms={} allocation={}x{} logical_viewport={}x{} scale_factor={} decode_target={}x{} user_rotation={} fallback={}",
-            target_started.elapsed().as_millis(),
-            root.width(),
-            root.height(),
-            logical_width,
-            logical_height,
-            scale_factor,
-            target_width,
-            target_height,
-            rotation,
-            fallback
-        );
-    }
+
     if std::thread::Builder::new()
         .name("lightbox-decode".to_string())
         .spawn(move || {
@@ -76,25 +59,13 @@ fn show_photo(
             }
             let gate = VIEWER_DECODE_GATE
                 .get_or_init(|| DecodeSemaphore::new(MAX_CONCURRENT_VIEWER_DECODES));
-            let gate_started = std::time::Instant::now();
             let Some(_permit) = gate.acquire_cancelled(&cancelled_for_thread) else {
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "UI TRACE lightbox_decode_cancelled stage=decode_gate wait_ms={}",
-                        gate_started.elapsed().as_millis()
-                    );
-                }
+
                 result_slot_for_worker.send(Err(anyhow::anyhow!("cancelled at decode gate")));
                 return;
             };
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "UI PERF lightbox_decode_gate_wait_ms={}",
-                    gate_started.elapsed().as_millis()
-                );
-            }
-            let worker_started = std::time::Instant::now();
-            let result: anyhow::Result<(u32, u32, Vec<u8>, std::time::Instant)> = (|| {
+
+            let result: anyhow::Result<(u32, u32, Vec<u8>)> = (|| {
                 let image = crate::thumbnail::decode_for_viewer_with_cancel(
                     &decode_path,
                     target_width,
@@ -104,30 +75,10 @@ fn show_photo(
                 if cancelled_for_thread.load(Ordering::Acquire) {
                     anyhow::bail!("cancelled");
                 }
-                let rotation_started = std::time::Instant::now();
                 let image = rotate_image(image, rotation);
                 let image = crate::edit::render::apply_recipe(image, &edit_recipe);
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "VIEW PERF user_orientation_ms={} rotation={} output={}x{}",
-                        rotation_started.elapsed().as_millis(),
-                        rotation,
-                        image.width(),
-                        image.height()
-                    );
-                    eprintln!(
-                        "VIEW PERF lightbox_worker_total_ms={} output={}x{}",
-                        worker_started.elapsed().as_millis(),
-                        image.width(),
-                        image.height()
-                    );
-                }
-                Ok((
-                    image.width(),
-                    image.height(),
-                    image.into_raw(),
-                    std::time::Instant::now(),
-                ))
+
+                Ok((image.width(), image.height(), image.into_raw()))
             })();
             result_slot_for_worker.send(result);
         })
@@ -143,24 +94,14 @@ fn show_photo(
     let display_texture_cache_for_result = display_texture_cache.clone();
     glib::MainContext::default().spawn_local(async move {
         let result = ResultSlot::wait(result_slot).await;
-        let delivery_started = std::time::Instant::now();
 
         if generation.get() != expected_generation || cancelled.load(Ordering::Acquire) {
-            LIGHTBOX_STATS
-                .decodes_cancelled
-                .fetch_add(1, Ordering::Relaxed);
-            if std::env::var_os("PICASA_TRACE").is_some() {
-            }
+
             return;
         }
 
         match result {
-            Ok((width, height, pixels, worker_finished)) => {
-                LIGHTBOX_STATS
-                    .decodes_completed
-                    .fetch_add(1, Ordering::Relaxed);
-                let channel_wait_ms = worker_finished.elapsed().as_millis();
-                let texture_started = std::time::Instant::now();
+            Ok((width, height, pixels)) => {
                 let bytes = glib::Bytes::from_owned(pixels);
                 let texture = gtk::gdk::MemoryTexture::new(
                     width as i32,
@@ -169,8 +110,6 @@ fn show_photo(
                     &bytes,
                     width as usize * 4,
                 );
-                let texture_ms = texture_started.elapsed().as_millis();
-                let gtk_started = std::time::Instant::now();
 
                 // Never overwrite PhotoObject's source dimensions with the
                 // dimensions of a display-sized viewer decode. The original
@@ -204,7 +143,6 @@ fn show_photo(
                         target_width,
                         target_height,
                         texture.clone(),
-                        false,
                     );
                 }
                 if zoom.get() < 0.0 {
@@ -212,36 +150,9 @@ fn show_photo(
                     picture_viewport.queue_resize();
                     center_viewport_soon(&picture_viewport);
                 }
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "UI PERF lightbox_texture_creation_ms={} size={}x{}",
-                        texture_ms, width, height
-                    );
-                    eprintln!(
-                        "UI PERF lightbox_main_thread_delivery_ms={} worker_finished_to_gtk_ms={} channel_wait_ms={} gtk_update_ms={}",
-                        delivery_started.elapsed().as_millis(),
-                        channel_wait_ms,
-                        channel_wait_ms,
-                        gtk_started.elapsed().as_millis()
-                    );
-                    eprintln!(
-                        "UI PERF lightbox_full_texture_visible_ms={} size={}x{}",
-                        started.elapsed().as_millis(),
-                        width,
-                        height
-                    );
-                }
+
             }
-            Err(error) => {
-                if cancelled.load(Ordering::Acquire) {
-                    LIGHTBOX_STATS
-                        .decodes_cancelled
-                        .fetch_add(1, Ordering::Relaxed);
-                } else {
-                    LIGHTBOX_STATS
-                        .decodes_failed
-                        .fetch_add(1, Ordering::Relaxed);
-                }
+            Err(_) => {
                 // A failed decode must not leave the previous photo visible.
                 // This is especially important when navigating from a valid
                 // image to a corrupt source: retaining the old paintable makes
@@ -249,27 +160,11 @@ fn show_photo(
                 picture.set_paintable(gtk::gdk::Paintable::NONE);
                 picture.set_filename(Option::<&str>::None);
                 picture.set_size_request(1, 1);
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "UI TRACE lightbox_decode_failed path={} error={}",
-                        cache_path, error
-                    );
-                }
+
             }
         }
     });
 
-    LIGHTBOX_STATS
-        .decodes_queued
-        .fetch_add(1, Ordering::Relaxed);
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "UI PERF lightbox_decode_queued_ms={} generation={} path={}",
-            started.elapsed().as_millis(),
-            expected_generation,
-            path
-        );
-    }
 }
 
 fn display_texture_cache_lookup(
@@ -290,13 +185,7 @@ fn display_texture_cache_lookup(
     })?;
     let entry = cache.remove(position)?;
     let texture = entry.texture.clone();
-    if entry.prefetched {
-        LIGHTBOX_STATS.prefetch_used.fetch_add(1, Ordering::Relaxed);
-    }
     cache.push_front(entry);
-    LIGHTBOX_STATS.cache_hits.fetch_add(1, Ordering::Relaxed);
-    let total: usize = cache.iter().map(|entry| entry.bytes).sum();
-    lightbox_cache_size_observed(cache.len(), total);
     Some(texture)
 }
 
@@ -308,7 +197,6 @@ fn display_texture_cache_insert(
     target_width: u32,
     target_height: u32,
     texture: gtk::gdk::MemoryTexture,
-    prefetched: bool,
 ) {
     // RGBA8 footprint of the texture. Used by the byte budget so a large or
     // zoomed viewport cannot cache an unbounded amount of pixel memory.
@@ -331,13 +219,11 @@ fn display_texture_cache_insert(
         target_height,
         texture,
         bytes,
-        prefetched,
     });
     // Evict least-recently-used entries past either the count or the byte
     // budget. Always keep at least one entry so a single oversized texture can
     // still be shown without the cache immediately dropping everything.
     let mut total: usize = cache.iter().map(|entry| entry.bytes).sum();
-    let mut evicted = 0u64;
     while cache.len() > DISPLAY_TEXTURE_CACHE_CAPACITY
         || (total > DISPLAY_TEXTURE_CACHE_BYTE_BUDGET && cache.len() > 1)
     {
@@ -345,14 +231,7 @@ fn display_texture_cache_insert(
             break;
         };
         total = total.saturating_sub(removed.bytes);
-        evicted += 1;
     }
-    if evicted > 0 {
-        LIGHTBOX_STATS
-            .evictions
-            .fetch_add(evicted, Ordering::Relaxed);
-    }
-    lightbox_cache_size_observed(cache.len(), total);
 }
 
 thread_local! {
@@ -508,9 +387,6 @@ fn prefetch_display_texture(
     {
         return;
     }
-    LIGHTBOX_STATS
-        .prefetches_started
-        .fetch_add(1, Ordering::Relaxed);
 
     glib::MainContext::default().spawn_local(async move {
         let result = ResultSlot::wait(result_slot).await;
@@ -536,14 +412,8 @@ fn prefetch_display_texture(
             target_width,
             target_height,
             texture,
-            true,
         );
-        LIGHTBOX_STATS
-            .prefetches_completed
-            .fetch_add(1, Ordering::Relaxed);
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("UI PERF lightbox_prefetch_done index={index}");
-        }
+
     });
 }
 
@@ -557,9 +427,7 @@ fn prepare_navigation_photo(
     let Some(photo) = photo else {
         return (false, false);
     };
-    let navigation_started = std::time::Instant::now();
-    if std::env::var_os("PICASA_TRACE").is_some() {
-    }
+
     if zoom < 0.0 {
         return (false, false);
     }
@@ -584,33 +452,8 @@ fn prepare_navigation_photo(
             texture.height(),
         );
         picture.set_paintable(Some(&texture));
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI PERF lightbox_display_cache_hit path={} target={}x{}",
-                path, target_width, target_height
-            );
-        }
+
         return (true, true);
-    }
-    LIGHTBOX_STATS.cache_misses.fetch_add(1, Ordering::Relaxed);
-    if crate::image_format::uses(&path, crate::image_format::DecoderKind::Raw) {
-        LIGHTBOX_STATS
-            .cache_misses_raw
-            .fetch_add(1, Ordering::Relaxed);
-    }
-    if !crate::edit::EditRecipe::decode(&photo.edit_recipe()).is_default() {
-        LIGHTBOX_STATS
-            .cache_misses_edited
-            .fetch_add(1, Ordering::Relaxed);
-    }
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "UI PERF lightbox_display_cache_miss path={} target={}x{} request_ms={}",
-            path,
-            target_width,
-            target_height,
-            navigation_started.elapsed().as_millis()
-        );
     }
 
     // Nikon RAW/NEF cached thumbnails can have a different presentation
@@ -618,8 +461,7 @@ fn prepare_navigation_photo(
     // image in place for uncached RAW navigation so it cannot flash a second
     // image or trigger a transient black-bar allocation.
     if crate::image_format::uses(&path, crate::image_format::DecoderKind::Raw) {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-        }
+
         return (false, false);
     }
 
@@ -636,7 +478,6 @@ fn prepare_navigation_photo(
         std::mem::swap(&mut width, &mut height);
     }
 
-    let started = std::time::Instant::now();
     set_fit_geometry_from_intrinsic(
         picture,
         photo,
@@ -653,15 +494,7 @@ fn prepare_navigation_photo(
     } else {
         return (false, false);
     }
-    LIGHTBOX_STATS.preview_hits.fetch_add(1, Ordering::Relaxed);
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "UI PERF lightbox_preview_visible_ms={} source=thumbnail geometry={}x{}",
-            started.elapsed().as_millis(),
-            picture.width_request(),
-            picture.height_request()
-        );
-    }
+
     (true, false)
 }
 
@@ -722,22 +555,10 @@ fn center_viewport_soon(viewport: &gtk::ScrolledWindow) {
         horizontal.set_value(centered_h);
         vertical.set_value(centered_v);
 
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE lightbox_pan_center h={} h_upper={} h_page={} v={} v_upper={} v_page={}",
-                centered_h,
-                horizontal.upper(),
-                horizontal.page_size(),
-                centered_v,
-                vertical.upper(),
-                vertical.page_size()
-            );
-        }
     });
 }
 
 fn show_cached_preview(picture: &gtk::Picture, photo: &PhotoObject) {
-    let started = std::time::Instant::now();
     if let Some(thumbnail) = photo
         .cached_thumbnail_path()
         .filter(|path| std::path::Path::new(path).is_file())
@@ -748,13 +569,7 @@ fn show_cached_preview(picture: &gtk::Picture, photo: &PhotoObject) {
         } else {
             picture.set_filename(Some(thumbnail));
         }
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI PERF lightbox_preview_ms={} path={}",
-                started.elapsed().as_millis(),
-                photo.path()
-            );
-        }
+
     } else {
         // `Picture` can retain its previous paintable across lightbox opens.
         // Clear it before decoding a photo with no usable cached thumbnail.
@@ -826,7 +641,6 @@ fn fit_picture(
     viewport_height: i32,
     zoom: f64,
 ) {
-    let started = std::time::Instant::now();
     let Some(photo) = photos.get(index) else {
         return;
     };
@@ -856,15 +670,7 @@ fn fit_picture(
     );
 
     picture.set_size_request(fitted_width, fitted_height);
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "UI PERF fit_ms={} zoom={} size={}x{}",
-            started.elapsed().as_millis(),
-            zoom,
-            fitted_width,
-            fitted_height
-        );
-    }
+
 }
 
 fn fitted_picture_dimensions(

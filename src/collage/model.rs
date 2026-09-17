@@ -101,9 +101,7 @@ pub struct CollageProject {
 
 impl CollageProject {
     pub fn new(photos: Vec<PhotoObject>) -> Self {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("COLLAGE TRACE project photos={}", photos.len());
-        }
+        
         let mut project = Self {
             aspect: AspectRatio::SixteenNine,
             custom_aspect: 16.0 / 9.0,

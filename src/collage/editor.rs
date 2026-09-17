@@ -1087,27 +1087,7 @@ fn refresh_preview(
             photo: photo_frame,
         });
     }
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        let mut child_count = 0;
-        let mut child = canvas.first_child();
-        while let Some(current) = child {
-            child_count += 1;
-            child = current.next_sibling();
-        }
-        eprintln!(
-            "COLLAGE TRACE preview items={} widgets={} canvas={}x{}",
-            project_data.items.len(),
-            child_count,
-            canvas.width(),
-            canvas.height()
-        );
-        for item in &project_data.items {
-            eprintln!(
-                "COLLAGE TRACE item id={} x={:.4} y={:.4} w={:.4} h={:.4} rotation={:.2}",
-                item.photo.id, item.x, item.y, item.width, item.height, item.rotation
-            );
-        }
-    }
+    
     update_geometry(canvas, frames, &project_data);
 }
 

@@ -112,17 +112,10 @@ fn spawn_preview_worker(
                 },
             };
 
-            let mut coalesced = 0usize;
             while let Ok(newer) = job_receiver.try_recv() {
                 job = newer;
-                coalesced += 1;
             }
-            if coalesced > 0 && std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "EDIT PREVIEW WORKER coalesced={} generation={}",
-                    coalesced, job.generation
-                );
-            }
+
 
             let result = render_preview_job(&job, &base_cache, &mut geometry_cache).map(|image| {
                 (
@@ -137,18 +130,10 @@ fn spawn_preview_worker(
             // keep only the newest one. The just-completed frame is stale, but
             // its decoded/geometry cache work remains useful to the next job.
             let mut newest = None;
-            let mut superseded = 0usize;
             while let Ok(next) = job_receiver.try_recv() {
                 newest = Some(next);
-                superseded += 1;
             }
             if let Some(next) = newest {
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "EDIT PREVIEW WORKER superseded={} finished_generation={} next_generation={}",
-                        superseded, job.generation, next.generation
-                    );
-                }
                 pending = Some(next);
                 continue;
             }
@@ -164,7 +149,6 @@ fn render_preview_job(
     base_cache: &Arc<Mutex<Vec<PreviewBase>>>,
     geometry_cache: &mut Option<PreviewGeometry>,
 ) -> anyhow::Result<image::RgbaImage> {
-    let total_started = Instant::now();
     let crop = job.recipe.crop.normalized();
     let straighten = job.recipe.straighten;
     let geometry_needed = straighten.abs() >= 0.01 || !crop.is_full();
@@ -181,9 +165,6 @@ fn render_preview_job(
             )
         });
 
-    let mut base_hit = false;
-    let mut decode_ms = 0u128;
-    let mut geometry_ms = 0u128;
 
     let geometry = if geometry_hit {
         geometry_cache
@@ -199,17 +180,14 @@ fn render_preview_job(
             job.target_width,
             job.target_height,
         ) {
-            base_hit = true;
             image
         } else {
-            let decode_started = Instant::now();
             let image = super::render::decode_base_for_viewer(
                 &job.path,
                 job.rotation,
                 job.target_width,
                 job.target_height,
             )?;
-            decode_ms = decode_started.elapsed().as_millis();
             store_preview_base(
                 base_cache,
                 PreviewBase {
@@ -224,9 +202,7 @@ fn render_preview_job(
         };
 
         if geometry_needed {
-            let geometry_started = Instant::now();
             let image = super::render::apply_geometry(base, &job.recipe);
-            geometry_ms = geometry_started.elapsed().as_millis();
             geometry_cache.replace(PreviewGeometry {
                 path: job.path.clone(),
                 rotation: job.rotation,
@@ -242,36 +218,8 @@ fn render_preview_job(
         }
     };
 
-    let tone_started = Instant::now();
     let rendered = super::render::apply_tone(geometry, &job.recipe);
-    let tone_ms = tone_started.elapsed().as_millis();
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "EDIT PREVIEW base_cache={} geometry_cache={} decode_ms={} geometry_ms={} tone_ms={} total_ms={} target={}x{} path={}",
-            if geometry_hit {
-                "skip"
-            } else if base_hit {
-                "hit"
-            } else {
-                "miss"
-            },
-            if geometry_hit {
-                "hit"
-            } else if geometry_needed {
-                "miss"
-            } else {
-                "bypass"
-            },
-            decode_ms,
-            geometry_ms,
-            tone_ms,
-            total_started.elapsed().as_millis(),
-            job.target_width,
-            job.target_height,
-            job.path
-        );
-    }
 
     Ok(rendered)
 }

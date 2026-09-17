@@ -78,42 +78,6 @@ fn queue_photo_presentation_async(photo: &PhotoObject, visible_priority: bool) -
     crate::thumbnail_display::submit(request)
 }
 
-pub(crate) fn take_scroll_probe_stats() -> (u64, u128, u128) {
-    SCROLL_PROBE_PICK_CALLS.with(|calls| {
-        SCROLL_PROBE_PICK_NS.with(|pick| {
-            SCROLL_PROBE_SCAN_NS.with(|scan| {
-                let stats = (calls.get(), pick.get(), scan.get());
-                calls.set(0);
-                pick.set(0);
-                scan.set(0);
-                stats
-            })
-        })
-    })
-}
-
-fn record_thumb_load(id: i64, total_ms: u128, fs_ms: u128, apply_ms: u128) {
-    THUMB_LOAD_COUNT.with(|count| count.set(count.get().wrapping_add(1)));
-    THUMB_LOAD_MAX_MS.with(|max| max.set(max.get().max(total_ms)));
-    THUMB_LOAD_FS_MS.with(|sum| sum.set(sum.get().wrapping_add(fs_ms)));
-    THUMB_LOAD_APPLY_MS.with(|sum| sum.set(sum.get().wrapping_add(apply_ms)));
-    THUMB_LOAD_SEEN.with(|seen| {
-        if !seen.borrow_mut().insert(id) {
-            THUMB_LOAD_RELOADS.with(|count| count.set(count.get().wrapping_add(1)));
-        }
-    });
-}
-
-pub(crate) fn take_thumb_load_stats() -> (u64, u64, u128, u128, u128) {
-    let loads = THUMB_LOAD_COUNT.with(|cell| cell.replace(0));
-    let reloads = THUMB_LOAD_RELOADS.with(|cell| cell.replace(0));
-    let max_ms = THUMB_LOAD_MAX_MS.with(|cell| cell.replace(0));
-    let fs_ms = THUMB_LOAD_FS_MS.with(|cell| cell.replace(0));
-    let apply_ms = THUMB_LOAD_APPLY_MS.with(|cell| cell.replace(0));
-    THUMB_LOAD_SEEN.with(|seen| seen.borrow_mut().clear());
-    (loads, reloads, max_ms, fs_ms, apply_ms)
-}
-
 mod square_tile {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -449,7 +413,6 @@ impl SquareTile {
         if !cache_hit {
             self.queue_presentation_visual_async(true);
         }
-        crate::diagnostics::visible_thumbnail(cache_hit);
     }
 
     fn unload_visual(&self) {
@@ -461,26 +424,11 @@ impl SquareTile {
                 }
             }
         }
-        // Deliberately no per-tile trace here. GtkListView can unbind
-        // thousands of tiles during a scrollbar jump; synchronous stderr
-        // output would become part of the scroll workload.
     }
 
     fn bind_photo(&self, photo: &PhotoObject) {
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let started = trace.then(Instant::now);
         self.set_photo_deferred(photo);
         self.load_visual();
-        if let Some(started) = started {
-            let elapsed_ms = started.elapsed().as_millis();
-            if elapsed_ms >= 12 {
-                eprintln!(
-                    "UI PERF grid_bind_slow id={} elapsed_ms={}",
-                    photo.id(),
-                    elapsed_ms
-                );
-            }
-        }
     }
 
     /// Folder ListView bind must stay strictly presentation-only.

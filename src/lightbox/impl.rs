@@ -96,19 +96,7 @@ impl Lightbox {
             drag_start_v_begin.set(vadj.value());
             viewport_for_drag_begin.set_cursor_from_name(Some("grabbing"));
 
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "UI TRACE lightbox_pan_begin x={} y={} h={} h_upper={} h_page={} v={} v_upper={} v_page={}",
-                    x,
-                    y,
-                    hadj.value(),
-                    hadj.upper(),
-                    hadj.page_size(),
-                    vadj.value(),
-                    vadj.upper(),
-                    vadj.page_size()
-                );
-            }
+            
         });
 
         let pan_active_for_drag_update = pan_active.clone();
@@ -130,12 +118,7 @@ impl Lightbox {
             hadj.set_value(new_h);
             vadj.set_value(new_v);
 
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "UI TRACE lightbox_pan_update dx={} dy={} h={} v={}",
-                    offset_x, offset_y, new_h, new_v
-                );
-            }
+            
         });
 
         let pan_active_for_drag_end = pan_active.clone();
@@ -297,15 +280,7 @@ impl Lightbox {
                 return;
             };
             if let Some(handler) = context_menu_for_context.borrow().as_ref() {
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "UI TRACE lightbox_context_menu index={} path={} viewport=({}, {})",
-                        index_for_context.get(),
-                        photo.path(),
-                        x,
-                        y
-                    );
-                }
+                
                 handler(
                     photo,
                     viewport_for_context.clone().upcast::<gtk::Widget>(),
@@ -375,15 +350,7 @@ impl Lightbox {
         let one_to_one_sync_for_scroll = one_to_one_sync.clone();
 
         scroll.connect_scroll(move |controller, _, dy| {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "UI TRACE lightbox_scroll dy={} visible={} focus={} index={}",
-                    dy,
-                    root_for_scroll.is_visible(),
-                    root_for_scroll.has_focus(),
-                    index_for_scroll.get()
-                );
-            }
+            
             // Ctrl+wheel zooms the image; ordinary wheel keeps navigation.
             // The controller's modifier state is sampled on the GTK thread.
             if controller
@@ -407,9 +374,7 @@ impl Lightbox {
                 };
                 zoom_for_scroll
                     .set((current * if dy < 0.0 { 1.12 } else { 0.89 }).clamp(0.25, 4.0));
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!("UI TRACE lightbox_ctrl_zoom zoom={}", zoom_for_scroll.get());
-                }
+                
                 fit_picture(
                     &picture_for_scroll,
                     &photos_for_scroll.borrow(),
@@ -674,15 +639,7 @@ impl Lightbox {
     /// Toggle native-pixel presentation while remembering the previous zoom.
     /// A negative zoom is reserved for this temporary 1:1 mode.
     pub fn set_one_to_one(&self, enabled: bool) {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE lightbox_one_to_one enabled={} active={} zoom={} before={}",
-                enabled,
-                self.one_to_one_active.get(),
-                self.zoom.get(),
-                self.zoom_before_one_to_one.get()
-            );
-        }
+        
 
         if self.one_to_one_active.get() == enabled {
             return;
@@ -793,16 +750,7 @@ impl Lightbox {
         // the first open it was previously still 0x0 here, so the initial
         // photo used a fallback size and appeared smaller until navigation.
         self.root.set_visible(true);
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE lightbox_open photos={} index={} root_targetable={} viewport_targetable={} picture_targetable={}",
-                len,
-                self.index.get(),
-                self.root.can_target(),
-                self.picture_viewport.can_target(),
-                self.picture.can_target()
-            );
-        }
+        
         // The overlay can still be unmapped/unallocated at this exact point,
         // so the immediate focus request is not always enough. That left the
         // underlying GtkGridView owning the arrow keys until another action

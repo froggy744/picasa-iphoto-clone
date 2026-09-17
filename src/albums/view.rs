@@ -182,12 +182,7 @@ pub fn build(
             resize_bookshelf_cards(&runtime_for_resize.rows, target_card_width, &theme);
             runtime_for_resize.last_card_width.set(target_card_width);
 
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "ALBUM SHELF SIZE TRACE theme={} width={} columns={} card_width={}",
-                    theme.id, width, columns, target_card_width
-                );
-            }
+            
         }
 
         glib::ControlFlow::Continue
@@ -365,14 +360,7 @@ fn populate(
         if albums.len() == 1 { "" } else { "s" }
     ));
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "ALBUM VIEW TRACE albums={} cover_size={}x{}",
-            albums.len(),
-            cover_width(thumbnail_width),
-            cover_height(thumbnail_width)
-        );
-    }
+    
 
     let appearance = settings::album_appearance(&connection.borrow());
     let bookshelf_theme = bookshelf_theme_for_appearance(appearance);

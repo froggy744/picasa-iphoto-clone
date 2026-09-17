@@ -426,7 +426,6 @@ impl Gallery {
     }
 }
 fn selection_position_for_id(selection: &gtk::MultiSelection, photo_id: i64) -> Option<u32> {
-    SELECTION_POSITION_CALLS.with(|count| count.set(count.get().wrapping_add(1)));
     (0..selection.n_items()).find(|position| {
         selection
             .item(*position)
@@ -634,7 +633,6 @@ fn install_folder_root_input(
     collage_ids: &Rc<RefCell<HashSet<i64>>>,
 ) -> gtk::DrawingArea {
     let anchor: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
-    let trace = std::env::var_os("PICASA_TRACE_VERBOSE").is_some();
     let rubberband = gtk::DrawingArea::new();
     rubberband.set_hexpand(true);
     rubberband.set_vexpand(true);
@@ -672,33 +670,15 @@ fn install_folder_root_input(
     let collage_ids_for_left = collage_ids.clone();
     let anchor_for_left = anchor.clone();
     left_click.connect_pressed(move |gesture, n_press, x, y| {
-        if trace {
-            eprintln!("FOLDER INPUT press x={x:.0} y={y:.0} n={n_press}");
-        }
         let Some(tile) = resolve_folder_tile(&root_for_left, x, y) else {
-            if trace {
-                eprintln!("FOLDER INPUT resolved=false no-tile");
-            }
             return;
         };
         let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
-            if trace {
-                eprintln!("FOLDER INPUT resolved=false tile-no-photo");
-            }
             return;
         };
         let Some(position) = selection_position_for_id(&selection_for_left, photo.id()) else {
-            if trace {
-                eprintln!("FOLDER INPUT resolved=false no-position id={}", photo.id());
-            }
             return;
         };
-        if trace {
-            eprintln!(
-                "FOLDER INPUT resolved=true id={} position={position}",
-                photo.id()
-            );
-        }
 
         // Do not claim the sequence here: claiming on press prevents the
         // grouped drag gesture from ever emitting drag-update, which is what
@@ -806,9 +786,6 @@ fn install_folder_root_input(
         };
         state.last.clear();
         drop(state);
-        if trace {
-            eprintln!("FOLDER INPUT drag_begin x={x:.0} y={y:.0}");
-        }
         root_for_begin.set_cursor_from_name(Some("crosshair"));
     });
 
@@ -896,15 +873,6 @@ fn install_folder_root_input(
             }
             state.last = hit.clone();
         }
-        if trace {
-            let mut realized = Vec::new();
-            collect_tiles(root_for_update.upcast_ref(), &mut realized);
-            eprintln!(
-                "FOLDER INPUT drag_update realized={} selected={}",
-                realized.len(),
-                hit.len()
-            );
-        }
         selection_for_update.unselect_all();
         for position in &hit {
             selection_for_update.select_item(*position, false);
@@ -916,9 +884,6 @@ fn install_folder_root_input(
     let rubberband_for_end = rubberband.clone();
     let rubberband_rect_for_end = rubberband_rect.clone();
     drag.connect_drag_end(move |_, _, _| {
-        if trace {
-            eprintln!("FOLDER INPUT drag_end");
-        }
         root_for_end.set_cursor_from_name(None);
         rubberband_rect_for_end.set(None);
         rubberband_for_end.set_visible(false);
@@ -937,14 +902,9 @@ fn install_folder_root_input(
 }
 
 fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiSelection) {
-    let trace = std::env::var_os("PICASA_TRACE").is_some();
-    let verbose = std::env::var_os("PICASA_TRACE_VERBOSE").is_some();
-    let started = (trace || verbose).then(Instant::now);
-    let calls_before = SELECTION_POSITION_CALLS.with(Cell::get);
     let selected_ids = selected_photo_id_set(selection);
     let mut tiles = Vec::new();
     collect_tiles(root.upcast_ref(), &mut tiles);
-    let count = tiles.len();
     for tile in tiles {
         let selected = tile
             .imp()
@@ -953,21 +913,6 @@ fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiS
             .as_ref()
             .is_some_and(|photo| selected_ids.contains(&photo.id()));
         tile.set_manual_selected(selected);
-    }
-    if let Some(started) = started {
-        let elapsed_ms = started.elapsed().as_millis();
-        if verbose || elapsed_ms >= 8 {
-            eprintln!(
-                "UI PERF folder_selection_styles{} tiles={} items={} spfid_calls={} ms={}",
-                if elapsed_ms >= 8 { "_slow" } else { "" },
-                count,
-                selection.n_items(),
-                SELECTION_POSITION_CALLS
-                    .with(Cell::get)
-                    .wrapping_sub(calls_before),
-                elapsed_ms
-            );
-        }
     }
 }
 

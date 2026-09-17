@@ -458,8 +458,6 @@ impl Gallery {
         let selected_ids_for_folder_bind = folder_selected_ids.clone();
 
         folder_factory.connect_bind(move |_, object| {
-            let trace = std::env::var_os("PICASA_TRACE").is_some();
-            let bind_started = trace.then(Instant::now);
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
@@ -628,22 +626,6 @@ impl Gallery {
                     }
                 }
             }
-
-            if trace {
-                let elapsed_ms = bind_started
-                    .map(|started| started.elapsed().as_millis())
-                    .unwrap_or(0);
-                if elapsed_ms >= 12 {
-                    eprintln!(
-                        "UI PERF folder_line_bind_slow row={} kind={:?} folder_id={} photos={} elapsed_ms={}",
-                        list_item.position(),
-                        data.kind,
-                        data.folder_id,
-                        data.end.saturating_sub(data.start),
-                        elapsed_ms
-                    );
-                }
-            }
         });
 
         folder_factory.connect_unbind(move |_, object| {
@@ -757,28 +739,11 @@ impl Gallery {
     }
 
     fn update_layout(&self, width: i32, tile_size_changed: bool) {
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
-        let started = trace.then(Instant::now);
         let old_columns = self.current_columns.get();
         let old_width = self.last_layout_width.get();
         let columns = self.columns_for_width(width);
         if width == old_width && columns == old_columns && !tile_size_changed {
             return;
-        }
-        if trace {
-            eprintln!(
-                "UI PERF update_width_begin mode={:?} width={} old_layout_width={} tile={}x{} old_columns={} new_columns={} photos={} folder_ranges={} folder_rows={}",
-                self.group_mode.get(),
-                width,
-                old_width,
-                self.tile_width.get(),
-                self.tile_height.get(),
-                old_columns,
-                columns,
-                self.current_photos.borrow().len(),
-                self.group_ranges.borrow().len(),
-                self.folder_store.n_items()
-            );
         }
         self.last_layout_width.set(width);
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
@@ -807,15 +772,6 @@ impl Gallery {
             // Width-only changes with the same columns need no vertical layout
             // work. GTK stretches the row boxes itself. Re-anchoring here made
             // every sidebar animation frame issue competing scroll requests.
-            if trace {
-                eprintln!(
-                    "UI PERF update_width_skip_reflow mode={:?} width={} columns={} reason=columns_unchanged scroll_y={:.0}",
-                    self.group_mode.get(),
-                    width,
-                    columns,
-                    self.folder_root.vadjustment().map(|a| a.value()).unwrap_or(0.0)
-                );
-            }
             return;
         }
 
@@ -827,34 +783,12 @@ impl Gallery {
             // Each model item is one visual photo line. A column change must
             // rebuild those lines to keep the layout gapless.
             let anchor = self.take_reframe_anchor();
-            let before = self
-                .folder_root
-                .vadjustment()
-                .map(|adjustment| adjustment.value())
-                .unwrap_or(0.0);
             self.rebuild_folder_rows();
             if let Some(anchor) = anchor {
                 self.scroll_folder_to_photo(anchor);
             }
-            if trace {
-                eprintln!(
-                    "UI PERF folder_zoom_anchor id={:?} before={:.0}",
-                    anchor, before
-                );
-            }
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
-        }
-        if trace {
-            eprintln!(
-                "UI PERF update_width_end mode={:?} width={} columns={} rebuild_ms=0 total_ms={} folder_rows={} strategy={}",
-                self.group_mode.get(),
-                width,
-                columns,
-                started.map(|value| value.elapsed().as_millis()).unwrap_or(0),
-                self.folder_store.n_items(),
-                if folder_mode { "virtual_chunks_rebuilt" } else { "grid_columns" }
-            );
         }
     }
 

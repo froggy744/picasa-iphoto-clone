@@ -216,9 +216,7 @@ impl Gallery {
             return false;
         }
         self.pending_folder_target.replace(None);
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("SEARCH TRACE suggestion_focus_done folder_id={folder_id}");
-        }
+        
         true
     }
 
@@ -233,13 +231,7 @@ impl Gallery {
         self.current_photos.replace(cache.photos.clone());
         self.group_ranges.replace(cache.ranges.clone());
         self.store.splice(0, self.store.n_items(), &cache.photos);
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI PERF folder_cache_restore photos={} rows={}",
-                cache.photos.len(),
-                self.folder_store.n_items()
-            );
-        }
+        
         true
     }
 
@@ -277,18 +269,11 @@ impl Gallery {
         if self.group_mode.get() != GroupMode::Folder {
             return None;
         }
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
         let width = self.folder_root.width().max(1) as f64;
         for y in [4.0_f64, 20.0, 40.0, 64.0] {
-            let pick_started = trace.then(Instant::now);
             let picked = self
                 .folder_root
                 .pick(width * 0.5, y, gtk::PickFlags::DEFAULT);
-            if let Some(started) = pick_started {
-                SCROLL_PROBE_PICK_CALLS.with(|calls| calls.set(calls.get().wrapping_add(1)));
-                SCROLL_PROBE_PICK_NS
-                    .with(|ns| ns.set(ns.get().wrapping_add(started.elapsed().as_nanos())));
-            }
             if let Some(folder_id) = picked
                 .as_ref()
                 .and_then(folder_id_from_named_ancestor)

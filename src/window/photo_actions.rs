@@ -13,9 +13,7 @@ fn dismiss_active_photo_context_menu() -> bool {
         if menu.parent().is_some() {
             menu.unparent();
         }
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("UI TRACE photo_context_menu_dismiss");
-        }
+        
         true
     })
 }
@@ -181,13 +179,7 @@ fn show_photo_context_menu(
     }
 
     let selection_ids = selected_photo_ids(&context, Some(photo.id()));
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "COLLAGE TRACE context clicked_id={} selected_ids={:?}",
-            photo.id(),
-            selection_ids
-        );
-    }
+    
     let selection_for_provider = selection_ids.clone();
     let selection_provider: Rc<dyn Fn() -> Vec<i64>> =
         Rc::new(move || selection_for_provider.clone());
@@ -224,9 +216,7 @@ fn show_photo_context_menu(
     let dismiss_menu_for_collage = dismiss_menu.clone();
     collage.connect_clicked(move |_| {
         dismiss_menu_for_collage();
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("COLLAGE TRACE open ids={:?}", collage_ids);
-        }
+        
         (collage_context.open_collage)(collage_ids.clone());
     });
 
@@ -726,20 +716,7 @@ fn show_photo_context_menu(
         active.borrow_mut().replace(menu_widget);
     });
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "UI TRACE photo_context_menu_show host=GtkOverlay anchor={} host_size={}x{} point=({:.1},{:.1}) menu=({}, {}) measured={}x{}",
-            anchor.type_().name(),
-            host.width(),
-            host.height(),
-            click_point.x(),
-            click_point.y(),
-            menu_x,
-            menu_y,
-            measured_width,
-            measured_height
-        );
-    }
+    
 
     host.add_overlay(&menu_host);
     menu_host.set_visible(true);

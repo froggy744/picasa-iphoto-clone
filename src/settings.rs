@@ -599,7 +599,6 @@ fn schedule_availability_stats(
 pub fn refresh_library_availability_stats(_connection: Rc<RefCell<Connection>>) {
     std::thread::spawn(move || {
         const PAGE_SIZE: usize = 512;
-        let started = std::time::Instant::now();
         let connection = match crate::db::open_default() {
             Ok(connection) => connection,
             Err(error) => {
@@ -652,14 +651,7 @@ pub fn refresh_library_availability_stats(_connection: Rc<RefCell<Connection>>) 
         ) {
             eprintln!("Could not save library stats timestamp: {error}");
         }
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "REFRESH availability_stats_worker_done available={} unavailable={} elapsed_ms={}",
-                available,
-                unavailable,
-                started.elapsed().as_millis()
-            );
-        }
+        
     });
 }
 

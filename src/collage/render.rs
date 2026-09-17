@@ -55,13 +55,6 @@ pub fn export(project: &CollageProject, destination: &Path, options: &ExportOpti
     };
     let width = width.max(1);
     let height = height.max(1);
-    trace_export(&format!("destination={}", destination.display()));
-    trace_export(&format!(
-        "canvas={}x{} items={}",
-        width,
-        height,
-        project.items.len()
-    ));
     let background = match project.background {
         Background::White => image::Rgba([255, 255, 255, 255]),
         Background::Black => image::Rgba([0, 0, 0, 255]),
@@ -80,11 +73,6 @@ pub fn export(project: &CollageProject, destination: &Path, options: &ExportOpti
         ) {
             Ok(decoded) => decoded,
             Err(error) => {
-                trace_export(&format!(
-                    "decode_failed id={} path={} error={error:#}",
-                    item.photo.id, item.photo.path
-                ));
-                trace_export(&format!("failed stage=decode error={error:#}"));
                 return Err(error).with_context(|| {
                     format!(
                         "could not decode original {} for collage export",
@@ -138,20 +126,17 @@ pub fn export(project: &CollageProject, destination: &Path, options: &ExportOpti
         .unwrap_or_else(|| Path::new("."));
     if !parent.is_dir() {
         let error = anyhow::anyhow!("parent directory does not exist: {}", parent.display());
-        trace_export(&format!("failed stage=parent_directory error={error}"));
         return Err(error);
     }
 
     let file = match File::create(destination) {
         Ok(file) => file,
         Err(error) => {
-            trace_export(&format!("failed stage=file_create error={error}"));
             return Err(error).with_context(|| {
                 format!("could not create collage file at {}", destination.display())
             });
         }
     };
-    trace_export(&format!("encoding destination={}", destination.display()));
     let mut writer = BufWriter::new(file);
     let encode_result = match options.format {
         ExportFormat::Jpeg => {
@@ -174,18 +159,12 @@ pub fn export(project: &CollageProject, destination: &Path, options: &ExportOpti
         }
     };
     if let Err(error) = encode_result {
-        trace_export(&format!(
-            "failed stage=encode format={:?} error={error}",
-            options.format
-        ));
         return Err(error).context("could not encode collage");
     }
     if let Err(error) = writer.flush() {
-        trace_export(&format!("failed stage=flush error={error}"));
         return Err(error)
             .with_context(|| format!("could not flush collage at {}", destination.display()));
     }
-    trace_export(&format!("success destination={}", destination.display()));
     Ok(())
 }
 
@@ -216,12 +195,6 @@ fn round_corners(image: &mut RgbaImage, radius_ratio: f32) {
                 image.get_pixel_mut(x as u32, y as u32).0[3] = 0;
             }
         }
-    }
-}
-
-fn trace_export(message: &str) {
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!("COLLAGE EXPORT {message}");
     }
 }
 

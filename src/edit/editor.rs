@@ -700,7 +700,7 @@ pub fn build(
                                             }
                                             let h_max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
                                             let v_max = (vadj.upper() - vadj.page_size()).max(vadj.lower());
-                                            let (target_h, target_v, anchored, trace_anchor) = match anchor {
+                                            let (target_h, target_v) = match anchor {
                                                 Some(OneToOneAnchor::Cursor {
                                                     normalized_x,
                                                     normalized_y,
@@ -719,8 +719,6 @@ pub fn build(
                                                         vadj.page_size(),
                                                         height as f64,
                                                     ),
-                                                    true,
-                                                    Some((normalized_x, normalized_y, pointer_x, pointer_y)),
                                                 ),
                                                 _ => (
                                                     one_to_one_scroll_target(
@@ -739,23 +737,11 @@ pub fn build(
                                                         height as f64,
                                                         false,
                                                     ),
-                                                    false,
-                                                    None,
                                                 ),
                                             };
                                             hadj.set_value(target_h.clamp(hadj.lower(), h_max));
                                             vadj.set_value(target_v.clamp(vadj.lower(), v_max));
-                                            if std::env::var_os("PICASA_TRACE").is_some() {
-                                                eprintln!(
-                                                    "EDIT 1TO1 anchor={} normalized={:?} scroll=({:.1},{:.1}) target={}x{}",
-                                                    if anchored { "cursor" } else { "center" },
-                                                    trace_anchor,
-                                                    hadj.value(),
-                                                    vadj.value(),
-                                                    width,
-                                                    height
-                                                );
-                                            }
+                                            
                                             glib::ControlFlow::Break
                                         });
                                         } else {
@@ -1301,16 +1287,7 @@ pub fn build(
                     let v_max = (vadj.upper() - vadj.page_size()).max(vadj.lower());
                     hadj.set_value(target_h.clamp(hadj.lower(), h_max));
                     vadj.set_value(target_v.clamp(vadj.lower(), v_max));
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "EDIT ZOOM anchor=({:.1},{:.1}) scroll=({:.1},{:.1}) zoom={:.2}",
-                            pointer_x,
-                            pointer_y,
-                            hadj.value(),
-                            vadj.value(),
-                            new_multiplier
-                        );
-                    }
+                    
                 });
             }
 
@@ -1379,13 +1356,7 @@ pub fn build(
                 );
 
                 let anchor = if let Some((normalized_x, normalized_y)) = normalized {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "EDIT 1TO1 request normalized=({:.4},{:.4}) cursor=({:.1},{:.1}) rect=({:.1},{:.1},{:.1},{:.1})",
-                            normalized_x, normalized_y, pointer_x, pointer_y,
-                            photo_x, photo_y, photo_width, photo_height
-                        );
-                    }
+                    
                     OneToOneAnchor::Cursor {
                         normalized_x,
                         normalized_y,
@@ -1715,50 +1686,27 @@ pub fn build(
 
         glib::timeout_add_local_once(Duration::from_millis(300), move || {
             if cached_preview_base(&cache, &path, rotation, target_width, target_height).is_some() {
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "EDIT PREFETCH cache=hit target={}x{} path={}",
-                        target_width, target_height, path
-                    );
-                }
+                
                 return;
             }
 
             std::thread::spawn(move || {
-                let started = Instant::now();
-                match super::render::decode_base_for_viewer(
+                if let Ok(image) = super::render::decode_base_for_viewer(
                     &path,
                     rotation,
                     target_width,
                     target_height,
                 ) {
-                    Ok(image) => {
-                        let decode_ms = started.elapsed().as_millis();
-                        store_preview_base(
-                            &cache,
-                            PreviewBase {
-                                path: path.clone(),
-                                rotation,
-                                target_width,
-                                target_height,
-                                image,
-                            },
-                        );
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!(
-                                "EDIT PREFETCH cache=ready decode_ms={} target={}x{} path={}",
-                                decode_ms, target_width, target_height, path
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!(
-                                "EDIT PREFETCH cache=failed target={}x{} path={} error={:#}",
-                                target_width, target_height, path, error
-                            );
-                        }
-                    }
+                    store_preview_base(
+                        &cache,
+                        PreviewBase {
+                            path: path.clone(),
+                            rotation,
+                            target_width,
+                            target_height,
+                            image,
+                        },
+                    );
                 }
             });
         });

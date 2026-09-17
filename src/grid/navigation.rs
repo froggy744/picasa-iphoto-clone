@@ -45,7 +45,6 @@ impl Gallery {
         let mode = self.group_mode.clone();
         let pending = self.folder_pending_reframe.clone();
         let reframe_photo = self.folder_reframe_photo.clone();
-        let trace = std::env::var_os("PICASA_TRACE").is_some();
         glib::idle_add_local_once(move || {
             if generation.get() != request
                 || model_generation.get() != model_request
@@ -60,13 +59,6 @@ impl Gallery {
             if let Some(adjustment) = root.vadjustment() {
                 let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
                 adjustment.set_value(exact_offset.clamp(adjustment.lower(), upper));
-                if trace {
-                    eprintln!(
-                        "UI PERF folder_zoom_anchor_exact row={row} target={:.0} after={:.0}",
-                        exact_offset,
-                        adjustment.value()
-                    );
-                }
 
                 // Exact virtual-row positioning succeeded. Do not run the old
                 // bounds-based settle loop afterwards: GTK can report transient
@@ -127,13 +119,6 @@ impl Gallery {
                 } else {
                     stable_frames.set(0);
                     adjustment.set_value(target);
-                }
-                if trace {
-                    eprintln!(
-                        "UI PERF folder_zoom_anchor row={row} bounds_y={:.0} after={:.0}",
-                        bounds.y(),
-                        adjustment.value()
-                    );
                 }
                 if stable_frames.get() >= 2 || frames.get() >= 8 {
                     // Selecting a fresh anchor is allowed again once this

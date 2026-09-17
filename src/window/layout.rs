@@ -291,10 +291,7 @@
                     favorite,
                 ) {
                     Ok(changed) => {
-                        eprintln!(
-                            "FAVORITE TRACE folder={} favorite={} changed={}",
-                            folder.id, favorite, changed
-                        );
+                        
                         refresh_photo_actions_grid(&context);
                         (context.on_unavailable)();
                     }
@@ -460,41 +457,24 @@
                 // Mount changes only re-evaluate folder availability for the
                 // offline badge. Cached thumbnails stay usable; do not start
                 // thumbnail recovery, scanning, or per-photo file checks.
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!("AVAILABILITY request reason=mount_update scan=false");
-                }
+                
                 availability_refresh();
             });
         })
     };
     let schedule_mount_refresh_for_mount = schedule_mount_refresh.clone();
     volume_monitor.connect_mount_added(move |_, mount| {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE availability_mount_added uri={}",
-                mount.root().uri()
-            );
-        }
+        
         schedule_mount_refresh_for_mount();
     });
     let schedule_mount_refresh_for_unmount = schedule_mount_refresh.clone();
     volume_monitor.connect_mount_removed(move |_, mount| {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE availability_mount_removed uri={}",
-                mount.root().uri()
-            );
-        }
+        
         schedule_mount_refresh_for_unmount();
     });
     let schedule_mount_refresh_for_change = schedule_mount_refresh.clone();
     volume_monitor.connect_mount_changed(move |_, mount| {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE availability_mount_changed uri={}",
-                mount.root().uri()
-            );
-        }
+        
         schedule_mount_refresh_for_change();
     });
     unsafe {
@@ -982,36 +962,10 @@
             open_collage(gallery.selected_photo_ids(None));
         });
     }
-    // Keep the search field centered in the header. Its allocation is traced
-    // below because HeaderBar title sizing changes when the split sidebar is
-    // shown or hidden.
+    // Keep the search field centered in the header.
     right_header.set_title_widget(Some(&search_area));
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        let search_for_trace = search.clone();
-        let search_area_for_trace = search_area.clone();
-        let header_for_trace = right_header.clone();
-        main_split.connect_show_sidebar_notify(move |split| {
-            let search = search_for_trace.clone();
-            let search_area = search_area_for_trace.clone();
-            let header = header_for_trace.clone();
-            let split = split.clone();
-            let shown = split.shows_sidebar();
-            let collapsed = split.is_collapsed();
-            glib::idle_add_local_once(move || {
-                eprintln!(
-                    "SEARCH TRACE sidebar shown={} collapsed={} split_width={} header_width={} area_width={} entry_width={} text_chars={}",
-                    shown,
-                    collapsed,
-                    split.width(),
-                    header.width(),
-                    search_area.width(),
-                    search.width(),
-                    search.text().chars().count(),
-                );
-            });
-        });
-    }
+    
 
     // The lightbox takes keyboard focus while it is open and covers the
     // header, so the search entry cannot be clicked or receive typed input.
@@ -1096,9 +1050,7 @@
             return glib::Propagation::Proceed;
         }
         gallery_for_search_navigation.root.grab_focus();
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("SEARCH TRACE gallery_navigation key={key:?}");
-        }
+        
         let _ = controller.forward(
             gallery_for_search_navigation
                 .root
@@ -1142,22 +1094,16 @@
     let sidebar_selection_for_search = sidebar_selection_slot.clone();
     let suggestion_popover_for_search = suggestion_popover.clone();
     let suggestion_list_for_search = suggestion_list.clone();
-    let search_area_for_search = search_area.clone();
-    let right_header_for_search = right_header.clone();
-    let main_split_for_search = main_split.clone();
 
     search.connect_search_changed(move |entry| {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let callback_started = Instant::now();
             if search_suppressed_for_search.get() {
                 return;
             }
             if let Some(source) = search_debounce_for_search.borrow_mut().take() {
-                let removal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     source.remove();
                 }));
-                if removal.is_err() {
-                }
             }
             let query = entry.text().to_string();
             if should_ignore_cleared_search_event(
@@ -1202,16 +1148,7 @@
                     }
                 }
             }
-            eprintln!(
-                "SEARCH TRACE changed folder_db_matches count={} query_chars={} entry_width={} area_width={} header_width={} sidebar_shown={} split_collapsed={}",
-                folders_for_search.len(),
-                query.chars().count(),
-                entry.width(),
-                search_area_for_search.width(),
-                right_header_for_search.width(),
-                main_split_for_search.shows_sidebar(),
-                main_split_for_search.is_collapsed(),
-            );
+            
             update_folder_suggestions(
                 &suggestion_popover_for_search,
                 &suggestion_list_for_search,
@@ -1225,9 +1162,7 @@
                     let search_text = search_text_for_search.clone();
                     let folders = folders_for_search.clone();
                     move |folder_id| {
-                        if std::env::var_os("PICASA_TRACE").is_some() {
-                            eprintln!("SEARCH TRACE suggestion_navigate folder_id={}", folder_id);
-                        }
+                        
                         let folder_path = folders
                             .iter()
                             .find(|folder| folder.id == folder_id)
@@ -1244,11 +1179,7 @@
                         // valid cache restore focus immediately without reloading the stream.
                         if let Some(folder_path) = folder_path {
                             gallery.set_pending_folder_target(folder_id, folder_path);
-                            if std::env::var_os("PICASA_TRACE").is_some() {
-                                eprintln!(
-                                    "SEARCH TRACE folder_focus_pending folder_id={folder_id}"
-                                );
-                            }
+                            
                             let focused_immediately = gallery.try_focus_pending_folder();
                             let gallery = gallery.clone();
                             let filter = filter.clone();
@@ -1295,7 +1226,6 @@
                     }
                 }),
             );
-            trace_search_focus("suggestions-updated", entry, &suggestion_popover_for_search);
 
             if query.is_empty() {
                 refresh_grid(
@@ -1316,7 +1246,6 @@
                 let source = glib::timeout_add_local(
                     Duration::from_millis(SEARCH_DEBOUNCE_MS),
                     move || {
-                        let refresh_started = Instant::now();
                         // The source removes itself after returning Break. Clear
                         // the slot now so a later keystroke never tries to remove
                         // an already-finished SourceId.
@@ -1331,21 +1260,13 @@
                             sort.get(),
                             &gallery,
                         );
-                        eprintln!(
-                            "SEARCH TRACE global_refresh_done query={:?} elapsed_ms={}",
-                            query_for_refresh,
-                            refresh_started.elapsed().as_millis()
-                        );
+                        
                         glib::ControlFlow::Break
                     },
                 );
                 search_debounce_for_search.replace(Some(source));
             }
-            eprintln!(
-                "SEARCH TRACE changed done query={:?} elapsed_ms={}",
-                query,
-                callback_started.elapsed().as_millis()
-            );
+            
         }));
         if let Err(payload) = result {
             let message = payload
@@ -1391,7 +1312,6 @@
             sort_for_activate.get(),
             &gallery_for_activate,
         );
-        trace_search_focus("activate", entry, &suggestion_popover_for_activate);
     });
 
     (

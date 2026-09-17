@@ -338,15 +338,7 @@ fn reflow_bookshelf_rows(runtime: &BookshelfRuntime, columns: usize, theme: &Boo
     build_bookshelf_rows(&runtime.rows, &cards, columns, theme);
     runtime.last_columns.set(columns);
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "ALBUM SHELF TRACE theme={} columns={} rows={} cards={}",
-            theme.id,
-            columns,
-            (cards.len() + columns - 1) / columns,
-            cards.len()
-        );
-    }
+    
 }
 
 fn insert_child(

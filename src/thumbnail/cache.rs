@@ -59,11 +59,7 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
     let destination = cache_path(path, mtime, size_bytes)?;
     let failure_marker = destination.with_extension("failed");
     if destination.is_file() {
-        thumb_trace!(
-            "THUMB TRACE cache-hit path={} cache={}",
-            path,
-            destination.display()
-        );
+        
         return Ok(destination);
     }
     if failure_marker.is_file() {
@@ -72,11 +68,7 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
             // once; only confirmed decode failures now suppress future work.
             let _ = fs::remove_file(&failure_marker);
         } else {
-            thumb_trace!(
-                "THUMB TRACE failed-cache-suppressed path={} marker={}",
-                path,
-                failure_marker.display()
-            );
+            
             return Ok(destination);
         }
     }
@@ -86,11 +78,7 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
         .map_err(|_| anyhow::anyhow!("thumbnail in-flight registry poisoned"))?
         .insert(destination.clone());
     if !claimed {
-        thumb_trace!(
-            "THUMB TRACE duplicate-suppressed path={} cache={}",
-            path,
-            destination.display()
-        );
+        
         return Ok(destination);
     }
 
@@ -121,79 +109,26 @@ fn known_decode_failure(path: &str, destination: &Path) -> bool {
 }
 
 fn create_uncached(path: &str, destination: &PathBuf) -> Result<PathBuf> {
-    let started = Instant::now();
-    thumb_trace!(
-        "THUMB TRACE start path={} cache={}",
-        path,
-        destination.display()
-    );
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
-    let decode_started = Instant::now();
-    let (source, source_width, source_height, decoder, scale, read_ms) = if is_raw(path) {
-        let decoded = decode_raw_thumbnail(path)?;
-        (
-            decoded.image,
-            decoded.source_width,
-            decoded.source_height,
-            "rawler",
-            "embedded preview",
-            0,
-        )
+
+    let source = if is_raw(path) {
+        decode_raw_thumbnail(path)?.image
     } else {
-        let read_started = Instant::now();
         let bytes = crate::source::read(path)?;
-        let read_ms = read_started.elapsed().as_millis();
         if is_jpeg(path) {
             match decode_jpeg_turbo(&bytes) {
-                Ok(decoded) => (
-                    decoded.image,
-                    decoded.source_width,
-                    decoded.source_height,
-                    "turbojpeg",
-                    decoded.scale,
-                    read_ms,
-                ),
-                Err(error) => {
-                    thumb_trace!(
-                        "THUMB TRACE turbojpeg-fallback path={} reason={}",
-                        path,
-                        error
-                    );
-                    let decoded = decode_with_image(&bytes)?;
-                    (
-                        decoded.image,
-                        decoded.source_width,
-                        decoded.source_height,
-                        "image",
-                        "1/1",
-                        read_ms,
-                    )
-                }
+                Ok(decoded) => decoded.image,
+                Err(_) => decode_with_image(&bytes)?.image,
             }
         } else if is_heif(path) {
-            let decoded = decode_heif(&bytes)?;
-            (
-                decoded.image,
-                decoded.source_width,
-                decoded.source_height,
-                "heif-oxide",
-                "1/1",
-                read_ms,
-            )
+            decode_heif(&bytes)?.image
         } else {
-            let decoded = decode_with_image(&bytes)?;
-            (
-                decoded.image,
-                decoded.source_width,
-                decoded.source_height,
-                "image",
-                "1/1",
-                read_ms,
-            )
+            decode_with_image(&bytes)?.image
         }
     };
+
     // heif-oxide applies HEIF container transforms (`irot`/`imir`/`clap`) as
     // part of decoding, so its pixels already have display orientation. Do
     // not apply an EXIF orientation a second time; some HEIC files contain
@@ -204,23 +139,10 @@ fn create_uncached(path: &str, destination: &PathBuf) -> Result<PathBuf> {
         exif_orientation(path)
     };
     let source = apply_orientation(DynamicImage::ImageRgb8(source), orientation).to_rgb8();
-    let decode_ms = decode_started.elapsed().as_millis();
-    thumb_trace!(
-        "THUMB TRACE decoded path={} decoder={} scale={} source={}x{}",
-        path,
-        decoder,
-        scale,
-        source_width,
-        source_height
-    );
-
-    let resize_started = Instant::now();
     let resized = resize(source)?;
-    let resize_ms = resize_started.elapsed().as_millis();
     let output_width = resized.width();
     let output_height = resized.height();
 
-    let encode_started = Instant::now();
     let mut encoded = Vec::new();
     JpegEncoder::new(&mut encoded).write_image(
         resized.as_raw(),
@@ -228,26 +150,6 @@ fn create_uncached(path: &str, destination: &PathBuf) -> Result<PathBuf> {
         output_height,
         ColorType::Rgb8.into(),
     )?;
-    let encode_ms = encode_started.elapsed().as_millis();
-
-    let write_started = Instant::now();
-    fs::write(&destination, encoded)?;
-    let write_ms = write_started.elapsed().as_millis();
-    thumb_trace!(
-        "THUMB PERF: path={} decoder={} scale={} source={}x{} output={}x{} read={}ms decode={}ms resize={}ms encode={}ms write={}ms total={}ms",
-        path,
-        decoder,
-        scale,
-        source_width,
-        source_height,
-        output_width,
-        output_height,
-        read_ms,
-        decode_ms,
-        resize_ms,
-        encode_ms,
-        write_ms,
-        started.elapsed().as_millis()
-    );
+    fs::write(destination, encoded)?;
     Ok(destination.clone())
 }

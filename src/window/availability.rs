@@ -152,9 +152,7 @@ fn spawn_thumbnail_recovery(
             .collect();
         let (mut ready, mut offline) = crate::thumbnail::recovery_items(items);
         ready.sort_by_key(|(path, _, _)| !startup_paths.contains(path));
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("THUMB RECOVERY ready={} offline={offline}", ready.len());
-        }
+        
         if !ready.is_empty() && !control.is_cancelled() {
             send(scanner::ScanEvent::ThumbnailsStarted { total: ready.len() });
         }
@@ -198,17 +196,10 @@ fn spawn_thumbnail_recovery(
 }
 
 fn run_ui_guarded(label: &str, action: impl FnOnce()) {
-    let started = std::time::Instant::now();
     if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)) {
         eprintln!("UI CALLBACK PANIC RECOVERED: {label}: {panic:?}");
     }
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "UI PERF callback={} elapsed_ms={}",
-            label,
-            started.elapsed().as_millis()
-        );
-    }
+    
 }
 
 fn show_unavailable_dialog(

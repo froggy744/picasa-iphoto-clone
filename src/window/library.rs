@@ -64,11 +64,7 @@ fn refresh_grid_inner(
     if filter == sidebar::SidebarFilter::Albums {
         return;
     }
-    let trace = std::env::var_os("PICASA_TRACE").is_some();
-    let started = trace.then(Instant::now);
-
     let generation = REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    let filter_label = format!("{filter:?}");
     let search = search.to_owned();
     let (sender, receiver) = std::sync::mpsc::channel();
 
@@ -129,9 +125,6 @@ fn refresh_grid_inner(
         match receiver.try_recv() {
             Ok(Some(photos)) => {
                 if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
-                    if let Some(started) = started {
-                        eprintln!("UI PERF refresh_grid filter={} photos={} ms={}", filter_label, photos.len(), started.elapsed().as_millis());
-                    }
                     gallery.replace(&photos);
                     if let Some((folder_id, folder_path)) = folder_target.clone() {
                         let gallery = gallery.clone();

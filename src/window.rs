@@ -198,18 +198,6 @@ impl PhotoScanRequestReason {
             | Self::ProgrammaticSidebarSelection => None,
         }
     }
-
-    fn trace_label(self) -> &'static str {
-        match self {
-            Self::UserFolderRefresh => "user_click",
-            Self::ManualLibraryRefresh => "manual_refresh",
-            Self::ImportFolder => "import",
-            Self::FilesystemNotification => "filesystem_notification",
-            Self::DebouncedWatchRefresh => "watch_refresh",
-            Self::AvailabilityUpdate => "availability_update",
-            Self::ProgrammaticSidebarSelection => "programmatic_sidebar_selection",
-        }
-    }
 }
 
 /// Resolve a watched library folder to the imported root that owns its scan.
@@ -246,13 +234,11 @@ enum RefreshPrepareEvent {
     LibraryReady {
         generation: u64,
         roots: Result<Vec<String>, String>,
-        elapsed_ms: u128,
     },
     FolderReady {
         generation: u64,
         path: String,
         imported_root: Result<bool, String>,
-        elapsed_ms: u128,
     },
 }
 

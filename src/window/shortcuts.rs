@@ -36,8 +36,7 @@
         if (key == gtk::gdk::Key::Escape || key == gtk::gdk::Key::BackSpace)
             && lightbox_for_window_escape.root.is_visible()
         {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-            }
+            
             lightbox_for_window_escape.close();
             glib::Propagation::Stop
         } else if key == gtk::gdk::Key::F11 {
@@ -74,20 +73,15 @@
                 if one_to_one_for_key.is_active() {
                     space_toggle_in_progress_for_key.set(true);
                     one_to_one_for_key.set_active(false);
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("UI TRACE lightbox_space active=false");
-                    }
+                    
                 } else {
                     space_toggle_in_progress_for_key.set(true);
                     one_to_one_for_key.set_active(true);
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("UI TRACE lightbox_space active=true");
-                    }
+                    
                 }
             } else if let Some(open_selected) = space_open_slot_for_key.borrow().as_ref() {
                 open_selected();
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                }
+                
             }
             glib::Propagation::Stop
         } else {

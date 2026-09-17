@@ -40,16 +40,6 @@ thread_local! {
         const { RefCell::new(VecDeque::new()) };
     static FOLDER_THUMBNAIL_CACHE: RefCell<VecDeque<(String, gtk::gdk::Paintable)>> =
         const { RefCell::new(VecDeque::new()) };
-    static SELECTION_POSITION_CALLS: Cell<u64> = const { Cell::new(0) };
-    static SCROLL_PROBE_PICK_CALLS: Cell<u64> = const { Cell::new(0) };
-    static SCROLL_PROBE_PICK_NS: Cell<u128> = const { Cell::new(0) };
-    static SCROLL_PROBE_SCAN_NS: Cell<u128> = const { Cell::new(0) };
-    static THUMB_LOAD_COUNT: Cell<u64> = const { Cell::new(0) };
-    static THUMB_LOAD_RELOADS: Cell<u64> = const { Cell::new(0) };
-    static THUMB_LOAD_MAX_MS: Cell<u128> = const { Cell::new(0) };
-    static THUMB_LOAD_FS_MS: Cell<u128> = const { Cell::new(0) };
-    static THUMB_LOAD_APPLY_MS: Cell<u128> = const { Cell::new(0) };
-    static THUMB_LOAD_SEEN: RefCell<HashSet<i64>> = RefCell::new(HashSet::new());
     static GRID_SCRUB_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -196,7 +186,7 @@ mod folder_stream_tests {
     }
 
     #[test]
-    fn exact_folder_row_offset_uses_fixed_model_heights() {
+    fn exact_folder_row_offset_uses_header_and_photo_heights() {
         let rows = vec![
             FolderVirtualRow {
                 kind: FolderRowKind::Header,
@@ -225,15 +215,23 @@ mod folder_stream_tests {
             },
         ];
 
-        // At tile height 88 the shared model-row height is 100px, so four
-        // rows (including both headers) have an exact 400px offset.
-        assert_eq!(super::folder_row_offset(&rows, 4, 88), 400.0);
+        // At tile height 88 photo rows are 100 px while headers stay at 70 px.
+        // Before row 4 there are two headers and two photo rows: 70+100+100+70.
+        assert_eq!(super::folder_row_offset(&rows, 4, 88), 340.0);
     }
 
     #[test]
-    fn folder_model_rows_share_one_height_per_zoom_level() {
-        assert_eq!(super::folder_row_height(88), 100);
-        assert_eq!(super::folder_row_height(40), super::FOLDER_HEADER_HEIGHT);
+    fn folder_model_rows_use_compact_headers_and_zoomed_photo_lines() {
+        assert_eq!(
+            super::folder_model_row_height(FolderRowKind::Header, 88),
+            super::FOLDER_HEADER_HEIGHT
+        );
+        assert_eq!(super::folder_model_row_height(FolderRowKind::Photos, 88), 100);
+        assert_eq!(
+            super::folder_model_row_height(FolderRowKind::Header, 155),
+            super::FOLDER_HEADER_HEIGHT
+        );
+        assert_eq!(super::folder_model_row_height(FolderRowKind::Photos, 155), 167);
     }
 
     fn sample_ranges() -> Vec<GroupRange> {

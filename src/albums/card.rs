@@ -468,18 +468,7 @@ fn album_card(
         (photo, cached)
     });
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "ALBUM TRACE id={} name={} photos={} cover={:?}",
-            album.id,
-            album.name,
-            photos.len(),
-            cover_photo.as_ref().map(|(photo, path)| path
-                .as_deref()
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_else(|| photo.path.clone()))
-        );
-    }
+    
 
     if let Some((photo, cached)) = cover_photo.as_ref() {
         // A cover without a cached thumbnail yet still draws from its original
@@ -601,26 +590,7 @@ fn album_card(
     card.set_child(Some(&content));
     install_album_context_menu(&card, menu_connection, album.clone(), on_appearance_changed);
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        let cover_for_trace = cover.clone();
-        let picture_for_trace = picture.clone();
-        card.add_tick_callback(move |card, _| {
-            if card.allocated_width() <= 0 || card.allocated_height() <= 0 {
-                return glib::ControlFlow::Continue;
-            }
-
-            eprintln!(
-                "ALBUM COVER TRACE card={}x{} cover={}x{} picture={}x{}",
-                card.allocated_width(),
-                card.allocated_height(),
-                cover_for_trace.allocated_width(),
-                cover_for_trace.allocated_height(),
-                picture_for_trace.allocated_width(),
-                picture_for_trace.allocated_height()
-            );
-            glib::ControlFlow::Break
-        });
-    }
+    
 
     let album_id = album.id;
     card.connect_clicked(move |_| {
