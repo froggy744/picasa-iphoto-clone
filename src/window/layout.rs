@@ -881,6 +881,11 @@
         let right_header = right_header.clone();
         let main_split = main_split.clone();
         let mode = window_controls_mode.clone();
+        // Which header currently hosts the lights. get_parent() of a
+        // headerbar-packed child is the headerbar's internal start box, not
+        // the headerbar itself, so host tracking goes through this cell
+        // instead of comparing parents.
+        let host: Rc<RefCell<Option<adw::HeaderBar>>> = Rc::new(RefCell::new(None));
         Rc::new(move || {
             let traffic = mode.get()
                 == crate::css::theme_discovery::WindowControls::TrafficLight;
@@ -889,21 +894,29 @@
             // off; the traffic-light box replaces them wherever they live.
             left_header.set_show_start_title_buttons(!traffic && sidebar_visible);
             right_header.set_show_start_title_buttons(!traffic && !sidebar_visible);
-            // The box lives in whichever header is on screen, never both.
-            let target: adw::HeaderBar = if sidebar_visible {
-                left_header.clone()
-            } else {
-                right_header.clone()
-            };
-            if window_controls.parent().as_ref() != Some(target.upcast_ref()) {
-                if let Some(old_parent) = window_controls.parent() {
-                    if let Ok(header) = old_parent.downcast::<adw::HeaderBar>() {
-                        header.remove(&window_controls);
+            let mut host = host.borrow_mut();
+            if traffic {
+                let target = if sidebar_visible {
+                    left_header.clone()
+                } else {
+                    right_header.clone()
+                };
+                if host.as_ref() != Some(&target) {
+                    // Unparent from whatever holds the box (the previous
+                    // header's internal start box) before repacking.
+                    if window_controls.parent().is_some() {
+                        window_controls.unparent();
                     }
+                    target.pack_start(&window_controls);
+                    *host = Some(target);
                 }
-                target.pack_start(&window_controls);
+                window_controls.set_visible(true);
+            } else {
+                if host.take().is_some() && window_controls.parent().is_some() {
+                    window_controls.unparent();
+                }
+                window_controls.set_visible(false);
             }
-            window_controls.set_visible(traffic);
         })
     };
     let place_for_notify = place_window_controls.clone();

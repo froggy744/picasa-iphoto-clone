@@ -280,8 +280,6 @@ window, .layout-left-column, .navigation-sidebar { background: @window_bg_color;
     button.traffic-light {
         min-width: 13px;
         min-height: 13px;
-        width: 13px;
-        height: 13px;
         padding: 0;
         margin: 0 3px;
         border-radius: 9999px;
