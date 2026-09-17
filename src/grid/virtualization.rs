@@ -211,7 +211,7 @@ impl Gallery {
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
-        self.request_zoom(base + ZOOM_STEP_WIDTH);
+        self.request_zoom(next_zoom_level(base));
     }
 
     pub fn zoom_out(self: &Rc<Self>) {
@@ -219,7 +219,33 @@ impl Gallery {
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
-        self.request_zoom(base - ZOOM_STEP_WIDTH);
+        self.request_zoom(prev_zoom_level(base));
+    }
+
+    /// Reset to the default view level: ~4 thumbnails per row for the current
+    /// surface, matching the startup default for users who never picked a
+    /// size. Falls back to the ladder level nearest the legacy fixed default
+    /// before the first real layout is known.
+    pub fn reset_zoom(self: &Rc<Self>) {
+        let width = if self.group_mode.get() == GroupMode::Folder {
+            self.folder_root.width()
+        } else {
+            self.root.width()
+        };
+        let target = if width > 0 {
+            zoom_level_for_four_columns(width)
+        } else {
+            nearest_zoom_level(DEFAULT_TILE_WIDTH)
+        };
+        self.request_zoom(target);
+    }
+
+    /// Adopt the ~4-thumbnails-per-row default on the first real layout.
+    /// Only set when no user-chosen thumbnail size is stored; the size stays
+    /// session-local until the user zooms manually, so resizing the window
+    /// later keeps re-targeting the default instead of freezing an old width.
+    pub fn enable_auto_default_zoom(&self) {
+        self.auto_default_zoom.set(true);
     }
 
     /// Record a zoom request. Isolated clicks apply immediately; a rapid
@@ -227,7 +253,11 @@ impl Gallery {
     /// crossing several column boundaries does not rebuild the Folder rows per
     /// notch.
     pub fn request_zoom(self: &Rc<Self>, width: i32) {
-        let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+        // Snap every request onto the canonical ladder so +/-, Ctrl+wheel and
+        // Reset converge on the same sizes no matter where they start.
+        let width = nearest_zoom_level(width).clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+        // An explicit zoom always wins over the pending startup default.
+        self.auto_default_zoom.set(false);
         let base = self
             .pending_zoom_width
             .get()
@@ -261,8 +291,13 @@ impl Gallery {
     }
 
     /// Zoom is driven by width. Height scales by the same factor, preserving
-    /// the custom width/height shape configured above.
+    /// the custom width/height shape configured above. `persist` is false for
+    /// the startup default so adopting it does not turn it into a preference.
     fn apply_zoom(&self, width: i32) {
+        self.apply_tile_size(width, true);
+    }
+
+    fn apply_tile_size(&self, width: i32, persist: bool) {
         let old_width = self.tile_width.get().max(1);
         let old_height = self.tile_height.get().max(1);
         let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
@@ -286,7 +321,9 @@ impl Gallery {
 
         self.tile_width.set(width);
         self.tile_height.set(height);
-        (self.on_zoom_changed)(width);
+        if persist {
+            (self.on_zoom_changed)(width);
+        }
 
 
         let mut tiles = Vec::new();

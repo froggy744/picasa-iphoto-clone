@@ -60,6 +60,9 @@ pub struct Gallery {
     // one Folder row rebuild instead of one per notch.
     pending_zoom_width: Rc<Cell<Option<i32>>>,
     zoom_reflow_source: Rc<RefCell<Option<glib::SourceId>>>,
+    // Set when no user-chosen thumbnail size exists: the first real layout
+    // adopts the ~4-thumbnails-per-row default instead of a fixed pixel size.
+    auto_default_zoom: Cell<bool>,
     on_zoom_changed: Rc<dyn Fn(i32)>,
 }
 
@@ -720,6 +723,7 @@ impl Gallery {
             folder_reframe_photo: Rc::new(Cell::new(None)),
             pending_zoom_width: Rc::new(Cell::new(None)),
             zoom_reflow_source: Rc::new(RefCell::new(None)),
+            auto_default_zoom: Cell::new(false),
             on_zoom_changed,
         };
         gallery.replace(photos);
@@ -727,11 +731,14 @@ impl Gallery {
     }
 
     /// Column count a content width produces for the current tile size.
+    /// The ceiling exists so absurdly narrow tiles cannot appear, not to
+    /// limit wide monitors: on 2K/4K surfaces the default 300px tiles fill
+    /// 9-11 columns, and capping below that leaves dead space on the right.
     fn columns_for_width(&self, width: i32) -> u32 {
         let available = (width - 48).max(200);
         ((available as f64) / (self.tile_width.get() as f64 + 30.0))
             .floor()
-            .clamp(1.0, 8.0) as u32
+            .clamp(1.0, 12.0) as u32
     }
 
     pub fn update_width(&self, width: i32) {
@@ -739,6 +746,17 @@ impl Gallery {
     }
 
     fn update_layout(&self, width: i32, tile_size_changed: bool) {
+        // First real allocation with no stored thumbnail preference: adopt
+        // the ~4-thumbnails-per-row default for this surface width. Session
+        // only - it becomes a preference if the user zooms manually.
+        if self.auto_default_zoom.get() && width > 0 {
+            self.auto_default_zoom.set(false);
+            let target = zoom_level_for_four_columns(width);
+            if target != self.tile_width.get() {
+                self.apply_tile_size(target, false);
+                return;
+            }
+        }
         let old_columns = self.current_columns.get();
         let old_width = self.last_layout_width.get();
         let columns = self.columns_for_width(width);

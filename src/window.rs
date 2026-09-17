@@ -31,7 +31,12 @@ const SORT_FIELD_SETTING_KEY: &str = "photo-sort-field";
 const SORT_DIRECTION_SETTING_KEY: &str = "photo-sort-direction";
 const GROUP_MODE_SETTING_KEY: &str = "photo-group-mode";
 const GRID_THUMBNAIL_SIZE_SETTING_KEY: &str = "grid-thumbnail-size";
-const DEFAULT_GRID_THUMBNAIL_SIZE: i32 = 136;
+// Fallback before the first real layout when no thumbnail size is stored.
+// A ladder level, so +/- from it stays on the canonical sizes.
+const DEFAULT_GRID_THUMBNAIL_SIZE: i32 = 160;
+// The historical fixed default. A stored value equal to this means the user
+// never picked a size themselves, so they get the new 4-per-row default.
+const LEGACY_GRID_THUMBNAIL_SIZE: i32 = 136;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SortField {
@@ -153,13 +158,14 @@ fn apply_gallery_grouping(
     gallery.set_grouping(grid::GroupMode::None, grid::GroupDate::Taken);
 }
 
-fn grid_thumbnail_size_from_setting(connection: &Connection) -> i32 {
+fn grid_thumbnail_size_from_setting(connection: &Connection) -> Option<i32> {
     db::setting(connection, GRID_THUMBNAIL_SIZE_SETTING_KEY)
         .ok()
         .flatten()
         .and_then(|value| value.parse::<i32>().ok())
         .map(|size| size.clamp(100, 300))
-        .unwrap_or(DEFAULT_GRID_THUMBNAIL_SIZE)
+        // The untouched legacy default is not a real preference.
+        .filter(|size| *size != LEGACY_GRID_THUMBNAIL_SIZE)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

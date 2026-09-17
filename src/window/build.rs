@@ -313,7 +313,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         window: window.clone().upcast::<gtk::Window>().downgrade(),
         context_menu_host: context_menu_host.clone(),
     };
-    let grid_thumbnail_size = grid_thumbnail_size_from_setting(&connection.borrow());
+    let saved_grid_thumbnail_size = grid_thumbnail_size_from_setting(&connection.borrow());
 
     // Result activation should dismiss the visible search UI without running the
     // normal empty-query handler. Running that handler here would immediately
@@ -349,7 +349,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let gallery = Rc::new(grid::Gallery::new(
         &[],
-        grid_thumbnail_size,
+        saved_grid_thumbnail_size.unwrap_or(DEFAULT_GRID_THUMBNAIL_SIZE),
         move |photo| {
             info_for_grid.set_photo(photo.as_ref());
             selected_photo_for_grid.replace(photo);
@@ -399,6 +399,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         },
     ));
+    // No stored size (or only the untouched legacy default): adopt the
+    // ~4-thumbnails-per-row view level on the first real layout.
+    if saved_grid_thumbnail_size.is_none() {
+        gallery.enable_auto_default_zoom();
+    }
+    // Resolved size for views that only need a number (album covers).
+    let grid_thumbnail_size = saved_grid_thumbnail_size.unwrap_or(DEFAULT_GRID_THUMBNAIL_SIZE);
     gallery_for_actions.replace(Rc::downgrade(&gallery));
     apply_gallery_grouping(&gallery, filter.get(), sort.get(), group_mode.get());
 
@@ -2204,7 +2211,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 editor.fit();
             }
         } else {
-            gallery_for_zoom_reset.request_zoom(DEFAULT_GRID_THUMBNAIL_SIZE);
+            gallery_for_zoom_reset.reset_zoom();
         }
     });
     let gallery_for_zoom_in = gallery.clone();
