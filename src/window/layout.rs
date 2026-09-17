@@ -937,7 +937,28 @@
     {
         let open_collage = open_collage.clone();
         let gallery = gallery.clone();
+        let main_stack = main_stack.clone();
+        let collage_editor = collage_editor.clone();
+        let connection = connection.clone();
         info.collage.connect_clicked(move |_| {
+            // Re-entering Collage while its editor is still visible happens
+            // before the normal stack teardown can save the live project.
+            // Persist it here so Resume always refers to what the user is
+            // actually looking at, not an older database draft.
+            if main_stack.visible_child_name().as_deref() == Some("collage") {
+                if let Ok(editor_handle) = collage_editor.try_borrow() {
+                    if let Some(editor) = editor_handle.as_ref() {
+                        let json = editor.draft_json();
+                        let guard = connection.borrow();
+                        let _ = db::set_setting(
+                            &guard,
+                            crate::collage::DRAFT_SETTING_KEY,
+                            &json,
+                        );
+                    }
+                }
+            }
+
             open_collage(gallery.selected_photo_ids(None));
         });
     }

@@ -25,10 +25,7 @@ pub(crate) fn reveal_file(file: &gio::File) {
         return;
     }
     if let Some(parent) = file.parent() {
-        let _ = gio::AppInfo::launch_default_for_uri(
-            &parent.uri(),
-            None::<&gio::AppLaunchContext>,
-        );
+        let _ = gio::AppInfo::launch_default_for_uri(&parent.uri(), None::<&gio::AppLaunchContext>);
     }
 }
 

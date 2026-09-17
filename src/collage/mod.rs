@@ -33,29 +33,35 @@ pub fn open(
         .filter_map(|id| crate::db::photo(&connection.borrow(), id).ok().flatten())
         .map(|photo| PhotoObject::from_photo(&photo))
         .collect();
-    if had_selection && photos.is_empty() {
-        let dialog = adw::AlertDialog::builder()
-            .heading("Create Collage")
-            .body("The selected photos are no longer available in the library.")
-            .close_response("close")
-            .build();
-        dialog.add_response("close", "Close");
-        dialog.present(Some(parent));
-        return;
-    }
-    if had_selection {
-        // An explicit selection is a deliberate new collage.
-        on_open(photos, None);
-        return;
-    }
-
-    // Blank start: offer to continue the previously saved draft, if any.
+    // Resume is a property of the saved draft, not of the current grid
+    // selection. Previously an explicit (or stale) selection silently skipped
+    // this prompt, which made the same Collage button behave inconsistently.
     let saved_draft = db::setting(&connection.borrow(), DRAFT_SETTING_KEY)
         .ok()
         .flatten()
         .and_then(|json| draft_from_json(&json))
         .filter(|draft| !draft.items.is_empty());
+
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "COLLAGE TRACE start had_selection={} selected_photos={} saved_draft={}",
+            had_selection,
+            photos.len(),
+            saved_draft.is_some()
+        );
+    }
+
     let Some(draft) = saved_draft else {
+        if had_selection && photos.is_empty() {
+            let dialog = adw::AlertDialog::builder()
+                .heading("Create Collage")
+                .body("The selected photos are no longer available in the library.")
+                .close_response("close")
+                .build();
+            dialog.add_response("close", "Close");
+            dialog.present(Some(parent));
+            return;
+        }
         on_open(photos, None);
         return;
     };
@@ -78,6 +84,9 @@ pub fn open(
         let on_open = on_open.clone();
         let draft = draft.clone();
         dialog.connect_response(Some("resume"), move |_, _| {
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("COLLAGE TRACE resume_choice=resume draft_photos={}", draft.items.len());
+            }
             // Re-fetch photos from the library so edits, rotations and
             // thumbnails are current; missing photos are dropped silently.
             let draft_photos: Vec<PhotoObject> = draft
@@ -95,8 +104,15 @@ pub fn open(
     }
     {
         let on_open = on_open.clone();
+        let fresh_photos = photos.clone();
         dialog.connect_response(Some("fresh"), move |_, _| {
-            on_open(Vec::new(), None);
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "COLLAGE TRACE resume_choice=fresh selected_photos={}",
+                    fresh_photos.len()
+                );
+            }
+            on_open(fresh_photos.clone(), None);
         });
     }
     dialog.present(Some(parent));

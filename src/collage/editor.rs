@@ -306,16 +306,16 @@ pub fn build(
         fit_content.append(&gtk::Label::new(Some("Fit")));
         fit_toggle.set_child(Some(&fit_content));
     }
-    fit_toggle.set_tooltip_text(Some(
-        "Fit photos inside their tiles (keep aspect ratio)",
-    ));
+    fit_toggle.set_tooltip_text(Some("Fit photos inside their tiles (keep aspect ratio)"));
     fit_toggle.set_active(project.borrow().keep_photo_aspect);
     fit_toggle.set_sensitive(!matches!(project.borrow().layout, LayoutKind::Grid));
     let portrait_btn = gtk::ToggleButton::new();
     {
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         content.set_halign(gtk::Align::Center);
-        content.append(&gtk::Image::from_icon_name("orientation-portrait-left-symbolic"));
+        content.append(&gtk::Image::from_icon_name(
+            "orientation-portrait-left-symbolic",
+        ));
         content.append(&gtk::Label::new(Some("Portrait")));
         portrait_btn.set_child(Some(&content));
     }
@@ -324,7 +324,9 @@ pub fn build(
     {
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         content.set_halign(gtk::Align::Center);
-        content.append(&gtk::Image::from_icon_name("orientation-landscape-symbolic"));
+        content.append(&gtk::Image::from_icon_name(
+            "orientation-landscape-symbolic",
+        ));
         content.append(&gtk::Label::new(Some("Landscape")));
         landscape_btn.set_child(Some(&content));
     }
@@ -1001,18 +1003,11 @@ fn refresh_preview(
                 menu_box.set_margin_bottom(6);
                 menu_box.set_margin_start(6);
                 menu_box.set_margin_end(6);
-                let edit_photo = flat_menu_button(
-                    "document-edit-symbolic",
-                    "Edit Photo",
-                );
-                let rotate_cw = flat_menu_button(
-                    "object-rotate-right-symbolic",
-                    "Rotate Clockwise",
-                );
-                let rotate_ccw = flat_menu_button(
-                    "object-rotate-left-symbolic",
-                    "Rotate Counter-Clockwise",
-                );
+                let edit_photo = flat_menu_button("document-edit-symbolic", "Edit Photo");
+                let rotate_cw =
+                    flat_menu_button("object-rotate-right-symbolic", "Rotate Clockwise");
+                let rotate_ccw =
+                    flat_menu_button("object-rotate-left-symbolic", "Rotate Counter-Clockwise");
                 let remove = flat_menu_button("edit-delete-symbolic", "Remove Photo");
                 menu_box.append(&edit_photo);
                 menu_box.append(&rotate_cw);
@@ -1021,12 +1016,7 @@ fn refresh_preview(
                 menu_box.append(&remove);
                 popover.set_child(Some(&menu_box));
                 popover.set_parent(&frame_for_menu);
-                let pointing = gtk::gdk::Rectangle::new(
-                    x as i32 - 8,
-                    y as i32 - 8,
-                    16,
-                    16,
-                );
+                let pointing = gtk::gdk::Rectangle::new(x as i32 - 8, y as i32 - 8, 16, 16);
                 popover.set_pointing_to(Some(&pointing));
                 popover.connect_closed(|popover| popover.unparent());
                 {
