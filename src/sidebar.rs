@@ -81,6 +81,8 @@ const CURRENT_FILTER_KEY: &str = "picasa-sidebar-current-filter";
 const FILTER_SYNCING_KEY: &str = "picasa-sidebar-filter-syncing";
 const FOLDER_REFRESH_KEY: &str = "picasa-sidebar-folder-refresh";
 const REFRESH_GATE_KEY: &str = "picasa-sidebar-refresh-gate";
+const ALBUM_PANE_ANIMATION_MS: u32 = 250;
+const STARTUP_VISIBLE_ALBUM_ROWS: usize = 5;
 
 /// Share the window's refresh sensitivity with existing and future menus.
 pub fn bind_refresh_gate(scrolled: &gtk::ScrolledWindow, gate: &gtk::Button) {
@@ -174,20 +176,14 @@ pub fn build(
         });
     }
 
-    // The Library section stays fixed. Albums and Folders headings are kept
-    // outside their row scrollers so each behaves like a sticky section header
-    // while its rows scroll underneath it.
-    let sections_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    sections_box.set_hexpand(true);
-    let sections_scroll = gtk::ScrolledWindow::new();
-    sections_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    sections_scroll.set_hexpand(true);
-    sections_scroll.set_vexpand(false);
-    sections_scroll.set_propagate_natural_height(true);
-    sections_scroll.set_max_content_height(220);
-    sections_scroll.set_child(Some(&sections_box));
-
-    // ALBUMS: sticky heading plus bounded scrolling album rows.
+    // ALBUMS + FOLDERS: use GTK's native vertical split control. GtkPaned
+    // owns pointer tracking and allocation while the divider is dragged, which
+    // avoids the feedback loop caused by resizing a widget underneath a
+    // GestureDrag attached to that same moving divider.
+    //
+    // The Albums heading stays outside the paned. The Folders heading lives at
+    // the top of the end pane, so it always follows Albums directly instead of
+    // becoming bottom-anchored when the folder rows are collapsed.
     let (album_heading, album_indicator) = collapsible_heading(
         "Albums",
         Some(on_create_album.clone()),
@@ -199,60 +195,29 @@ pub fn build(
         }),
     );
     album_heading.add_css_class("sidebar-sticky-heading");
+    root.append(&album_heading);
 
     let album_list = section_list();
     connect_filter_list(&album_list, on_filter.clone(), filter_syncing.clone());
-    sections_box.append(&album_list);
+
+    let album_scroll = gtk::ScrolledWindow::new();
+    album_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    album_scroll.set_hexpand(true);
+    album_scroll.set_vexpand(true);
+    // This caps only the initial/natural request. GtkPaned may allocate more
+    // when the user drags its native handle, while a short album list still
+    // opens at its natural height without a large empty block.
+    album_scroll.set_propagate_natural_height(true);
+    album_scroll.set_max_content_height(260);
+    album_scroll.set_child(Some(&album_list));
 
     let album_revealer = gtk::Revealer::new();
     album_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     album_revealer.set_reveal_child(true);
     album_revealer.set_hexpand(true);
-    album_revealer.set_vexpand(false);
-    album_revealer.set_child(Some(&sections_scroll));
+    album_revealer.set_vexpand(true);
+    album_revealer.set_child(Some(&album_scroll));
 
-    {
-        let state = state.clone();
-        let revealer = album_revealer.clone();
-        let indicator = album_indicator.clone();
-        album_indicator.connect_clicked(move |_| {
-            let expanded = !state.borrow().albums_expanded;
-            state.borrow_mut().albums_expanded = expanded;
-            revealer.set_reveal_child(expanded);
-            indicator.set_icon_name(if expanded {
-                "pan-down-symbolic"
-            } else {
-                "pan-end-symbolic"
-            });
-        });
-    }
-
-    // Double-click anywhere on the heading to collapse/expand. Capture phase so
-    // it wins over the title's single-click navigation.
-    {
-        let state = state.clone();
-        let revealer = album_revealer.clone();
-        let indicator = album_indicator.clone();
-        let double_click = gtk::GestureClick::new();
-        double_click.set_button(1);
-        double_click.set_propagation_phase(gtk::PropagationPhase::Capture);
-        double_click.connect_pressed(move |gesture, n_press, _, _| {
-            if n_press == 2 {
-                let expanded = !state.borrow().albums_expanded;
-                state.borrow_mut().albums_expanded = expanded;
-                revealer.set_reveal_child(expanded);
-                indicator.set_icon_name(if expanded {
-                    "pan-down-symbolic"
-                } else {
-                    "pan-end-symbolic"
-                });
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-            }
-        });
-        album_heading.add_controller(double_click);
-    }
-
-    // FOLDERS: sticky heading plus an independently scrollable folder tree.
     let (folder_heading, folder_indicator) = collapsible_heading(
         "Folders",
         Some(on_import_folder.clone()),
@@ -270,13 +235,14 @@ pub fn build(
     folder_mode_toggle.set_focusable(false);
     folder_mode_toggle.set_size_request(24, 24);
     set_folder_mode_toggle_presentation(&folder_mode_toggle, folder_display_mode);
-    // Place the display-mode toggle between the collapse control and the +
-    // button. It changes presentation only; scanner/database scope is untouched.
-    folder_heading.insert_child_after(&folder_mode_toggle, Some(&folder_indicator));
-
-    root.append(&album_heading);
-    root.append(&album_revealer);
-    root.append(&folder_heading);
+    // Keep heading controls in the same left-to-right order everywhere:
+    // section-specific action, add, collapse. For Folders that means
+    // folder-mode, +, collapse. The first child is always the heading label.
+    if let Some(label) = folder_heading.first_child() {
+        folder_heading.insert_child_after(&folder_mode_toggle, Some(&label));
+    } else {
+        folder_heading.prepend(&folder_mode_toggle);
+    }
 
     let folder_list = section_list();
     connect_filter_list(&folder_list, on_filter, filter_syncing.clone());
@@ -293,42 +259,223 @@ pub fn build(
     folder_revealer.set_hexpand(true);
     folder_revealer.set_vexpand(true);
     folder_revealer.set_child(Some(&folder_scroll));
-    root.append(&folder_revealer);
 
+    // Keep the Folders heading in the paned end child. Even with the rows
+    // collapsed, the heading remains the end child's minimum visible content,
+    // so the native handle cannot drag over or hide it.
+    let folder_section = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    folder_section.set_hexpand(true);
+    folder_section.set_vexpand(true);
+    folder_section.append(&folder_heading);
+    folder_section.append(&folder_revealer);
+
+    let section_paned = gtk::Paned::new(gtk::Orientation::Vertical);
+    section_paned.set_hexpand(true);
+    section_paned.set_vexpand(true);
+    // Preserve the user's Album height when the window itself grows/shrinks;
+    // the Folders pane absorbs ordinary window-size changes. The user can still
+    // resize both sections directly with GtkPaned's native handle.
+    section_paned.set_resize_start_child(false);
+    section_paned.set_resize_end_child(true);
+    section_paned.set_shrink_start_child(true);
+    section_paned.set_shrink_end_child(false);
+    section_paned.set_start_child(Some(&album_revealer));
+    section_paned.set_end_child(Some(&folder_section));
+    root.append(&section_paned);
+
+    // Remember the user's last native divider position so collapsing Albums
+    // does not throw away their preferred split. 260 is only a pre-layout
+    // fallback; once GTK allocates the paned we remember its real position.
+    let saved_album_pane_position = Rc::new(Cell::new(260));
+    let album_pane_animating = Rc::new(Cell::new(false));
+    let album_pane_animation_generation = Rc::new(Cell::new(0_u64));
     {
         let state = state.clone();
-        let revealer = folder_revealer.clone();
-        let indicator = folder_indicator.clone();
-        folder_indicator.connect_clicked(move |_| {
-            let expanded = !state.borrow().folders_expanded;
-            state.borrow_mut().folders_expanded = expanded;
-            revealer.set_reveal_child(expanded);
+        let saved_position = saved_album_pane_position.clone();
+        let animating = album_pane_animating.clone();
+        let album_revealer_for_trace = album_revealer.clone();
+        let folder_revealer_for_trace = folder_revealer.clone();
+        section_paned.connect_position_notify(move |paned| {
+            let position = paned.position();
+            // Only treat native user dragging as a new saved position. During
+            // our collapse/expand animation the pane position changes every
+            // frame and must not overwrite the user's preferred split.
+            if state.borrow().albums_expanded
+                && !animating.get()
+                && paned.start_child().is_some()
+                && position > 0
+            {
+                saved_position.set(position);
+            }
+
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "SIDEBAR PANE position={} min={} max={} album={} folders={} root={}",
+                    position,
+                    paned.min_position(),
+                    paned.max_position(),
+                    album_revealer_for_trace.height(),
+                    folder_revealer_for_trace.height(),
+                    paned.height(),
+                );
+            }
+        });
+    }
+
+    // Keep GtkPaned as the only resize mechanism. For section collapse/expand,
+    // animate the native pane position over the same duration as GtkRevealer,
+    // then detach the Albums pane only after collapse completes. This keeps the
+    // native divider future-proof while giving Albums the same smooth motion as
+    // the other sidebar sections.
+    album_revealer.set_transition_duration(ALBUM_PANE_ANIMATION_MS);
+
+    let set_albums_expanded: Rc<dyn Fn(bool)> = {
+        let state = state.clone();
+        let paned = section_paned.clone();
+        let revealer = album_revealer.clone();
+        let indicator = album_indicator.clone();
+        let saved_position = saved_album_pane_position.clone();
+        let animating = album_pane_animating.clone();
+        let animation_generation = album_pane_animation_generation.clone();
+        Rc::new(move |expanded| {
+            if state.borrow().albums_expanded == expanded {
+                return;
+            }
+
+            if !expanded && !animating.get() {
+                let position = paned.position();
+                if position > 0 {
+                    saved_position.set(position);
+                }
+            }
+
+            state.borrow_mut().albums_expanded = expanded;
             indicator.set_icon_name(if expanded {
                 "pan-down-symbolic"
             } else {
                 "pan-end-symbolic"
             });
+            indicator.set_tooltip_text(Some(if expanded { "Collapse" } else { "Expand" }));
+
+            let generation = animation_generation.get().wrapping_add(1);
+            animation_generation.set(generation);
+            animating.set(true);
+
+            if expanded {
+                // Reattach hidden at zero height, then reveal and grow the
+                // native pane. If a collapse was interrupted, continue from
+                // the current position instead of jumping back to zero.
+                let was_detached = paned.start_child().is_none();
+                if was_detached {
+                    revealer.set_reveal_child(false);
+                    paned.set_start_child(Some(&revealer));
+                    paned.set_position(0);
+                }
+
+                let from = paned.position().max(0);
+                revealer.set_reveal_child(true);
+                let target = saved_position.get().max(0);
+                animate_sidebar_pane_position(
+                    &paned,
+                    from,
+                    target,
+                    animation_generation.clone(),
+                    generation,
+                    animating.clone(),
+                    None,
+                );
+            } else {
+                let from = paned.position().max(0);
+                revealer.set_reveal_child(false);
+
+                let paned_for_finish = paned.clone();
+                let revealer_for_finish = revealer.clone();
+                let state_for_finish = state.clone();
+                let finish: Rc<dyn Fn()> = Rc::new(move || {
+                    if !state_for_finish.borrow().albums_expanded {
+                        paned_for_finish.set_start_child(None::<&gtk::Widget>);
+                        revealer_for_finish.set_reveal_child(false);
+                    }
+                });
+
+                animate_sidebar_pane_position(
+                    &paned,
+                    from,
+                    0,
+                    animation_generation.clone(),
+                    generation,
+                    animating.clone(),
+                    Some(finish),
+                );
+            }
+        })
+    };
+
+    {
+        let state = state.clone();
+        let set_expanded = set_albums_expanded.clone();
+        album_indicator.connect_clicked(move |_| {
+            let expanded = !state.borrow().albums_expanded;
+            set_expanded(expanded);
+        });
+    }
+
+    // Double-click anywhere on the Albums heading to collapse/expand.
+    {
+        let state = state.clone();
+        let set_expanded = set_albums_expanded.clone();
+        let double_click = gtk::GestureClick::new();
+        double_click.set_button(1);
+        double_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        double_click.connect_pressed(move |gesture, n_press, _, _| {
+            if n_press == 2 {
+                let expanded = !state.borrow().albums_expanded;
+                set_expanded(expanded);
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+            }
+        });
+        album_heading.add_controller(double_click);
+    }
+
+    let set_folders_expanded: Rc<dyn Fn(bool)> = {
+        let state = state.clone();
+        let revealer = folder_revealer.clone();
+        let indicator = folder_indicator.clone();
+        Rc::new(move |expanded| {
+            if state.borrow().folders_expanded == expanded {
+                return;
+            }
+            state.borrow_mut().folders_expanded = expanded;
+            revealer.set_reveal_child(expanded);
+            revealer.set_vexpand(expanded);
+            indicator.set_icon_name(if expanded {
+                "pan-down-symbolic"
+            } else {
+                "pan-end-symbolic"
+            });
+        })
+    };
+
+    {
+        let state = state.clone();
+        let set_expanded = set_folders_expanded.clone();
+        folder_indicator.connect_clicked(move |_| {
+            let expanded = !state.borrow().folders_expanded;
+            set_expanded(expanded);
         });
     }
 
     // Double-click the Folders heading to collapse/expand the whole tree.
     {
         let state = state.clone();
-        let revealer = folder_revealer.clone();
-        let indicator = folder_indicator.clone();
+        let set_expanded = set_folders_expanded;
         let double_click = gtk::GestureClick::new();
         double_click.set_button(1);
         double_click.set_propagation_phase(gtk::PropagationPhase::Capture);
         double_click.connect_pressed(move |gesture, n_press, _, _| {
             if n_press == 2 {
                 let expanded = !state.borrow().folders_expanded;
-                state.borrow_mut().folders_expanded = expanded;
-                revealer.set_reveal_child(expanded);
-                indicator.set_icon_name(if expanded {
-                    "pan-down-symbolic"
-                } else {
-                    "pan-end-symbolic"
-                });
+                set_expanded(expanded);
                 gesture.set_state(gtk::EventSequenceState::Claimed);
             }
         });
@@ -369,6 +516,47 @@ pub fn build(
     populate_folders(&folder_list, folders, &state, &on_unavailable);
 
     outer.set_child(Some(&root));
+
+    // On first presentation, give Albums enough room for five rows when five
+    // are available. Measure the actual row widgets instead of assuming a
+    // fixed pixel height, so font/theme/DPI changes keep the startup split
+    // correct. A short album list still uses only its natural height.
+    {
+        let paned = section_paned.clone();
+        let album_list = album_list.clone();
+        let saved_position = saved_album_pane_position.clone();
+        let applied = Rc::new(Cell::new(false));
+        let applied_for_map = applied.clone();
+        section_paned.connect_map(move |_| {
+            if applied_for_map.replace(true) {
+                return;
+            }
+
+            let paned = paned.clone();
+            let album_list = album_list.clone();
+            let saved_position = saved_position.clone();
+            glib::idle_add_local_once(move || {
+                let desired = list_natural_height_for_rows(
+                    &album_list,
+                    STARTUP_VISIBLE_ALBUM_ROWS,
+                );
+                if desired <= 0 {
+                    return;
+                }
+
+                let max_position = paned.max_position();
+                let target = if max_position > 0 {
+                    desired.min(max_position)
+                } else {
+                    desired
+                };
+                if target > 0 {
+                    saved_position.set(target);
+                    paned.set_position(target);
+                }
+            });
+        });
+    }
 
     // Store stable widget/state handles on the existing GtkScrolledWindow so
     // refresh() and append_folder() can update only the relevant sections
@@ -672,7 +860,9 @@ pub fn refresh(
         });
     }
     if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, FOLDER_REVEALER_KEY) {
-        revealer.set_reveal_child(state.borrow().folders_expanded);
+        let expanded = state.borrow().folders_expanded;
+        revealer.set_reveal_child(expanded);
+        revealer.set_vexpand(expanded);
     }
     if let Some(indicator) = stored_widget::<gtk::Button>(scrolled, FOLDER_INDICATOR_KEY) {
         indicator.set_icon_name(if state.borrow().folders_expanded {
@@ -1099,6 +1289,7 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
     state.borrow_mut().folders_expanded = true;
     if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, FOLDER_REVEALER_KEY) {
         revealer.set_reveal_child(true);
+        revealer.set_vexpand(true);
     }
     if let Some(indicator) = stored_widget::<gtk::Button>(scrolled, FOLDER_INDICATOR_KEY) {
         indicator.set_icon_name("pan-down-symbolic");
@@ -1357,6 +1548,29 @@ fn populate_library(list: &gtk::ListBox, counts: SidebarCounts, on_unavailable: 
     );
 }
 
+fn list_natural_height_for_rows(list: &gtk::ListBox, max_rows: usize) -> i32 {
+    if max_rows == 0 {
+        return 0;
+    }
+
+    let mut height = 0;
+    let mut rows = 0;
+    let mut child = list.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+            let (_, natural, _, _) = row.measure(gtk::Orientation::Vertical, -1);
+            height += natural.max(0);
+            rows += 1;
+            if rows >= max_rows {
+                break;
+            }
+        }
+        child = next;
+    }
+    height
+}
+
 fn populate_albums(list: &gtk::ListBox, albums: &[Album], on_delete_album: &Rc<dyn Fn(i64)>) {
     for album in albums {
         append_album_filter(list, album, on_delete_album);
@@ -1580,6 +1794,19 @@ fn append_folder_row(
     let icon = gtk::Image::from_icon_name("folder-symbolic");
     icon.set_pixel_size(18);
     icon_overlay.set_child(Some(&icon));
+
+    if folder.watched {
+        // A small eye emblem makes watched folders visible at a glance while
+        // preserving the normal folder icon and row alignment.
+        let watch_badge = gtk::Image::from_icon_name("view-reveal-symbolic");
+        watch_badge.set_pixel_size(10);
+        watch_badge.set_halign(gtk::Align::End);
+        watch_badge.set_valign(gtk::Align::End);
+        watch_badge.set_tooltip_text(Some("Watched folder"));
+        icon_overlay.add_overlay(&watch_badge);
+        icon_overlay.set_tooltip_text(Some("Watched folder"));
+    }
+
     content.append(&icon_overlay);
 
     let labels = gtk::Box::new(gtk::Orientation::Vertical, 1);
@@ -1950,6 +2177,58 @@ fn set_folder_mode_toggle_presentation(button: &gtk::Button, mode: FolderDisplay
     }
 }
 
+fn sidebar_pane_ease(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    // Smoothstep: zero velocity at both ends, so the pane does not visibly
+    // snap when the Revealer starts or when the native handle disappears.
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn animate_sidebar_pane_position(
+    paned: &gtk::Paned,
+    from: i32,
+    to: i32,
+    generation: Rc<Cell<u64>>,
+    expected_generation: u64,
+    animating: Rc<Cell<bool>>,
+    on_complete: Option<Rc<dyn Fn()>>,
+) {
+    if from == to {
+        if generation.get() == expected_generation {
+            paned.set_position(to);
+            animating.set(false);
+            if let Some(callback) = on_complete.as_ref() {
+                callback();
+            }
+        }
+        return;
+    }
+
+    let started = std::time::Instant::now();
+    paned.add_tick_callback(move |paned, _| {
+        if generation.get() != expected_generation {
+            return glib::ControlFlow::Break;
+        }
+
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let progress = (elapsed_ms / f64::from(ALBUM_PANE_ANIMATION_MS)).clamp(0.0, 1.0);
+        let eased = sidebar_pane_ease(progress);
+        let position = f64::from(from) + f64::from(to - from) * eased;
+        paned.set_position(position.round() as i32);
+
+        if progress >= 1.0 {
+            paned.set_position(to);
+            animating.set(false);
+            if let Some(callback) = on_complete.as_ref() {
+                callback();
+            }
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
+}
+
 fn collapsible_heading(
     text: &str,
     action: Option<Rc<dyn Fn()>>,
@@ -1979,9 +2258,17 @@ fn collapsible_heading(
     }
     content.append(&label);
 
-    // Keep the disclosure indicator beside the + action on the right. This
-    // matches the section-level controls visually and keeps the heading text
-    // itself clear of toggle affordances.
+    // Keep the disclosure control rightmost. Any section-specific action sits
+    // before it, so headings read consistently as: action / + / collapse.
+    if let Some(action) = action {
+        let add = gtk::Button::from_icon_name("list-add-symbolic");
+        add.add_css_class("flat");
+        add.set_size_request(24, 24);
+        add.set_tooltip_text(Some(action_tooltip));
+        add.connect_clicked(move |_| action());
+        content.append(&add);
+    }
+
     let indicator = gtk::Button::from_icon_name(if expanded {
         "pan-down-symbolic"
     } else {
@@ -1992,15 +2279,6 @@ fn collapsible_heading(
     indicator.set_size_request(24, 24);
     indicator.set_tooltip_text(Some(if expanded { "Collapse" } else { "Expand" }));
     content.append(&indicator);
-
-    if let Some(action) = action {
-        let add = gtk::Button::from_icon_name("list-add-symbolic");
-        add.add_css_class("flat");
-        add.set_size_request(24, 24);
-        add.set_tooltip_text(Some(action_tooltip));
-        add.connect_clicked(move |_| action());
-        content.append(&add);
-    }
 
     (content, indicator)
 }
