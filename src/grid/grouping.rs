@@ -438,7 +438,7 @@ fn group_label(photo: &PhotoObject, mode: GroupMode, date: GroupDate) -> String 
     match mode {
         GroupMode::None => String::new(),
         GroupMode::Folder => unreachable!("folder grouping returns before date grouping"),
-        GroupMode::Month => value.format("%B %Y").to_string(),
+        GroupMode::Month => value.format("%b %Y").to_string(),
         GroupMode::Day => {
             let date = value.date_naive();
             let today = Local::now().date_naive();
@@ -447,7 +447,9 @@ fn group_label(photo: &PhotoObject, mode: GroupMode, date: GroupDate) -> String 
             } else if date == today.pred_opt().unwrap_or(today) {
                 "Yesterday".to_string()
             } else {
-                value.format("%-d %B %Y").to_string()
+                // Match the bottom bar's dd Mmm yyyy date style so headers
+                // and the infobar agree across All Photos/Favourites views.
+                value.format("%d %b %Y").to_string()
             }
         }
     }

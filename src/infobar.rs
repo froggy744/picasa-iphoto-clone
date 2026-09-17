@@ -11,7 +11,6 @@ pub struct InfoBar {
     pub root: gtk::Box,
     preview: gtk::Image,
     filename: gtk::Label,
-    subtitle: gtk::Label,
     details: gtk::Box,
     pub favorite: gtk::Button,
     pub edit: gtk::Button,
@@ -62,17 +61,20 @@ impl InfoBar {
         text.set_width_request(140);
         text.set_hexpand(false);
 
+        // A small heading above the value keeps the file name grouped with the
+        // other labelled metrics (Taken/Camera/Dimensions/Size) instead of
+        // acting as a title, and frees the second line for the name itself.
+        let heading = gtk::Label::new(Some("File name"));
+        heading.set_xalign(0.0);
+        heading.add_css_class("dim-label");
+        heading.add_css_class("metric-key");
+        text.append(&heading);
+
         let filename = gtk::Label::new(Some("No photo selected"));
         filename.set_xalign(0.0);
         filename.set_ellipsize(gtk::pango::EllipsizeMode::End);
         filename.add_css_class("info-title");
         text.append(&filename);
-
-        let subtitle = gtk::Label::new(Some("Select a photo to see details"));
-        subtitle.set_xalign(0.0);
-        subtitle.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        subtitle.add_css_class("dim-label");
-        text.append(&subtitle);
 
         root.append(&text);
 
@@ -81,6 +83,7 @@ impl InfoBar {
         details.set_valign(gtk::Align::Center);
         details.set_visible(false);
 
+        let mut other_metrics = Vec::<gtk::Box>::new();
         for (label, value) in [
             ("Taken", "—"),
             ("Camera", "—"),
@@ -101,6 +104,13 @@ impl InfoBar {
             metric.append(&key);
             metric.append(&val);
             details.append(&metric);
+            if label == "Taken" {
+                // Fixed-width date column: the filename and the other metrics
+                // shrink first, so the date is never squeezed or ellipsized.
+                metric.set_width_request(110);
+            } else {
+                other_metrics.push(metric.clone());
+            }
         }
         root.append(&details);
 
@@ -211,11 +221,18 @@ impl InfoBar {
         let details_for_resize = details.clone();
         let text_for_resize = text.clone();
         let preview_for_resize = preview.clone();
+        let other_metrics_for_resize = other_metrics;
         root.add_tick_callback(move |bar, _| {
             let width = bar.width();
             if width > 0 {
-                details_for_resize.set_visible(has_photo_for_resize.get() && width >= 900);
-                text_for_resize.set_visible(width >= 620);
+                // Priority when space is tight: the taken date stays visible
+                // first, then the filename block, then the remaining metrics.
+                details_for_resize.set_visible(has_photo_for_resize.get() && width >= 640);
+                let full_details = width >= 1030;
+                for metric in &other_metrics_for_resize {
+                    metric.set_visible(full_details);
+                }
+                text_for_resize.set_visible(width >= 790);
                 preview_for_resize.set_visible(width >= 520);
             }
             glib::ControlFlow::Continue
@@ -225,7 +242,6 @@ impl InfoBar {
             root,
             preview,
             filename,
-            subtitle,
             details,
             favorite,
             edit,
@@ -255,7 +271,6 @@ impl InfoBar {
         let Some(photo) = photo else {
             self.has_photo.set(false);
             self.filename.set_text("No photo selected");
-            self.subtitle.set_text("Select a photo to see details");
             self.preview.set_icon_name(Some("image-x-generic-symbolic"));
             self.details.set_visible(false);
             set_metric_values(&self.details, ["—", "—", "—", "—"]);
@@ -291,7 +306,7 @@ impl InfoBar {
             self.preview.set_icon_name(Some("image-x-generic-symbolic"));
         }
 
-        self.details.set_visible(self.root.width() >= 900);
+        self.details.set_visible(self.root.width() >= 640);
         let dimensions = if photo.width() > 0 && photo.height() > 0 {
             format!("{} × {}", photo.width(), photo.height())
         } else {
@@ -306,7 +321,8 @@ impl InfoBar {
             .unwrap_or_else(|| "Unknown date".to_string());
         let formatted_date = format_date(&raw_date);
 
-        self.subtitle.set_text(&camera);
+        // The camera stays a metric beside Taken; the filename subtitle slot
+        // that previously duplicated it now holds the actual file name.
         set_metric_values(&self.details, [formatted_date, camera, dimensions, size]);
 
         self.favorite.set_sensitive(true);
@@ -337,7 +353,7 @@ fn edit_button_sensitive(has_photo: bool, collage_active: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::edit_button_sensitive;
+    use super::{edit_button_sensitive, format_date};
 
     #[test]
     fn edit_is_disabled_while_collage_is_active() {
@@ -345,6 +361,24 @@ mod tests {
         assert!(!edit_button_sensitive(true, true));
         assert!(!edit_button_sensitive(false, false));
         assert!(!edit_button_sensitive(false, true));
+    }
+
+    #[test]
+    fn taken_date_renders_dd_mmm_yyyy_without_time() {
+        // mtime fallback (RFC3339)
+        assert_eq!(
+            format_date("2026-09-17T14:46:00+02:00"),
+            "17 Sep 2026"
+        );
+        // canonical scanner format
+        assert_eq!(format_date("2026-09-17 14:46:00"), "17 Sep 2026");
+        // EXIF-derived format: missing this made camera photos fall back to
+        // the raw timestamp in the bottom bar.
+        assert_eq!(format_date("2026-09-17 14-46-00"), "17 Sep 2026");
+        // date-only value
+        assert_eq!(format_date("2026-09-17"), "17 Sep 2026");
+        // unparseable values pass through untouched
+        assert_eq!(format_date("not a date"), "not a date");
     }
 }
 
@@ -387,11 +421,22 @@ pub(crate) fn format_size(size: i64) -> String {
 }
 
 pub(crate) fn format_date(value: &str) -> String {
+    // Dates render as calendar dates only (dd Mmm yyyy). Every stored
+    // taken_at shape must be accepted: RFC3339 (mtime fallback),
+    // "YYYY-MM-DD HH:MM:SS", and the EXIF-derived "YYYY-MM-DD HH-MM-SS"
+    // produced by the scanner's colon replacement. Missing the EXIF shape
+    // made the raw timestamp (time included) show for camera photos.
     if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
-        return parsed.format("%b %-d, %Y, %-I:%M %p").to_string();
+        return parsed.format("%d %b %Y").to_string();
     }
     if let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
-        return parsed.format("%b %-d, %Y, %-I:%M %p").to_string();
+        return parsed.format("%d %b %Y").to_string();
+    }
+    if let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H-%M-%S") {
+        return parsed.format("%d %b %Y").to_string();
+    }
+    if let Ok(parsed) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        return parsed.format("%d %b %Y").to_string();
     }
     value.to_string()
 }
