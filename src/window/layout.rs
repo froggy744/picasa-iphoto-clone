@@ -513,6 +513,25 @@
     // left edge remains clear for macOS-style or Linux-left window controls.
     left_header.pack_end(&menu);
 
+    // The pin button is state-aware. A pinned sidebar offers "Hide sidebar";
+    // a sidebar that was only revealed by the left-edge hover offers "Always
+    // Show" so clicking it converts the temporary reveal into a persistent
+    // pin instead of closing it again. Pin state lives in plain cells without
+    // change notifications, so callers sync the button on every transition.
+    let update_pin_button: Rc<dyn Fn(bool)> = {
+        let menu = menu.clone();
+        Rc::new(move |pinned| {
+            if pinned {
+                menu.set_icon_name(sidebar_toggle_icon);
+                menu.set_tooltip_text(Some("Hide sidebar"));
+            } else {
+                menu.set_icon_name("view-pin-symbolic");
+                menu.set_tooltip_text(Some("Always Show"));
+            }
+        })
+    };
+    update_pin_button(true);
+
     let left_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     left_column.set_vexpand(true);
     left_column.add_css_class("layout-left-column");
@@ -616,8 +635,16 @@
     let sidebar_for_show_state = sidebar.clone();
     let sidebar_hover_layout_freeze_for_state = sidebar_hover_layout_freeze.clone();
     let sidebar_hover_freeze_generation_for_state = sidebar_hover_freeze_generation.clone();
+    let pin_button_for_state = update_pin_button.clone();
     main_split.connect_show_sidebar_notify(move |split| {
-        sidebar_hover_reveal_for_state.set_visible(!split.shows_sidebar());
+        let sidebar_visible = split.shows_sidebar();
+        sidebar_hover_reveal_for_state.set_visible(!sidebar_visible);
+        // Every reveal path (hover, pin button, breakpoint restore) funnels
+        // through this notify, so this is the one place that keeps the pin
+        // button's tooltip/icon in sync with how the sidebar was opened.
+        if sidebar_visible {
+            pin_button_for_state(sidebar::is_pinned(&sidebar_for_show_state));
+        }
 
         if !split.shows_sidebar() && sidebar_hover_layout_freeze_for_state.get() {
             // A hover-open sidebar may be closed by mouse-leave, destination
@@ -719,7 +746,28 @@
     let sidebar_layout_settle_for_hide = sidebar_layout_settle.clone();
     let sidebar_hover_layout_freeze_for_unpin = sidebar_hover_layout_freeze.clone();
     let sidebar_hover_freeze_generation_for_unpin = sidebar_hover_freeze_generation.clone();
+    let pin_button_for_menu = update_pin_button.clone();
     menu.connect_clicked(move |_| {
+        // A hover-revealed sidebar is temporary. This button must pin it so
+        // it stays open (mouse-leave stops auto-hiding once pinned), not
+        // close it again.
+        if !sidebar::is_pinned(&sidebar_for_hide) {
+            // Release the reveal's layout freeze the same way the pin button
+            // in the content header does: bump the generation so any pending
+            // unfreeze timeout becomes a no-op, then unfreeze immediately —
+            // pinning does not change the sidebar width.
+            sidebar_hover_freeze_generation_for_unpin.set(
+                sidebar_hover_freeze_generation_for_unpin
+                    .get()
+                    .wrapping_add(1),
+            );
+            sidebar_hover_layout_freeze_for_unpin.set(false);
+            // set_pinned(true) also clears hover_open, so the shell's
+            // mouse-leave handler no longer auto-hides the sidebar.
+            sidebar::set_pinned(&sidebar_for_hide, true);
+            pin_button_for_menu(true);
+            return;
+        }
         // Unpinning is a persistent layout change. Allow the animation to run
         // without intermediate Folder rebuilds, then reflow once at its final
         // width through WidthSettleGate.
