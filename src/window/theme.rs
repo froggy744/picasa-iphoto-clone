@@ -23,7 +23,7 @@ use libadwaita as adw;
 use rusqlite::Connection;
 
 use super::THEME_SETTING_KEY;
-use crate::css::theme_discovery::{self, DiscoveredTheme};
+use crate::css::theme_discovery::{self, DiscoveredTheme, WindowControls};
 
 pub(crate) const THEMES_DIRECTORY: &str = "css/themes";
 
@@ -47,6 +47,9 @@ pub(crate) struct ThemeEngine {
     /// covers pick up the new palette. Not invoked during startup, when the
     /// albums home does not exist yet.
     post_apply: RefCell<Option<Rc<dyn Fn()>>>,
+    /// Runs on every activation (startup and switches): tells the window
+    /// chrome which window-control style the active theme opted into.
+    window_controls_hook: RefCell<Option<Rc<dyn Fn(WindowControls)>>>,
 }
 
 impl ThemeEngine {
@@ -68,6 +71,7 @@ impl ThemeEngine {
             active_id: RefCell::new(String::new()),
             appearance_button: RefCell::new(None),
             post_apply: RefCell::new(None),
+            window_controls_hook: RefCell::new(None),
         });
         // While a light theme is active the lightbox backdrop follows the
         // system preference; dark themes own their backdrop regardless.
@@ -111,6 +115,21 @@ impl ThemeEngine {
 
     pub(crate) fn set_post_apply(&self, hook: Rc<dyn Fn()>) {
         self.post_apply.borrow_mut().replace(hook);
+    }
+
+    /// Registers the window-chrome reaction to the active theme's window
+    /// control style. Invoked on every activation, so the initial placement
+    /// happens during startup.
+    pub(crate) fn set_on_window_controls_changed(&self, hook: Rc<dyn Fn(WindowControls)>) {
+        self.window_controls_hook.borrow_mut().replace(hook);
+    }
+
+    pub(crate) fn active_window_controls(&self) -> WindowControls {
+        self.themes()
+            .iter()
+            .find(|theme| theme.id == self.active_id())
+            .map(|theme| theme.window_controls)
+            .unwrap_or_default()
     }
 
     /// Apply the persisted theme before the window's first rendered frame.
@@ -191,6 +210,9 @@ impl ThemeEngine {
         }
 
         *self.active_id.borrow_mut() = theme.id.clone();
+        if let Some(hook) = self.window_controls_hook.borrow().as_ref() {
+            hook(theme.window_controls);
+        }
 
         // Force the app-wide color scheme so widgets the theme CSS does not
         // reach (title bar, popovers, dialogs, the settings window) follow

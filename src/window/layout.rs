@@ -495,6 +495,59 @@
     left_header.set_show_end_title_buttons(false);
     left_header.add_css_class("layout-left-header");
 
+    // Theme-overridable window controls: a theme opts in with
+    // `window-controls: traffic-light` in its picasa-theme header and the
+    // ThemeEngine shows this box while hiding the native start title
+    // buttons. Packed first so the lights sit left of everything else.
+    let window_controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    window_controls.add_css_class("window-controls");
+    window_controls.set_margin_start(8);
+    window_controls.set_margin_end(8);
+    window_controls.set_valign(gtk::Align::Center);
+    let window_controls_close = gtk::Button::new();
+    window_controls_close.add_css_class("traffic-light");
+    window_controls_close.add_css_class("traffic-light-close");
+    window_controls_close.set_tooltip_text(Some("Close"));
+    window_controls_close.set_focus_on_click(false);
+    {
+        let window = window.clone();
+        window_controls_close.connect_clicked(move |_| window.close());
+    }
+    let window_controls_minimize = gtk::Button::new();
+    window_controls_minimize.add_css_class("traffic-light");
+    window_controls_minimize.add_css_class("traffic-light-minimize");
+    window_controls_minimize.set_tooltip_text(Some("Minimize"));
+    window_controls_minimize.set_focus_on_click(false);
+    {
+        let window = window.clone();
+        window_controls_minimize.connect_clicked(move |_| window.minimize());
+    }
+    let window_controls_zoom = gtk::Button::new();
+    window_controls_zoom.add_css_class("traffic-light");
+    window_controls_zoom.add_css_class("traffic-light-zoom");
+    window_controls_zoom.set_tooltip_text(Some("Maximize"));
+    window_controls_zoom.set_focus_on_click(false);
+    {
+        let window = window.clone();
+        window_controls_zoom.connect_clicked(move |_| {
+            if window.is_maximized() {
+                window.unmaximize();
+            } else {
+                window.maximize();
+            }
+        });
+    }
+    for light in [
+        &window_controls_close,
+        &window_controls_minimize,
+        &window_controls_zoom,
+    ] {
+        light.add_css_class("flat");
+        window_controls.append(light);
+    }
+    window_controls.set_visible(false);
+    left_header.pack_start(&window_controls);
+
     let display_for_sidebar_toggle = gtk::gdk::Display::default().expect("a display is required");
     let sidebar_toggle_icon_theme = gtk::IconTheme::for_display(&display_for_sidebar_toggle);
     let sidebar_toggle_icon = if sidebar_toggle_icon_theme.has_icon("sidebar-hide-symbolic") {
@@ -815,17 +868,66 @@
     right_header.pack_start(&show_sidebar);
 
     let show_sidebar_for_state = show_sidebar.clone();
-    let left_header_for_controls = left_header.clone();
-    let right_header_for_controls = right_header.clone();
+    // Theme-overridable window controls: the mode cell is written by the
+    // ThemeEngine hook (build.rs) whenever a theme activates; placement runs
+    // on every sidebar transition and mirrors the native title buttons'
+    // left/right header movement.
+    let window_controls_mode: Rc<Cell<crate::css::theme_discovery::WindowControls>> = Rc::new(
+        Cell::new(crate::css::theme_discovery::WindowControls::Native),
+    );
+    let place_window_controls: Rc<dyn Fn()> = {
+        let window_controls = window_controls.clone();
+        let left_header = left_header.clone();
+        let right_header = right_header.clone();
+        let main_split = main_split.clone();
+        let mode = window_controls_mode.clone();
+        Rc::new(move || {
+            let traffic = mode.get()
+                == crate::css::theme_discovery::WindowControls::TrafficLight;
+            let sidebar_visible = main_split.shows_sidebar();
+            // Native start title buttons only exist while traffic lights are
+            // off; the traffic-light box replaces them wherever they live.
+            left_header.set_show_start_title_buttons(!traffic && sidebar_visible);
+            right_header.set_show_start_title_buttons(!traffic && !sidebar_visible);
+            // The box lives in whichever header is on screen, never both.
+            let target: adw::HeaderBar = if sidebar_visible {
+                left_header.clone()
+            } else {
+                right_header.clone()
+            };
+            if window_controls.parent().as_ref() != Some(target.upcast_ref()) {
+                if let Some(old_parent) = window_controls.parent() {
+                    if let Ok(header) = old_parent.downcast::<adw::HeaderBar>() {
+                        header.remove(&window_controls);
+                    }
+                }
+                target.pack_start(&window_controls);
+            }
+            window_controls.set_visible(traffic);
+        })
+    };
+    let place_for_notify = place_window_controls.clone();
     main_split.connect_show_sidebar_notify(move |split| {
         let sidebar_visible = split.shows_sidebar();
         show_sidebar_for_state.set_visible(!sidebar_visible);
-        // Keep left-side window controls at the window's top-left corner in
-        // every sidebar state, and never render them in both headers at once
-        // (which would also duplicate them mid-slide during the animation).
-        left_header_for_controls.set_show_start_title_buttons(sidebar_visible);
-        right_header_for_controls.set_show_start_title_buttons(!sidebar_visible);
+        // Keep window controls (native title buttons or theme traffic lights)
+        // at the window's top-left corner in every sidebar state, and never
+        // render them in both headers at once (which would also duplicate
+        // them mid-slide during the animation).
+        place_for_notify();
     });
+    // The engine reports the active theme's window-control style on every
+    // activation (startup + switches); placement reacts here where the
+    // headers and the mode cell live.
+    theme_engine.set_on_window_controls_changed({
+        let window_controls_mode = window_controls_mode.clone();
+        let place_for_hook = place_window_controls.clone();
+        Rc::new(move |controls: crate::css::theme_discovery::WindowControls| {
+            window_controls_mode.set(controls);
+            place_for_hook();
+        })
+    });
+    place_window_controls();
 
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Search photos"));

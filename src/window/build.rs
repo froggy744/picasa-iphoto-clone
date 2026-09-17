@@ -2444,6 +2444,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let settings = crate::window::theme::appearance_button();
     theme_engine.set_appearance_button(&settings);
     // Theme switches redraw the albums home so covers pick up the palette.
+    // Window chrome (traffic lights vs native title buttons) is wired inside
+    // layout.rs, where the headers and the placement closure live.
     theme_engine.set_post_apply(theme_post_apply);
     {
         let present_settings_for_appearance = present_settings.clone();

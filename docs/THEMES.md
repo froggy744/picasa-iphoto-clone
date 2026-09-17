@@ -46,6 +46,7 @@ the stylesheet:
 | `name` | any text | folder name, humanized | Label shown in the picker. |
 | `dark` | `true`/`false` (also `yes`/`on`/`1`) | `false` | Dark themes force the app-wide color scheme to prefer dark and use the dark lightbox backdrop; the header icon switches to a moon. |
 | `mode` | `overlay` or `base` | `overlay` | `base` marks the one theme that is always loaded beneath every overlay theme (the shipped iPhoto Dark). |
+| `window-controls` | `native` or `traffic-light` | `native` | `traffic-light` replaces the native GTK minimize/maximize/close buttons with the app's gel-style traffic lights while the theme is active; style them via `button.traffic-light-*` (see the template). |
 
 The header only counts as metadata when its first line contains the marker
 `picasa-theme`; ordinary licence comments are ignored.

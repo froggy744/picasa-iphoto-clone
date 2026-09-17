@@ -3,6 +3,7 @@
    name: My Theme
    dark: false
    mode: overlay
+   window-controls: native
 */
 
 /* ==========================================================================
@@ -28,6 +29,10 @@
        scheme and uses the dark lightbox backdrop.
      - `version:` is the metadata contract version of this file (current: 1).
        Keep it at 1 unless a PIC release documents a new contract.
+     - `window-controls: native` keeps the GTK title buttons; set
+       `traffic-light` to have PIC show macOS-style gel buttons (Close /
+       Minimize / Maximize) instead — style them with the block at the
+       bottom of this file.
      - Colors: use `@name` references after defining them below. `alpha(color,
        0.5)` derives translucent variants, so define fewer colors and derive
        the rest.
@@ -264,3 +269,40 @@ window, .layout-left-column, .navigation-sidebar { background: @window_bg_color;
         font-weight: 700;
         box-shadow: 0 1px 4px alpha(black, 0.22);
     }
+
+/* --------------------------------------------------------------------------
+   10. WINDOW CONTROLS (optional) — only needed when the metadata above sets
+   `window-controls: traffic-light`. Uncomment to get iLife-style gel buttons.
+   --------------------------------------------------------------------------
+
+    .window-controls { margin-left: 8px; margin-right: 8px; }
+
+    button.traffic-light {
+        min-width: 13px;
+        min-height: 13px;
+        width: 13px;
+        height: 13px;
+        padding: 0;
+        margin: 0 3px;
+        border-radius: 9999px;
+    }
+
+    button.traffic-light-close {
+        background: linear-gradient(to bottom, #ff8b82 0%, #ff5f57 48%, #e33e37 100%);
+        border: 1px solid #a72f2a;
+        box-shadow: inset 0 1px rgba(255,255,255,0.55), 0 1px 2px rgba(0,0,0,0.40);
+    }
+
+    button.traffic-light-minimize {
+        background: linear-gradient(to bottom, #ffd86b 0%, #febc2e 48%, #d99a18 100%);
+        border: 1px solid #a97812;
+        box-shadow: inset 0 1px rgba(255,255,255,0.55), 0 1px 2px rgba(0,0,0,0.40);
+    }
+
+    button.traffic-light-zoom {
+        background: linear-gradient(to bottom, #5ee26f 0%, #28c840 48%, #169c2a 100%);
+        border: 1px solid #117821;
+        box-shadow: inset 0 1px rgba(255,255,255,0.50), 0 1px 2px rgba(0,0,0,0.40);
+    }
+
+    -------------------------------------------------------------------------- */

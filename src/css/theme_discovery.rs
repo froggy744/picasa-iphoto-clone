@@ -23,6 +23,16 @@
 
 use std::path::{Path, PathBuf};
 
+/// How a theme wants the window's minimize/maximize/close controls drawn.
+/// `Native` keeps the GTK/libadwaita title buttons; `TrafficLight` opts the
+/// theme into the app's gel-style traffic-light buttons.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum WindowControls {
+    #[default]
+    Native,
+    TrafficLight,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DiscoveredTheme {
     /// Stable identifier: the theme folder's name. Stored in the settings
@@ -36,6 +46,8 @@ pub(crate) struct DiscoveredTheme {
     pub(crate) dark: bool,
     /// Base themes are always loaded beneath the active overlay theme.
     pub(crate) is_base: bool,
+    /// Window control style the theme opts into (native by default).
+    pub(crate) window_controls: WindowControls,
     /// Full stylesheet text, ready for a `CssProvider`.
     pub(crate) css: String,
 }
@@ -73,6 +85,7 @@ pub(crate) fn discover(directory: &Path) -> Vec<DiscoveredTheme> {
             id,
             dark: metadata.dark,
             is_base: metadata.is_base,
+            window_controls: metadata.window_controls,
             css,
         });
     }
@@ -126,6 +139,7 @@ struct ThemeMetadata {
     name: Option<String>,
     dark: bool,
     is_base: bool,
+    window_controls: WindowControls,
 }
 
 /// Parse the `picasa-theme` metadata comment. The first comment block in the
@@ -179,6 +193,20 @@ fn metadata_from_css(css: &str) -> ThemeMetadata {
                         "Theme metadata: ignoring unrecognized mode value '{value}' (expected overlay or base)"
                     );
                     false
+                }
+            }
+            "window-controls" => {
+                metadata.window_controls = match value.to_ascii_lowercase().as_str() {
+                    "traffic-light" | "traffic-light" | "trafficlights" => {
+                        WindowControls::TrafficLight
+                    }
+                    "" | "native" => WindowControls::Native,
+                    other => {
+                        eprintln!(
+                            "Theme metadata: ignoring unrecognized window-controls value '{other}' (expected native or traffic-light)"
+                        );
+                        WindowControls::Native
+                    }
                 }
             }
             _ => {}
@@ -353,6 +381,28 @@ mod tests {
     }
 
     #[test]
+    fn window_controls_metadata_opts_into_traffic_lights() {
+        let traffic = metadata_from_css(
+            "/* picasa-theme\n   window-controls: traffic-light\n*/\n.x {}",
+        );
+        assert_eq!(traffic.window_controls, WindowControls::TrafficLight);
+
+        // Missing key and explicit native both stay native.
+        let bare = metadata_from_css(".x {}");
+        assert_eq!(bare.window_controls, WindowControls::Native);
+        let native = metadata_from_css(
+            "/* picasa-theme\n   window-controls: native\n*/\n.x {}",
+        );
+        assert_eq!(native.window_controls, WindowControls::Native);
+
+        // Unrecognized values fall back to native instead of breaking.
+        let junk = metadata_from_css(
+            "/* picasa-theme\n   window-controls: holograms\n*/\n.x {}",
+        );
+        assert_eq!(junk.window_controls, WindowControls::Native);
+    }
+
+    #[test]
     fn invalid_dark_and_mode_values_are_rejected_with_a_fallback() {
         let metadata = metadata_from_css(
             "/* picasa-theme\n   dark: maybe\n   mode: basse\n*/\n.x {}",
@@ -408,6 +458,7 @@ mod tests {
             name: id.to_string(),
             dark: false,
             is_base: false,
+            window_controls: WindowControls::Native,
             css: String::new(),
         };
         let themes = [theme("superman"), theme("standard"), theme("teal")];
@@ -469,6 +520,7 @@ mod tests {
         assert_eq!(theme.name, "My Theme");
         assert!(!theme.dark);
         assert!(!theme.is_base);
+        assert_eq!(theme.window_controls, WindowControls::Native);
         for selector in [
             ".photo-tile",
             ".navigation-sidebar row.sidebar-scroll-location",
