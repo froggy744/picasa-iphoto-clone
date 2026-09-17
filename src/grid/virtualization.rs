@@ -38,14 +38,15 @@ enum FolderRowKind {
 /// Minimum height needed by the Folder section header's contents.
 const FOLDER_HEADER_HEIGHT: i32 = 70;
 
-/// GtkListView estimates positions for unrealized rows. Mixing 70 px header
-/// rows with taller photo rows makes those estimates drift as rows are
-/// recycled, which shows up as 33 px (and multiples of 33 px) adjustment
-/// corrections that fight the custom smooth-scroll spring. Keep every model
-/// row the same height for the current zoom level so virtualized geometry is
-/// deterministic.
-fn folder_row_height(tile_height: i32) -> i32 {
-    folder_line_height(tile_height).max(FOLDER_HEADER_HEIGHT)
+/// Exact height of one Folder model row. Headers stay compact while photo
+/// lines continue to follow the current thumbnail zoom. Every scroll/anchor
+/// calculation uses this helper so GtkListView allocation and our own geometry
+/// stay in sync even though the two row kinds have different heights.
+fn folder_model_row_height(kind: FolderRowKind, tile_height: i32) -> i32 {
+    match kind {
+        FolderRowKind::Header => FOLDER_HEADER_HEIGHT,
+        FolderRowKind::Photos => folder_line_height(tile_height),
+    }
 }
 
 fn folder_chunk_size(columns: u32) -> usize {
@@ -56,8 +57,10 @@ fn folder_chunk_size(columns: u32) -> usize {
 /// gives every model row a fixed height, so we do not need GtkListView's
 /// estimated far-row position when restoring an anchor after a column change.
 fn folder_row_offset(rows: &[FolderVirtualRow], target_row: usize, tile_height: i32) -> f64 {
-    let row_height = folder_row_height(tile_height) as f64;
-    rows.iter().take(target_row).map(|_| row_height).sum()
+    rows.iter()
+        .take(target_row)
+        .map(|row| f64::from(folder_model_row_height(row.kind, tile_height)))
+        .sum()
 }
 
 #[derive(Clone, Default)]
@@ -793,13 +796,37 @@ impl Gallery {
         }
 
         let columns = self.current_columns.get().max(1) as usize;
-        let row_height = folder_row_height(self.tile_height.get()).max(1) as f64;
+        let tile_height = self.tile_height.get().max(1);
+        let header_height = f64::from(folder_model_row_height(FolderRowKind::Header, tile_height));
+        let photo_row_height =
+            f64::from(folder_model_row_height(FolderRowKind::Photos, tile_height));
+        let smallest_row_height = header_height.min(photo_row_height).max(1.0);
         let view_start = scroll_y.max(0.0);
-        let view_end = view_start + viewport_height.max(row_height);
-        // Include one model row on either side so a page jump paints the edge
+        let view_end = view_start + viewport_height.max(smallest_row_height);
+        // Include one photo line on either side so a page jump paints the edge
         // rows too, without wasting decode work on several speculative screens.
-        let target_start = (view_start - row_height).max(0.0);
-        let target_end = view_end + row_height;
+        let target_start = (view_start - photo_row_height).max(0.0);
+        let target_end = view_end + photo_row_height;
+
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            let mut section_y = 0.0_f64;
+            eprintln!(
+                "GRID GROUP GEOMETRY summary columns={} tile_height={} header_height={} photo_row_height={} ranges={}",
+                columns, tile_height, header_height as i32, photo_row_height as i32, ranges.len(),
+            );
+            for (section_index, range) in ranges.iter().take(12).enumerate() {
+                let photo_count = range.end.saturating_sub(range.start);
+                let photo_rows = photo_count.div_ceil(columns);
+                let section_height = header_height + photo_rows as f64 * photo_row_height;
+                eprintln!(
+                    "GRID GROUP GEOMETRY section={} folder_id={} label={:?} photos={} photo_rows={} header_height={} photo_row_height={} section_y={:.0} section_height={:.0} next_y={:.0}",
+                    section_index, range.folder_id, range.label, photo_count, photo_rows,
+                    header_height as i32, photo_row_height as i32, section_y, section_height,
+                    section_y + section_height,
+                );
+                section_y += section_height;
+            }
+        }
 
         let mut y = 0.0_f64;
         let mut indexes = Vec::<usize>::new();
@@ -807,7 +834,7 @@ impl Gallery {
         for range in ranges.iter() {
             let photo_count = range.end.saturating_sub(range.start);
             let photo_rows = photo_count.div_ceil(columns);
-            let section_height = (1 + photo_rows) as f64 * row_height;
+            let section_height = header_height + photo_rows as f64 * photo_row_height;
             let section_end = y + section_height;
 
             if section_end < target_start {
@@ -818,10 +845,10 @@ impl Gallery {
                 break;
             }
 
-            let photo_rows_y = y + row_height;
+            let photo_rows_y = y + header_height;
             for row in 0..photo_rows {
-                let row_top = photo_rows_y + row as f64 * row_height;
-                let row_bottom = row_top + row_height;
+                let row_top = photo_rows_y + row as f64 * photo_row_height;
+                let row_bottom = row_top + photo_row_height;
                 if row_bottom < target_start {
                     continue;
                 }

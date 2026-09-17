@@ -207,6 +207,10 @@ impl SquareTile {
         tile
     }
 
+    pub(crate) fn photo(&self) -> Option<PhotoObject> {
+        self.imp().photo.borrow().as_ref().cloned()
+    }
+
     fn set_tile_size(&self, width: i32, height: i32) {
         let width = width.max(1);
         let height = height.max(1);

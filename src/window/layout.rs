@@ -410,14 +410,42 @@
     sidebar_for_unavailable.replace(Some(sidebar.clone()));
     sidebar_selection_slot.replace(Some(sidebar.clone()));
     sidebar::set_active_filter(&sidebar, filter.get());
-    if matches!(filter.get(), sidebar::SidebarFilter::Folder(_)) {
-        sidebar::set_scroll_location(
-            &sidebar,
-            gallery
-                .photo_for_scroll_position(gallery.scroll_position())
-                .map(|photo| photo.folder_id()),
-        );
-    }
+
+    // Sidebar folder tracking is intentionally click-driven. Passive gallery
+    // scrolling must never move the sidebar or probe the visible folder: that
+    // work can steal a few milliseconds from the scroll frame. A real primary
+    // click on a thumbnail uses the same exact-folder navigation path as
+    // "Open in Folder", so ancestors expand, the correct row is selected,
+    // the previous sidebar selection is cleared, and the clicked photo remains
+    // the exact gallery target.
+    let install_thumbnail_sidebar_focus = |root: &gtk::Widget| {
+        let click = gtk::GestureClick::new();
+        click.set_button(1);
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let root = root.clone();
+        let root_for_pick = root.clone();
+        let folder_navigation_slot = folder_navigation_slot.clone();
+        click.connect_pressed(move |_, _, x, y| {
+            let Some(picked) = root_for_pick.pick(x, y, gtk::PickFlags::DEFAULT) else {
+                return;
+            };
+            let Some(tile) = picked
+                .ancestor(crate::grid::SquareTile::static_type())
+                .and_downcast::<crate::grid::SquareTile>()
+            else {
+                return;
+            };
+            let Some(photo) = tile.photo() else {
+                return;
+            };
+            if let Some(open_in_folder) = folder_navigation_slot.borrow().as_ref().cloned() {
+                open_in_folder(photo.folder_id(), photo.id());
+            }
+        });
+        root.add_controller(click);
+    };
+    install_thumbnail_sidebar_focus(gallery.root.upcast_ref());
+    install_thumbnail_sidebar_focus(gallery.folder_root.upcast_ref());
 
     // Reconnecting sources also resumes previews for already indexed photos.
     let thumbnail_recovery_requested = Rc::new(Cell::new(true));

@@ -85,7 +85,10 @@ pub fn open(
         let draft = draft.clone();
         dialog.connect_response(Some("resume"), move |_, _| {
             if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("COLLAGE TRACE resume_choice=resume draft_photos={}", draft.items.len());
+                eprintln!(
+                    "COLLAGE TRACE resume_choice=resume draft_photos={}",
+                    draft.items.len()
+                );
             }
             // Re-fetch photos from the library so edits, rotations and
             // thumbnails are current; missing photos are dropped silently.

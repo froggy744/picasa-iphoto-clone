@@ -293,8 +293,6 @@ pub fn build(
         let state = state.clone();
         let saved_position = saved_album_pane_position.clone();
         let animating = album_pane_animating.clone();
-        let album_revealer_for_trace = album_revealer.clone();
-        let folder_revealer_for_trace = folder_revealer.clone();
         section_paned.connect_position_notify(move |paned| {
             let position = paned.position();
             // Only treat native user dragging as a new saved position. During
@@ -308,17 +306,6 @@ pub fn build(
                 saved_position.set(position);
             }
 
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "SIDEBAR PANE position={} min={} max={} album={} folders={} root={}",
-                    position,
-                    paned.min_position(),
-                    paned.max_position(),
-                    album_revealer_for_trace.height(),
-                    folder_revealer_for_trace.height(),
-                    paned.height(),
-                );
-            }
         });
     }
 
@@ -1195,11 +1182,11 @@ pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) 
         scrolled.set_data(CURRENT_FILTER_KEY, filter);
     }
 
-    // The scroll-location marker belongs only to Folder browsing. Clear it as
-    // soon as the user switches to Library, Favourites, Albums, Search, etc.
-    if !matches!(filter, SidebarFilter::Folder(_)) {
-        set_scroll_location(scrolled, None);
-    }
+    // The old scroll-location marker is separate from ListBox selection. Once
+    // a real destination becomes active it must be cleared even for Folder
+    // destinations, otherwise GTK can show two highlighted folder rows: the
+    // newly selected row plus the stale scroll-location marker.
+    set_scroll_location(scrolled, None);
 
     let syncing = unsafe {
         scrolled

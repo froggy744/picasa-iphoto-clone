@@ -1442,9 +1442,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     });
 
     let gallery_for_folder_scroll = gallery.clone();
-    let sidebar_for_scroll_location = sidebar_selection_slot.clone();
     let filter_for_scroll_location = filter.clone();
-    let folder_follow_scheduled = Rc::new(Cell::new(false));
     let latest_folder_scroll_y = Rc::new(Cell::new(0.0_f64));
     // Last scroll direction, used to warm thumbnails ahead of the user rather
     // than both sides equally.
@@ -1730,46 +1728,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             });
             folder_thumbnail_debounce_for_event.replace(Some(source));
 
-            if matches!(
-                filter_for_scroll_location.get(),
-                sidebar::SidebarFilter::Folder(_)
-            ) && !folder_follow_scheduled.replace(true)
-            {
-                let gallery = gallery_for_folder_scroll.clone();
-                let sidebar_slot = sidebar_for_scroll_location.clone();
-                let filter = filter_for_scroll_location.clone();
-                let scheduled = folder_follow_scheduled.clone();
-                let latest_y = latest_folder_scroll_y.clone();
-                glib::timeout_add_local_once(Duration::from_millis(50), move || {
-                    scheduled.set(false);
-                    if !matches!(filter.get(), sidebar::SidebarFilter::Folder(_)) {
-                        return;
-                    }
-
-                    let follow_started = trace.then(Instant::now);
-                    let y = latest_y.get();
-                    let folder_id = gallery.visible_folder_id();
-                    if let Some(sidebar) = sidebar_slot.borrow().as_ref() {
-                        sidebar::set_scroll_location(sidebar, folder_id);
-                    }
-                    if trace {
-                        let (pick_calls, pick_ns, scan_ns) = crate::grid::take_scroll_probe_stats();
-                        let total_ms = follow_started
-                            .map(|started| started.elapsed().as_millis())
-                            .unwrap_or(0);
-                        if total_ms >= 8 || pick_ns / 1_000_000 >= 8 || scan_ns / 1_000_000 >= 8 {
-                            eprintln!(
-                                "UI PERF folder_scroll_follow_slow pick_calls={} pick_ms={} scan_ms={} total_ms={} y={}",
-                                pick_calls,
-                                pick_ns / 1_000_000,
-                                scan_ns / 1_000_000,
-                                total_ms,
-                                y
-                            );
-                        }
-                    }
-                });
-            }
 
             if let Some(started) = handler_started {
                 let total_ms = started.elapsed().as_millis();
@@ -1809,7 +1767,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     }
 
     install_smooth_gallery_scroll(&grid_scroll, gallery.clone(), true);
-    install_smooth_gallery_scroll(&folder_scroll, gallery.clone(), true);
+    // Folder mode uses a variable-height GtkListView. Use relative wheel
+    // easing rather than an absolute spring target so GTK anchor corrections
+    // cannot pull the viewport backwards. Precision touchpads remain native.
+    install_folder_smooth_gallery_scroll(&folder_scroll, gallery.clone());
 
     // While the sidebar divider is being dragged, keep the gallery column
     // count fixed. Otherwise every few pixels can cross a column threshold

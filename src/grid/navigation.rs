@@ -27,7 +27,15 @@ impl Gallery {
         let Some(row) = self.folder_row_index_for_photo(photo_id) else {
             return;
         };
-        let exact_offset = f64::from(row) * f64::from(folder_row_height(self.tile_height.get()));
+        let tile_height = self.tile_height.get();
+        let exact_offset = (0..row)
+            .filter_map(|position| {
+                self.folder_store
+                    .item(position)
+                    .and_downcast::<FolderRowObject>()
+            })
+            .map(|row| f64::from(folder_model_row_height(row.data().kind, tile_height)))
+            .sum::<f64>();
         let root = self.folder_root.clone();
         let generation = self.folder_scroll_generation.clone();
         let request = generation.get().wrapping_add(1);
@@ -45,11 +53,10 @@ impl Gallery {
             {
                 return;
             }
-            // Every Folder row has a fixed model height. Position the viewport
-            // directly instead of asking GtkListView to estimate the offset of
-            // a far, unrealized row. The old scroll_to() path visibly landed
-            // about a row away first and then snapped into place on later
-            // allocation frames.
+            // Position the viewport from the exact model geometry instead of
+            // asking GtkListView to estimate a far, unrealized row. Header rows
+            // are compact while photo rows follow zoom, so summing the model
+            // row kinds above keeps the anchor deterministic.
             if let Some(adjustment) = root.vadjustment() {
                 let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
                 adjustment.set_value(exact_offset.clamp(adjustment.lower(), upper));
@@ -182,7 +189,10 @@ fn update_folder_realized_rows(widget: &gtk::Widget, tile_width: i32, tile_heigh
             }
             if line.is_visible() {
                 if let Some(row_root) = line.parent().and_downcast::<gtk::Box>() {
-                    row_root.set_height_request(folder_row_height(tile_height));
+                    row_root.set_height_request(folder_model_row_height(
+                        FolderRowKind::Photos,
+                        tile_height,
+                    ));
                 }
             }
         }

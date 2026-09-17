@@ -376,6 +376,158 @@ fn install_smooth_gallery_scroll(
 }
 
 
+
+fn install_folder_smooth_gallery_scroll(
+    scrolled: &gtk::ScrolledWindow,
+    gallery: Rc<grid::Gallery>,
+) {
+    // Folder mode is a variable-height GtkListView. An absolute spring target
+    // can fight ListView's own anchor corrections, producing the visible
+    // rebase/debounce seen while scrolling. Smooth only the *remaining wheel
+    // distance* instead: every frame advances from GTK's current authoritative
+    // adjustment value, so an anchor correction never leaves a stale target to
+    // pull the viewport backwards.
+    const WHEEL_STEP_PX: f64 = 120.0;
+    const TIME_CONSTANT_S: f64 = 0.085;
+    const STOP_REMAINING_PX: f64 = 0.35;
+
+    let adjustment = scrolled.vadjustment();
+    let remaining = Rc::new(Cell::new(0.0_f64));
+    let active = Rc::new(Cell::new(false));
+    let last_frame_us = Rc::new(Cell::new(0_i64));
+
+    // A scrollbar drag or pointer press owns the viewport immediately.
+    {
+        let remaining = remaining.clone();
+        let active = active.clone();
+        let click = gtk::GestureClick::new();
+        click.set_button(0);
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        click.connect_pressed(move |_, _, _, _| {
+            remaining.set(0.0);
+            active.set(false);
+        });
+        scrolled.add_controller(click);
+    }
+
+    {
+        let adjustment = adjustment.clone();
+        let remaining = remaining.clone();
+        let active = active.clone();
+        let last_frame_us = last_frame_us.clone();
+        scrolled.add_tick_callback(move |_, clock| {
+            let now = clock.frame_time();
+            let previous = last_frame_us.replace(now);
+
+            if !active.get() {
+                return glib::ControlFlow::Continue;
+            }
+            if previous <= 0 || now <= previous {
+                return glib::ControlFlow::Continue;
+            }
+
+            let dt = ((now - previous) as f64 / 1_000_000.0).clamp(1.0 / 240.0, 0.033);
+            let lower = adjustment.lower();
+            let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
+            let current = adjustment.value().clamp(lower, upper);
+            let left = remaining.get();
+
+            if left.abs() <= STOP_REMAINING_PX {
+                remaining.set(0.0);
+                active.set(false);
+                return glib::ControlFlow::Continue;
+            }
+
+            // Exponential ease-out. Crucially this is relative to GTK's current
+            // value, not an absolute destination. If ListView re-anchors after
+            // this write, the next frame simply continues from that new value.
+            let fraction = 1.0 - (-dt / TIME_CONSTANT_S).exp();
+            let mut step = left * fraction;
+            if step.abs() < 0.75 {
+                step = 0.75 * step.signum();
+                if step.abs() > left.abs() {
+                    step = left;
+                }
+            }
+
+            let next = (current + step).round().clamp(lower, upper);
+            let applied = next - current;
+            if applied.abs() <= f64::EPSILON {
+                remaining.set(0.0);
+                active.set(false);
+                return glib::ControlFlow::Continue;
+            }
+
+            adjustment.set_value(next);
+            remaining.set(left - applied);
+            glib::ControlFlow::Continue
+        });
+    }
+
+    let controller = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+    let adjustment_for_scroll = adjustment.clone();
+    let remaining_for_scroll = remaining.clone();
+    let active_for_scroll = active.clone();
+    controller.connect_scroll(move |controller, _, dy| {
+        if controller
+            .current_event_state()
+            .contains(gtk::gdk::ModifierType::CONTROL_MASK)
+        {
+            remaining_for_scroll.set(0.0);
+            active_for_scroll.set(false);
+            if dy < 0.0 {
+                gallery.zoom_in();
+            } else if dy > 0.0 {
+                gallery.zoom_out();
+            }
+            return glib::Propagation::Stop;
+        }
+
+        if dy == 0.0 {
+            return glib::Propagation::Proceed;
+        }
+
+        match controller.unit() {
+            gtk::gdk::ScrollUnit::Wheel => {
+                let lower = adjustment_for_scroll.lower();
+                let upper = (adjustment_for_scroll.upper() - adjustment_for_scroll.page_size())
+                    .max(lower);
+                let current = adjustment_for_scroll.value().clamp(lower, upper);
+                if (dy < 0.0 && current <= lower) || (dy > 0.0 && current >= upper) {
+                    remaining_for_scroll.set(0.0);
+                    active_for_scroll.set(false);
+                    return glib::Propagation::Stop;
+                }
+
+                let impulse = dy * WHEEL_STEP_PX;
+                let old = remaining_for_scroll.get();
+                // Direction reversal should react immediately rather than first
+                // consuming momentum queued in the opposite direction.
+                let next_remaining = if old != 0.0 && old.signum() != impulse.signum() {
+                    impulse
+                } else {
+                    old + impulse
+                };
+                remaining_for_scroll.set(next_remaining);
+                active_for_scroll.set(true);
+                glib::Propagation::Stop
+            }
+            gtk::gdk::ScrollUnit::Surface => {
+                // Precision touchpads already deliver smooth pixel deltas.
+                // Leave those native and cancel any stale wheel easing.
+                remaining_for_scroll.set(0.0);
+                active_for_scroll.set(false);
+                glib::Propagation::Proceed
+            }
+            _ => glib::Propagation::Proceed,
+        }
+    });
+
+    scrolled.add_controller(controller);
+}
+
 fn install_gallery_zoom_scroll(scrolled: &gtk::ScrolledWindow, gallery: Rc<grid::Gallery>) {
     // Folder mode deliberately leaves ordinary wheel/touchpad/scrollbar input
     // entirely to GTK. Only Ctrl+wheel is intercepted for thumbnail zoom.

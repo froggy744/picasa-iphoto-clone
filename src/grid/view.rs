@@ -388,7 +388,10 @@ impl Gallery {
             row_root.set_hexpand(true);
             row_root.set_vexpand(false);
             row_root.add_css_class("folder-stream-row");
-            row_root.set_height_request(folder_row_height(setup_tile_height.get()));
+            row_root.set_height_request(folder_model_row_height(
+                FolderRowKind::Header,
+                setup_tile_height.get(),
+            ));
 
             let header_outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
             header_outer.set_widget_name("picasa-folder-section-header");
@@ -481,7 +484,10 @@ impl Gallery {
 
             match data.kind {
                 FolderRowKind::Header => {
-                    let row_height = folder_row_height(tile_height_for_folder_bind.get());
+                    let row_height = folder_model_row_height(
+                        FolderRowKind::Header,
+                        tile_height_for_folder_bind.get(),
+                    );
                     if row_root.height_request() != row_height {
                         row_root.set_height_request(row_height);
                     }
@@ -543,7 +549,10 @@ impl Gallery {
                     if !photo_line.is_visible() {
                         photo_line.set_visible(true);
                     }
-                    let row_height = folder_row_height(tile_height_for_folder_bind.get());
+                    let row_height = folder_model_row_height(
+                        FolderRowKind::Photos,
+                        tile_height_for_folder_bind.get(),
+                    );
                     if row_root.height_request() != row_height {
                         row_root.set_height_request(row_height);
                     }
