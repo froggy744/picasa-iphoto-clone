@@ -76,9 +76,10 @@ Folder ids match the values older releases saved, so existing installs keep
 their selection. Current shipped set: `standard` (Standard GTK4), `iphone`
 (iPhoto Dark, base), `teal` (Teal), `blue` (Deep Ocean), `glass` (Glass),
 `tron` (TRON Legacy, dark), `claude` (Orange), `archive ledger` (Archive
-Ledger), `green` (Green), `retro` (Retro), `aqua-garageband-v2` (Aqua
-GarageBand v2) and `aqua-garageband-lights` (Aqua GarageBand Lights,
-traffic-light window controls).
+Ledger), `green` (Green), `retro` (Retro), `velvet-dusk` (Velvet Dusk,
+dark), `aqua-garageband-v2` (Aqua GarageBand v2) and
+`aqua-garageband-lights` (Aqua GarageBand Lights, traffic-light window
+controls).
 
 ## Authoring tips
 
