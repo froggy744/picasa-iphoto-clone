@@ -120,19 +120,19 @@ window,
     min-height: 32px;
     border-radius: 9999px;
     color: @theme_fg_color;
-    background: linear-gradient(to bottom, #C6C8CB 0%, #F4F5F6 28%, #FFFFFF 44%, #ECEEF0 100%);
+    background: linear-gradient(to bottom, #4A4D52 0%, #3E4145 55%, #36393D 100%);
     border: 1px solid #2E3033;
     box-shadow: inset 0 2px 3px rgba(0,0,0,0.34), 0 1px rgba(255,255,255,0.20);
 }
 
 .search-field:focus-within {
-    background: #FFFFFF;
+    background: linear-gradient(to bottom, #55585C 0%, #474A4F 55%, #3E4145 100%);
     border-color: @aqua_gel_edge;
     box-shadow: inset 0 1px 2px rgba(0,0,0,0.14), 0 0 0 3px alpha(@aqua_focus, 0.42);
 }
 
-.search-field image { color: #565A60; }
-.search-field entry { color: #25282C; }
+.search-field image { color: #C9CCD1; }
+.search-field entry { color: #F2F3F4; caret-color: #F2F3F4; }
 
 /* ------------------------------------------------------------------------
    4. PHOTO GRID + GROUPS
@@ -386,7 +386,7 @@ button.album-card:active {
     box-shadow: inset 0 2px 3px rgba(0,0,0,0.28);
 }
 
-/* Default silver pill controls used by the info/action bar. */
+/* Default silver controls used by the info/action bar. */
 .photo-action-button,
 button.clear-action-button {
     color: #F2F3F4;
@@ -395,6 +395,12 @@ button.clear-action-button {
     border: 1px solid #2C2E31;
     box-shadow: inset 0 1px rgba(255,255,255,0.30), inset 0 -1px rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.42);
     text-shadow: 0 -1px rgba(0,0,0,0.72);
+}
+
+/* Info bar buttons are rounded squares; the settings clear button keeps
+   the pill shape above. */
+.photo-action-button {
+    border-radius: 8px;
 }
 
 .photo-action-button:hover,
