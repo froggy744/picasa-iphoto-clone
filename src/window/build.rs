@@ -448,10 +448,36 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
         space_open_slot.replace(Some(Rc::new(move || {
             let photos = gallery.photo_objects();
-            let selected_id = selected_photo
-                .borrow()
+            // Scroll-then-open: when 1:1/Space is activated within a short
+            // grace after a wheel/touchpad scroll and the pointer rests on a
+            // thumbnail, that photo becomes the selection and opens. This is
+            // the fast "scroll, then Space through photos" flow. Normally the
+            // scroll has already re-selected it (scroll to focus), so this is
+            // only a fast-path fallback. Hover alone never changes anything:
+            // the plain selection always wins.
+            let scroll_hovered =
+                gallery.hovered_photo_after_scroll(grid::SCROLL_HOVER_OPEN_GRACE);
+            if let Some(hovered) = scroll_hovered.as_ref() {
+                gallery.set_selected_photo_ids(&[hovered.id()]);
+            }
+            if std::env::var_os("PIC_DEBUG_SPACE").is_some() {
+                match scroll_hovered.as_ref() {
+                    Some(hovered) => eprintln!(
+                        "[space-debug] slot: scroll-hover wins -> {}",
+                        hovered.filename()
+                    ),
+                    None => eprintln!("[space-debug] slot: no scroll-hover -> selection decides"),
+                }
+            }
+            let selected_id = scroll_hovered
                 .as_ref()
                 .map(|photo| photo.id())
+                .or_else(|| {
+                    selected_photo
+                        .borrow()
+                        .as_ref()
+                        .map(|photo| photo.id())
+                })
                 .filter(|id| photos.iter().any(|photo| photo.id() == *id))
                 .or_else(|| gallery.selected_photo_ids(None).into_iter().next());
             let Some(selected_id) = selected_id else {
@@ -2607,6 +2633,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             });
         })
     }));
+
+    // Hover to focus: once the pointer rests on a thumbnail, it becomes the
+    // selection - so Space/1:1 always opens exactly what is under it, whether
+    // it got there by scrolling or by moving the mouse.
+    {
+        let gallery_for_hover = gallery.clone();
+        gallery.set_hover_select_handler(Rc::new(move || {
+            gallery_for_hover.select_photo_under_pointer();
+        }));
+    }
+
 
     // Debounce/coalesce monitor activity independently from scan authorization.
     // One busy scan cannot be interrupted by a watch event; the dirty root

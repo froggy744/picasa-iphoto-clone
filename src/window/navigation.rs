@@ -265,6 +265,42 @@ fn install_smooth_gallery_scroll(
     let controller = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     controller.set_propagation_phase(gtk::PropagationPhase::Capture);
 
+    // Scroll to focus: while the user wheels with the pointer resting on the
+    // grid, the photo under the pointer becomes the selection once the eased
+    // scroll settles. The selection then simply follows the browsed content,
+    // so Space/1:1 opens it no matter how much later they are pressed.
+    let scroll_focus_source: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+    let schedule_scroll_focus: Rc<dyn Fn()> = {
+        let gallery = gallery.clone();
+        let source_cell = scroll_focus_source.clone();
+        Rc::new(move || {
+            if let Some(old) = source_cell.borrow_mut().take() {
+                old.remove();
+            }
+            let gallery = gallery.clone();
+            let source_cell_for_timer = source_cell.clone();
+            let id = glib::timeout_add_local_once(
+                std::time::Duration::from_millis(220),
+                move || {
+                    source_cell_for_timer.borrow_mut().take();
+                    gallery.select_photo_under_pointer();
+                },
+            );
+            *source_cell.borrow_mut() = Some(id);
+        })
+    };
+    {
+        // The eased spring keeps moving content after the last wheel event;
+        // keep re-arming the focus update while that tail is still running.
+        let schedule = schedule_scroll_focus.clone();
+        let gallery_for_focus = gallery.clone();
+        adjustment.connect_value_changed(move |_| {
+            if gallery_for_focus.recent_user_scroll(std::time::Duration::from_millis(600)) {
+                schedule();
+            }
+        });
+    }
+
     let adjustment_for_scroll = adjustment.clone();
     let target_for_scroll = target.clone();
     let velocity_for_scroll = velocity.clone();
@@ -296,6 +332,14 @@ fn install_smooth_gallery_scroll(
         if dy == 0.0 {
             return glib::Propagation::Proceed;
         }
+
+        // Real user scroll input (wheel detent or touchpad surface scroll).
+        // This capture-phase controller stops wheel events before they can
+        // reach controllers deeper in the tree, so this is the only place the
+        // scroll-then-open grace window (Gallery::note_user_scroll) can be
+        // stamped from for this scroller.
+        gallery.note_user_scroll();
+        schedule_scroll_focus();
 
         match controller.unit() {
             gtk::gdk::ScrollUnit::Wheel => {
@@ -442,6 +486,37 @@ fn install_folder_smooth_gallery_scroll(
     let controller = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     controller.set_propagation_phase(gtk::PropagationPhase::Capture);
 
+    // Scroll to focus for the Folder stream, same contract as the grid.
+    let folder_focus_source: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+    let schedule_folder_focus: Rc<dyn Fn()> = {
+        let gallery = gallery.clone();
+        let source_cell = folder_focus_source.clone();
+        Rc::new(move || {
+            if let Some(old) = source_cell.borrow_mut().take() {
+                old.remove();
+            }
+            let gallery = gallery.clone();
+            let source_cell_for_timer = source_cell.clone();
+            let id = glib::timeout_add_local_once(
+                std::time::Duration::from_millis(220),
+                move || {
+                    source_cell_for_timer.borrow_mut().take();
+                    gallery.select_photo_under_pointer();
+                },
+            );
+            *source_cell.borrow_mut() = Some(id);
+        })
+    };
+    {
+        let schedule = schedule_folder_focus.clone();
+        let gallery_for_focus = gallery.clone();
+        adjustment.connect_value_changed(move |_| {
+            if gallery_for_focus.recent_user_scroll(std::time::Duration::from_millis(600)) {
+                schedule();
+            }
+        });
+    }
+
     let adjustment_for_scroll = adjustment.clone();
     let remaining_for_scroll = remaining.clone();
     let active_for_scroll = active.clone();
@@ -463,6 +538,13 @@ fn install_folder_smooth_gallery_scroll(
         if dy == 0.0 {
             return glib::Propagation::Proceed;
         }
+
+        // Real user scroll input. This capture-phase controller stops wheel
+        // events before they can reach controllers deeper in the tree, so this
+        // is the only place the scroll-then-open grace window
+        // (Gallery::note_user_scroll) can be stamped from for this scroller.
+        gallery.note_user_scroll();
+        schedule_folder_focus();
 
         match controller.unit() {
             gtk::gdk::ScrollUnit::Wheel => {

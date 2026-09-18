@@ -67,6 +67,13 @@
             lightbox_for_window_escape.navigate_collection(if key == gtk::gdk::Key::Up { -1 } else { 1 });
             glib::Propagation::Stop
         } else if key == gtk::gdk::Key::space {
+            if std::env::var_os("PIC_DEBUG_SPACE").is_some() {
+                eprintln!(
+                    "[space-debug] Space key: lightbox_visible={} edit_page={}",
+                    lightbox_for_window_escape.root.is_visible(),
+                    edit_space_slot_for_key.borrow().is_some()
+                );
+            }
             if let Some(toggle_edit) = edit_space_slot_for_key.borrow().as_ref() {
                 toggle_edit();
             } else if lightbox_for_window_escape.root.is_visible() {
