@@ -4,6 +4,10 @@ include!("navigation.rs");
 pub fn build(app: &adw::Application, connection: Connection) -> adw::ApplicationWindow {
     let build_started = Instant::now();
     let window = adw::ApplicationWindow::new(app);
+    // Test hook: fullscreen layout for UI automation.
+    if std::env::var_os("PIC_TEST_FULLSCREEN").is_some() {
+        window.fullscreen();
+    }
     window.set_title(Some("PIC - Picasa iPhoto Clone"));
     window.set_default_size(1440, 900);
 
@@ -121,6 +125,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         })
     };
     let import_folder_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let add_network_share_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let edit_open_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> = Rc::new(RefCell::new(None));
     let edit_clipboard: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let open_edit: Rc<dyn Fn(i64)> = {
@@ -451,10 +456,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             // Scroll-then-open: when 1:1/Space is activated within a short
             // grace after a wheel/touchpad scroll and the pointer rests on a
             // thumbnail, that photo becomes the selection and opens. This is
-            // the fast "scroll, then Space through photos" flow. Normally the
-            // scroll has already re-selected it (scroll to focus), so this is
-            // only a fast-path fallback. Hover alone never changes anything:
-            // the plain selection always wins.
+            // the fast "scroll, then Space through photos" flow. Hover alone
+            // never changes anything: the plain selection always wins.
             let scroll_hovered =
                 gallery.hovered_photo_after_scroll(grid::SCROLL_HOVER_OPEN_GRACE);
             if let Some(hovered) = scroll_hovered.as_ref() {
@@ -2635,8 +2638,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     }));
 
     // Hover to focus: once the pointer rests on a thumbnail, it becomes the
-    // selection - so Space/1:1 always opens exactly what is under it, whether
-    // it got there by scrolling or by moving the mouse.
+    // selection - so Space/1:1 always opens exactly what is under it.
     {
         let gallery_for_hover = gallery.clone();
         gallery.set_hover_select_handler(Rc::new(move || {
@@ -2755,6 +2757,106 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         })
     };
     start_thumbnail_recovery();
+
+    // Test hook: auto-open the Add Network Share dialog for UI automation.
+    if std::env::var_os("PIC_TEST_OPEN_SHARE").is_some() {
+        let slot = add_network_share_slot.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(2000), move || {
+            if let Some(callback) = slot.borrow().as_ref() {
+                callback();
+            }
+        });
+    }
+    let add_network_share_slot_for_import = add_network_share_slot.clone();
+    let connection_for_share = connection.clone();
+    let scan_job_for_share = scan_job.clone();
+    let start_next_scan_for_share = start_next_scan.clone();
+    let sidebar_refresh_for_share = availability_refresh.clone();
+    let window_for_share = window.clone();
+    add_network_share_slot.replace(Some(Rc::new(move || {
+        let connection = connection_for_share.clone();
+        let scan_job = scan_job_for_share.clone();
+        let start_next_scan = start_next_scan_for_share.clone();
+        let sidebar_refresh = sidebar_refresh_for_share.clone();
+        let parent_window = window_for_share.clone();
+        let parent_for_dialog = window_for_share.clone();
+        let on_connect: Rc<dyn Fn(String, String)> = Rc::new(move |name, browse_root| {
+            let parent = parent_window.clone().upcast::<gtk::Widget>();
+            crate::source::net_trace(format!("connect_requested uri={browse_root}"));
+            let connection = connection.clone();
+            let scan_job = scan_job.clone();
+            let start_next_scan = start_next_scan.clone();
+            let sidebar_refresh = sidebar_refresh.clone();
+            let parent_window = parent_window.clone();
+            let mount_parent = parent_window.clone().upcast::<gtk::Window>();
+            let browse_root_for_mount = browse_root.clone();
+            crate::source::mount_share_async(&browse_root_for_mount, Some(&mount_parent), move |result| {
+                if let Err(message) = result {
+                    show_error(&parent, "Could not connect to network share", &message);
+                    sidebar_refresh();
+                    return;
+                }
+                // Normalize the browse root (network:// discovery shortcuts
+                // resolve to their concrete target URI; smb:// / nfs:// roots
+                // stay canonical with a trailing slash).
+                let chooser_root = crate::source::network_browse_root(&browse_root);
+                if !chooser_root.contains("://") || !chooser_root.ends_with('/') {
+                    let message = format!(
+                        "could not browse {browse_root}: not a valid network location"
+                    );
+                    crate::source::net_trace(format!(
+                        "browse_failed uri={browse_root} error={message}"
+                    ));
+                    show_error(&parent, "Could not open network share", &message);
+                    sidebar_refresh();
+                    return;
+                }
+                crate::source::net_trace(format!("browse_opened root={chooser_root}"));
+
+                // Browse the mounted server (shares first, then folders) with
+                // the in-app GIO browser and register only the folder the user
+                // actually picks. The GTK file chooser cannot display remote
+                // gvfs locations (it falls back to $HOME).
+                let connection = connection.clone();
+                let scan_job = scan_job.clone();
+                let start_next_scan = start_next_scan.clone();
+                let sidebar_refresh = sidebar_refresh.clone();
+                let parent = parent.clone();
+                let parent_widget = parent_window.clone().upcast::<gtk::Widget>();
+                show_network_folder_browser(
+                    parent_widget,
+                    chooser_root,
+                    Rc::new(move |selected_uri: String| {
+                        let display_name = if name.is_empty() {
+                            crate::source::filename(&selected_uri)
+                        } else {
+                            name.clone()
+                        };
+                        if let Err(error) = db::insert_network_share(
+                            &connection.borrow(),
+                            &selected_uri,
+                            &display_name,
+                        ) {
+                            show_error(&parent, "Could not add network share", &error.to_string());
+                            return;
+                        }
+                        crate::source::net_trace(format!("registered uri={selected_uri}"));
+                        sidebar_refresh();
+                        // The share is mounted and the folder was verified by
+                        // browsing into it, so the scan goes straight out.
+                        if let Ok(mut job) = scan_job.try_borrow_mut() {
+                            job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
+                                .expect("import is an authorized scan reason");
+                            job.pending.push_back(selected_uri.clone());
+                        }
+                        start_next_scan();
+                        crate::source::net_trace(format!("scan_queued uri={selected_uri}"));
+                    }),
+                );
+            });
+        });
+        show_add_network_share_dialog(parent_for_dialog.upcast::<gtk::Widget>(), on_connect);
+    })));
 
     let parent = window.clone();
     let connection_for_import = connection.clone();

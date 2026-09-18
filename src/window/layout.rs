@@ -338,6 +338,83 @@
                 }
             })
         },
+        // NETWORK SHARES: section + button opens the Phase 1 SMB dialog.
+        {
+            let slot = add_network_share_slot.clone();
+            Rc::new(move || {
+                if let Some(callback) = slot.borrow().as_ref() {
+                    callback();
+                }
+            })
+        },
+        {
+            let parent: gtk::Widget = window.clone().upcast();
+            let parent_window: gtk::Window = window.clone().upcast();
+            Rc::new(move |folder| {
+                // "Open" shows the share in the system file browser (Nautilus)
+                // via the URI's default handler. The share is mounted first
+                // (gvfs auto-mount; auth dialog if needed) - an unmounted
+                // location would launch the browser into a fallback view.
+                let mut uri = folder.path.clone();
+                if !uri.ends_with('/') {
+                    uri.push('/');
+                }
+                crate::source::net_trace(format!("open uri={uri}"));
+                let parent_for_error = parent.clone();
+                let parent_for_mount = parent_window.clone();
+                let uri_for_launch = uri.clone();
+                crate::source::mount_share_async(&uri, Some(&parent_for_mount), move |result| {
+                    if let Err(message) = result {
+                        show_error(
+                            &parent_for_error,
+                            "Could not open network share",
+                            &message,
+                        );
+                        return;
+                    }
+                    if let Err(error) = gio::AppInfo::launch_default_for_uri(
+                        uri_for_launch.as_str(),
+                        None::<&gio::AppLaunchContext>,
+                    ) {
+                        show_error(
+                            &parent_for_error,
+                            "Could not open network share",
+                            &error.to_string(),
+                        );
+                    }
+                });
+            })
+        },
+        {
+            let on_unavailable = availability_refresh.clone();
+            let parent: gtk::Window = window.clone().upcast();
+            let parent_for_error = parent.clone().upcast::<gtk::Widget>();
+            Rc::new(move |folder| {
+                // "Retry Connection" = reconnect through gvfs: if the share
+                // is not mounted yet, this mounts it (guest shares connect
+                // silently; password-protected ones get the mount dialog),
+                // then availability is re-probed off the UI thread.
+                let path = folder.path.clone();
+                let on_unavailable = on_unavailable.clone();
+                let parent_for_mount = parent.clone();
+                let parent_for_error = parent_for_error.clone();
+                crate::source::net_trace(format!("connect_requested uri={path}"));
+                crate::source::mount_share_async(&path, Some(&parent_for_mount), move |result| {
+                    match result {
+                        Ok(()) => {}
+                        Err(ref message) => {
+                            show_error(
+                                &parent_for_error,
+                                "Could not connect to network share",
+                                message,
+                            );
+                        }
+                    }
+                    crate::source::refresh_availability();
+                    on_unavailable();
+                });
+            })
+        },
         folder_display_mode,
         {
             let connection = connection.clone();

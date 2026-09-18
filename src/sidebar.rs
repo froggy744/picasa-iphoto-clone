@@ -96,6 +96,9 @@ const FOLDER_STATISTICS_KEY: &str = "picasa-sidebar-folder-statistics";
 const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
 const FOLDER_WATCH_KEY: &str = "picasa-sidebar-folder-watch";
+const SHARE_LIST_KEY: &str = "picasa-sidebar-share-list";
+const SHARE_OPEN_KEY: &str = "picasa-sidebar-share-open";
+const SHARE_RETRY_KEY: &str = "picasa-sidebar-share-retry";
 const FOLDER_MODE_TOGGLE_KEY: &str = "picasa-sidebar-folder-mode-toggle";
 const FOLDER_MODE_CHANGED_KEY: &str = "picasa-sidebar-folder-mode-changed";
 const KEYBOARD_GRID_TARGET_KEY: &str = "picasa-sidebar-keyboard-grid-target";
@@ -120,6 +123,9 @@ pub fn build(
     on_remove_folder: Rc<dyn Fn(Folder)>,
     on_folder_favorite: Rc<dyn Fn(Folder, bool)>,
     on_folder_watch: Rc<dyn Fn(Folder, bool)>,
+    on_add_share: Rc<dyn Fn()>,
+    on_open_share: Rc<dyn Fn(Folder)>,
+    on_retry_share: Rc<dyn Fn(Folder)>,
     folder_display_mode: FolderDisplayMode,
     on_folder_display_mode_changed: Rc<dyn Fn(FolderDisplayMode)>,
 ) -> gtk::ScrolledWindow {
@@ -245,7 +251,7 @@ pub fn build(
     }
 
     let folder_list = section_list();
-    connect_filter_list(&folder_list, on_filter, filter_syncing.clone());
+    connect_filter_list(&folder_list, on_filter.clone(), filter_syncing.clone());
 
     let folder_scroll = gtk::ScrolledWindow::new();
     folder_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -491,15 +497,41 @@ pub fn build(
     // Folder rows install their context menu while they are created, so these
     // callbacks must be available on the ListBox before populate_folders().
     unsafe {
-        folder_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder);
+        folder_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder.clone());
         folder_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics);
-        folder_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder);
+        folder_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder.clone());
         folder_list.set_data(FOLDER_FAVORITE_KEY, on_folder_favorite);
         folder_list.set_data(FOLDER_WATCH_KEY, on_folder_watch);
     }
 
+    // NETWORK SHARES: registered remote sources (Phase 1: SMB). Kept strictly
+    // separate from local Folders; the section lives below the Folders pane.
+    let (share_heading, _share_indicator) = collapsible_heading(
+        "Network Shares",
+        Some(on_add_share.clone()),
+        "Add Network Share",
+        true,
+        None,
+    );
+    share_heading.add_css_class("sidebar-sticky-heading");
+    let share_list = section_list();
+    connect_filter_list(&share_list, on_filter.clone(), filter_syncing.clone());
+    unsafe {
+        outer.set_data(SHARE_LIST_KEY, share_list.clone());
+        share_list.set_data(SHARE_OPEN_KEY, on_open_share);
+        share_list.set_data(SHARE_RETRY_KEY, on_retry_share);
+        share_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder);
+        share_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder);
+    }
+    // The section lives INSIDE the Folders pane, directly under the folder
+    // list: collapsing Folders moves Network Shares up with it instead of
+    // leaving it pinned to the bottom of the sidebar.
+    folder_section.append(&share_heading);
+    folder_section.append(&share_list);
+
     populate_albums(&album_list, albums, &on_delete_album);
     populate_folders(&folder_list, folders, &state, &on_unavailable);
+    refresh_network_shares(&outer, folders, &on_unavailable);
 
     outer.set_child(Some(&root));
 
@@ -895,7 +927,15 @@ pub fn refresh_folder_rows(
     };
     let folder_scroll_value = folder_scroll_value(scrolled);
     clear_list(&folder_list);
-    populate_folders(&folder_list, folders, &state, on_unavailable);
+    // Registered network shares are presented in their own section; the
+    // Folders tree stays strictly local.
+    let local_folders: Vec<Folder> = folders
+        .iter()
+        .filter(|folder| !crate::db::is_remote_path(&folder.path))
+        .cloned()
+        .collect();
+    populate_folders(&folder_list, &local_folders, &state, on_unavailable);
+    refresh_network_shares(scrolled, folders, on_unavailable);
     restore_folder_scroll(scrolled, folder_scroll_value);
 }
 
@@ -1576,6 +1616,23 @@ fn populate_folders(
     state: &Rc<RefCell<SidebarState>>,
     on_unavailable: &Rc<dyn Fn()>,
 ) {
+    // Registered network shares live in their own sidebar section; the local
+    // Folders tree never mixes URI sources in. refresh_folder_rows filters
+    // before calling, but the initial build() path passes the full list.
+    let folders_owned;
+    let folders = if folders
+        .iter()
+        .any(|folder| crate::db::is_remote_path(&folder.path))
+    {
+        folders_owned = folders
+            .iter()
+            .filter(|folder| !crate::db::is_remote_path(&folder.path))
+            .cloned()
+            .collect::<Vec<Folder>>();
+        &folders_owned
+    } else {
+        folders
+    };
     unsafe {
         list.set_data("picasa-folder-cache", folders.to_vec());
         list.set_data("picasa-folder-unavailable-callback", on_unavailable.clone());
@@ -2257,4 +2314,191 @@ fn format_count(value: i64) -> String {
     } else {
         grouped
     }
+}
+
+/// Registered network shares (imported URI roots). Presented in their own
+/// sidebar section below Folders, never mixed into the local folder tree.
+fn refresh_network_shares(
+    scrolled: &gtk::ScrolledWindow,
+    folders: &[Folder],
+    on_unavailable: &Rc<dyn Fn()>,
+) {
+    let Some(list) = stored_widget::<gtk::ListBox>(scrolled, SHARE_LIST_KEY) else {
+        return;
+    };
+    clear_list(&list);
+    let shares: Vec<Folder> = folders
+        .iter()
+        .filter(|folder| folder.imported_root && crate::db::is_remote_path(&folder.path))
+        .cloned()
+        .collect();
+    if shares.is_empty() {
+        return;
+    }
+    for folder in &shares {
+        append_share_row(&list, folder, on_unavailable);
+    }
+    list.set_visible(true);
+}
+
+fn append_share_row(
+    list: &gtk::ListBox,
+    folder: &Folder,
+    on_unavailable: &Rc<dyn Fn()>,
+) -> gtk::ListBoxRow {
+    let _ = on_unavailable;
+    let row = gtk::ListBoxRow::new();
+    row.set_margin_top(2);
+    row.set_margin_bottom(2);
+    unsafe {
+        row.set_data("picasa-filter", SidebarFilter::Folder(folder.id));
+    }
+    row.set_tooltip_text(Some(folder.path.as_str()));
+
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    content.set_margin_top(4);
+    content.set_margin_bottom(4);
+    content.set_margin_start(4);
+    content.set_margin_end(8);
+
+    let icon_overlay = gtk::Overlay::new();
+    icon_overlay.set_size_request(18, 18);
+    icon_overlay.set_halign(gtk::Align::Center);
+    icon_overlay.set_valign(gtk::Align::Center);
+    let icon = gtk::Image::from_icon_name("folder-remote-symbolic");
+    icon.set_pixel_size(18);
+    icon_overlay.set_child(Some(&icon));
+    if !folder.available {
+        // Same offline indicator as local folders: the library rows survive,
+        // only the original files are unreachable right now.
+        let badge = gtk::Image::from_icon_name("dialog-warning-symbolic");
+        badge.set_pixel_size(11);
+        badge.set_halign(gtk::Align::End);
+        badge.set_valign(gtk::Align::End);
+        badge.add_css_class("unavailable-badge");
+        badge.set_tooltip_text(Some(
+            "Share unreachable - cached thumbnails remain available",
+        ));
+        icon_overlay.add_overlay(&badge);
+    }
+    content.append(&icon_overlay);
+
+    let name = gtk::Label::new(Some(&folder.name));
+    name.set_xalign(0.0);
+    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    name.set_hexpand(true);
+    content.append(&name);
+
+    if folder.photo_count > 0 {
+        let count = gtk::Label::new(Some(&folder.photo_count.to_string()));
+        count.add_css_class("dim-label");
+        count.add_css_class("sidebar-count");
+        count.set_valign(gtk::Align::Center);
+        content.append(&count);
+    }
+
+    row.set_child(Some(&content));
+    add_share_context_menu(list, &row, folder);
+    list.append(&row);
+    row
+}
+
+fn add_share_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &Folder) {
+    let open = unsafe {
+        list.data::<Rc<dyn Fn(Folder)>>(SHARE_OPEN_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
+    let retry = unsafe {
+        list.data::<Rc<dyn Fn(Folder)>>(SHARE_RETRY_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
+    let refresh = unsafe {
+        list.data::<Rc<dyn Fn(String)>>(FOLDER_REFRESH_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
+    let remove = unsafe {
+        list.data::<Rc<dyn Fn(Folder)>>(FOLDER_REMOVE_KEY)
+            .map(|callback| callback.as_ref().clone())
+    };
+    let (Some(open), Some(retry), Some(refresh), Some(remove)) = (open, retry, refresh, remove)
+    else {
+        return;
+    };
+
+    let folder_for_menu = folder.clone();
+    let row_for_menu = row.clone();
+    let right_click = gtk::GestureClick::new();
+    right_click.set_button(3);
+    right_click.connect_pressed(move |gesture, _, _, _| {
+        let popover = gtk::Popover::new();
+        popover.set_has_arrow(true);
+        popover.set_parent(&row_for_menu);
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        menu.set_margin_top(6);
+        menu.set_margin_bottom(6);
+        menu.set_margin_start(6);
+        menu.set_margin_end(6);
+
+        let open_item = gtk::Button::with_label("Open");
+        open_item.add_css_class("flat");
+        {
+            let folder = folder_for_menu.clone();
+            let open = open.clone();
+            let popover_for_open = popover.clone();
+            open_item.connect_clicked(move |_| {
+                popover_for_open.popdown();
+                open(folder.clone());
+            });
+        }
+        menu.append(&open_item);
+
+        let retry_item = gtk::Button::with_label("Retry Connection");
+        retry_item.add_css_class("flat");
+        {
+            let folder = folder_for_menu.clone();
+            let retry = retry.clone();
+            let popover_for_retry = popover.clone();
+            retry_item.connect_clicked(move |_| {
+                popover_for_retry.popdown();
+                retry(folder.clone());
+            });
+        }
+        menu.append(&retry_item);
+
+        let rescan_item = gtk::Button::with_label("Rescan");
+        rescan_item.add_css_class("flat");
+        rescan_item.set_sensitive(folder_for_menu.imported_root);
+        {
+            let path = folder_for_menu.path.clone();
+            let refresh = refresh.clone();
+            let popover_for_rescan = popover.clone();
+            rescan_item.connect_clicked(move |_| {
+                popover_for_rescan.popdown();
+                refresh(path.clone());
+            });
+        }
+        menu.append(&rescan_item);
+
+        let remove_item = gtk::Button::with_label("Remove from Library");
+        remove_item.add_css_class("flat");
+        remove_item.add_css_class("destructive-action");
+        {
+            let folder = folder_for_menu.clone();
+            let remove = remove.clone();
+            let popover_for_remove = popover.clone();
+            remove_item.set_tooltip_text(Some(
+                "Removes the share and its index from PIC. Files on the server are never touched.",
+            ));
+            remove_item.connect_clicked(move |_| {
+                popover_for_remove.popdown();
+                remove(folder.clone());
+            });
+        }
+        menu.append(&remove_item);
+
+        popover.set_child(Some(&menu));
+        popover.popup();
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+    });
+    row.add_controller(right_click);
 }

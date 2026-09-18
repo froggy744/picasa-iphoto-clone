@@ -982,3 +982,59 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod network_share_tests {
+    use super::*;
+
+    #[test]
+    fn network_share_registers_root_with_display_name_and_lists_separately() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+
+        let id = insert_network_share(
+            &connection,
+            "smb://192.168.1.20/Photos",
+            "Synology NAS",
+        )
+        .unwrap();
+        assert!(id > 0);
+
+        let folder = folders(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.path == "smb://192.168.1.20/Photos")
+            .expect("share must persist in the folders table");
+        assert_eq!(folder.name, "Synology NAS");
+        assert!(folder.imported_root, "share must be an imported (scan) root");
+        assert!(is_remote_path(&folder.path));
+
+        // Only registered URI roots are shares; local folders never leak in,
+        // and descendants of a share are not listed as shares themselves.
+        connection
+            .execute(
+                "INSERT INTO folders(path, name, parent_id) VALUES ('smb://192.168.1.20/Photos/2024', '2024', ?1)",
+                [id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO folders(path, name) VALUES ('/home/peet/Pictures', 'Pictures')",
+                [],
+            )
+            .unwrap();
+        let shares = network_shares(&connection).unwrap();
+        assert_eq!(shares.len(), 1, "only the share root, not descendants");
+        assert_eq!(shares[0].name, "Synology NAS");
+
+        // Re-adding with a new name updates the display name in place.
+        insert_network_share(&connection, "smb://192.168.1.20/Photos", "Home NAS").unwrap();
+        let renamed = network_shares(&connection).unwrap();
+        assert_eq!(renamed.len(), 1);
+        assert_eq!(renamed[0].name, "Home NAS");
+
+        // Removal is database-only: no filesystem calls anywhere in the path.
+        remove_folder(&connection, id).unwrap();
+        assert!(network_shares(&connection).unwrap().is_empty());
+    }
+}

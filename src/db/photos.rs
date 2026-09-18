@@ -189,6 +189,37 @@ pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: 
     Ok(id)
 }
 
+/// Register a network share (such as `smb://host/share`) as an independent
+/// library root with a user-chosen display name. The share behaves like an
+/// imported folder: it is scanned, indexed and availability-tracked through
+/// the ordinary GIO source layer. Registered shares persist in the folders
+/// table, so they remain visible (with cached thumbnails) while offline.
+pub fn insert_network_share(connection: &Connection, uri: &str, name: &str) -> Result<i64> {
+    let id = mark_import_root(connection, uri)?;
+    connection.execute(
+        "UPDATE folders SET name = ?1 WHERE id = ?2",
+        params![name, id],
+    )?;
+    Ok(id)
+}
+
+/// Registered network share roots: URI-based folders the user added. Their
+/// indexed subfolders stay descendants in the folders table but are presented
+/// only inside the sidebar's Network Shares section.
+pub fn network_shares(connection: &Connection) -> Result<Vec<Folder>> {
+    Ok(folders(connection)?
+        .into_iter()
+        .filter(|folder| folder.imported_root && is_remote_path(&folder.path))
+        .collect())
+}
+
+/// True when a folder path is a remote URI (smb://, nfs://, ...) rather than a
+/// local filesystem path. Local-only sidebar sections and local-only behaviour
+/// key off this.
+pub fn is_remote_path(path: &str) -> bool {
+    path.contains("://")
+}
+
 pub fn search_folders(
     connection: &Connection,
     query: &str,
