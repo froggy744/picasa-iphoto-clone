@@ -52,7 +52,7 @@ src/
 ├── grid/           view, tile, grouping, navigation, selection, virtualization
 ├── collage/        editor, layout, model, smart_mosaic, render
 ├── thumbnail/ lightbox/ db/ platform/ ...
-css/themes/<id>/theme.css    shipped + community themes (13 at present)
+themes/<id>/theme.css        shipped + community themes (13 at present)
 docs/THEMES.md, docs/theme-template/   theme docs and community template
 ```
 
@@ -62,7 +62,7 @@ Platform typography stays separate from themes (Segoe UI / GTK / Apple stacks). 
 
 ## 4. What Changed Since the v4 Summary (2026-09-16)
 
-- **Theme system rewritten:** hardcoded theme list replaced by runtime discovery of `css/themes/<id>/` folders; new themes appear without restart. Docs: `docs/THEMES.md`; community template: `docs/theme-template/`.
+- **Theme system rewritten:** hardcoded theme list replaced by runtime discovery of `themes/<id>/` folders; new themes appear without restart. Docs: `docs/THEMES.md`; community template: `docs/theme-template/`.
 - **Shipped themes:** iphone (base), standard, blue, green, teal, glass, retro, claude, archive ledger, tron, velvet-dusk, aqua-garageband-lights, aqua-garageband-v2. Traffic-light window controls are theme-overridable.
 - **Header/Settings:** top-bar gear icon removed; Appearance/Themes picker lives in the header; thumbnail appearance toggles moved into the Themes tab; clear-database functions moved into Settings → Library.
 - **Sidebar:** major rewrite — collapse-all, resizable album area, pin/auto-close button, corrected counts/totals, smooth scrolling fixes.

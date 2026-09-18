@@ -21,7 +21,7 @@ pub struct SettingsWindow {
     window: Rc<RefCell<glib::WeakRef<adw::Window>>>,
     stack: Rc<RefCell<glib::WeakRef<gtk::Stack>>>,
     /// Rebuilds the Appearance section on the Themes page from a fresh scan
-    /// of css/themes, so themes dropped into the folder appear the next time
+    /// of the themes folder, so themes dropped into the folder appear the next time
     /// the window is presented. Set when the page is first built.
     refresh_appearance: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
 }
@@ -990,7 +990,7 @@ fn themes_page(
 ) -> (gtk::ScrolledWindow, Rc<dyn Fn()>) {
     let content = page_content("Themes", "Customize theme options.");
 
-    // Appearance: one radio row per theme folder found in css/themes. The
+    // Appearance: one radio row per theme folder found in the themes folder. The
     // section is rebuilt from a fresh scan every time the settings window is
     // presented, so new folders appear without a restart.
     let appearance_section = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -1033,7 +1033,7 @@ fn themes_page(
                 }
                 append_row(&list, &theme.name, None, Some(check.upcast_ref()));
             }
-            append_empty_state(&list, "No themes found in css/themes", themes.is_empty());
+            append_empty_state(&list, "No themes found in the themes folder", themes.is_empty());
             section.append(&list);
         })
     };
@@ -1747,7 +1747,7 @@ mod tests {
             ],
         );
         // Switch order: the runtime-discovered appearance radios first
-        // (their count follows the css/themes folder contents), then the two
+        // (their count follows the themes folder contents), then the two
         // thumbnail toggles, then bookshelf and album covers at the end.
         let album_switches = &switches[switches.len() - 2..];
         assert_eq!(album_switches.len(), 2);

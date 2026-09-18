@@ -1,6 +1,6 @@
 //! Runtime discovery of appearance themes.
 //!
-//! Themes are plain folders below `css/themes` next to the executable (same
+//! Themes are plain folders below `themes` next to the executable (same
 //! layout convention as the `images/` runtime folder). Each theme folder must
 //! contain one stylesheet: either `theme.css` (preferred) or, failing that,
 //! the only `*.css` file in the folder.

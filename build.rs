@@ -1,11 +1,11 @@
 //! Stage runtime resource folders next to the built binary.
 //!
-//! PIC resolves `css/themes` and `images` relative to the working directory
+//! PIC resolves `themes` and `images` relative to the working directory
 //! (see `resolve_runtime_dir` in `src/css/mod.rs`). Packaging scripts copy
 //! those folders next to the executable, but a plain `cargo build` did not,
 //! so `target/release/pic-rs` started without appearance themes or album
 //! artwork. After each build this script mirrors the packaging layout by
-//! copying the current `css/` and `images/` folders into the profile
+//! copying the current `themes/` and `images/` folders into the profile
 //! directory (for example `target/release`), keeping them in sync whenever
 //! their contents change.
 
@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    println!("cargo:rerun-if-changed=css");
+    println!("cargo:rerun-if-changed=themes");
     println!("cargo:rerun-if-changed=images");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -28,7 +28,7 @@ fn main() {
         return;
     };
 
-    for folder in ["css", "images"] {
+    for folder in ["themes", "images"] {
         let source = manifest_dir.join(folder);
         if source.is_dir() {
             stage_dir(&source, &profile_dir.join(folder));

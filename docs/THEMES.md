@@ -8,13 +8,13 @@ theme appears without restarting.
 ## Location
 
 ```
-<app folder>/css/themes/<theme-id>/theme.css
+<app folder>/themes/<theme-id>/theme.css
 ```
 
-The app resolves `css/themes` relative to its working directory, exactly like
+The app resolves `themes` relative to its working directory, exactly like
 the `images/` runtime folder; if the folder is not found there it falls back
 to the path next to the executable, so the binary works from any launch
-directory. The shipped themes live in the repository at `css/themes/` and
+directory. The shipped themes live in the repository at `themes/` and
 `cargo build` (via `build.rs`) and the packaging scripts both stage them
 next to the binary.
 
@@ -60,7 +60,7 @@ The header only counts as metadata when its first line contains the marker
   database. Renaming a folder makes the saved selection fall back to
   `standard`, then to the first theme found.
 - The **display name** is free to change at any time via the metadata header.
-- If `css/themes` is missing entirely the app runs on the stock GTK
+- If `themes` is missing entirely the app runs on the stock GTK
   appearance.
 
 ## Layering
@@ -89,11 +89,11 @@ controls).
 - **Start from the community template: `docs/theme-template/`** — a complete,
   commented theme with every selector the app exercises (surfaces, photo
   tiles, sidebar selected + scroll-follow marker, segmented toggles, info
-  bar, context menu). Copy it to `css/themes/<your-id>/` and recolor the
+  bar, context menu). Copy it to `themes/<your-id>/` and recolor the
   palette block. See its README for the three-step install.
-- `css/themes/standard/theme.css` is the shortest real example: it resets the
+- `themes/standard/theme.css` is the shortest real example: it resets the
   dark base back to the stock libadwaita look.
-- `css/themes/blue/theme.css` shows a fully self-contained palette.
+- `themes/blue/theme.css` shows a fully self-contained palette.
 - Always style the scroll-follow folder marker
   (`.navigation-sidebar row.sidebar-scroll-location`) and the segmented
   toggles (`.crop-aspect-button:checked`, `.crop-orientation-row button:checked`,

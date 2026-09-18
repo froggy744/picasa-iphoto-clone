@@ -17,7 +17,7 @@ pub(crate) const PLATFORM: &str = include_str!("macos.css");
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 pub(crate) const PLATFORM: &str = include_str!("linux.css");
 
-/// Resolve a runtime resource directory such as `css/themes` or
+/// Resolve a runtime resource directory such as `themes` or
 /// `images/theme/album-covers`.
 ///
 /// Relative paths normally resolve against the working directory: a source

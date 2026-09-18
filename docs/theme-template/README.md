@@ -9,11 +9,11 @@ rename it, recolor the palette — done.
    your theme's id (lowercase, no spaces — this is the stable name PIC saves):
 
    ```
-   css/themes/my-theme/          <- the copy, folder renamed
+   themes/my-theme/              <- the copy, folder renamed
    ```
 
-   `css/themes/` sits next to the PIC executable (same place as the bundled
-   `css/themes/standard/`, `css/themes/teal/`, …).
+   The `themes/` folder sits next to the PIC executable (same place as the
+   bundled `themes/standard/`, `themes/teal/`, …).
 
 2. **Rename** `theme.css` stays `theme.css` — instead, edit the metadata at
    the top of the file:

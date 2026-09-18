@@ -69,7 +69,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let info_for_lightbox = info.clone();
     let selected_photo_for_lightbox = selected_photo.clone();
 
-    // Appearance themes are discovered from css/themes at runtime; the
+    // Appearance themes are discovered from the themes folder at runtime; the
     // engine applies them, persists the choice, and is shared with the
     // Settings → Themes picker (the single theme list in the app).
     let display = gtk::gdk::Display::default().expect("a display is required");
@@ -2439,7 +2439,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     ) = include!("layout.rs");
 
     // Appearance button: opens Settings → Themes, where the theme list is
-    // built from the css/themes folders on disk. toolbar.rs appends the
+    // built from the theme folders on disk. toolbar.rs appends the
     // `settings` button to the header tools.
     let settings = crate::window::theme::appearance_button();
     theme_engine.set_appearance_button(&settings);

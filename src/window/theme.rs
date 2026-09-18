@@ -1,6 +1,6 @@
 //! Appearance theme engine.
 //!
-//! Themes are discovered at runtime from the `css/themes` folder next to the
+//! Themes are discovered at runtime from the `themes` folder next to the
 //! executable (see [`crate::css::theme_discovery`]); nothing about the
 //! available themes is hardcoded. Layering on the display, lowest first:
 //!
@@ -25,7 +25,7 @@ use rusqlite::Connection;
 use super::THEME_SETTING_KEY;
 use crate::css::theme_discovery::{self, DiscoveredTheme, WindowControls};
 
-pub(crate) const THEMES_DIRECTORY: &str = "css/themes";
+pub(crate) const THEMES_DIRECTORY: &str = "themes";
 
 /// Fallback when the saved theme id no longer exists on disk.
 const DEFAULT_THEME_ID: &str = "standard";

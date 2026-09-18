@@ -541,15 +541,14 @@ copy_runtime_resources() {
         cp -a "$SOURCE_DIR/images" "$resource_root/images"
         ok "Bundled runtime images: $resource_root/images"
     fi
-    # Appearance themes: the app discovers css/themes/<name>/theme.css at
+    # Appearance themes: the app discovers themes/<name>/theme.css at
     # runtime, and users can drop extra theme folders in here.
-    if [[ ! -d "$SOURCE_DIR/css/themes" ]]; then
-        warn "Runtime themes folder not found: $SOURCE_DIR/css/themes"
+    if [[ ! -d "$SOURCE_DIR/themes" ]]; then
+        warn "Runtime themes folder not found: $SOURCE_DIR/themes"
     else
-        mkdir -p "$resource_root/css"
-        rm -rf "$resource_root/css/themes"
-        cp -a "$SOURCE_DIR/css" "$resource_root/css"
-        ok "Bundled runtime themes: $resource_root/css/themes"
+        rm -rf "$resource_root/themes"
+        cp -a "$SOURCE_DIR/themes" "$resource_root/themes"
+        ok "Bundled runtime themes: $resource_root/themes"
     fi
 }
 
@@ -750,7 +749,7 @@ EOF_CARGO
         "install -Dm755 $launcher_rel /app/bin/$BIN_NAME",
         "install -d /app/share/$BIN_NAME",
         "cp -a images /app/share/$BIN_NAME/",
-        "cp -a css /app/share/$BIN_NAME/",
+        "cp -a themes /app/share/$BIN_NAME/",
         "install -Dm644 $desktop_rel /app/share/applications/$APP_ID.desktop",
         "install -Dm644 $icon_rel $FLATPAK_ICON_DEST"
       ],
