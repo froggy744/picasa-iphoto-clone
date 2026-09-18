@@ -1,2 +1,4 @@
 .worktrees/
 target/
+dist/
+build-logs/
