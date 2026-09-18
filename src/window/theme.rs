@@ -89,7 +89,8 @@ impl ThemeEngine {
     /// Rescan the theme folder. Call whenever the picker is (re)built so
     /// themes dropped into the folder appear without a restart.
     pub(crate) fn themes(&self) -> Vec<DiscoveredTheme> {
-        theme_discovery::discover(&self.themes_dir.borrow())
+        let dir = crate::css::resolve_runtime_dir(&self.themes_dir.borrow());
+        theme_discovery::discover(&dir)
     }
 
     #[cfg(test)]
@@ -140,7 +141,7 @@ impl ThemeEngine {
         if themes.is_empty() {
             eprintln!(
                 "No appearance themes found in {}; running with the stock GTK appearance",
-                self.themes_dir.borrow().display()
+                crate::css::resolve_runtime_dir(&self.themes_dir.borrow()).display()
             );
             return;
         }

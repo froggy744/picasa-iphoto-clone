@@ -12,7 +12,9 @@ pub fn build(
     scrolled.set_vexpand(true);
 
     let background = gtk::CssProvider::new();
-    let background_rules = bookshelf_background_rules(Path::new(BOOKSHELF_THEME_DIRECTORY));
+    let background_rules = bookshelf_background_rules(&crate::css::resolve_runtime_dir(Path::new(
+        BOOKSHELF_THEME_DIRECTORY,
+    )));
     background.load_from_string(&background_rules);
     scrolled
         .style_context()
@@ -406,8 +408,10 @@ fn populate(
     bookshelf_runtime.rows.set_visible(responsive_bookshelf);
     bookshelf_runtime.selected_theme.replace(row_theme.clone());
 
-    let frames: Vec<FrameAsset> =
-        album_frame_paths_for_appearance(Path::new(ALBUM_COVER_THEME_DIRECTORY), appearance)
+    let frames: Vec<FrameAsset> = album_frame_paths_for_appearance(
+        &crate::css::resolve_runtime_dir(Path::new(ALBUM_COVER_THEME_DIRECTORY)),
+        appearance,
+    )
             .into_iter()
             .filter_map(|path| {
                 gtk::gdk::Texture::from_filename(&path).ok().map(|texture| {
@@ -482,7 +486,7 @@ fn populate(
     for album in &albums {
         let frame = selected_frame_index(
             album,
-            Path::new(ALBUM_COVER_THEME_DIRECTORY),
+            &crate::css::resolve_runtime_dir(Path::new(ALBUM_COVER_THEME_DIRECTORY)),
             &frame_paths,
             appearance.cover_index,
         )

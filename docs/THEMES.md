@@ -12,8 +12,11 @@ theme appears without restarting.
 ```
 
 The app resolves `css/themes` relative to its working directory, exactly like
-the `images/` runtime folder. The shipped themes live in the repository at
-`css/themes/` and build scripts bundle them next to the binary.
+the `images/` runtime folder; if the folder is not found there it falls back
+to the path next to the executable, so the binary works from any launch
+directory. The shipped themes live in the repository at `css/themes/` and
+`cargo build` (via `build.rs`) and the packaging scripts both stage them
+next to the binary.
 
 ## Theme folder
 

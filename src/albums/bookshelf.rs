@@ -127,7 +127,8 @@ fn bookshelf_theme_for_appearance(appearance: AlbumAppearance) -> Option<Bookshe
     if !appearance.bookshelf_enabled {
         return None;
     }
-    let themes = bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY));
+    let themes =
+        bookshelf_themes_in(&crate::css::resolve_runtime_dir(Path::new(BOOKSHELF_THEME_DIRECTORY)));
     (!themes.is_empty()).then(|| themes[appearance.background_index % themes.len()].clone())
 }
 
@@ -158,7 +159,8 @@ fn bookshelf_background_rules(directory: &Path) -> String {
 }
 
 fn bookshelf_background_css_class(appearance: AlbumAppearance) -> Option<String> {
-    let themes = bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY));
+    let themes =
+        bookshelf_themes_in(&crate::css::resolve_runtime_dir(Path::new(BOOKSHELF_THEME_DIRECTORY)));
     if !appearance.bookshelf_enabled || themes.is_empty() {
         return None;
     }

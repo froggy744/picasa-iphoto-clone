@@ -150,8 +150,8 @@ fn album_frame_paths_in(directory: &Path) -> Vec<PathBuf> {
 }
 
 pub(crate) fn album_cover_theme_count() -> usize {
-    let root = Path::new(ALBUM_COVER_THEME_DIRECTORY);
-    cover_themes(root, &album_frame_paths_in(root)).len()
+    let root = crate::css::resolve_runtime_dir(Path::new(ALBUM_COVER_THEME_DIRECTORY));
+    cover_themes(&root, &album_frame_paths_in(&root)).len()
 }
 
 fn collect_matching_files(
@@ -177,7 +177,7 @@ fn collect_matching_files(
 }
 
 pub(crate) fn bookshelf_background_count() -> usize {
-    bookshelf_themes_in(Path::new(BOOKSHELF_THEME_DIRECTORY)).len()
+    bookshelf_themes_in(&crate::css::resolve_runtime_dir(Path::new(BOOKSHELF_THEME_DIRECTORY))).len()
 }
 
 fn png_or_jpg_paths_matching(directory: &Path, matches: impl Fn(&str) -> bool) -> Vec<PathBuf> {

@@ -112,8 +112,8 @@ fn show_album_context_menu(
     album: Album,
     on_appearance_changed: Rc<dyn Fn()>,
 ) {
-    let frame_root = Path::new(ALBUM_COVER_THEME_DIRECTORY);
-    let frames = album_frame_paths_in(frame_root);
+    let frame_root = crate::css::resolve_runtime_dir(Path::new(ALBUM_COVER_THEME_DIRECTORY));
+    let frames = album_frame_paths_in(&frame_root);
     let popover = gtk::Popover::new();
     popover.set_autohide(true);
     popover.set_has_arrow(false);
@@ -177,7 +177,7 @@ fn show_album_context_menu(
             change_to_next_album_cover(
                 &connection.borrow(),
                 &album,
-                frame_root,
+                &frame_root,
                 &frames,
                 cover_index,
             )?;
