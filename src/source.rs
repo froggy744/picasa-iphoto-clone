@@ -34,20 +34,22 @@ pub fn folder_available(folder_id: Option<i64>) -> bool {
 }
 
 fn query_exists(reference: &str, directory: bool, lane: crate::smb_transport::SmbLane) -> bool {
+    // Legacy gvfs-FUSE paths normalize to smb:// URIs (see `read`).
+    let reference = crate::smb_transport::normalize_smb_reference(reference);
     if !reference.contains("://") {
         return if directory {
-            Path::new(reference).is_dir()
+            Path::new(&reference).is_dir()
         } else {
-            Path::new(reference).is_file()
+            Path::new(&reference).is_file()
         };
     }
     if reference.starts_with("smb://") {
         // Direct SMB probe through libsmbclient (worker threads only - this
         // blocks up to the transport timeout). The lane keeps availability
         // probes from delaying photo reads. NFS stays on gvfs.
-        return crate::smb_transport::stat_in_lane(reference, lane).is_ok();
+        return crate::smb_transport::stat_in_lane(&reference, lane).is_ok();
     }
-    uri_query_exists(&file(&normalize_nfs_uri(reference)))
+    uri_query_exists(&file(&normalize_nfs_uri(&reference)))
 }
 
 /// Longest a remote existence probe may block. gvfs SMB/NFS lookups can stall
@@ -849,14 +851,18 @@ fn materialize_inner(reference: &str) -> Result<PathBuf> {
 }
 
 pub fn read(reference: &str) -> Result<Vec<u8>> {
+    // Legacy gvfs-FUSE photo paths (`/run/user/.../gvfs/smb-share:...`)
+    // normalize to canonical smb:// URIs so the direct transport can serve
+    // records imported before the redesign (no gvfs mount exists anymore).
+    let reference = crate::smb_transport::normalize_smb_reference(reference);
     net_trace(format!("read_start uri={reference}"));
     let read_started = Instant::now();
     // Direct SMB: reads go through libsmbclient (no gvfs mount, nothing in
     // Nautilus). NFS and every other scheme keep riding gvfs.
     let loaded = if reference.starts_with("smb://") {
-        crate::smb_transport::read_file(reference).map_err(anyhow::Error::msg)
+        crate::smb_transport::read_file(&reference).map_err(anyhow::Error::msg)
     } else {
-        file(reference)
+        file(&reference)
             .load_contents(gio::Cancellable::NONE)
             .map(|(contents, _)| contents.as_ref().to_vec())
             .with_context(|| format!("could not read {reference}"))

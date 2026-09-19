@@ -164,6 +164,72 @@ pub fn percent_encode_segment(segment: &str) -> String {
     out
 }
 
+/// Rewrite legacy gvfs-FUSE photo paths into canonical `smb://` URIs.
+///
+/// Photographs imported before the direct transport were stored as
+/// `/run/user/UID/gvfs/smb-share:server=HOST,share=SHARE/path...`. Those
+/// paths only resolve while a gvfs mount exists - the transport mounts
+/// nothing, so reads of such records failed instantly (Fedora v17: 19
+/// lightbox read failures, every one on a legacy FUSE path). Normalizing at
+/// the read/probe boundary restores access without touching library
+/// records. Non-FUSE references (smb://, nfs://, local paths) pass through
+/// unchanged; NFS FUSE paths stay on gvfs by design.
+pub fn normalize_smb_reference(reference: &str) -> String {
+    if reference.starts_with("smb://") {
+        return reference.to_string();
+    }
+    let Some(marker) = reference.find("/gvfs/smb-share:") else {
+        return reference.to_string();
+    };
+    let options_and_path = &reference[marker + "/gvfs/smb-share:".len()..];
+    let (options, tail) = match options_and_path.split_once('/') {
+        Some((options, tail)) => (options, tail),
+        None => (options_and_path, ""),
+    };
+    let mut server: Option<&str> = None;
+    let mut share: Option<&str> = None;
+    for option in options.split(',') {
+        if let Some(host) = option.strip_prefix("server=") {
+            server = Some(host);
+        } else if let Some(share_name) = option.strip_prefix("share=") {
+            share = Some(share_name);
+        }
+    }
+    let (Some(server), Some(share)) = (server, share) else {
+        return reference.to_string();
+    };
+    // Drop a numeric :port (SMB is 445-only; smbc URLs take no port) and any
+    // userinfo-style components Samba may have included.
+    let server = match server.rsplit_once(':') {
+        Some((host, port))
+            if !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            host
+        }
+        _ => server,
+    };
+    if server.is_empty() || share.is_empty() {
+        return reference.to_string();
+    }
+    let mut url = format!(
+        "smb://{server}/{}",
+        percent_encode_segment(&unescape_gvfs(share))
+    );
+    for segment in tail.split('/').filter(|segment| !segment.is_empty()) {
+        url.push('/');
+        url.push_str(&percent_encode_segment(&unescape_gvfs(segment)));
+    }
+    url
+}
+
+/// gvfs percent-encodes option values (e.g. `prefix=%2Fexports%2FWork`);
+/// decode so the value can be re-encoded per segment.
+fn unescape_gvfs(value: &str) -> String {
+    glib::uri_unescape_string(value, None::<&str>)
+        .map(|decoded| decoded.to_string())
+        .unwrap_or_else(|| value.to_string())
+}
+
 impl SmbTarget {
     /// smbc URL for a path inside the share. An empty path is the share root.
     fn smbc_url(&self) -> String {
@@ -1139,6 +1205,57 @@ mod tests {
         assert_eq!(target.host, "nas");
         assert_eq!(target.share, "share");
         assert_eq!(target.path, "file.jpg");
+    }
+
+    #[test]
+    fn normalizes_legacy_gvfs_fuse_paths() {
+        // The exact failing records from Fedora v17: photos imported before
+        // the redesign carry gvfs-FUSE paths that die with the mount.
+        let normalized = normalize_smb_reference(
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbp/Other/Christian Other/Father of Lights (2012)/folder.jpg",
+        );
+        assert_eq!(
+            normalized,
+            "smb://dietpi.local/4tbp/Other/Christian%20Other/Father%20of%20Lights%20%282012%29/folder.jpg"
+        );
+
+        let normalized = normalize_smb_reference(
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbs/sg1/file.JPG",
+        );
+        assert_eq!(normalized, "smb://dietpi.local/4tbs/sg1/file.JPG");
+
+        // Other option orders and extra options still parse; ports drop.
+        let normalized = normalize_smb_reference(
+            "/run/user/1000/gvfs/smb-share:share=Work,server=10.0.0.1:445/sub/dir/pic.png",
+        );
+        assert_eq!(normalized, "smb://10.0.0.1/Work/sub/dir/pic.png");
+
+        // Case of the stored path is preserved (only the scheme is built).
+        let normalized = normalize_smb_reference(
+            "/run/user/1000/gvfs/smb-share:server=DietPi.local,share=4TBS/Photos/IMG_0001.JPG",
+        );
+        assert_eq!(normalized, "smb://DietPi.local/4TBS/Photos/IMG_0001.JPG");
+
+        // Pass-throughs: canonical URIs, NFS FUSE paths, plain local paths.
+        assert_eq!(
+            normalize_smb_reference("smb://dietpi.local/4tbs/x.jpg"),
+            "smb://dietpi.local/4tbs/x.jpg"
+        );
+        assert_eq!(
+            normalize_smb_reference(
+                "/run/user/1000/gvfs/nfs:host=DietPi.local,prefix=%2Fexports%2FWork/a.png"
+            ),
+            "/run/user/1000/gvfs/nfs:host=DietPi.local,prefix=%2Fexports%2FWork/a.png"
+        );
+        assert_eq!(
+            normalize_smb_reference("/home/peet/Pictures/a.jpg"),
+            "/home/peet/Pictures/a.jpg"
+        );
+        // Malformed gvfs option strings pass through untouched.
+        assert_eq!(
+            normalize_smb_reference("/run/user/1000/gvfs/smb-share:bogus/a.jpg"),
+            "/run/user/1000/gvfs/smb-share:bogus/a.jpg"
+        );
     }
 
     #[test]

@@ -158,7 +158,7 @@ fn show_photo(
                 }
 
             }
-            Err(_) => {
+            Err(error) => {
                 // A failed decode must not leave the previous photo visible.
                 // This is especially important when navigating from a valid
                 // image to a corrupt source: retaining the old paintable makes
@@ -167,10 +167,49 @@ fn show_photo(
                 picture.set_filename(Option::<&str>::None);
                 picture.set_size_request(1, 1);
 
+                // An offline network share reads as a failed READ (not a
+                // corrupt file). Tell the user why the photo did not open
+                // and how to fix it - rate-limited so keyboard navigation
+                // through an offline folder cannot spam dialogs.
+                let message = error.to_string();
+                let network_read_failure = message.contains("could not read")
+                    && (message.contains("smb://")
+                        || message.contains("nfs://")
+                        || message.contains("/run/user/"));
+                if network_read_failure && should_show_unavailable_notice() {
+                    crate::source::net_trace(format!(
+                        "lightbox_unavailable_notice uri={cache_path}"
+                    ));
+                    use libadwaita as adw;
+                    use libadwaita::prelude::*;
+                    let dialog = adw::AlertDialog::builder()
+                        .heading("Original unavailable")
+                        .body("This photo is on a network share that is currently offline. Use \"Retry Connection\" on the share in the sidebar, then open the photo again.")
+                        .build();
+                    dialog.add_response("ok", "OK");
+                    dialog.present(Some(&root));
+                }
             }
         }
     });
 
+}
+
+/// Rate limit for the offline-original notice (one per 10 s across all
+/// lightbox decodes).
+fn should_show_unavailable_notice() -> bool {
+    static LAST_NOTICE: std::sync::OnceLock<Mutex<std::time::Instant>> = std::sync::OnceLock::new();
+    let last = LAST_NOTICE.get_or_init(|| Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(60)));
+    let mut last = match last.lock() {
+        Ok(last) => last,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if last.elapsed() >= std::time::Duration::from_secs(10) {
+        *last = std::time::Instant::now();
+        true
+    } else {
+        false
+    }
 }
 
 fn display_texture_cache_lookup(
