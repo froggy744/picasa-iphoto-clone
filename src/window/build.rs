@@ -11,10 +11,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     window.set_title(Some("PIC - Picasa iPhoto Clone"));
     window.set_default_size(1440, 900);
 
+    crate::source::install_ui_heartbeat();
+
     install_close_confirmation(&window);
 
     let connection = Rc::new(RefCell::new(connection));
-    let folders = db::folders(&connection.borrow()).unwrap_or_default();
+    let folders = db::folders_cached(&connection.borrow()).unwrap_or_default();
     let folder_cache = Rc::new(RefCell::new(folders.clone()));
     let albums = db::albums(&connection.borrow()).unwrap_or_default();
     let sidebar_counts = db::sidebar_counts(&connection.borrow()).unwrap_or_default();
@@ -188,7 +190,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 return;
             }
 
-            let Ok(folders) = db::folders(&connection.borrow()) else {
+            let Ok(folders) = db::folders_cached(&connection.borrow()) else {
                 eprintln!("WATCH ERROR could not read folders");
                 return;
             };
@@ -635,7 +637,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     &gallery,
                 );
                 if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
-                    if let Ok(folders) = db::folders(&connection.borrow()) {
+                    if let Ok(folders) = db::folders_cached(&connection.borrow()) {
                         sidebar::refresh_folder_rows(&sidebar, &folders, &on_unavailable);
                     }
                     if let Ok(counts) = db::sidebar_counts(&connection.borrow()) {
@@ -684,7 +686,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 Rc::new(move || {
                     rebuild_folder_watches();
                     if let Some(sidebar) = watch_sidebar.borrow().as_ref().cloned() {
-                        if let Ok(folders) = db::folders(&watch_connection.borrow()) {
+                        if let Ok(folders) = db::folders_cached(&watch_connection.borrow()) {
                             sidebar::refresh_folder_rows(
                                 &sidebar,
                                 &folders,
@@ -741,7 +743,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 // Navigate in the order the user can actually see in the
                 // Folders sidebar. Tree mode therefore follows visible tree
                 // rows, while Imported-only mode contains only imported roots.
-                let folders = db::folders(&connection_for_collection_nav.borrow())
+                let folders = db::folders_cached(&connection_for_collection_nav.borrow())
                     .unwrap_or_default();
                 let folder_ids = sidebar_selection_for_collection_nav
                     .borrow()
@@ -879,7 +881,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                 // The last album connects to the first available folder.
                 if direction > 0 && Some(current_index) == last_available_album {
-                    let folders = db::folders(&connection_for_collection_nav.borrow())
+                    let folders = db::folders_cached(&connection_for_collection_nav.borrow())
                         .unwrap_or_default();
                     for folder in folders {
                         let mut photos = db::photos(
@@ -1169,7 +1171,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 else {
                     return;
                 };
-                let folders = db::folders(&connection_for_collection_nav.borrow())
+                let folders = db::folders_cached(&connection_for_collection_nav.borrow())
                     .unwrap_or_default();
                 let Some(current_index) = folders
                     .iter()
@@ -2621,7 +2623,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let sender = refresh_prepare_sender.clone();
             std::thread::spawn(move || {
                 let imported_root = db::open_default()
-                    .and_then(|connection| db::folders(&connection))
+                    .and_then(|connection| db::folders_cached(&connection))
                     .map(|folders| {
                         folders
                             .into_iter()
@@ -2832,6 +2834,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         } else {
                             name.clone()
                         };
+                        crate::source::net_trace(format!(
+                            "register_start uri={selected_uri} name={display_name}"
+                        ));
                         if let Err(error) = db::insert_network_share(
                             &connection.borrow(),
                             &selected_uri,
@@ -3389,6 +3394,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     if kind != Some(ScanJobKind::FolderRefresh) {
                         availability_refresh_for_events();
                     }
+                    // New photos outside Folder mode never touch the cached
+                    // Folder stream, so a restored stream would silently miss
+                    // the share that was just imported. Drop it; the next
+                    // folder click rebuilds (scoped preview, then background).
+                    if total_imported > 0 {
+                        gallery_for_events.invalidate_folder_cache();
+                    }
                     
                     refresh_status_label_for_events.set_text(&message);
                     refresh_status_box_for_events.set_visible(true);
@@ -3419,6 +3431,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         }
                         _ => format!("Import stopped · {imported} photos added"),
                     };
+                    if *imported > 0 {
+                        gallery_for_events.invalidate_folder_cache();
+                    }
                     
                     refresh_status_label_for_events.set_text(&message);
                     refresh_status_box_for_events.set_visible(true);

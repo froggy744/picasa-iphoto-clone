@@ -42,9 +42,10 @@ fn window_point_in_view(view: &gtk::Widget, x: f64, y: f64) -> Option<(f64, f64)
 }
 
 /// How long after the last real wheel/touchpad scroll a Space/1:1 activation
-/// may still resolve to the photo under the pointer. Scrolling also
-/// continuously re-selects the photo under the pointer (scroll to focus), so
-/// this is only a fallback for very fast activations.
+/// may still resolve to the photo under the pointer. This covers the gap
+/// between the end of a scroll gesture and the key press/click that follows.
+/// Scrolling also continuously re-selects the photo under the pointer (scroll
+/// to focus), so this is only a fallback for very fast activations.
 pub const SCROLL_HOVER_OPEN_GRACE: std::time::Duration =
     std::time::Duration::from_millis(2500);
 
@@ -118,10 +119,10 @@ pub struct Gallery {
     fit_whole_photo: Rc<Cell<bool>>,
     on_zoom_changed: Rc<dyn Fn(i32)>,
     // Scroll-then-open support: the pointer position over whichever grid view
-    // is visible (GridView or Folder ListView) in WINDOW space, plus the time
-    // of the last real wheel/touchpad scroll. Hover alone never influences
-    // which photo opens; only a Space/1:1 activation shortly after a scroll
-    // resolves to the hovered thumbnail (and then also selects it).
+    // is visible (GridView or Folder ListView), plus the time of the last real
+    // wheel/touchpad scroll. Hover never influences which photo opens; only a
+    // Space/1:1 activation shortly after a scroll resolves to the hovered
+    // thumbnail (and then also selects it).
     pointer_spot: Rc<Cell<Option<PointerSpot>>>,
     last_wheel_scroll: Rc<Cell<Option<Instant>>>,
     // Hover-select ("hover to focus"): armed while the pointer moves over a
@@ -763,9 +764,10 @@ impl Gallery {
         // Track the pointer over whichever grid view is visible. Wheel/touchpad
         // scroll stamping happens in the smooth scrollers' capture-phase
         // handlers (window::navigation): they consume wheel events with
-        // Propagation::Stop before they can ever reach these views. Keyboard
-        // navigation and programmatic scroll_to() never stamp: hover must only
-        // matter for the scroll-then-open case, never for plain selection.
+        // Propagation::Stop before they can ever reach these views, so this is
+        // only half of the tracking. Keyboard navigation and programmatic
+        // scroll_to() never stamp: hover must only matter for the
+        // scroll-then-open case, never for plain selection behavior.
         let pointer_spot: Rc<Cell<Option<PointerSpot>>> = Rc::new(Cell::new(None));
         let last_wheel_scroll: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
         let hover_select_source: Rc<RefCell<Option<glib::SourceId>>> =
@@ -793,7 +795,7 @@ impl Gallery {
                 let handler = handler.clone();
                 let source_for_timer = source.clone();
                 let id = glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(200),
+                    std::time::Duration::from_millis(350),
                     move || {
                         source_for_timer.borrow_mut().take();
                         if let Some(handler) = handler.borrow().as_ref() {
@@ -814,6 +816,12 @@ impl Gallery {
                 let spot = spot.clone();
                 let view = view.clone();
                 motion.connect_enter(move |_, x, y| {
+                    if std::env::var_os("PIC_DEBUG_SPACE").is_some() {
+                        eprintln!(
+                            "[space-debug] pointer enter {} at {x:.0},{y:.0}",
+                            if is_folder { "folder" } else { "grid" }
+                        );
+                    }
                     if let Some((wx, wy)) = pointer_window_position(&view, x, y) {
                         spot.set(Some(PointerSpot::new(is_folder, wx, wy)));
                     }
@@ -834,6 +842,9 @@ impl Gallery {
                 let spot = spot.clone();
                 let hover_select_source = hover_select_source.clone();
                 motion.connect_leave(move |_| {
+                    if std::env::var_os("PIC_DEBUG_SPACE").is_some() {
+                        eprintln!("[space-debug] pointer leave");
+                    }
                     spot.set(None);
                     if let Some(old) = hover_select_source.borrow_mut().take() {
                         old.remove();
@@ -862,6 +873,7 @@ impl Gallery {
                 view.add_controller(press);
             }
         }
+
 
         let gallery = Self {
             root,
@@ -1015,7 +1027,9 @@ impl Gallery {
     }
 
     /// Photo under the pointer, ignoring the scroll grace window. The pointer
-    /// spot must be on the currently mapped view.
+    /// spot must be on the currently mapped view. Used by the scroll-to-focus
+    /// selection updater; see `hovered_photo_after_scroll` for the gated
+    /// variant used at 1:1/Space activation time.
     pub fn photo_under_pointer(&self) -> Option<PhotoObject> {
         let debug = std::env::var_os("PIC_DEBUG_SPACE").is_some();
         let (view, x, y) = match self.pointer_spot.get()? {
@@ -1024,10 +1038,6 @@ impl Gallery {
                 (self.folder_root.clone().upcast::<gtk::Widget>(), x, y)
             }
         };
-        // Only the view that is actually presented (mapped - the active stack
-        // child) can be under the pointer. Stale spots for the hidden view
-        // must not resolve. `is_visible` is not enough: inactive GtkStack
-        // pages keep their visible flag set.
         if !view.is_mapped() {
             if debug {
                 eprintln!("[space-debug] view not mapped");
@@ -1035,9 +1045,9 @@ impl Gallery {
             return None;
         }
         // Map the window-space pointer position into the view's CURRENT
-        // coordinate space. The stored window position is constant for a
-        // stationary pointer; this conversion applies whatever scroll
-        // translation is live right now.
+        // coordinate space. This is what keeps the pick honest: the stored
+        // window position is constant for a stationary pointer, and this
+        // conversion applies whatever scroll translation is live right now.
         let Some((x, y)) = window_point_in_view(&view, x, y) else {
             if debug {
                 eprintln!("[space-debug] window->view conversion failed");
@@ -1058,10 +1068,7 @@ impl Gallery {
             .and_downcast::<SquareTile>()
         else {
             if debug {
-                eprintln!(
-                    "[space-debug] pick: {} (no tile ancestor)",
-                    picked.widget_name()
-                );
+                eprintln!("[space-debug] pick: {} (no tile ancestor)", picked.widget_name());
             }
             return None;
         };
@@ -1079,7 +1086,7 @@ impl Gallery {
     /// Scroll to focus: make the photo currently under the pointer the single
     /// selection. Called (debounced) while the user scrolls with the pointer
     /// resting on the grid, so the selection follows the browsed content and
-    /// Space/1:1 simply opens the selection.
+    /// Space/1:1 simply opens the selection. Hover alone never calls this.
     /// Returns true when a photo is selected afterwards.
     /// Registers the callback fired once the pointer rests on a grid tile
     /// (hover to focus). The app wires this to `select_photo_under_pointer`.
@@ -1088,8 +1095,8 @@ impl Gallery {
     }
 
     pub fn select_photo_under_pointer(&self) -> bool {
-        // Never fight multi-selection or collage checklist mode: those flows
-        // own the selection explicitly.
+        // Hover-select must never fight multi-selection or collage checklist
+        // mode: those flows own the selection explicitly.
         if self.collage_selection_mode.get() || self.selected_photo_ids(None).len() > 1 {
             return false;
         }
@@ -1108,16 +1115,20 @@ impl Gallery {
     }
 
     /// Photo under the pointer, but only within `grace` of the last real
-    /// wheel/touchpad scroll. Fallback for very fast "scroll then Space"
-    /// activations; the normal path is `select_photo_under_pointer`, which the
-    /// smooth scrollers call once the eased scroll has settled.
+    /// wheel/touchpad scroll. This powers "scroll, then immediately hit
+    /// Space/1:1": the photo that scrolled past under the stationary pointer
+    /// wins over the previous selection, and the caller then also selects it.
+    /// Hover alone never resolves here - without a recent scroll (or with the
+    /// pointer over a gap, a header, or outside the grid) the selection
+    /// decides, as does key focus.
     pub fn hovered_photo_after_scroll(
         &self,
         grace: std::time::Duration,
     ) -> Option<PhotoObject> {
+        let debug = std::env::var_os("PIC_DEBUG_SPACE").is_some();
         let scrolled_at = self.last_wheel_scroll.get()?;
         if scrolled_at.elapsed() > grace {
-            if std::env::var_os("PIC_DEBUG_SPACE").is_some() {
+            if debug {
                 eprintln!("[space-debug] grace expired ({:?} ago)", scrolled_at.elapsed());
             }
             return None;

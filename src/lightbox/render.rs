@@ -44,6 +44,8 @@ fn show_photo(
     let result_slot = ResultSlot::new();
     let result_slot_for_worker = result_slot.clone();
     let decode_path = path.clone();
+    crate::source::net_trace(format!("decode_start uri={decode_path}"));
+    let decode_started = std::time::Instant::now();
     let rotation = photo.rotation();
     let edit_recipe_text = photo.edit_recipe();
     let edit_recipe = crate::edit::EditRecipe::decode(&edit_recipe_text);
@@ -102,6 +104,10 @@ fn show_photo(
 
         match result {
             Ok((width, height, pixels)) => {
+                crate::source::net_trace(format!(
+                    "decode_done uri={cache_path} w={width} h={height} ms={:.1}",
+                    decode_started.elapsed().as_secs_f64() * 1000.0
+                ));
                 let bytes = glib::Bytes::from_owned(pixels);
                 let texture = gtk::gdk::MemoryTexture::new(
                     width as i32,

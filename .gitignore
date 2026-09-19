@@ -1,4 +1,30 @@
-.worktrees/
-target/
-dist/
-build-logs/
+# Ignore everything by default
+/*
+
+# Keep selected root files
+!/.gitignore
+!/ABOUT ME.md
+!/Cargo.lock
+!/Cargo.toml
+!/README.md
+
+# Keep icon folder
+!/icon/
+!/icon/**
+
+# Keep samples
+!/samples/
+!/samples/**
+
+# Keep source
+!/src/
+!/src/**
+
+# Keep the GResource icon bundle (main.rs include_bytes! it at compile time)
+!/resources/
+!/resources/**
+
+# Keep the isolated GUI search regression check
+!/scripts/
+/scripts/*
+!/scripts/check_search_input.py

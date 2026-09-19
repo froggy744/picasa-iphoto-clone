@@ -51,6 +51,19 @@ fn format_folder_bytes(bytes: u64) -> String {
     }
 }
 
+fn percent_encode(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 pub(crate) fn debug_log(message: &str) {
     use std::io::Write;
     let Ok(mut file) = std::fs::OpenOptions::new()
@@ -261,7 +274,7 @@ pub fn show_add_network_share_dialog(
                         updating.set(true);
                         // Protocol from the service type: NFS announcements get
                         // the nfs scheme; everything else rides SMB.
-                        if decoded.contains("._nfs.") {
+                        if decoded.contains("._nfs.") || decoded.starts_with("nfs://") {
                             protocol_for_row.set_selected(1);
                         } else {
                             protocol_for_row.set_selected(0);
@@ -372,21 +385,31 @@ pub fn show_add_network_share_dialog(
                 }
             }
         } else {
-            let scheme = if protocol.selected() == 1 { "nfs" } else { "smb" };
-            let root = crate::source::build_network_uri(
-                scheme,
-                &typed_server,
-                &_share_entry.text(),
-            );
-            if root.ends_with(format!("://{}/", scheme).as_str()) {
-                show_error(
-                    &parent_for_response,
-                    "Could not connect to network share",
-                    "A server address is required (for example 192.168.1.20 or nas.local).",
+            // Preserve the scheme the discovery dropdown selected. If the
+            // user picked an NFS-discovered location, its URI already has
+            // nfs://; do not silently rewrite it to smb://.
+            let discovered = discovered_uri.borrow().clone();
+            if let Some(uri) = discovered {
+                // Discovered URIs are used verbatim: they already carry the
+                // correct scheme, host, port, and path that gvfs resolved.
+                uri
+            } else {
+                let scheme = if protocol.selected() == 1 { "nfs" } else { "smb" };
+                let root = crate::source::build_network_uri(
+                    scheme,
+                    &typed_server,
+                    &_share_entry.text(),
                 );
-                return;
+                if root.ends_with(format!("://{}/", scheme).as_str()) {
+                    show_error(
+                        &parent_for_response,
+                        "Could not connect to network share",
+                        "A server address is required (for example 192.168.1.20 or nas.local).",
+                    );
+                    return;
+                }
+                root
             }
-            root
         };
         if browse_root.is_empty() {
             dialog.close();
@@ -530,6 +553,7 @@ pub fn show_network_folder_browser(
             error_for_load.set_visible(false);
             status_for_load.set_text("Listing…");
             status_for_load.set_visible(true);
+            contains_mountables_for_load.set(false);
             while let Some(child) = list.first_child() {
                 list.remove(&child);
             }
@@ -542,32 +566,65 @@ pub fn show_network_folder_browser(
             let (sender, receiver) = std::sync::mpsc::channel::<NetworkBrowseMessage>();
             let uri_for_worker = uri.clone();
             std::thread::spawn(move || {
+                let enumerate_started = std::time::Instant::now();
                 let file = gio::File::for_uri(&uri_for_worker);
                 let mut directories: Vec<(String, String, bool)> = Vec::new();
                 let mut failure: Option<String> = None;
                 if let Ok(enumerator) = file.enumerate_children(
-                    "standard::name,standard::type",
+                    "standard::name,standard::type,standard::is-hidden",
                     gio::FileQueryInfoFlags::NONE,
                     Some(&fresh_cancellable),
                 ) {
                     loop {
                         match enumerator.next_file(Some(&fresh_cancellable)) {
                             Ok(Some(info)) => {
-                                // Shares on a server root are MOUNTABLE
-                                // entries; subfolders are DIRECTORIES.
+                                // Only directories and mountable shares are
+                                // navigable here. Files are ignored.
                                 let kind = info.file_type();
                                 let browsable = kind == gio::FileType::Directory
                                     || kind == gio::FileType::Mountable;
-                                let mountable = kind == gio::FileType::Mountable;
-                                if browsable {
-                                    let name = info.name().to_string_lossy().into_owned();
-                                    if name.starts_with('.') {
-                                        continue;
-                                    }
-                                    let child = enumerator.child(&info);
-                                    let child_uri = child.uri().to_string();
-                                    directories.push((name, child_uri, mountable));
+                                if !browsable {
+                                    continue;
                                 }
+                                // gvfs marks macOS AppleDouble artifacts
+                                // (._Foo), .DS_Store and similar metadata as
+                                // hidden on SMB/NFS. They look like folders
+                                // in the raw listing but are not real
+                                // directories - enumerating them returns 0.
+                                // gvfs does not always populate
+                                // standard::is-hidden (e.g. on SMB), so guard
+                                // the call to avoid a GLib-GIO critical.
+                                if info.has_attribute("standard::is-hidden")
+                                    && info.is_hidden()
+                                {
+                                    continue;
+                                }
+                                let name = info.name().to_string_lossy().into_owned();
+                                let trimmed = name.trim();
+                                // Belt-and-braces: even when gvfs does not
+                                // mark them hidden, skip dotfiles and the
+                                // AppleDouble prefix.
+                                if trimmed.is_empty()
+                                    || trimmed.starts_with('.')
+                                    || trimmed == ".DS_Store"
+                                {
+                                    continue;
+                                }
+                                let mountable = kind == gio::FileType::Mountable;
+                                let child_uri = if mountable {
+                                    // gvfs mangles child construction at a
+                                    // server root into AppleDouble paths
+                                    // (smb://host/._share), so build the
+                                    // share segment manually instead.
+                                    format!(
+                                        "{}/{}",
+                                        uri_for_worker.trim_end_matches('/'),
+                                        percent_encode(&trimmed)
+                                    )
+                                } else {
+                                    enumerator.child(&info).uri().to_string()
+                                };
+                                directories.push((name, child_uri, mountable));
                             }
                             Ok(None) => break,
                             Err(error) => {
@@ -581,9 +638,18 @@ pub fn show_network_folder_browser(
                 }
                 match failure {
                     Some(message) => {
+                        crate::source::net_trace(format!(
+                            "browse_enumerate uri={uri_for_worker} ms={:.1} failed",
+                            enumerate_started.elapsed().as_secs_f64() * 1000.0
+                        ));
                         let _ = sender.send(NetworkBrowseMessage::Done(Err(message)));
                     }
                     None => {
+                        crate::source::net_trace(format!(
+                            "browse_enumerate uri={uri_for_worker} count={} ms={:.1}",
+                            directories.len(),
+                            enumerate_started.elapsed().as_secs_f64() * 1000.0
+                        ));
                         directories.sort_by(|left, right| {
                             left.0.to_lowercase().cmp(&right.0.to_lowercase())
                         });
@@ -633,7 +699,15 @@ pub fn show_network_folder_browser(
                             let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 6);
                             box_.set_margin_top(2);
                             box_.set_margin_bottom(2);
-                            let icon = gtk::Image::from_icon_name("folder-symbolic");
+                            // Shares at a server root are mountable entries;
+                            // give them the network icon so they are visually
+                            // distinct from ordinary subfolders.
+                            let icon_name = if mountable {
+                                "folder-remote-symbolic"
+                            } else {
+                                "folder-symbolic"
+                            };
+                            let icon = gtk::Image::from_icon_name(icon_name);
                             icon.set_pixel_size(16);
                             box_.append(&icon);
                             let label = gtk::Label::new(Some(&name));
@@ -648,13 +722,19 @@ pub fn show_network_folder_browser(
                             let dialog_window_for_activate = dialog_window_for_rows.clone();
                             let error_for_activate = error_for_poll.clone();
                             let uri_for_activate = child_uri.clone();
-                            row.connect_activate(move |_| {
+
+                            // Mouse path. Capture phase + attached to the row's
+                            // child box: in GTK4 the click inside a GtkListBoxRow
+                            // targets the child widget, and the enclosing
+                            // GtkListBox installs its own gesture on the row in
+                            // the bubble phase. Capturing on the box guarantees
+                            // this handler runs first and can claim the sequence.
+                            let click = gtk::GestureClick::new();
+                            click.set_propagation_phase(gtk::PropagationPhase::Capture);
+                            click.connect_pressed(move |gesture, _, _, _| {
                                 crate::source::net_trace(format!(
                                     "browse_enter uri={uri_for_activate}"
                                 ));
-                                // Shares are mountable entries: mount through
-                                // gvfs first (auth dialog if needed), then list
-                                // the folder contents.
                                 let parent_window =
                                     dialog_window_for_activate.clone().upcast::<gtk::Window>();
                                 let error = error_for_activate.clone();
@@ -678,6 +758,46 @@ pub fn show_network_folder_browser(
                                             crate::source::net_trace(format!(
                                                 "browse_failed uri={uri_for_error} error={message}"
                                             ));
+                                            error.set_text(&message);
+                                            error.set_visible(true);
+                                        }
+                                    },
+                                );
+                                gesture.set_state(gtk::EventSequenceState::Claimed);
+                            });
+                            box_.add_controller(click);
+                            // Keep the row itself focusable so keyboard Enter /
+                            // Space still activates it.
+                            row.set_focusable(true);
+
+                            // Keyboard path: same mount-then-list as the mouse.
+                            let load_for_key = load_slot.clone();
+                            let dialog_window_for_key = dialog_window_for_rows.clone();
+                            let error_for_key = error_for_poll.clone();
+                            let uri_for_key = child_uri.clone();
+                            row.connect_activate(move |_| {
+                                crate::source::net_trace(format!(
+                                    "browse_enter_key uri={uri_for_key}"
+                                ));
+                                let parent_window =
+                                    dialog_window_for_key.clone().upcast::<gtk::Window>();
+                                let error = error_for_key.clone();
+                                let load_for_mount = load_for_key.clone();
+                                let uri_for_mount = uri_for_key.clone();
+                                let uri_for_load = uri_for_key.clone();
+                                let load_slot_for_mount = load_for_mount.clone();
+                                crate::source::mount_share_async(
+                                    &uri_for_mount,
+                                    Some(&parent_window),
+                                    move |result| match result {
+                                        Ok(()) => {
+                                            if let Some(load) =
+                                                load_slot_for_mount.borrow().as_ref()
+                                            {
+                                                load(uri_for_load.clone());
+                                            }
+                                        }
+                                        Err(message) => {
                                             error.set_text(&message);
                                             error.set_visible(true);
                                         }

@@ -16,9 +16,9 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gtk4 as gtk;
 use gtk::gdk;
 use gtk::prelude::*;
+use gtk4 as gtk;
 use libadwaita as adw;
 use rusqlite::Connection;
 
@@ -166,7 +166,10 @@ impl ThemeEngine {
         if active.as_ref().is_some_and(|theme| theme.id != saved) {
             eprintln!(
                 "Saved appearance theme '{saved}' was not found; falling back to '{}'",
-                active.as_ref().map(|theme| theme.id.as_str()).unwrap_or("none")
+                active
+                    .as_ref()
+                    .map(|theme| theme.id.as_str())
+                    .unwrap_or("none")
             );
         }
         if let Some(theme) = active {
@@ -219,11 +222,14 @@ impl ThemeEngine {
         // reach (title bar, popovers, dialogs, the settings window) follow
         // the dark appearance too.
         if theme.dark {
-            self.style_manager.set_color_scheme(adw::ColorScheme::PreferDark);
+            self.style_manager
+                .set_color_scheme(adw::ColorScheme::PreferDark);
             self.lightbox.use_iphone_backdrop();
         } else {
-            self.style_manager.set_color_scheme(adw::ColorScheme::Default);
-            self.lightbox.use_standard_backdrop(self.style_manager.is_dark());
+            self.style_manager
+                .set_color_scheme(adw::ColorScheme::Default);
+            self.lightbox
+                .use_standard_backdrop(self.style_manager.is_dark());
         }
         self.update_appearance_icon(theme.dark);
     }
@@ -274,9 +280,7 @@ mod tests {
         let connection = Rc::new(RefCell::new(Connection::open_in_memory().unwrap()));
         connection
             .borrow()
-            .execute_batch(
-                "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-            )
+            .execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             .unwrap();
         connection
     }
@@ -293,7 +297,11 @@ mod tests {
         let root = unique_temp_dir("runtime");
         write_theme(&root, "alpha", "/* picasa-theme\n   name: Alpha\n*/");
         write_theme(&root, "beta", "/* picasa-theme\n   name: Beta\n*/");
-        write_theme(&root, "zeta", "/* picasa-theme\n   name: Zeta\n   dark: true\n   mode: base\n*/");
+        write_theme(
+            &root,
+            "zeta",
+            "/* picasa-theme\n   name: Zeta\n   dark: true\n   mode: base\n*/",
+        );
 
         let connection = memory_db();
         let lightbox = Rc::new(crate::lightbox::Lightbox::new());

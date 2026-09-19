@@ -2,6 +2,8 @@ use std::sync::mpsc::TryRecvError;
 
 static REFRESH_GENERATION: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+static SHARE_READY_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// Invalidate any asynchronous grid result or delayed folder destination from
 /// an older navigation. Folder-to-folder reuse does not start a new database
@@ -20,7 +22,7 @@ fn refresh_grid(
 ) {
     let folder_target = if search.is_empty() {
         if let sidebar::SidebarFilter::Folder(folder_id) = filter {
-            db::folders(&connection.borrow())
+            db::folders_light(&connection.borrow())
                 .ok()
                 .and_then(|folders| folders.into_iter().find(|folder| folder.id == folder_id))
                 .map(|folder| (folder.id, folder.path))
@@ -30,7 +32,7 @@ fn refresh_grid(
     } else {
         None
     };
-    refresh_grid_inner(connection, filter, search, sort, gallery, folder_target);
+    refresh_grid_inner(connection, filter, search, sort, gallery, folder_target, false);
 }
 
 fn refresh_grid_to_folder(
@@ -49,7 +51,86 @@ fn refresh_grid_to_folder(
         sort,
         gallery,
         Some((folder_id, folder_path)),
+        false,
     );
+}
+
+/// Results delivered from the off-thread grid query.
+///
+/// Folder destinations send two payloads: an interim `Scoped` snapshot of the
+/// selected folder so the grid is populated the instant it lands, then the
+/// `Stream` spanning the whole continuous Folder stream which is built in the
+/// background and swapped in once ready. Every other destination sends only
+/// the `Stream`.
+// An existing library can contain photos indexed through the gvfs FUSE mount
+// while a registered share is stored as smb://host/share/subfolder. Those
+// references describe the same files, but are separate folder trees in SQLite.
+// Compare them without touching the network or creating GTK photo objects.
+fn share_location(reference: &str) -> Option<(String, String)> {
+    // Decode URI path escapes (not '+' which is a literal filename character).
+    fn unescape(value: &str) -> String {
+        let bytes = value.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = |c: u8| -> Option<u8> {
+                    match c {
+                        b'0'..=b'9' => Some(c - b'0'),
+                        b'a'..=b'f' => Some(c - b'a' + 10),
+                        b'A'..=b'F' => Some(c - b'A' + 10),
+                        _ => None,
+                    }
+                };
+                if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                    out.push(hi * 16 + lo);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    let lower = reference.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("smb://") {
+        let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let host = host.rsplit('@').next()?.split(':').next()?;
+        if host.is_empty() { return None; }
+        return Some((host.to_owned(), unescape(path).trim_matches('/').to_owned()));
+    }
+    // gvfs mounts use /run/user/UID/gvfs/smb-share:server=HOST,share=SHARE/path.
+    // Only accept an actual gvfs mount prefix, not arbitrary local filenames.
+    let (_, mount) = lower.split_once("/gvfs/smb-share:server=")?;
+    let (host_part, share_part) = mount.split_once(",share=")?;
+    let host = host_part.split(',').next()?.split(':').next()?;
+    if host.is_empty() { return None; }
+    let path = share_part.split(',').next().unwrap_or(share_part);
+    Some((host.to_owned(), unescape(path).trim_matches('/').to_owned()))
+}
+
+pub(crate) fn path_belongs_to_share(share: &str, candidate: &str) -> bool {
+    let (share_host, share_path) = match share_location(share) {
+        Some(location) => location,
+        None => return false,
+    };
+    let (candidate_host, candidate_path) = match share_location(candidate) {
+        Some(location) => location,
+        None => return false,
+    };
+    share_host == candidate_host
+        && (share_path.is_empty()
+            || candidate_path == share_path
+            || candidate_path.starts_with(&(share_path + "/")))
+}
+
+enum GridPayload {
+    Scoped(Vec<db::Photo>),
+    Share(Vec<db::Photo>),
+    Stream(Vec<db::Photo>),
+    Failed,
 }
 
 fn refresh_grid_inner(
@@ -59,28 +140,149 @@ fn refresh_grid_inner(
     sort: PhotoSort,
     gallery: &Rc<grid::Gallery>,
     folder_target: Option<(i64, String)>,
+    exact_local_folder: bool,
 ) {
     let _ = connection;
     if filter == sidebar::SidebarFilter::Albums {
         return;
     }
     let generation = REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let op = crate::source::current_trace_op();
     let search = search.to_owned();
+    let folder_stream = !exact_local_folder && search.is_empty()
+        && matches!(filter, sidebar::SidebarFilter::Folder(_));
     let (sender, receiver) = std::sync::mpsc::channel();
+    let scoped_target = folder_target.clone();
+    // A network-share sidebar selection is a bounded library destination, not
+    // a request to materialize the entire 70k+ photo Folder stream.
+    let share_target = folder_target.as_ref().and_then(|(id, path)| {
+        crate::source::is_network_location(path).then_some((*id, path.clone()))
+    });
 
     std::thread::spawn(move || {
+        crate::source::net_trace(format!(
+            "grid_query_start op={op} filter={filter:?} folder_stream={folder_stream}"
+        ));
         let Ok(connection) = db::open_default() else {
-            let _ = sender.send(None);
+            crate::source::net_trace(format!("grid_failed op={op}"));
+            let _ = sender.send(GridPayload::Failed);
             return;
         };
 
-        // Prime folder-only availability before constructing PhotoObjects on
-        // the GTK thread. This checks imported roots once and never checks an
-        // individual original photo path.
-        let _ = db::folders(&connection);
+        if let Some((share_id, share_path)) = share_target {
+            // Keep descendants from the real folder tree AND photos imported
+            // earlier via a gvfs mount / URI spelling. Do all database work in
+            // this worker: only the bounded share result reaches GTK.
+            let indexed = match db::photos(&connection, Some(share_id), false, None) {
+                Ok(photos) => photos,
+                Err(error) => {
+                    crate::source::net_trace(format!("grid_share_query_failed op={op} error={error}"));
+                    let _ = sender.send(GridPayload::Failed);
+                    return;
+                }
+            };
+            let descendant_ids: std::collections::HashSet<i64> =
+                indexed.iter().map(|photo| photo.id).collect();
+            let all = match db::photos(&connection, None, false, None) {
+                Ok(photos) => photos,
+                Err(error) => {
+                    crate::source::net_trace(format!("grid_share_query_failed op={op} error={error}"));
+                    let _ = sender.send(GridPayload::Failed);
+                    return;
+                }
+            };
+            let mut photos: Vec<db::Photo> = all.into_iter().filter(|photo| {
+                descendant_ids.contains(&photo.id)
+                    || path_belongs_to_share(&share_path, &photo.path)
+                    || photo.folder_path.as_deref().is_some_and(|path| {
+                        path_belongs_to_share(&share_path, path)
+                    })
+            }).collect();
+            crate::source::net_trace(format!(
+                "grid_share_matched op={op} root={} descendants={} matched={}",
+                share_path, descendant_ids.len(), photos.len()
+            ));
+            retain_enabled_formats(&connection, &mut photos);
+            let folders = db::folders_light(&connection).unwrap_or_default();
+            let display_mode = sidebar::FolderDisplayMode::from_setting(
+                db::setting(&connection, sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY)
+                    .ok().flatten().as_deref(),
+            );
+            sort_folder_stream(&mut photos, &folders, sort, display_mode);
+            crate::source::net_trace(format!(
+                "grid_share_scoped op={op} count={}", photos.len()
+            ));
+            let _ = sender.send(GridPayload::Share(photos));
+            return;
+        }
 
-        let folder_stream = search.is_empty()
-            && matches!(filter, sidebar::SidebarFilter::Folder(_));
+        if exact_local_folder {
+            // Open in Folder is an exact photo destination, not a request to
+            // construct the 73k-photo continuous folder browser. Reuse the
+            // complete scoped payload path already used by Network Shares.
+            let Some((folder_id, _)) = scoped_target else {
+                let _ = sender.send(GridPayload::Failed);
+                return;
+            };
+            let mut photos = match db::photos(&connection, Some(folder_id), false, None) {
+                Ok(photos) => photos,
+                Err(error) => {
+                    crate::source::net_trace(format!("grid_local_exact_failed op={op} error={error}"));
+                    let _ = sender.send(GridPayload::Failed);
+                    return;
+                }
+            };
+            retain_enabled_formats(&connection, &mut photos);
+            let folders = db::folders_light(&connection).unwrap_or_default();
+            let display_mode = sidebar::FolderDisplayMode::from_setting(
+                db::setting(&connection, sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY)
+                    .ok().flatten().as_deref(),
+            );
+            sort_folder_stream(&mut photos, &folders, sort, display_mode);
+            crate::source::net_trace(format!("grid_local_exact_scoped op={op} folder={folder_id} count={}", photos.len()));
+            let _ = sender.send(GridPayload::Share(photos));
+            return;
+        }
+
+        if folder_stream {
+            // Picasa-style Folder mode is a single continuous stream. The
+            // selected folder is a scroll destination, not a query boundary,
+            // so the whole library is used below. First present a scoped
+            // snapshot of only the destination folder: without it a Folder
+            // click after a model reset leaves an empty grid while the
+            // continuous stream is progressively constructed.
+            //
+            // Folder ordering for the stream sort uses the probe-free listing:
+            // availability is resolved separately and asynchronously by the
+            // availability refresher. An unmounted remote root would otherwise
+            // stall this worker for seconds before the scoped snapshot could
+            // be sent.
+            let stream_folders = db::folders_light(&connection).unwrap_or_default();
+            let display_mode = sidebar::FolderDisplayMode::from_setting(
+                db::setting(&connection, sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY)
+                    .ok()
+                    .flatten()
+                    .as_deref(),
+            );
+            if let Some((folder_id, _)) = scoped_target {
+                let mut scoped = db::photos(&connection, Some(folder_id), false, None)
+                    .unwrap_or_default();
+                retain_enabled_formats(&connection, &mut scoped);
+                // Reuse the stream ordering so the swap-in does not visibly
+                // reorder the folder the user is already looking at.
+                sort_folder_stream(&mut scoped, &stream_folders, sort, display_mode);
+                crate::source::net_trace(format!("grid_scoped op={op} count={}", scoped.len()));
+                let _ = sender.send(GridPayload::Scoped(scoped));
+            }
+
+            let mut stream = db::photos(&connection, None, false, None).unwrap_or_default();
+            retain_enabled_formats(&connection, &mut stream);
+            sort_folder_stream(&mut stream, &stream_folders, sort, display_mode);
+            crate::source::net_trace(format!("grid_stream op={op} count={}", stream.len()));
+            let _ = sender.send(GridPayload::Stream(stream));
+            return;
+        }
+
         let mut photos = if !search.is_empty() {
             // An active search is a library-wide view, regardless of the
             // destination that was selected before typing began.
@@ -93,9 +295,6 @@ fn refresh_grid_inner(
                     (None, false)
                 }
                 sidebar::SidebarFilter::Favorites => (None, true),
-                // Picasa-style Folder mode is a single continuous stream.
-                // The selected folder is a scroll destination, not a query
-                // boundary, so load every indexed folder exactly once.
                 sidebar::SidebarFilter::Folder(_) => (None, false),
                 sidebar::SidebarFilter::Albums => return,
                 sidebar::SidebarFilter::Album(_) => unreachable!(),
@@ -105,30 +304,62 @@ fn refresh_grid_inner(
 
         retain_enabled_formats(&connection, &mut photos);
         limit_recently_added(&connection, filter, &mut photos);
-        if folder_stream {
-            let folders = db::folders(&connection).unwrap_or_default();
-            let display_mode = sidebar::FolderDisplayMode::from_setting(
-                db::setting(&connection, sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY)
-                    .ok()
-                    .flatten()
-                    .as_deref(),
-            );
-            sort_folder_stream(&mut photos, &folders, sort, display_mode);
-        } else {
-            sort_photos(&mut photos, sort);
-        }
-        let _ = sender.send(Some(photos));
+        sort_photos(&mut photos, sort);
+        crate::source::net_trace(format!("grid_stream op={op} count={}", photos.len()));
+        let _ = sender.send(GridPayload::Stream(photos));
     });
 
     let gallery = gallery.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(25), move || {
         match receiver.try_recv() {
-            Ok(Some(photos)) => {
+            Ok(GridPayload::Share(photos)) => {
                 if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
-                    gallery.replace(&photos);
+                    crate::source::net_trace(format!(
+                        "grid_share_replace op={op} count={}", photos.len()
+                    ));
+                    gallery.invalidate_folder_cache();
+                    // The share snapshot is the COMPLETE requested view; do not
+                    // prewarm/swap in a library-wide stream behind it.
+                    gallery.replace_scoped_folder(&photos);
+                    SHARE_READY_GENERATION.store(generation, std::sync::atomic::Ordering::Relaxed);
+                    crate::source::net_trace(format!("grid_share_ready op={op}"));
+                }
+                crate::source::clear_trace_op_after(op);
+                glib::ControlFlow::Break
+            }
+            Ok(GridPayload::Scoped(photos)) => {
+                if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
+                    crate::source::net_trace(format!(
+                        "grid_payload_scoped op={op} count={}",
+                        photos.len()
+                    ));
+                    // Show the destination folder immediately. Unlike replace(),
+                    // this never caches the snapshot as the full Folder stream.
+                    gallery.replace_scoped_folder(&photos);
+                }
+                crate::source::clear_trace_op_after(op);
+                glib::ControlFlow::Continue
+            }
+            Ok(GridPayload::Stream(photos)) => {
+                if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
+                    if folder_stream {
+                        crate::source::net_trace(format!(
+                            "gallery_prewarm op={op} count={}",
+                            photos.len()
+                        ));
+                        // Build the continuous stream without blanking the
+                        // scoped Folder snapshot the user is looking at.
+                        gallery.prewarm_folder_stream(photos);
+                    } else {
+                        crate::source::net_trace(format!(
+                            "gallery_replace op={op} count={}",
+                            photos.len()
+                        ));
+                        gallery.replace(&photos);
+                    }
                     if let Some((folder_id, folder_path)) = folder_target.clone() {
                         let gallery = gallery.clone();
-                        // replace() may schedule a progressive model build.
+                        // prewarm() may schedule a progressive model build.
                         // Start the scroll helper on the next main-loop turn so
                         // it never succeeds against the previous grid model.
                         glib::idle_add_local_once(move || {
@@ -143,7 +374,9 @@ fn refresh_grid_inner(
                 }
                 glib::ControlFlow::Break
             }
-            Ok(None) | Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            Ok(GridPayload::Failed) | Err(TryRecvError::Disconnected) => {
+                glib::ControlFlow::Break
+            }
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
         }
     });
@@ -174,8 +407,10 @@ fn scroll_gallery_to_folder_when_ready(
         total_for_timer.set(total_for_timer.get() + 1);
         // scroll_to_folder scans the whole photo model. Calling it every 25 ms
         // while the progressive Folder stream is still being built starves that
-        // very build, so wait for it to finish before scanning at all.
-        if gallery.stream_building() {
+        // very build, so wait for it to finish before scanning at all. The
+        // scoped snapshot shown while the stream prewarms must be skipped too:
+        // it is only a scroll-destination hint, not the final continuous stream.
+        if !gallery.folder_stream_ready() {
             if total_for_timer.get() >= 1200 {
                 // Hard safety net (30 s) for a build that never completes.
                 glib::ControlFlow::Break
@@ -589,5 +824,30 @@ mod photo_action_tests {
             sorted_paths(SortField::DateAdded, SortDirection::Ascending),
             ["/photos/m.jpg", "/photos/z.jpg", "/photos/A.jpg"]
         );
+    }
+}
+
+#[cfg(test)]
+mod network_share_path_regression_tests {
+    use super::path_belongs_to_share;
+
+    #[test]
+    fn matches_gvfs_photos_under_uri_share() {
+        let root = "smb://DietPi.local:445/4TBS/Spar%20Ladies%202025";
+        assert!(path_belongs_to_share(root,
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbs/Spar Ladies 2025/FB-Spar Womens-ToUpload/p.jpg"));
+        assert!(path_belongs_to_share("smb://dietpi.local/4tbp/ImmichLibrary",
+            "smb://dietpi.local/4tbp/ImmichLibrary/2025/p.jpg"));
+    }
+
+    #[test]
+    fn excludes_other_shares_and_prefix_collisions() {
+        let root = "smb://dietpi.local/4tbs/series-kids";
+        assert!(!path_belongs_to_share(root,
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbs/series-kids-old/p.jpg"));
+        assert!(!path_belongs_to_share(root,
+            "/run/user/1000/gvfs/smb-share:server=other.local,share=4tbs/series-kids/p.jpg"));
+        assert!(!path_belongs_to_share(root,
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbp/series-kids/p.jpg"));
     }
 }

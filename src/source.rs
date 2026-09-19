@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use gio::prelude::*;
@@ -51,6 +52,8 @@ fn query_exists(reference: &str, directory: bool) -> bool {
 const URI_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
 
 fn uri_query_exists(uri_file: &gio::File) -> bool {
+    net_trace(format!("probe_start uri={}", uri_file.uri()));
+    let probe_started = Instant::now();
     let cancellable = gio::Cancellable::new();
     let timer = cancellable.clone();
     std::thread::spawn(move || {
@@ -60,45 +63,198 @@ fn uri_query_exists(uri_file: &gio::File) -> bool {
     let exists = uri_file.query_exists(Some(&cancellable));
     // Release the timer thread early on a fast answer.
     cancellable.cancel();
+    net_trace(format!(
+        "probe_done uri={} exists={exists} ms={:.1}",
+        uri_file.uri(),
+        probe_started.elapsed().as_secs_f64() * 1000.0
+    ));
     exists
 }
 
 /// Probe again after a reconnect, without retaining a previous offline result.
+/// Blocking (up to `URI_PROBE_TIMEOUT` for a remote probe); only call from a
+/// worker thread. No cache lock is held while the probe runs.
 pub fn file_available(reference: &str) -> bool {
     query_exists(reference, false)
 }
 
+/// Read the cached availability of an imported source root. Never probes:
+/// absence from the cache means "not probed yet" and defaults to available,
+/// matching the historical online default. The asynchronous availability
+/// refresher (worker thread) fills this cache via `probe_source_available`, so
+/// the GTK thread never blocks on gvfs.
 pub fn cached_source_available(reference: &str) -> bool {
+    if !is_network_location(reference) {
+        // Local filesystem paths are cheap and can change when a removable
+        // drive is mounted or unmounted, so check them directly.
+        return local_exists(reference, true);
+    }
     let key = format!("source:{reference}");
-    let mut cache = availability_cache().lock().unwrap();
-    *cache
-        .entry(key)
-        .or_insert_with(|| query_exists(reference, true))
+    availability_cache()
+        .lock()
+        .unwrap()
+        .get(&key)
+        .copied()
+        .unwrap_or(true)
 }
 
+/// Read availability for a single photo's original file. Never probes the
+/// network. Local filesystem paths (and `file://` URIs) are checked directly
+/// and cheaply so removable-drive mount state stays accurate; remote paths read
+/// the per-folder cache, which a photo inherits from its imported source root.
 pub fn cached_file_available(reference: &str) -> bool {
     // Local paths are cheap to check and can change when a removable drive is
     // mounted or unmounted, so do not retain a stale result for them.
+    if !is_network_location(reference) {
+        return local_exists(reference, false);
+    }
+    let key = format!("file:{reference}");
+    availability_cache()
+        .lock()
+        .unwrap()
+        .get(&key)
+        .copied()
+        .unwrap_or(true)
+}
+
+/// Existence check that needs no gvfs daemon: resolves `file://` URIs to their
+/// local path and stats the filesystem directly.
+fn local_exists(reference: &str, directory: bool) -> bool {
+    let uri = file(reference).uri().to_string();
+    let path = match uri.strip_prefix("file://") {
+        Some(path) => Path::new(path),
+        None => Path::new(reference),
+    };
+    if directory {
+        path.is_dir()
+    } else {
+        path.is_file()
+    }
+}
+
+/// Blocking probe of an imported source root, storing the result in the cache
+/// after the probe finishes. Worker threads only: the probe may block for up to
+/// `URI_PROBE_TIMEOUT`, but the cache lock is never held while it runs.
+pub fn probe_source_available(reference: &str) -> bool {
+    let key = format!("source:{reference}");
+    let result = query_exists(reference, true);
+    availability_cache().lock().unwrap().insert(key, result);
+    result
+}
+
+/// Blocking probe of a photo's original file, stored afterwards. Worker threads
+/// only.
+pub fn probe_file_available(reference: &str) -> bool {
     if !reference.contains("://") {
         return Path::new(reference).is_file();
     }
     let key = format!("file:{reference}");
-    let mut cache = availability_cache().lock().unwrap();
-    *cache
-        .entry(key)
-        .or_insert_with(|| query_exists(reference, false))
+    let result = query_exists(reference, false);
+    availability_cache().lock().unwrap().insert(key, result);
+    result
 }
 
 pub fn refresh_availability() {
     availability_cache().lock().unwrap().clear();
 }
 
-/// Trace log for the network-share path, enabled with PICASA_TRACE=1.
-/// Emits `NETWORK <event>` lines; never prints credentials.
-pub(crate) fn net_trace(message: impl std::fmt::Display) {
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!("NETWORK {message}");
+static NET_TRACE_EPOCH: OnceLock<Instant> = OnceLock::new();
+static NET_TRACE_LAST: OnceLock<Mutex<Instant>> = OnceLock::new();
+
+std::thread_local! {
+    static CURRENT_TRACE_OP: std::cell::RefCell<u64> = const { std::cell::RefCell::new(0) };
+}
+
+/// Start a new operation id for the GTK-thread interaction being measured, so
+/// `NETWORK` lines emitted across the click -> gallery pipeline share one `op=`.
+pub(crate) fn new_trace_op() -> u64 {
+    static NEXT_TRACE_OP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT_TRACE_OP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Set the operation id attached to subsequent `net_trace` lines. Reset with
+/// `clear_trace_op` when the operation finishes so unrelated GTK work is not
+/// misattributed.
+pub(crate) fn set_trace_op(op: u64) {
+    CURRENT_TRACE_OP.with(|current| *current.borrow_mut() = op);
+}
+
+pub(crate) fn clear_trace_op() {
+    CURRENT_TRACE_OP.with(|current| *current.borrow_mut() = 0);
+}
+
+/// Clear the current operation id only if it still matches `op`. Lets an
+/// already-finished interaction release its id without wiping a newer
+/// interaction that took over the main thread in the meantime.
+pub(crate) fn clear_trace_op_after(op: u64) {
+    CURRENT_TRACE_OP.with(|current| {
+        if *current.borrow() == op {
+            *current.borrow_mut() = 0;
+        }
+    });
+}
+
+pub(crate) fn current_trace_op() -> u64 {
+    CURRENT_TRACE_OP.with(|current| *current.borrow())
+}
+
+fn trace_thread_label() -> String {
+    match std::thread::current().name() {
+        Some(name) => name.to_string(),
+        None => format!("{:?}", std::thread::current().id()),
     }
+}
+
+/// Trace log for the network-share path, enabled with PICASA_TRACE=1.
+/// Emits `NETWORK <event>` lines; never prints credentials. Every line is
+/// timestamped relative to the first trace (`t=`, ms) and to the previous
+/// trace (`dt=`, ms), and carries the emitting thread (`tid=`) plus the current
+/// operation id (`op=`) when one is active, so delays in the
+/// click -> populate pipeline show up at a glance.
+pub(crate) fn net_trace(message: impl std::fmt::Display) {
+    if std::env::var_os("PICASA_TRACE").is_none() {
+        return;
+    }
+    let epoch = *NET_TRACE_EPOCH.get_or_init(Instant::now);
+    let mut last = NET_TRACE_LAST
+        .get_or_init(|| Mutex::new(Instant::now()))
+        .lock()
+        .unwrap();
+    let since_epoch = epoch.elapsed().as_secs_f64() * 1000.0;
+    let since_last = last.elapsed().as_secs_f64() * 1000.0;
+    *last = Instant::now();
+    let op_suffix = if current_trace_op() != 0 {
+        format!(" op={}", current_trace_op())
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "NETWORK t={since_epoch:>8.1}ms dt={since_last:>7.1}ms tid={} {message}{op_suffix}",
+        trace_thread_label()
+    );
+}
+
+/// Diagnose GTK main-loop stalls. Installs a 100 ms heartbeat on the GTK
+/// thread; whenever a beat arrives more than 100 ms late it logs a `ui_stall`
+/// line with the actual delay, exposing exactly where the ~4 s click-to-grid
+/// latency is spent on the UI thread. Pure diagnostics: no behaviour depends on
+/// the heartbeat.
+pub(crate) fn install_ui_heartbeat() {
+    // One beat per 100 ms; a real stall (>200 ms without the main loop
+    // returning) is far above normal tick jitter.
+    const STALL_THRESHOLD_MS: f64 = 250.0;
+    let last = std::rc::Rc::new(std::cell::Cell::new(Instant::now()));
+    let last_for_beat = last.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        let now = Instant::now();
+        let elapsed = now.duration_since(last_for_beat.get());
+        last_for_beat.set(now);
+        let ms = elapsed.as_secs_f64() * 1000.0;
+        if ms > STALL_THRESHOLD_MS {
+            net_trace(format!("ui_stall ms={ms:.1}"));
+        }
+        glib::ControlFlow::Continue
+    });
 }
 
 /// True when a URI points at a remote, gvfs-managed location (smb://, nfs://,
@@ -353,6 +509,24 @@ pub fn filename(reference: &str) -> String {
 /// RAW decoders require a native path. Remote files are cached locally only
 /// when such a decoder needs one; ordinary JPEG/PNG/WebP reads stay streaming.
 pub fn materialize(reference: &str) -> Result<PathBuf> {
+    net_trace(format!("materialize_start uri={reference}"));
+    let materialize_started = Instant::now();
+    let result = materialize_inner(reference);
+    match &result {
+        Ok(path) => net_trace(format!(
+            "materialize_done uri={reference} path={} ms={:.1}",
+            path.display(),
+            materialize_started.elapsed().as_secs_f64() * 1000.0
+        )),
+        Err(error) => net_trace(format!(
+            "materialize_failed uri={reference} error={error} ms={:.1}",
+            materialize_started.elapsed().as_secs_f64() * 1000.0
+        )),
+    }
+    result
+}
+
+fn materialize_inner(reference: &str) -> Result<PathBuf> {
     if !reference.contains("://") {
         return Ok(PathBuf::from(reference));
     }
@@ -376,10 +550,24 @@ pub fn materialize(reference: &str) -> Result<PathBuf> {
 }
 
 pub fn read(reference: &str) -> Result<Vec<u8>> {
-    let (contents, _) = file(reference)
+    net_trace(format!("read_start uri={reference}"));
+    let read_started = Instant::now();
+    let loaded = file(reference)
         .load_contents(gio::Cancellable::NONE)
-        .with_context(|| format!("could not read {reference}"))?;
-    Ok(contents.as_ref().to_vec())
+        .with_context(|| format!("could not read {reference}"));
+    let result = loaded.map(|(contents, _)| contents.as_ref().to_vec());
+    match &result {
+        Ok(bytes) => net_trace(format!(
+            "read_done uri={reference} bytes={} ms={:.1}",
+            bytes.len(),
+            read_started.elapsed().as_secs_f64() * 1000.0
+        )),
+        Err(error) => net_trace(format!(
+            "read_failed uri={reference} error={error} ms={:.1}",
+            read_started.elapsed().as_secs_f64() * 1000.0
+        )),
+    }
+    result
 }
 
 /// Normalize a network browse root for the folder browser:
@@ -389,9 +577,16 @@ pub fn read(reference: &str) -> Result<Vec<u8>> {
 /// - a trailing slash is guaranteed so the location is browsable
 /// - a remote URI is NEVER converted to a local `$HOME`/gvfs path
 pub fn network_browse_root(reference: &str) -> String {
+    net_trace(format!("browse_root_in uri={reference}"));
+    let result = network_browse_root_inner(reference);
+    net_trace(format!("browse_root_out uri={result}"));
+    result
+}
+
+fn network_browse_root_inner(reference: &str) -> String {
     if reference.starts_with("network://") {
         if let Some(resolved) = resolve_network_uri(reference) {
-            return network_browse_root(&resolved);
+            return network_browse_root_inner(&resolved);
         }
     }
     let mut uri = reference.to_string();

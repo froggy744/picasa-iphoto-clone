@@ -207,7 +207,7 @@ fn folders_page(
         Some(automatic.upcast_ref()),
     );
 
-    let folders = crate::db::folders(&connection.borrow()).unwrap_or_default();
+    let folders = crate::db::folders_cached(&connection.borrow()).unwrap_or_default();
     for folder in &folders {
         let status = if folder.available {
             "Available"
@@ -1033,7 +1033,11 @@ fn themes_page(
                 }
                 append_row(&list, &theme.name, None, Some(check.upcast_ref()));
             }
-            append_empty_state(&list, "No themes found in the themes folder", themes.is_empty());
+            append_empty_state(
+                &list,
+                "No themes found in the themes folder",
+                themes.is_empty(),
+            );
             section.append(&list);
         })
     };
@@ -1051,8 +1055,11 @@ fn themes_page(
     let square_corners = gtk::Switch::new();
     square_corners.set_valign(gtk::Align::Center);
     square_corners.set_active(
-        saved_bool(&connection.borrow(), crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY)
-            .unwrap_or(false),
+        saved_bool(
+            &connection.borrow(),
+            crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY,
+        )
+        .unwrap_or(false),
     );
     {
         let connection = connection.clone();
@@ -1081,8 +1088,11 @@ fn themes_page(
     let fit_whole_photo = gtk::Switch::new();
     fit_whole_photo.set_valign(gtk::Align::Center);
     fit_whole_photo.set_active(
-        saved_bool(&connection.borrow(), crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY)
-            .unwrap_or(false),
+        saved_bool(
+            &connection.borrow(),
+            crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+        )
+        .unwrap_or(false),
     );
     {
         let connection = connection.clone();
@@ -1720,11 +1730,7 @@ mod tests {
         let notified_for_callback = notified.clone();
         let display = gtk::gdk::Display::default().unwrap();
         let lightbox = Rc::new(crate::lightbox::Lightbox::new());
-        let engine = crate::window::theme::ThemeEngine::new(
-            display,
-            connection.clone(),
-            lightbox,
-        );
+        let engine = crate::window::theme::ThemeEngine::new(display, connection.clone(), lightbox);
         let (page, _refresh_appearance) = themes_page(
             connection.clone(),
             Rc::new(move || notified_for_callback.set(notified_for_callback.get() + 1)),

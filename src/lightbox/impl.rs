@@ -727,6 +727,7 @@ impl Lightbox {
     }
 
     pub fn open(&self, photos: Vec<PhotoObject>, selected: usize) {
+        crate::source::net_trace(format!("lightbox_open index={selected}"));
         self.photos.replace(photos);
 
         let len = self.photos.borrow().len();

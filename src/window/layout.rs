@@ -21,12 +21,36 @@
         let album_home_click_slot = album_home_click_slot.clone();
         let open_in_folder_exact_target = open_in_folder_exact_target.clone();
         Rc::new(move |new_filter, exact_photo_target| {
+            if std::env::var_os("PICASA_TRACE").is_some() && crate::source::current_trace_op() == 0
+            {
+                crate::source::set_trace_op(crate::source::new_trace_op());
+            }
+            crate::source::net_trace(format!(
+                "apply_filter_start filter={new_filter:?} exact={exact_photo_target}"
+            ));
             // Cancel stale async refresh/folder-scroll work before this new
             // destination is established. This also covers Folder-to-Folder
             // reuse, which otherwise would not bump the refresh generation.
             invalidate_pending_grid_navigation();
             gallery.clear_pending_folder_target();
             let query = search_text.borrow().clone();
+            // Avoid an unnecessary gallery rebuild when the user re-clicks the
+            // folder currently displayed in the photos grid: the indexed data
+            // and cached thumbnails are already on screen. A non-empty search
+            // (being cleared) or an exact-photo target still requires work, and
+            // the Albums home re-click must navigate into the grid.
+            if !exact_photo_target
+                && query.is_empty()
+                && new_filter == filter.get()
+                && main_stack
+                    .visible_child_name()
+                    .is_some_and(|name| name == "photos")
+            {
+                lightbox.close();
+                crate::source::net_trace("apply_filter_unchanged suppress_rebuild=true");
+                crate::source::net_trace("apply_filter_done");
+                return;
+            }
             cleared_query.replace(Some(query.clone()));
             if !exact_photo_target {
                 open_in_folder_exact_target.set(None);
@@ -43,10 +67,14 @@
             // folder should be a scroll operation, not another database query
             // and model rebuild. An active global search is the exception: its
             // grid model is not the Folder stream, so it must be reloaded.
-            let reuse_folder_stream = can_reuse_folder_stream_for_destination(
-                folder_target.is_some(),
-                gallery.can_restore_folder_cache(),
-            );
+            let network_destination = folder_target.as_ref().is_some_and(|(_, path)| {
+                crate::source::is_network_location(path)
+            });
+            let reuse_folder_stream = !network_destination
+                && can_reuse_folder_stream_for_destination(
+                    folder_target.is_some(),
+                    gallery.can_restore_folder_cache(),
+                );
 
             if let Some(source) = debounce.borrow_mut().take() {
                 source.remove();
@@ -85,34 +113,52 @@
                         album_theme_changed_for_destination.clone(),
                     );
                 }
+                crate::source::net_trace("apply_filter_done albums");
                 return;
             }
             main_stack.set_visible_child_name("photos");
             apply_gallery_grouping(&gallery, new_filter, sort.get(), group_mode.get());
+            if network_destination {
+                // For a network photo, the exact destination is the scoped
+                // registered share, never the 73k-photo local Folder stream.
+                if let Some((folder_id, folder_path)) = folder_target {
+                    refresh_grid_to_folder(
+                        &connection, new_filter, "", sort.get(), &gallery,
+                        folder_id, folder_path,
+                    );
+                    crate::source::net_trace("apply_filter_done network_share_scoped");
+                }
+                return;
+            }
             match folder_destination_plan(exact_photo_target, reuse_folder_stream) {
                 FolderDestinationPlan::ReuseWithoutFolderScroll => {
                     // Open in Folder will select/scroll the exact photo below.
                     // Do not also queue the generic folder-header destination.
+                    crate::source::net_trace("apply_filter_done reuse_stream");
                     return;
                 }
                 FolderDestinationPlan::RefreshWithoutFolderScroll => {
                     // Load the continuous Folder stream, but deliberately omit
                     // folder_target so refresh_grid_inner does not schedule a
                     // later scroll_to_folder() that can overwrite the exact photo.
+                    let exact_local_target = folder_target.clone();
                     refresh_grid_inner(
                         &connection,
                         new_filter,
                         "",
                         sort.get(),
                         &gallery,
-                        None,
+                        exact_local_target,
+                        true,
                     );
+                    crate::source::net_trace("apply_filter_done local_exact_scoped");
                 }
                 FolderDestinationPlan::Normal => {
                     if let Some((folder_id, folder_path)) = folder_target {
                         if reuse_folder_stream
                             && gallery.scroll_to_folder(folder_id, &folder_path)
                         {
+                            crate::source::net_trace("apply_filter_done scroll_to_folder");
                             return;
                         }
                         refresh_grid_to_folder(
@@ -127,6 +173,7 @@
                     } else {
                         refresh_grid(&connection, new_filter, "", sort.get(), &gallery);
                     }
+                    crate::source::net_trace("apply_filter_done refresh_grid");
                 }
             }
         })
@@ -145,10 +192,16 @@
         let destination_click_with_target = destination_click_with_target.clone();
         let sidebar_selection = sidebar_selection_slot.clone();
         let gallery = gallery.clone();
+        let connection = connection.clone();
         let exact_target = open_in_folder_exact_target.clone();
         Rc::new(move |folder_id, photo_id| {
             exact_target.set(Some(photo_id));
+            let is_network_share = db::folder_path_by_id(&connection.borrow(), folder_id)
+                .ok().flatten().is_some_and(|path| crate::source::is_network_location(&path));
             destination_click_with_target(sidebar::SidebarFilter::Folder(folder_id), true);
+            let expected_share_generation = is_network_share.then(|| {
+                REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+            });
             let gallery = gallery.clone();
             let exact_target_for_timer = exact_target.clone();
             let attempts = Rc::new(Cell::new(0u32));
@@ -156,7 +209,10 @@
             glib::timeout_add_local(Duration::from_millis(25), move || {
                 let attempt = attempts_for_timer.get() + 1;
                 attempts_for_timer.set(attempt);
-                let building = gallery.stream_building();
+                let share_pending = expected_share_generation.is_some_and(|generation| {
+                    SHARE_READY_GENERATION.load(std::sync::atomic::Ordering::Relaxed) != generation
+                });
+                let building = gallery.stream_building() || share_pending;
                 let revealed = if building {
                     false
                 } else {
@@ -182,7 +238,11 @@
             if let Some(sidebar) = sidebar_selection.borrow().as_ref().cloned() {
                 // scroll_to_folder() already retries internally if Tree mode or
                 // ancestor expansion is required. Do not hammer it 24 times.
-                sidebar::scroll_to_folder(&sidebar, folder_id);
+                if is_network_share {
+                    sidebar::scroll_to_network_share(&sidebar, folder_id);
+                } else {
+                    sidebar::scroll_to_folder(&sidebar, folder_id);
+                }
             }
         })
     }));
@@ -316,7 +376,7 @@
                     Ok(true) => {
                         rebuild_folder_watches();
                         if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
-                            if let Ok(folders) = db::folders(&connection.borrow()) {
+                            if let Ok(folders) = db::folders_cached(&connection.borrow()) {
                                 sidebar::refresh_folder_rows(
                                     &sidebar,
                                     &folders,
@@ -434,7 +494,7 @@
 
                 let current_filter = filter.get();
                 if let sidebar::SidebarFilter::Folder(folder_id) = current_filter {
-                    let folders = db::folders(&connection.borrow()).unwrap_or_default();
+                    let folders = db::folders_cached(&connection.borrow()).unwrap_or_default();
                     let folder_path = folders
                         .iter()
                         .find(|folder| folder.id == folder_id)

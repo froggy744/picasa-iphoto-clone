@@ -179,11 +179,66 @@ fn show_photo_context_menu(
     let open = add_action("Open");
     let edit = add_action("Edit Photo…");
     let open_with = add_action("Open With…");
-    let open_in_folder = (!matches!(
-        context.filter.get(),
-        sidebar::SidebarFilter::Albums
-    ))
-    .then(|| add_action("Open in Folder"));
+    let photo_path = photo.path();
+    // Classify the clicked photo, never the currently selected sidebar row.
+    // Photos may be stored as a GVfs file, or have a network folder path in
+    // the DB even when the displayed file reference is a relative/local path.
+    let photo_folder_id = photo.folder_id();
+    // A context menu needs two small DB lookups, not folders_light(): that
+    // computes every folder's recursive photo count and can fail under an
+    // existing RefCell borrow. A separate read connection is safe here.
+    let resolve_source = |connection: &rusqlite::Connection| -> (bool, Option<i64>, Option<String>) {
+        let folder_path = crate::db::folder_path_by_id(connection, photo_folder_id)
+            .ok().flatten();
+        let network = sidebar::is_network_photo_path(&photo_path)
+            || folder_path.as_deref().is_some_and(sidebar::is_network_photo_path);
+        if !network {
+            return (false, None, folder_path);
+        }
+        let owning_share = connection
+            .prepare("SELECT id, path FROM folders WHERE imported_root = 1")
+            .ok()
+            .and_then(|mut statement| {
+                statement.query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                }).ok().map(|rows| {
+                    rows.filter_map(Result::ok)
+                        .filter(|(_, root)| crate::source::is_network_location(root))
+                        .filter(|(_, root)| {
+                            crate::window::path_belongs_to_share(root, &photo_path)
+                                || folder_path.as_deref().is_some_and(|path|
+                                    crate::window::path_belongs_to_share(root, path))
+                        })
+                        .max_by_key(|(_, root)| root.len())
+                        .map(|(id, _)| id)
+                })
+            })
+            .flatten();
+        (true, owning_share, folder_path)
+    };
+    let (photo_is_network, owning_share_id, photo_folder_path) =
+        if let Ok(connection) = context.connection.try_borrow() {
+            resolve_source(&connection)
+        } else if let Ok(connection) = crate::db::open_default() {
+            resolve_source(&connection)
+        } else {
+            (sidebar::is_network_photo_path(&photo_path), None, None)
+        };
+    crate::source::net_trace(format!(
+        "photo_context_source photo={} path={} folder_id={} folder_path={:?} network={} share_id={:?}",
+        photo.id(), photo_path, photo_folder_id, photo_folder_path,
+        photo_is_network, owning_share_id
+    ));
+    let open_in_folder = add_action(if photo_is_network {
+        "Open in Network Share"
+    } else {
+        "Open in Folder"
+    });
+    // Keep the two distinct actions adjacent and visible without scrolling.
+    let file_manager = add_action("Open in File Manager");
+    if photo_is_network && owning_share_id.is_none() {
+        open_in_folder.set_sensitive(false);
+    }
     {
         let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
         separator.add_css_class("photo-context-separator");
@@ -456,7 +511,6 @@ fn show_photo_context_menu(
     }
     let move_file = add_action("Move…");
     let rename = add_action("Rename…");
-    let file_manager = add_action("Open in File Manager");
     let wallpaper = add_action("Set as Wallpaper");
     let print = add_action("Print");
     let properties = add_action("Properties");
@@ -516,8 +570,8 @@ fn show_photo_context_menu(
         }
     });
 
-    if let Some(open_in_folder) = open_in_folder {
-        let folder_id = photo.folder_id();
+    {
+        let folder_id = owning_share_id.unwrap_or_else(|| photo.folder_id());
         let navigate_to_folder = context.navigate_to_folder.clone();
         let dismiss_menu_for_folder = dismiss_menu.clone();
         let photo_id = photo.id();
@@ -526,6 +580,10 @@ fn show_photo_context_menu(
         let gallery_for_folder = context.gallery.clone();
         let sidebar_for_folder = context.sidebar.clone();
         open_in_folder.connect_clicked(move |_| {
+            crate::source::net_trace(format!(
+                "photo_context_navigate photo={} network={} folder={} share={:?}",
+                photo_id, photo_is_network, folder_id, owning_share_id
+            ));
             if folder_id != 0 {
                 // If we are already in the continuous Folder tree/stream and no
                 // search filter is active, do not route through destination
@@ -533,7 +591,8 @@ fn show_photo_context_menu(
                 // header and then re-select the photo, which is fragile for
                 // virtualized folder rows. Directly select/scroll the clicked
                 // photo instead, and still reveal its folder in the sidebar.
-                if matches!(current_filter.get(), sidebar::SidebarFilter::Folder(_))
+                if !photo_is_network
+                    && matches!(current_filter.get(), sidebar::SidebarFilter::Folder(_))
                     && current_search.borrow().is_empty()
                 {
                     if let Some(gallery) = gallery_for_folder.borrow().upgrade() {

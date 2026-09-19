@@ -8,7 +8,7 @@ fn selected_photo_ids(context: &PhotoActionContext, fallback_id: Option<i64>) ->
 }
 
 fn refresh_album_ui(context: &PhotoActionContext) {
-    let folders = db::folders(&context.connection.borrow()).unwrap_or_default();
+    let folders = db::folders_cached(&context.connection.borrow()).unwrap_or_default();
     let albums = db::albums(&context.connection.borrow()).unwrap_or_default();
     let counts = db::sidebar_counts(&context.connection.borrow()).unwrap_or_default();
     if let Some(sidebar) = context.sidebar.borrow().as_ref() {

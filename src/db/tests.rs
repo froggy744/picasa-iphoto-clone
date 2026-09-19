@@ -988,6 +988,36 @@ mod network_share_tests {
     use super::*;
 
     #[test]
+    fn registering_remote_parent_preserves_independently_registered_children() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let child_a = insert_network_share(&connection, "smb://dietpi.local/4tbp/Other/Tat%20Sing", "Tat Sing").unwrap();
+        let child_b = insert_network_share(&connection, "smb://dietpi.local/4tbp/Other/Street%20Fighter", "Street Fighter").unwrap();
+        let parent = insert_network_share(&connection, "smb://dietpi.local/4tbp/Other", "Other").unwrap();
+        let shares = network_shares(&connection).unwrap();
+        assert_eq!(shares.len(), 3);
+        assert!(shares.iter().any(|share| share.id == child_a));
+        assert!(shares.iter().any(|share| share.id == child_b));
+        assert!(shares.iter().any(|share| share.id == parent));
+        assert_eq!(imported_root_paths(&connection).unwrap(), vec!["smb://dietpi.local/4tbp/Other".to_string()], "scan should traverse overlapping shares only once");
+        // A scan or re-import of the containing folder must not demote children.
+        insert_folder(&connection, "smb://dietpi.local/4tbp/Other").unwrap();
+        assert_eq!(network_shares(&connection).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn registering_remote_child_preserves_its_registered_parent() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let parent = insert_network_share(&connection, "smb://dietpi.local/4tbp/Other", "Other").unwrap();
+        let child = insert_network_share(&connection, "smb://dietpi.local/4tbp/Other/Tat%20Sing", "Tat Sing").unwrap();
+        let shares = network_shares(&connection).unwrap();
+        assert_eq!(shares.len(), 2);
+        assert!(shares.iter().any(|share| share.id == parent));
+        assert!(shares.iter().any(|share| share.id == child));
+    }
+
+    #[test]
     fn network_share_registers_root_with_display_name_and_lists_separately() {
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch(SCHEMA).unwrap();
