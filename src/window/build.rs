@@ -13,6 +13,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     crate::source::install_ui_heartbeat();
 
+    // Warm the network-location cache in the background so the FIRST Add
+    // Network Share dialog already lists the discovered shares instead of
+    // requiring Cancel + reopen after a cold DNS-SD pass.
+    crate::source::prefetch_network_locations();
+
     install_close_confirmation(&window);
 
     let connection = Rc::new(RefCell::new(connection));

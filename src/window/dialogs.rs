@@ -257,7 +257,7 @@ pub fn show_add_network_share_dialog(
     content.append(&discovery_note);
 
     let hint = gtk::Label::new(Some(
-        "Connects through the system's network services (guest or saved credentials). Enter a Share to jump straight into it, or leave it empty to browse all shares - then pick the folder with your photos. For NFS, enter the export path (for example mnt or export/photos).",
+        "Connects through the system's network services (guest or saved credentials). Enter a Share to jump straight into it, or leave it empty to browse all shares - then pick the folder with your photos. For NFS, enter the export path (for example exports/Work or mnt/4TBP) - the server's real exports appear in the list once a server is set.",
     ));
     hint.set_xalign(0.0);
     hint.set_wrap(true);
@@ -268,8 +268,34 @@ pub fn show_add_network_share_dialog(
     // stops. A closed dialog halts the poll on its next tick, the spinner is
     // replaced by the list or an explicit empty/error state.
     crate::source::net_trace("discovery_ui_started");
+    // Seed the list from the warm discovery cache (startup prefetch or an
+    // earlier dialog run) so the FIRST open already shows the shares, then
+    // merge the live discovery events into the same stream. The poll below
+    // drops duplicate URIs, so cache hits found again live are ignored.
+    let (sender, receiver) =
+        std::sync::mpsc::channel::<crate::source::NetworkDiscoveryEvent>();
+    // Clone for the NFS export lookup: gvfs cannot list NFS exports, so
+    // `showmount -e` results are fed into this same channel and rendered
+    // by the poll below, even after the gvfs discovery finished.
+    let nfs_sender_slot = Rc::new(RefCell::new(Some(sender.clone())));
+    let cached = crate::source::cached_network_locations();
+    crate::source::net_trace(format!(
+        "discovery_cache_seeded count={}",
+        cached.len()
+    ));
+    for (name, uri) in cached {
+        let _ = sender.send(crate::source::NetworkDiscoveryEvent::Item(name, uri));
+    }
+    let sender_for_live = sender;
+    std::thread::spawn(move || {
+        let live = crate::source::discover_network_locations();
+        while let Ok(event) = live.recv() {
+            if sender_for_live.send(event).is_err() {
+                break;
+            }
+        }
+    });
     {
-        let receiver = crate::source::discover_network_locations();
         let list = discovered_list.clone();
         let header = discovered_header.clone();
         let scroll = discovered_scroll.clone();
@@ -287,6 +313,7 @@ pub fn show_add_network_share_dialog(
         let first_smb_target = first_smb_target.clone();
         let name_for_rows = name_entry.clone();
         let on_connect_for_rows = on_connect.clone();
+        let shown_uris = Rc::new(RefCell::new(std::collections::HashSet::new()));
         let mut items_added = 0u32;
         glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
             if closed.get() {
@@ -296,10 +323,23 @@ pub fn show_add_network_share_dialog(
             for _ in 0..25 {
                 match receiver.try_recv() {
                     Ok(crate::source::NetworkDiscoveryEvent::Item(name, uri)) => {
+                        // Cache-seeded rows and live results can overlap; the
+                        // second occurrence of a URI is skipped.
+                        if !shown_uris.borrow_mut().insert(uri.clone()) {
+                            continue;
+                        }
                         items_added += 1;
+                        // A late result (e.g. an NFS export found after the
+                        // zero-state was shown) replaces the empty note.
+                        note.set_visible(false);
                         crate::source::net_trace(format!(
                             "discovery_ui_item n={items_added} uri={uri}"
                         ));
+                        // Persist for the next dialog open.
+                        crate::source::remember_discovered_location(
+                            name.clone(),
+                            uri.clone(),
+                        );
                         // Remember the first SMB target: pressing Connect without
                         // typing connects to it (discovery convenience).
                         if first_smb_target.borrow().is_none() && uri.starts_with("smb://") {
@@ -351,10 +391,15 @@ pub fn show_add_network_share_dialog(
                         let decoded = glib::uri_unescape_string(uri.as_str(), None::<&str>)
                             .unwrap_or_else(|| uri.clone().into());
                         let click = gtk::GestureClick::new();
-                        crate::source::net_trace(format!(
-                            "discovery_row_clicked name={name} uri={uri}"
-                        ));
+                        let click_name = name.clone();
+                        let click_uri = uri.clone();
                         click.connect_pressed(move |gesture, _, _, _| {
+                            // Trace INSIDE the handler: the previous placement
+                            // logged at row-build time, so the trace could never
+                            // show whether a row was actually clicked.
+                            crate::source::net_trace(format!(
+                                "discovery_row_clicked name={click_name} uri={click_uri}"
+                            ));
                             // NFS topics are service endpoints
                             // (nfs://host:2049/export); Connect must mount the
                             // export root nfs://host/export, never the RPC port.
@@ -402,7 +447,13 @@ pub fn show_add_network_share_dialog(
                             updating.set(false);
                             gesture.set_state(gtk::EventSequenceState::Claimed);
                         });
-                        row.add_controller(click);
+                        // Capture phase + attached to the row's child box: the
+                        // enclosing GtkListBox installs its own press gesture on
+                        // the row in the bubble phase and wins otherwise, so the
+                        // fields were never filled and Connect fell back to the
+                        // first discovered SMB target.
+                        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+                        box_.add_controller(click);
                         // Keyboard users: Enter on a focused row connects directly.
                         let name_for_activate = name_for_rows.clone();
                         let on_connect_for_row = on_connect_for_rows.clone();
@@ -443,7 +494,10 @@ pub fn show_add_network_share_dialog(
                         } else {
                             status_box.set_visible(false);
                         }
-                        return glib::ControlFlow::Break;
+                        // Keep polling: NFS export lookups (showmount) feed
+                        // rows into this channel after the gvfs discovery has
+                        // finished. The dialog-close check above ends the poll.
+                        return glib::ControlFlow::Continue;
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => continue,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -457,6 +511,68 @@ pub fn show_add_network_share_dialog(
                 }
             }
             glib::ControlFlow::Continue
+        });
+    }
+
+    // NFS export lookup: gvfs cannot enumerate NFS exports (NFS has no
+    // share-listing protocol), so query the server's mountd with
+    // `showmount -e` on a worker thread and feed the real exports into the
+    // discovered list. Debounced 400 ms behind protocol/server changes; the
+    // results are nfs://host/export rows that Connect can use verbatim.
+    let nfs_lookup_generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
+    let schedule_nfs_lookup: Rc<dyn Fn()> = {
+        let protocol = protocol.clone();
+        let server_entry = server_entry.clone();
+        let sender_slot = nfs_sender_slot.clone();
+        let generation = nfs_lookup_generation.clone();
+        Rc::new(move || {
+            if protocol.selected() != 1 {
+                return;
+            }
+            let host = server_entry.text().trim().to_string();
+            if host.is_empty() {
+                return;
+            }
+            generation.set(generation.get() + 1);
+            let my_generation = generation.get();
+            let sender_slot = sender_slot.clone();
+            let host_for_tick = host.clone();
+            let generation_for_tick = generation.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
+                if generation_for_tick.get() != my_generation {
+                    return glib::ControlFlow::Break;
+                }
+                crate::source::net_trace(format!("nfs_lookup_started host={host_for_tick}"));
+                // Clone the channel sender on the main thread: the Sender is
+                // Send, the Rc/RefCell slot itself is not.
+                let sender_for_exports = sender_slot.borrow().clone();
+                let host_for_worker = host_for_tick.clone();
+                std::thread::spawn(move || {
+                    let exports = crate::source::query_nfs_exports(&host_for_worker);
+                    let Some(sender) = sender_for_exports else {
+                        return;
+                    };
+                    for export in exports {
+                        let _ = sender.send(crate::source::NetworkDiscoveryEvent::Item(
+                            export.clone(),
+                            format!("nfs://{host_for_worker}/{export}"),
+                        ));
+                    }
+                });
+                glib::ControlFlow::Break
+            });
+        })
+    };
+    {
+        let schedule = schedule_nfs_lookup.clone();
+        protocol.connect_selected_item_notify(move |_| {
+            schedule();
+        });
+    }
+    {
+        let schedule = schedule_nfs_lookup.clone();
+        server_entry.connect_changed(move |_| {
+            schedule();
         });
     }
 
@@ -506,9 +622,19 @@ pub fn show_add_network_share_dialog(
         // first discovered SMB location (discovery is convenience; manual
         // entry wins when provided).
         let typed_server = server_entry.text().trim().to_string();
+        crate::source::net_trace(format!(
+            "dialog_connect_state server='{typed_server}' discovered={} protocol={}",
+            discovered_uri.borrow().is_some(),
+            protocol.selected()
+        ));
         let browse_root = if typed_server.is_empty() {
             match first_smb_target.borrow().clone() {
-                Some(target) => target,
+                Some(target) => {
+                    crate::source::net_trace(format!(
+                        "dialog_connect_source=fallback_first_smb uri={target}"
+                    ));
+                    target
+                }
                 None => {
                     show_error(
                         &parent_for_response,
@@ -528,6 +654,9 @@ pub fn show_add_network_share_dialog(
                 // Discovered URIs are used verbatim: they already carry the
                 // correct scheme, host and path that gvfs resolved, and NFS
                 // entries were normalized (no service port) at row-click time.
+                crate::source::net_trace(format!(
+                    "dialog_connect_source=discovered uri={uri}"
+                ));
                 uri
             } else {
                 let scheme = if protocol.selected() == 1 { "nfs" } else { "smb" };
@@ -536,6 +665,9 @@ pub fn show_add_network_share_dialog(
                     &typed_server,
                     &_share_entry.text(),
                 );
+                crate::source::net_trace(format!(
+                    "dialog_connect_source=typed uri={root}"
+                ));
                 if root.ends_with(format!("://{}/", scheme).as_str()) {
                     show_error(
                         &parent_for_response,
@@ -1053,7 +1185,18 @@ pub fn show_network_folder_browser(
                             status.set_visible(false);
                             return glib::ControlFlow::Break;
                         }
-                        Err(_) => return glib::ControlFlow::Break,
+                        // A momentarily empty channel is normal: the worker
+                        // enumerates on a thread and a cold gvfs session can
+                        // take hundreds of ms, far past the first 50 ms tick.
+                        // Only a disconnected sender (worker gone without a
+                        // Done) ends the poll. Breaking on Empty killed the
+                        // poll on its first tick whenever enumeration was
+                        // slower than one tick, leaving the list empty until
+                        // the dialog was closed and re-opened.
+                        Err(std::sync::mpsc::TryRecvError::Empty) => continue,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            return glib::ControlFlow::Break;
+                        }
                     }
                 }
                 glib::ControlFlow::Continue

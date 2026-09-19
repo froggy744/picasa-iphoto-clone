@@ -351,7 +351,21 @@ fn describe_mount_error(reference: &str, error: &glib::Error) -> String {
         Some(IOErrorEnum::TimedOut) => format!(
             "the server did not respond in time: {reference}. Is the NAS online? ({detail})"
         ),
-        _ => format!("{reference}: {detail}"),
+        Some(IOErrorEnum::NotSupported) if reference.starts_with("nfs://") => format!(
+            "NFS is not supported by this system's gvfs backends: {reference}. Install the gvfs NFS backend (for example: sudo dnf install gvfs-nfs) and try again. ({detail})"
+        ),
+        _ => {
+            // The backend-missing error also arrives with other error kinds
+            // ("The specified location is not supported"), so fall back to a
+            // text check for NFS references.
+            if detail.contains("not supported") && reference.starts_with("nfs://") {
+                format!(
+                    "NFS is not supported by this system's gvfs backends: {reference}. Install the gvfs NFS backend (for example: sudo dnf install gvfs-nfs) and try again. ({detail})"
+                )
+            } else {
+                format!("{reference}: {detail}")
+            }
+        }
     }
 }
 
@@ -556,6 +570,91 @@ pub fn discover_network_locations() -> std::sync::mpsc::Receiver<NetworkDiscover
         send(NetworkDiscoveryEvent::Done(count));
     });
     receiver
+}
+
+/// Process-global cache of discovered network locations, deduped by URI and
+/// kept in discovery order. Warmed by the startup prefetch and by every
+/// dialog run, so the FIRST Add Network Share dialog can list the shares
+/// immediately instead of staring at an empty list until Cancel + reopen.
+static DISCOVERY_CACHE: std::sync::OnceLock<std::sync::Mutex<Vec<(String, String)>>> =
+    std::sync::OnceLock::new();
+
+fn discovery_cache() -> &'static std::sync::Mutex<Vec<(String, String)>> {
+    DISCOVERY_CACHE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Store a discovered location for later dialogs. Deduped by URI.
+pub fn remember_discovered_location(name: String, uri: String) {
+    let mut cache = match discovery_cache().lock() {
+        Ok(cache) => cache,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if !cache.iter().any(|(_, existing)| existing == &uri) {
+        cache.push((name, uri));
+    }
+}
+
+/// Snapshot of the cached locations in discovery order.
+pub fn cached_network_locations() -> Vec<(String, String)> {
+    let cache = match discovery_cache().lock() {
+        Ok(cache) => cache,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    cache.clone()
+}
+
+/// Warm the discovery cache in the background at app startup. Runs one full
+/// discovery pass (which also warms the gvfs DNS-SD backends for the whole
+/// session), so by the time the user opens the Add Network Share dialog the
+/// shares are already known and the first open lists them instantly.
+pub fn prefetch_network_locations() {
+    std::thread::spawn(|| {
+        let receiver = discover_network_locations();
+        while let Ok(event) = receiver.recv() {
+            if let NetworkDiscoveryEvent::Item(name, uri) = event {
+                remember_discovered_location(name, uri);
+            }
+        }
+        net_trace("discovery_prefetch_done");
+    });
+}
+
+/// List the NFS exports a server offers, queried from the server's mountd
+/// with `showmount -e` (nfs-utils). gvfs cannot enumerate NFS exports - NFS
+/// has no share-listing protocol - which is why an NFS browser at a server
+/// root always looks empty and why the DNS-SD-advertised path (`/mnt`) is
+/// often not itself an export. BLOCKING: only call from a worker thread.
+/// Returns export paths without the leading slash (`exports/Work`,
+/// `mnt/4TBP`), sorted and deduped; empty when the query fails.
+pub fn query_nfs_exports(host: &str) -> Vec<String> {
+    let output = std::process::Command::new("showmount")
+        .arg("-e")
+        .arg(host)
+        .output();
+    let Ok(output) = output else {
+        net_trace(format!("nfs_exports host={host} failed=showmount-missing"));
+        return Vec::new();
+    };
+    if !output.status.success() {
+        net_trace(format!(
+            "nfs_exports host={host} failed=status={} {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+        return Vec::new();
+    }
+    let mut exports: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let path = line.trim().split_whitespace().next()?;
+            let path = path.strip_prefix('/')?;
+            (!path.is_empty()).then(|| path.to_string())
+        })
+        .collect();
+    exports.sort();
+    exports.dedup();
+    net_trace(format!("nfs_exports host={host} count={}", exports.len()));
+    exports
 }
 /// Resolve a `network://` shortcut URI to the concrete location gvfs says it
 /// targets (e.g. `smb://DietPi.local:445/`). Returns None for non-network
