@@ -1020,6 +1020,14 @@ pub fn delete_smb_credentials(uri: &str) -> Result<(), String> {
 // Service; auth failures advance the ladder, everything else stops it).
 // ---------------------------------------------------------------------------
 
+/// True when the direct libsmbclient transport is usable in this environment.
+/// The Sandboxed flatpak has no libsmbclient.so.0, so callers fall back to
+/// gvfs (see source::read / query_exists); native builds keep the direct
+/// transport unconditionally.
+pub fn direct_available() -> bool {
+    api().is_ok()
+}
+
 /// List a directory inside an SMB share.
 pub fn list_dir(uri: &str) -> Result<Vec<SmbEntry>, SmbTransportError> {
     let target = parse_smb_uri(uri).ok_or(SmbTransportError::NotSmb)?;

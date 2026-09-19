@@ -455,7 +455,7 @@
                 let parent_for_mount = parent.clone();
                 let parent_for_error = parent_for_error.clone();
                 crate::source::net_trace(format!("connect_requested uri={path}"));
-                if path.starts_with("smb://") {
+                if path.starts_with("smb://") && crate::smb_transport::direct_available() {
                     // SMB reconnects go through the direct transport: guest
                     // and Secret Service credentials are tried silently; a
                     // PIC-owned credentials dialog appears only on an auth

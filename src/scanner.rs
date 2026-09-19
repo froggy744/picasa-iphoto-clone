@@ -98,7 +98,9 @@ fn scan_with_control(
     }
     let indexed = db::photo_fingerprints(&connection)?;
     let root_file = crate::source::file(root);
-    let (files, discovered_folders) = if root.starts_with("smb://") {
+    let (files, discovered_folders) = if root.starts_with("smb://")
+        && crate::smb_transport::direct_available()
+    {
         collect_smb_files(root, control)?
     } else {
         collect_files(&root_file, control)?
@@ -304,9 +306,13 @@ fn scan_with_control(
 
 fn root_is_available(root: &str) -> bool {
     if root.starts_with("smb://") {
-        // Direct SMB availability (libsmbclient; worker thread only).
-        return crate::smb_transport::stat_in_lane(root, crate::smb_transport::SmbLane::User)
-            .is_ok();
+        // Direct SMB availability (libsmbclient; worker thread only). Without
+        // libsmbclient (sandboxed flatpak) SMB rides gvfs like NFS.
+        if crate::smb_transport::direct_available() {
+            return crate::smb_transport::stat_in_lane(root, crate::smb_transport::SmbLane::User)
+                .is_ok();
+        }
+        return crate::source::file(root).query_exists(gio::Cancellable::NONE);
     }
     if root.contains("://") {
         crate::source::file(root).query_exists(gio::Cancellable::NONE)

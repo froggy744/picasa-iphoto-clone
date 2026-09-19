@@ -525,6 +525,13 @@ else
     PREFIX="\$(dirname -- "\$BIN_DIR")"
 fi
 
+# Flatpak redirects XDG_DATA_HOME to \$HOME/.var/app/<app-id>/data by default,
+# which would silently open a separate library. Keep the same library database
+# as the native build so shares opened in either mode stay in sync.
+if [ -n "\${FLATPAK_ID:-}" ]; then
+    export XDG_DATA_HOME="\$HOME/.local/share"
+fi
+
 cd "\$PREFIX/share/$BIN_NAME"
 exec "\$PREFIX/libexec/$BIN_NAME" "\$@"
 EOF_LAUNCHER
@@ -733,6 +740,7 @@ EOF_CARGO
     "--device=dri",
     "--share=network",
     "--filesystem=host",
+    "--filesystem=xdg-run/gvfsd",
     "--talk-name=org.gtk.vfs.*"
   ],
   "build-options": {

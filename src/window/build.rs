@@ -3678,13 +3678,29 @@ fn schedule_startup_smb_probe(
             let (sender, receiver) = std::sync::mpsc::channel::<(bool, String)>();
             let root_for_worker = root.clone();
             std::thread::spawn(move || {
-                let outcome =
-                    crate::smb_transport::stat_in_lane(&root_for_worker, crate::smb_transport::SmbLane::Background);
-                let ok = outcome.is_ok();
-                let reason = outcome
-                    .err()
-                    .map(|error| error.to_string())
-                    .unwrap_or_else(|| String::from("ok"));
+                // Direct libsmbclient stat probes (native). Sandboxed flatpak
+                // builds fall back to a gvfs probe so SMB shares still come
+                // online without libsmbclient.
+                let (ok, reason) = if crate::smb_transport::direct_available() {
+                    let outcome = crate::smb_transport::stat_in_lane(
+                        &root_for_worker,
+                        crate::smb_transport::SmbLane::Background,
+                    );
+                    let ok = outcome.is_ok();
+                    let reason = outcome
+                        .err()
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| String::from("ok"));
+                    (ok, reason)
+                } else {
+                    let ok = crate::source::probe_source_available(&root_for_worker);
+                    let reason = if ok {
+                        String::from("ok")
+                    } else {
+                        String::from("location could not be reached through gvfs")
+                    };
+                    (ok, reason)
+                };
                 let _ = sender.send((ok, reason));
             });
             let reprobe_state = std::cell::RefCell::new(if allow_reprobe {

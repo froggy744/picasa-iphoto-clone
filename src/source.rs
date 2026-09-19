@@ -46,8 +46,12 @@ fn query_exists(reference: &str, directory: bool, lane: crate::smb_transport::Sm
     if reference.starts_with("smb://") {
         // Direct SMB probe through libsmbclient (worker threads only - this
         // blocks up to the transport timeout). The lane keeps availability
-        // probes from delaying photo reads. NFS stays on gvfs.
-        return crate::smb_transport::stat_in_lane(&reference, lane).is_ok();
+        // probes from delaying photo reads. NFS stays on gvfs. Without
+        // libsmbclient (sandboxed flatpak) the probe rides gvfs instead.
+        if crate::smb_transport::direct_available() {
+            return crate::smb_transport::stat_in_lane(&reference, lane).is_ok();
+        }
+        return uri_query_exists(&file(&normalize_nfs_uri(&reference)));
     }
     uri_query_exists(&file(&normalize_nfs_uri(&reference)))
 }
@@ -276,6 +280,13 @@ pub fn is_network_location(reference: &str) -> bool {
         scheme.as_str(),
         "smb" | "cifs" | "nfs" | "sftp" | "ssh" | "ftp" | "dav" | "davs" | "afc"
     )
+}
+
+/// Whether SMB reads go through the direct libsmbclient transport (native) or
+/// gvfs (sandboxed flatpak, where libsmbclient.so.0 is absent). Native builds
+/// never mount SMB shares through gvfs; the flatpak has no alternative.
+fn is_smb_direct() -> bool {
+    crate::smb_transport::direct_available()
 }
 
 /// Mount a remote location through gvfs (never a manual mount, never fstab).
@@ -866,8 +877,11 @@ pub fn read(reference: &str) -> Result<Vec<u8>> {
     net_trace(format!("read_start uri={reference}"));
     let read_started = Instant::now();
     // Direct SMB: reads go through libsmbclient (no gvfs mount, nothing in
-    // Nautilus). NFS and every other scheme keep riding gvfs.
-    let loaded = if reference.starts_with("smb://") {
+    // Nautilus) when the library is present. Sandboxed builds without
+    // libsmbclient (the flatpak) read smb:// through gvfs instead; NFS and
+    // every other scheme keep riding gvfs unconditionally.
+    let reads_smb_direct = reference.starts_with("smb://") && is_smb_direct();
+    let loaded = if reads_smb_direct {
         crate::smb_transport::read_file(&reference).map_err(anyhow::Error::msg)
     } else {
         file(&reference)
