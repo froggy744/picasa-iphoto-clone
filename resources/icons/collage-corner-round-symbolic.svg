@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+  <!-- Rounded corner: maximum corner radius (concentric quarter arcs). -->
+  <g fill="#2e3436">
+    <path d="M 2 14 V 8 A 6 6 0 0 1 8 2 H 14 V 4 H 8 A 4 4 0 0 0 4 8 V 14 Z"/>
+  </g>
+</svg>

@@ -20,6 +20,10 @@
 !/src/
 !/src/**
 
+# Keep the GResource icon bundle (main.rs include_bytes! it at compile time)
+!/resources/
+!/resources/**
+
 # Keep the isolated GUI search regression check
 !/scripts/
 /scripts/*
