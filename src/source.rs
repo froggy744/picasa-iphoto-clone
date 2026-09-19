@@ -287,8 +287,81 @@ pub fn mount_share_async(
     let reference = &normalize_nfs_uri(reference);
     let file = file(reference);
     net_trace(format!("mount_started uri={reference}"));
+    // GtkMountOperation routes credential requests to the GTK auth dialog.
     let mount_operation = gtk::MountOperation::new(parent);
-    let reference_for_callback = reference.to_string();
+    mount_share_run(
+        reference.to_string(),
+        file,
+        mount_operation,
+        move |outcome, _| on_result(outcome),
+    );
+}
+
+/// Failure of a silent (`mount_share_async_silent`) mount. `auth_required`
+/// distinguishes "credentials needed" (stop retrying, hand over to the
+/// interactive Retry Connection) from offline/unreachable servers
+/// (safe to retry with backoff).
+pub struct SilentMountFailure {
+    pub message: String,
+    pub auth_required: bool,
+}
+
+/// Mount a remote location WITHOUT any user interaction. Uses a plain
+/// `GMountOperation` instead of `GtkMountOperation`: it shows no dialogs, so
+/// a credential request goes unanswered and the backend fails the mount.
+/// Saved gvfs/keyring credentials are still used, and anonymous/guest SMB and
+/// NFS exports connect silently. Used by the automatic startup reconnect -
+/// shares needing a password stay registered and offline until the user
+/// runs the interactive Retry Connection. `on_result` runs on the main
+/// thread.
+pub fn mount_share_async_silent(
+    reference: &str,
+    on_result: impl FnOnce(Result<(), SilentMountFailure>) + 'static,
+) {
+    let reference = &normalize_nfs_uri(reference);
+    let file = file(reference);
+    net_trace(format!("mount_started mode=silent uri={reference}"));
+    let mount_operation = gio::MountOperation::new();
+    mount_share_run(
+        reference.to_string(),
+        file,
+        mount_operation,
+        move |outcome, auth_required| {
+            on_result(outcome.map_err(|message| SilentMountFailure {
+                message,
+                auth_required,
+            }));
+        },
+    );
+}
+
+/// True when a mount failure means "credentials are required but unavailable"
+/// rather than an offline/unreachable server. Backend texts differ (SMB logon
+/// failure, NFS access denied, generic "Authentication required"), so the
+/// error kind is checked first and the message text second.
+fn is_auth_error(error: &glib::Error) -> bool {
+    if error.kind() == Some(gio::IOErrorEnum::PermissionDenied) {
+        return true;
+    }
+    let detail = error.to_string().to_lowercase();
+    detail.contains("authenticat")
+        || detail.contains("password")
+        || detail.contains("logon failure")
+        || detail.contains("not authorized")
+        || detail.contains("access denied")
+}
+
+/// Shared mount core: already-mounted fast path, async
+/// `mount_enclosing_volume`, reachability check and error mapping. The
+/// second `on_result` argument reports whether a failure looks like missing
+/// credentials (see `is_auth_error`); interactive callers ignore it.
+fn mount_share_run(
+    reference: String,
+    file: gio::File,
+    mount_operation: impl IsA<gio::MountOperation> + 'static,
+    on_result: impl FnOnce(Result<(), String>, bool) + 'static,
+) {
+    let reference_for_callback = reference;
     // "Already mounted" counts as success: skip straight to the reachability
     // check when the location has an enclosing mount.
     if file.find_enclosing_mount(gio::Cancellable::NONE).is_ok()
@@ -297,7 +370,7 @@ pub fn mount_share_async(
         net_trace(format!(
             "mount_success uri={reference_for_callback} (already mounted)"
         ));
-        on_result(Ok(()));
+        on_result(Ok(()), false);
         return;
     }
     file.mount_enclosing_volume(
@@ -305,6 +378,7 @@ pub fn mount_share_async(
         Some(&mount_operation),
         gio::Cancellable::NONE,
         move |result| {
+            let mut auth_required = false;
             let outcome = match result {
                 Ok(()) if query_exists(&reference_for_callback, true) => {
                     net_trace(format!("mount_success uri={}", reference_for_callback));
@@ -320,17 +394,25 @@ pub fn mount_share_async(
                             "mount_success uri={} (already mounted)",
                             reference_for_callback
                         ));
-                        on_result(Ok(()));
+                        on_result(Ok(()), false);
                         return;
                     }
-                    net_trace(format!(
-                        "mount_failed uri={} error={}",
-                        reference_for_callback, error
-                    ));
+                    auth_required = is_auth_error(&error);
+                    if auth_required {
+                        net_trace(format!(
+                            "mount_auth_required uri={} error={}",
+                            reference_for_callback, error
+                        ));
+                    } else {
+                        net_trace(format!(
+                            "mount_failed uri={} error={}",
+                            reference_for_callback, error
+                        ));
+                    }
                     Err(describe_mount_error(&reference_for_callback, &error))
                 }
             };
-            on_result(outcome);
+            on_result(outcome, auth_required);
         },
     );
 }

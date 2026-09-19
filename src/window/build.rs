@@ -3505,10 +3505,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     // Restore network shares after a reboot: gvfs mounts are session-scoped,
     // so no registered share is mounted when the app starts. Remount each
-    // registered root in the background shortly after startup (guest and
-    // keyring-saved shares connect silently; a share needing credentials
-    // gets the normal mount dialog), then re-probe availability so the
-    // sidebar returns online without a manual Retry Connection per share.
+    // registered root SILENTLY in the background (plain GMountOperation: no
+    // auth dialogs at startup; saved keyring credentials, guest SMB and NFS
+    // exports still connect). A share whose credentials are unavailable
+    // stays registered and offline - the trace records the reason and the
+    // sidebar's interactive Retry Connection handles the password. Offline
+    // servers are retried with bounded backoff; attempts are strictly
+    // sequential per share and stop on success.
     {
         let shares = db::network_shares(&connection.borrow()).unwrap_or_default();
         let mut roots: Vec<String> = Vec::new();
@@ -3521,30 +3524,110 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }
         for (index, root) in roots.into_iter().enumerate() {
             let availability_refresh = availability_refresh.clone();
-            let window_for_mount: gtk::Window = window.clone().upcast();
-            // Staggered: a moment after startup, one root at a time.
-            glib::timeout_add_local_once(
-                std::time::Duration::from_millis(2500 + index as u64 * 600),
-                move || {
-                    crate::source::net_trace(format!("startup_remount uri={root}"));
-                    let root_for_mount = root.clone();
-                    crate::source::mount_share_async(
-                        &root_for_mount,
-                        Some(&window_for_mount),
-                        move |result| {
-                            crate::source::net_trace(format!(
-                                "startup_remount_done uri={root} ok={}",
-                                result.is_ok()
-                            ));
-                            crate::source::refresh_availability();
-                            availability_refresh();
-                        },
-                    );
-                },
-            );
+            // Sequential retry chain per share: the next attempt is scheduled
+            // only from the previous attempt's completion, so two silent
+            // mounts for the same share never overlap.
+            let retry: Rc<RefCell<Option<Rc<dyn Fn(u32)>>>> = Rc::new(RefCell::new(None));
+            let retry_for_run = retry.clone();
+            *retry.borrow_mut() = Some(Rc::new(move |attempt: u32| {
+                let availability = availability_refresh.clone();
+                let retry_for_schedule = retry_for_run.clone();
+                let root_for_attempt = root.clone();
+                let delay_ms = startup_remount_delay(attempt, index);
+                glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(delay_ms),
+                    move || {
+                        crate::source::net_trace(format!(
+                            "startup_remount uri={root_for_attempt} attempt={attempt} delay_ms={delay_ms}"
+                        ));
+                        let retry_for_callback = retry_for_schedule.clone();
+                        let availability_for_callback = availability.clone();
+                        let root_for_callback = root_for_attempt.clone();
+                        crate::source::mount_share_async_silent(
+                            &root_for_attempt,
+                            move |result| {
+                                match result {
+                                    Ok(()) => {
+                                        crate::source::net_trace(format!(
+                                            "startup_remount_done uri={root_for_callback} ok=true attempt={attempt}"
+                                        ));
+                                    }
+                                    Err(failure) => {
+                                        let exhausted = attempt as usize
+                                            >= REMOUNT_BACKOFF_MS.len();
+                                        let may_retry =
+                                            !failure.auth_required && !exhausted;
+                                        crate::source::net_trace(format!(
+                                            "startup_remount_failed uri={root_for_callback} attempt={attempt} auth_required={} retry={} message={}",
+                                            failure.auth_required,
+                                            may_retry,
+                                            failure.message
+                                        ));
+                                        if may_retry {
+                                            if let Some(run) =
+                                                retry_for_callback.borrow().as_ref()
+                                            {
+                                                run(attempt + 1);
+                                            }
+                                        } else {
+                                            crate::source::net_trace(format!(
+                                                "startup_remount_stopped uri={root_for_callback} reason={}",
+                                                if failure.auth_required {
+                                                    "auth-required (interactive Retry Connection will prompt)"
+                                                } else {
+                                                    "backoff exhausted (share stays registered and offline)"
+                                                }
+                                            ));
+                                        }
+                                    }
+                                }
+                                // Update the sidebar either way: a failed
+                                // attempt keeps the share registered and
+                                // offline, a success flips it back online.
+                                crate::source::refresh_availability();
+                                availability_for_callback();
+                            },
+                        );
+                    },
+                );
+            }));
+            let run_first = retry.borrow().as_ref().cloned();
+            if let Some(run) = run_first {
+                run(0);
+            }
         }
     }
 
     window
+}
+
+/// Backoff schedule for the silent startup reconnect. Attempt 0 is the
+/// staggered first pass (~2.5s after launch, one share every 600ms); every
+/// later entry is the delay before the next retry after a failure. Bounded:
+/// after the last entry a still-offline share waits for a manual
+/// Retry Connection instead of retrying forever.
+const REMOUNT_BACKOFF_MS: &[u64] = &[30_000, 60_000, 120_000, 300_000, 600_000];
+
+fn startup_remount_delay(attempt: u32, index: usize) -> u64 {
+    if attempt == 0 {
+        2500 + index as u64 * 600
+    } else {
+        REMOUNT_BACKOFF_MS[(attempt as usize - 1).min(REMOUNT_BACKOFF_MS.len() - 1)]
+    }
+}
+
+#[cfg(test)]
+mod startup_remount_tests {
+    use super::startup_remount_delay;
+
+    #[test]
+    fn first_pass_is_staggered_and_retries_back_off_boundedly() {
+        assert_eq!(startup_remount_delay(0, 0), 2500);
+        assert_eq!(startup_remount_delay(0, 3), 4300);
+        assert_eq!(startup_remount_delay(1, 0), 30_000);
+        assert_eq!(startup_remount_delay(5, 0), 600_000);
+        // Beyond the schedule: clamped to the largest backoff step.
+        assert_eq!(startup_remount_delay(9, 0), 600_000);
+    }
 }
 
