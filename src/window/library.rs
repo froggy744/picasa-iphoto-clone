@@ -32,7 +32,7 @@ fn refresh_grid(
     } else {
         None
     };
-    refresh_grid_inner(connection, filter, search, sort, gallery, folder_target);
+    refresh_grid_inner(connection, filter, search, sort, gallery, folder_target, false);
 }
 
 fn refresh_grid_to_folder(
@@ -51,6 +51,7 @@ fn refresh_grid_to_folder(
         sort,
         gallery,
         Some((folder_id, folder_path)),
+        false,
     );
 }
 
@@ -139,6 +140,7 @@ fn refresh_grid_inner(
     sort: PhotoSort,
     gallery: &Rc<grid::Gallery>,
     folder_target: Option<(i64, String)>,
+    exact_local_folder: bool,
 ) {
     let _ = connection;
     if filter == sidebar::SidebarFilter::Albums {
@@ -147,7 +149,7 @@ fn refresh_grid_inner(
     let generation = REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let op = crate::source::current_trace_op();
     let search = search.to_owned();
-    let folder_stream = search.is_empty()
+    let folder_stream = !exact_local_folder && search.is_empty()
         && matches!(filter, sidebar::SidebarFilter::Folder(_));
     let (sender, receiver) = std::sync::mpsc::channel();
     let scoped_target = folder_target.clone();
@@ -210,6 +212,34 @@ fn refresh_grid_inner(
             crate::source::net_trace(format!(
                 "grid_share_scoped op={op} count={}", photos.len()
             ));
+            let _ = sender.send(GridPayload::Share(photos));
+            return;
+        }
+
+        if exact_local_folder {
+            // Open in Folder is an exact photo destination, not a request to
+            // construct the 73k-photo continuous folder browser. Reuse the
+            // complete scoped payload path already used by Network Shares.
+            let Some((folder_id, _)) = scoped_target else {
+                let _ = sender.send(GridPayload::Failed);
+                return;
+            };
+            let mut photos = match db::photos(&connection, Some(folder_id), false, None) {
+                Ok(photos) => photos,
+                Err(error) => {
+                    crate::source::net_trace(format!("grid_local_exact_failed op={op} error={error}"));
+                    let _ = sender.send(GridPayload::Failed);
+                    return;
+                }
+            };
+            retain_enabled_formats(&connection, &mut photos);
+            let folders = db::folders_light(&connection).unwrap_or_default();
+            let display_mode = sidebar::FolderDisplayMode::from_setting(
+                db::setting(&connection, sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY)
+                    .ok().flatten().as_deref(),
+            );
+            sort_folder_stream(&mut photos, &folders, sort, display_mode);
+            crate::source::net_trace(format!("grid_local_exact_scoped op={op} folder={folder_id} count={}", photos.len()));
             let _ = sender.send(GridPayload::Share(photos));
             return;
         }

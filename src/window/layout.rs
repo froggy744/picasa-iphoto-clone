@@ -141,15 +141,17 @@
                     // Load the continuous Folder stream, but deliberately omit
                     // folder_target so refresh_grid_inner does not schedule a
                     // later scroll_to_folder() that can overwrite the exact photo.
+                    let exact_local_target = folder_target.clone();
                     refresh_grid_inner(
                         &connection,
                         new_filter,
                         "",
                         sort.get(),
                         &gallery,
-                        None,
+                        exact_local_target,
+                        true,
                     );
-                    crate::source::net_trace("apply_filter_done refresh_stream");
+                    crate::source::net_trace("apply_filter_done local_exact_scoped");
                 }
                 FolderDestinationPlan::Normal => {
                     if let Some((folder_id, folder_path)) = folder_target {
