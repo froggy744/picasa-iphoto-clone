@@ -68,7 +68,7 @@
             // and model rebuild. An active global search is the exception: its
             // grid model is not the Folder stream, so it must be reloaded.
             let reuse_folder_stream = can_reuse_folder_stream_for_destination(
-                folder_target.is_some(),
+                folder_target.as_ref().is_some_and(|(_, path)| !crate::source::is_network_location(path)),
                 gallery.can_restore_folder_cache(),
             );
 

@@ -1,6 +1,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -97,6 +99,12 @@ const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
 const FOLDER_WATCH_KEY: &str = "picasa-sidebar-folder-watch";
 const SHARE_LIST_KEY: &str = "picasa-sidebar-share-list";
+// A newer refresh must never be overwritten by an older worker's count result.
+static SHARE_COUNT_GENERATION: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    // Preserve previously calculated counts while share rows are rebuilt.
+    static SHARE_COUNT_CACHE: RefCell<HashMap<i64, (String, i64)>> = RefCell::new(HashMap::new());
+}
 const SHARE_OPEN_KEY: &str = "picasa-sidebar-share-open";
 const SHARE_RETRY_KEY: &str = "picasa-sidebar-share-retry";
 const FOLDER_MODE_TOGGLE_KEY: &str = "picasa-sidebar-folder-mode-toggle";
@@ -2342,6 +2350,7 @@ fn refresh_network_shares(
     folders: &[Folder],
     on_unavailable: &Rc<dyn Fn()>,
 ) {
+    let generation = SHARE_COUNT_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
     crate::source::net_trace("shares_refresh_start");
     let Some(list) = stored_widget::<gtk::ListBox>(scrolled, SHARE_LIST_KEY) else {
         return;
@@ -2356,18 +2365,87 @@ fn refresh_network_shares(
         crate::source::net_trace("shares_refresh_done count=0");
         return;
     }
+    let mut labels = HashMap::new();
     for folder in &shares {
-        append_share_row(&list, folder, on_unavailable);
+        let (_, count_label) = append_share_row(&list, folder, on_unavailable);
+        labels.insert(folder.id, count_label);
     }
     list.set_visible(true);
     crate::source::net_trace(format!("shares_refresh_done count={}", shares.len()));
+
+    // A share's registered smb:// URI may not be the SQLite ancestor of
+    // photos indexed through /run/user/UID/gvfs/. Do not use Folder.photo_count
+    // as the final Network Shares count: compute exactly the same path matches
+    // as the share gallery, without blocking GTK or rebuilding any gallery.
+    let share_paths: HashMap<i64, String> = shares.iter().map(|s| (s.id, s.path.clone())).collect();
+    let folder_parents: HashMap<i64, Option<i64>> = folders
+        .iter().map(|folder| (folder.id, folder.parent_id)).collect();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let counts = (|| -> anyhow::Result<HashMap<i64, i64>> {
+            let connection = crate::db::open_default()?;
+            let photos = crate::db::photos(&connection, None, false, None)?;
+            let mut counts: HashMap<i64, i64> = shares.iter().map(|share| (share.id, 0)).collect();
+            for photo in &photos {
+                for share in &shares {
+                    let mut ancestor = photo.folder_id;
+                    let mut linked = false;
+                    // Protect against a malformed/cyclic folder hierarchy.
+                    for _ in 0..folder_parents.len() {
+                        let Some(id) = ancestor else { break; };
+                        if id == share.id { linked = true; break; }
+                        ancestor = folder_parents.get(&id).copied().flatten();
+                    }
+                    if linked
+                        || crate::window::path_belongs_to_share(&share.path, &photo.path)
+                        || photo.folder_path.as_deref().is_some_and(|path| {
+                            crate::window::path_belongs_to_share(&share.path, path)
+                        })
+                    {
+                        *counts.entry(share.id).or_default() += 1;
+                    }
+                }
+            }
+            Ok(counts)
+        })();
+        if let Err(error) = &counts {
+            crate::source::net_trace(format!("shares_count_failed error={error}"));
+        }
+        let _ = sender.send(counts);
+    });
+    glib::timeout_add_local(Duration::from_millis(50), move || {
+        if SHARE_COUNT_GENERATION.load(Ordering::Relaxed) != generation {
+            return glib::ControlFlow::Break;
+        }
+        match receiver.try_recv() {
+            Ok(Ok(counts)) => {
+                for (id, count) in &counts {
+                    if let Some(label) = labels.get(id) {
+                        label.set_text(&format_count(*count));
+                    }
+                }
+                SHARE_COUNT_CACHE.with(|cache| {
+                    let mut cache = cache.borrow_mut();
+                    for (id, count) in &counts {
+                        if let Some(path) = share_paths.get(id) {
+                            cache.insert(*id, (path.clone(), *count));
+                        }
+                    }
+                });
+                crate::source::net_trace(format!("shares_counts_ready count={}", counts.len()));
+                glib::ControlFlow::Break
+            }
+            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        }
+    });
 }
 
 fn append_share_row(
     list: &gtk::ListBox,
     folder: &Folder,
     on_unavailable: &Rc<dyn Fn()>,
-) -> gtk::ListBoxRow {
+) -> (gtk::ListBoxRow, gtk::Label) {
     let _ = on_unavailable;
     let row = gtk::ListBoxRow::new();
     row.set_margin_top(2);
@@ -2411,19 +2489,25 @@ fn append_share_row(
     name.set_hexpand(true);
     content.append(&name);
 
-    if folder.photo_count > 0 {
-        let count = gtk::Label::new(Some(&folder.photo_count.to_string()));
-        count.add_css_class("dim-label");
-        count.add_css_class("sidebar-count");
-        count.set_valign(gtk::Align::Center);
-        content.append(&count);
-    }
+    // Never make counts disappear while an asynchronous refresh is pending.
+    // Show the previous path-matched value, or the stored folder count until
+    // the new calculation arrives. Display zero explicitly when appropriate.
+    let previous = SHARE_COUNT_CACHE.with(|cache| {
+        cache.borrow().get(&folder.id)
+            .filter(|(path, _)| path == &folder.path)
+            .map(|(_, count)| *count)
+    });
+    let count = gtk::Label::new(Some(&format_count(previous.unwrap_or(folder.photo_count))));
+    count.add_css_class("dim-label");
+    count.add_css_class("sidebar-count");
+    count.set_valign(gtk::Align::Center);
+    content.append(&count);
 
     row.set_child(Some(&content));
     add_share_context_menu(list, &row, folder);
     trace_share_row_press(&row, folder);
     list.append(&row);
-    row
+    (row, count)
 }
 
 /// Earliest GTK input callback for a network-share row: a capture-phase press

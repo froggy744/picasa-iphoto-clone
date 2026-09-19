@@ -59,8 +59,73 @@ fn refresh_grid_to_folder(
 /// `Stream` spanning the whole continuous Folder stream which is built in the
 /// background and swapped in once ready. Every other destination sends only
 /// the `Stream`.
+// An existing library can contain photos indexed through the gvfs FUSE mount
+// while a registered share is stored as smb://host/share/subfolder. Those
+// references describe the same files, but are separate folder trees in SQLite.
+// Compare them without touching the network or creating GTK photo objects.
+fn share_location(reference: &str) -> Option<(String, String)> {
+    // Decode URI path escapes (not '+' which is a literal filename character).
+    fn unescape(value: &str) -> String {
+        let bytes = value.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = |c: u8| -> Option<u8> {
+                    match c {
+                        b'0'..=b'9' => Some(c - b'0'),
+                        b'a'..=b'f' => Some(c - b'a' + 10),
+                        b'A'..=b'F' => Some(c - b'A' + 10),
+                        _ => None,
+                    }
+                };
+                if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                    out.push(hi * 16 + lo);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    let lower = reference.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("smb://") {
+        let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let host = host.rsplit('@').next()?.split(':').next()?;
+        if host.is_empty() { return None; }
+        return Some((host.to_owned(), unescape(path).trim_matches('/').to_owned()));
+    }
+    // gvfs mounts use /run/user/UID/gvfs/smb-share:server=HOST,share=SHARE/path.
+    // Only accept an actual gvfs mount prefix, not arbitrary local filenames.
+    let (_, mount) = lower.split_once("/gvfs/smb-share:server=")?;
+    let (host_part, share_part) = mount.split_once(",share=")?;
+    let host = host_part.split(',').next()?.split(':').next()?;
+    if host.is_empty() { return None; }
+    let path = share_part.split(',').next().unwrap_or(share_part);
+    Some((host.to_owned(), unescape(path).trim_matches('/').to_owned()))
+}
+
+pub(crate) fn path_belongs_to_share(share: &str, candidate: &str) -> bool {
+    let (share_host, share_path) = match share_location(share) {
+        Some(location) => location,
+        None => return false,
+    };
+    let (candidate_host, candidate_path) = match share_location(candidate) {
+        Some(location) => location,
+        None => return false,
+    };
+    share_host == candidate_host
+        && (share_path.is_empty()
+            || candidate_path == share_path
+            || candidate_path.starts_with(&(share_path + "/")))
+}
+
 enum GridPayload {
     Scoped(Vec<db::Photo>),
+    Share(Vec<db::Photo>),
     Stream(Vec<db::Photo>),
     Failed,
 }
@@ -84,6 +149,11 @@ fn refresh_grid_inner(
         && matches!(filter, sidebar::SidebarFilter::Folder(_));
     let (sender, receiver) = std::sync::mpsc::channel();
     let scoped_target = folder_target.clone();
+    // A network-share sidebar selection is a bounded library destination, not
+    // a request to materialize the entire 70k+ photo Folder stream.
+    let share_target = folder_target.as_ref().and_then(|(id, path)| {
+        crate::source::is_network_location(path).then_some((*id, path.clone()))
+    });
 
     std::thread::spawn(move || {
         crate::source::net_trace(format!(
@@ -94,6 +164,53 @@ fn refresh_grid_inner(
             let _ = sender.send(GridPayload::Failed);
             return;
         };
+
+        if let Some((share_id, share_path)) = share_target {
+            // Keep descendants from the real folder tree AND photos imported
+            // earlier via a gvfs mount / URI spelling. Do all database work in
+            // this worker: only the bounded share result reaches GTK.
+            let indexed = match db::photos(&connection, Some(share_id), false, None) {
+                Ok(photos) => photos,
+                Err(error) => {
+                    crate::source::net_trace(format!("grid_share_query_failed op={op} error={error}"));
+                    let _ = sender.send(GridPayload::Failed);
+                    return;
+                }
+            };
+            let descendant_ids: std::collections::HashSet<i64> =
+                indexed.iter().map(|photo| photo.id).collect();
+            let all = match db::photos(&connection, None, false, None) {
+                Ok(photos) => photos,
+                Err(error) => {
+                    crate::source::net_trace(format!("grid_share_query_failed op={op} error={error}"));
+                    let _ = sender.send(GridPayload::Failed);
+                    return;
+                }
+            };
+            let mut photos: Vec<db::Photo> = all.into_iter().filter(|photo| {
+                descendant_ids.contains(&photo.id)
+                    || path_belongs_to_share(&share_path, &photo.path)
+                    || photo.folder_path.as_deref().is_some_and(|path| {
+                        path_belongs_to_share(&share_path, path)
+                    })
+            }).collect();
+            crate::source::net_trace(format!(
+                "grid_share_matched op={op} root={} descendants={} matched={}",
+                share_path, descendant_ids.len(), photos.len()
+            ));
+            retain_enabled_formats(&connection, &mut photos);
+            let folders = db::folders_light(&connection).unwrap_or_default();
+            let display_mode = sidebar::FolderDisplayMode::from_setting(
+                db::setting(&connection, sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY)
+                    .ok().flatten().as_deref(),
+            );
+            sort_folder_stream(&mut photos, &folders, sort, display_mode);
+            crate::source::net_trace(format!(
+                "grid_share_scoped op={op} count={}", photos.len()
+            ));
+            let _ = sender.send(GridPayload::Share(photos));
+            return;
+        }
 
         if folder_stream {
             // Picasa-style Folder mode is a single continuous stream. The
@@ -163,6 +280,20 @@ fn refresh_grid_inner(
     let gallery = gallery.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(25), move || {
         match receiver.try_recv() {
+            Ok(GridPayload::Share(photos)) => {
+                if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
+                    crate::source::net_trace(format!(
+                        "grid_share_replace op={op} count={}", photos.len()
+                    ));
+                    gallery.invalidate_folder_cache();
+                    // The share snapshot is the COMPLETE requested view; do not
+                    // prewarm/swap in a library-wide stream behind it.
+                    gallery.replace_scoped_folder(&photos);
+                    crate::source::net_trace(format!("grid_share_ready op={op}"));
+                }
+                crate::source::clear_trace_op_after(op);
+                glib::ControlFlow::Break
+            }
             Ok(GridPayload::Scoped(photos)) => {
                 if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
                     crate::source::net_trace(format!(
@@ -660,5 +791,30 @@ mod photo_action_tests {
             sorted_paths(SortField::DateAdded, SortDirection::Ascending),
             ["/photos/m.jpg", "/photos/z.jpg", "/photos/A.jpg"]
         );
+    }
+}
+
+#[cfg(test)]
+mod network_share_path_regression_tests {
+    use super::path_belongs_to_share;
+
+    #[test]
+    fn matches_gvfs_photos_under_uri_share() {
+        let root = "smb://DietPi.local:445/4TBS/Spar%20Ladies%202025";
+        assert!(path_belongs_to_share(root,
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbs/Spar Ladies 2025/FB-Spar Womens-ToUpload/p.jpg"));
+        assert!(path_belongs_to_share("smb://dietpi.local/4tbp/ImmichLibrary",
+            "smb://dietpi.local/4tbp/ImmichLibrary/2025/p.jpg"));
+    }
+
+    #[test]
+    fn excludes_other_shares_and_prefix_collisions() {
+        let root = "smb://dietpi.local/4tbs/series-kids";
+        assert!(!path_belongs_to_share(root,
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbs/series-kids-old/p.jpg"));
+        assert!(!path_belongs_to_share(root,
+            "/run/user/1000/gvfs/smb-share:server=other.local,share=4tbs/series-kids/p.jpg"));
+        assert!(!path_belongs_to_share(root,
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbp/series-kids/p.jpg"));
     }
 }
