@@ -38,15 +38,11 @@ impl CacheStats {
     }
 }
 
-/// The cache paths every current (non-trashed) library photo expects in the
-/// cache directory. Keys are derived purely from database fingerprints, so a
-/// photo whose original is offline right now still owns its thumbnail and
-/// survives a cleanup.
-pub fn valid_cache_paths(connection: &Connection) -> Result<HashSet<PathBuf>> {
-    valid_cache_paths_in(&cache_dir()?, connection)
-}
-
-fn valid_cache_paths_in(directory: &Path, connection: &Connection) -> Result<HashSet<PathBuf>> {
+/// The cache file names every current (non-trashed) library photo expects.
+/// Validity is keyed on the file NAME, not its full path: cache keys are
+/// globally unique, so a thumbnail remains valid no matter which shard layout
+/// generation (or legacy flat directory) it currently sits in.
+pub fn valid_cache_names(connection: &Connection) -> Result<HashSet<String>> {
     let mut statement =
         connection.prepare("SELECT path, mtime, size_bytes FROM photos WHERE trashed = 0")?;
     let rows = statement.query_map([], |row| {
@@ -59,24 +55,19 @@ fn valid_cache_paths_in(directory: &Path, connection: &Connection) -> Result<Has
     Ok(rows
         .map(|row| {
             let (path, mtime, size_bytes) = row?;
-            let file_name = cache_file_name(&path, mtime, size_bytes);
-            Ok(shard_dir_in(&directory.join("files"), &file_name).join(file_name))
+            Ok(cache_file_name(&path, mtime, size_bytes))
         })
         .collect::<rusqlite::Result<HashSet<_>>>()?)
 }
 
-/// The materialized remote source files the current library still needs,
+/// The materialized remote source file names the current library still needs,
 /// keyed exactly like `source::materialize` derives them: blake3 over the
 /// normalized reference, with the reference's extension. Files whose names do
 /// not decode to that key shape (foreign files) are never pruned.
-pub fn valid_source_paths(connection: &Connection) -> Result<HashSet<PathBuf>> {
-    valid_source_paths_in(&sources_dir()?, connection)
-}
-
-fn valid_source_paths_in(sources_root: &Path, connection: &Connection) -> Result<HashSet<PathBuf>> {
+pub fn valid_source_names(connection: &Connection) -> Result<HashSet<String>> {
     let mut statement = connection.prepare("SELECT path FROM photos WHERE trashed = 0")?;
     let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    let mut paths = HashSet::new();
+    let mut names = HashSet::new();
     for row in rows {
         let reference = crate::smb_transport::normalize_smb_reference(&row?);
         let mut hasher = blake3::Hasher::new();
@@ -86,125 +77,141 @@ fn valid_source_paths_in(sources_root: &Path, connection: &Connection) -> Result
             .extension()
             .and_then(|value| value.to_str())
             .unwrap_or("raw");
-        let file_name = format!("{stem}.{extension}");
-        paths.insert(shard_dir_in(sources_root, &file_name).join(file_name));
+        names.insert(format!("{stem}.{extension}"));
     }
-    Ok(paths)
+    Ok(names)
 }
 
 /// Delete thumbnails the current library no longer references.
 ///
-/// Only `.jpg`/`.failed` files inside the cache shards are considered, and a
-/// file is removed only when its cache key matches no current photo. Empty
-/// shard directories are pruned afterwards. Stale `.failed` markers go with
+/// Both the legacy flat directory and the cache shards are swept; a `.jpg`
+/// file is removed only when its cache-key name matches no current photo, so
+/// valid thumbnails are safe in any layout. Stale `.failed` markers go with
 /// their keys; a marker whose key is still current stays so known-bad sources
-/// keep being suppressed. Unrelated files and the originals are never touched.
-pub fn cleanup_cache(valid: &HashSet<PathBuf>) -> Result<CacheCleanup> {
+/// keep being suppressed. Empty shard directories are pruned afterwards.
+/// Unrelated files and the originals are never touched.
+pub fn cleanup_cache(valid: &HashSet<String>) -> Result<CacheCleanup> {
     // A thumbnail being generated right now may not be part of the key
     // snapshot yet. Both registries cover every `create()` destination that
     // can be mid-write, so reserve them instead of racing the workers.
-    let reserved = currently_generating_cache_paths();
+    let reserved: HashSet<String> = currently_generating_cache_paths()
+        .iter()
+        .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
+        .map(str::to_owned)
+        .collect();
     cleanup_cache_in(&cache_dir()?, valid, &reserved)
 }
 
 fn cleanup_cache_in(
     directory: &Path,
-    valid: &HashSet<PathBuf>,
-    reserved: &HashSet<PathBuf>,
+    valid: &HashSet<String>,
+    reserved: &HashSet<String>,
 ) -> Result<CacheCleanup> {
     let mut cleanup = CacheCleanup::default();
+    // Legacy flat-layout files first: any pre-sharding thumbnail still sits
+    // directly in the cache root.
+    sweep_cache_files(directory, valid, reserved, &mut cleanup)?;
     let files_root = directory.join("files");
     for shard in read_dir_entries(&files_root)? {
         if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
             continue;
         }
         let shard_path = shard.path();
-        for entry in read_dir_entries(&shard_path)? {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            // Only regular files are candidates; nested directories that
-            // merely carry a thumbnail-looking name are left alone.
-            if !file_type.is_file() {
-                continue;
-            }
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if name.ends_with(".jpg") {
-                if valid.contains(&path) || reserved.contains(&path) {
-                    cleanup.valid += 1;
-                } else {
-                    // Read the size before the file disappears; DirEntry::metadata
-                    // no longer resolves once the entry is deleted.
-                    let bytes = entry_len(&entry);
-                    if fs::remove_file(&path).is_ok() {
-                        cleanup.removed += 1;
-                        cleanup.bytes_freed += bytes;
-                    }
-                }
-            } else if name.ends_with(".failed") {
-                let thumbnail = path.with_extension("jpg");
-                if !valid.contains(&thumbnail) && !reserved.contains(&thumbnail) {
-                    let bytes = entry_len(&entry);
-                    if fs::remove_file(&path).is_ok() {
-                        cleanup.bytes_freed += bytes;
-                    }
-                }
-            }
-        }
+        sweep_cache_files(&shard_path, valid, reserved, &mut cleanup)?;
         // Drop shards this pass emptied so the bucket count reflects use.
         let _ = fs::remove_dir(&shard_path);
     }
     Ok(cleanup)
 }
 
-/// Measure the cache directory against the current photo cache keys.
-pub fn cache_stats(valid: &HashSet<PathBuf>) -> Result<CacheStats> {
-    cache_stats_in(&cache_dir()?, valid)
-}
-
-fn cache_stats_in(directory: &Path, valid: &HashSet<PathBuf>) -> Result<CacheStats> {
-    let mut stats = CacheStats {
-        required: valid.len() as u64,
-        ..CacheStats::default()
-    };
-    let files_root = directory.join("files");
-    for shard in read_dir_entries(&files_root)? {
-        if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+/// One directory of candidate thumbnail/marker files, shard or flat.
+fn sweep_cache_files(
+    directory: &Path,
+    valid: &HashSet<String>,
+    reserved: &HashSet<String>,
+    cleanup: &mut CacheCleanup,
+) -> Result<()> {
+    for entry in read_dir_entries(directory)? {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        // Only regular files are candidates; nested directories that merely
+        // carry a thumbnail-looking name are left alone.
+        if !file_type.is_file() {
             continue;
         }
-        for entry in read_dir_entries(&shard.path())? {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if !file_type.is_file() {
-                continue;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".jpg") {
+            if valid.contains(name) || reserved.contains(name) {
+                cleanup.valid += 1;
+            } else {
+                // Read the size before the file disappears; DirEntry::metadata
+                // no longer resolves once the entry is deleted.
+                let bytes = entry_len(&entry);
+                if fs::remove_file(&path).is_ok() {
+                    cleanup.removed += 1;
+                    cleanup.bytes_freed += bytes;
+                }
             }
-            let path = entry.path();
-            stats.bytes += entry_len(&entry);
-            let is_jpg = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(".jpg"));
-            if is_jpg {
-                stats.cached += 1;
-                if valid.contains(&path) {
-                    stats.referenced += 1;
+        } else if name.ends_with(".failed") {
+            let thumbnail = Path::new(name)
+                .with_extension("jpg")
+                .to_string_lossy()
+                .into_owned();
+            if !valid.contains(thumbnail.as_str()) && !reserved.contains(thumbnail.as_str()) {
+                let bytes = entry_len(&entry);
+                if fs::remove_file(&path).is_ok() {
+                    cleanup.bytes_freed += bytes;
                 }
             }
         }
     }
+    Ok(())
+}
+
+/// Measure the cache directory against the current photo cache keys.
+pub fn cache_stats(valid: &HashSet<String>) -> Result<CacheStats> {
+    cache_stats_in(&cache_dir()?, valid)
+}
+
+fn cache_stats_in(directory: &Path, valid: &HashSet<String>) -> Result<CacheStats> {
+    let mut stats = CacheStats {
+        required: valid.len() as u64,
+        ..CacheStats::default()
+    };
+    let mut measure = |subdirectory: &Path| -> Result<()> {
+        for entry in read_dir_entries(subdirectory)? {
+            if !entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+                continue;
+            }
+            stats.bytes += entry_len(&entry);
+            let is_jpg = entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.ends_with(".jpg"));
+            if is_jpg {
+                stats.cached += 1;
+                if entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| valid.contains(name))
+                {
+                    stats.referenced += 1;
+                }
+            }
+        }
+        Ok(())
+    };
     // Legacy flat-layout files migrate on first access; anything left there
     // still counts so the numbers do not silently shrink mid-migration.
-    for entry in read_dir_entries(directory)? {
-        if entry
-            .file_type()
-            .map(|kind| kind.is_file())
-            .unwrap_or(false)
-        {
-            stats.bytes += entry_len(&entry);
+    measure(directory)?;
+    let files_root = directory.join("files");
+    for shard in read_dir_entries(&files_root)? {
+        if shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            measure(&shard.path())?;
         }
     }
     if let Ok(source_bytes) = source_dir_bytes(directory) {
@@ -221,11 +228,8 @@ fn source_dir_bytes(directory: &Path) -> Result<u64> {
         .map(|parent| parent.join("source"))
         .unwrap_or_else(|| directory.join("source"));
     let mut total = 0;
-    for shard in read_dir_entries(&sources_root)? {
-        if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        for entry in read_dir_entries(&shard.path())? {
+    let mut measure = |subdirectory: &Path| -> Result<()> {
+        for entry in read_dir_entries(subdirectory)? {
             if entry
                 .file_type()
                 .map(|kind| kind.is_file())
@@ -234,6 +238,13 @@ fn source_dir_bytes(directory: &Path) -> Result<u64> {
                 total += entry_len(&entry);
             }
         }
+        Ok(())
+    };
+    measure(&sources_root)?;
+    for shard in read_dir_entries(&sources_root)? {
+        if shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            measure(&shard.path())?;
+        }
     }
     Ok(total)
 }
@@ -241,16 +252,35 @@ fn source_dir_bytes(directory: &Path) -> Result<u64> {
 /// Delete materialized remote sources the current library no longer
 /// references. Aggressive by design: a source can be re-materialized from the
 /// original share at any time, and these multi-megabyte files dominate the
-/// cache. Foreign/unknown files are never touched.
-pub fn cleanup_sources(valid: &HashSet<PathBuf>) -> Result<CacheCleanup> {
+/// cache. Foreign/unknown files are never touched. Validity is keyed on the
+/// file name, so a referenced source survives in any layout.
+pub fn cleanup_sources(valid: &HashSet<String>) -> Result<CacheCleanup> {
     cleanup_source_cache_in(&sources_dir()?, valid)
 }
 
-fn cleanup_source_cache_in(sources_root: &Path, valid: &HashSet<PathBuf>) -> Result<CacheCleanup> {
+fn cleanup_source_cache_in(sources_root: &Path, valid: &HashSet<String>) -> Result<CacheCleanup> {
     let mut cleanup = CacheCleanup::default();
     // Legacy flat-layout files (pre-sharding): a referenced one is kept for
     // lazy migration on next use, an unreferenced one is garbage.
-    for entry in read_dir_entries(sources_root)? {
+    sweep_source_files(sources_root, valid, &mut cleanup)?;
+    for shard in read_dir_entries(sources_root)? {
+        if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let shard_path = shard.path();
+        sweep_source_files(&shard_path, valid, &mut cleanup)?;
+        let _ = fs::remove_dir(&shard_path);
+    }
+    Ok(cleanup)
+}
+
+/// One directory of candidate source files, shard or flat.
+fn sweep_source_files(
+    directory: &Path,
+    valid: &HashSet<String>,
+    cleanup: &mut CacheCleanup,
+) -> Result<()> {
+    for entry in read_dir_entries(directory)? {
         if !entry
             .file_type()
             .map(|kind| kind.is_file())
@@ -259,10 +289,11 @@ fn cleanup_source_cache_in(sources_root: &Path, valid: &HashSet<PathBuf>) -> Res
             continue;
         }
         let path = entry.path();
-        let Some(key) = source_key(path.file_name().and_then(|name| name.to_str())) else {
+        // Only exact cache-key shapes are prunable; unknown names stay.
+        let Some(key) = source_key(entry.file_name().to_str()) else {
             continue;
         };
-        if valid.contains(&sources_root.join(&key)) {
+        if valid.contains(key.as_str()) {
             continue;
         }
         let bytes = entry_len(&entry);
@@ -271,36 +302,7 @@ fn cleanup_source_cache_in(sources_root: &Path, valid: &HashSet<PathBuf>) -> Res
             cleanup.bytes_freed += bytes;
         }
     }
-    for shard in read_dir_entries(sources_root)? {
-        if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let shard_path = shard.path();
-        for entry in read_dir_entries(&shard_path)? {
-            if !entry
-                .file_type()
-                .map(|kind| kind.is_file())
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            let path = entry.path();
-            // Only exact cache-key shapes are prunable; unknown names stay.
-            let Some(key) = source_key(path.file_name().and_then(|name| name.to_str())) else {
-                continue;
-            };
-            if valid.contains(&shard_path.join(&key)) {
-                continue;
-            }
-            let bytes = entry_len(&entry);
-            if fs::remove_file(&path).is_ok() {
-                cleanup.removed += 1;
-                cleanup.bytes_freed += bytes;
-            }
-        }
-        let _ = fs::remove_dir(&shard_path);
-    }
-    Ok(cleanup)
+    Ok(())
 }
 
 /// Reconstruct the deterministic part of a source cache file name: 64 hex
@@ -449,12 +451,12 @@ mod cleanup_tests {
             path
         }
 
-        fn valid_paths(&self) -> HashSet<PathBuf> {
-            valid_cache_paths_in(&self.directory, &self.connection).unwrap()
+        fn valid_names(&self) -> HashSet<String> {
+            valid_cache_names(&self.connection).unwrap()
         }
 
         fn clean(&self) -> CacheCleanup {
-            cleanup_cache_in(&self.directory, &self.valid_paths(), &HashSet::new()).unwrap()
+            cleanup_cache_in(&self.directory, &self.valid_names(), &HashSet::new()).unwrap()
         }
     }
 
@@ -617,9 +619,9 @@ mod cleanup_tests {
             .unwrap();
 
         let sources_root = fixture.directory.join("source");
-        let valid = valid_source_paths_in(&sources_root, &fixture.connection).unwrap();
+        let valid = valid_source_names(&fixture.connection).unwrap();
         assert_eq!(valid.len(), 1);
-        let referenced_key = valid.iter().next().unwrap().file_name().unwrap();
+        let referenced_name = valid.iter().next().unwrap().clone();
         let stale_stem = {
             let mut hasher = blake3::Hasher::new();
             hasher.update("smb://host/share/stale.NEF".as_bytes());
@@ -628,11 +630,7 @@ mod cleanup_tests {
         let stale_name = format!("{stale_stem}.NEF");
         let foreign_name = "172e0c6c-not-a-key.txt";
 
-        for name in [
-            referenced_key.to_str().unwrap(),
-            stale_name.as_str(),
-            foreign_name,
-        ] {
+        for name in [referenced_name.as_str(), stale_name.as_str(), foreign_name] {
             let path = shard_dir_in(&sources_root, name).join(name);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, b"source bytes").unwrap();
@@ -640,7 +638,7 @@ mod cleanup_tests {
 
         let cleanup = cleanup_source_cache_in(&sources_root, &valid).unwrap();
 
-        let referenced = valid.iter().next().unwrap().clone();
+        let referenced = shard_dir_in(&sources_root, &referenced_name).join(&referenced_name);
         assert!(referenced.is_file(), "referenced source must survive");
         assert_eq!(cleanup.removed, 1, "only the stale source is pruned");
         let stale_path = shard_dir_in(&sources_root, &stale_name).join(&stale_name);
@@ -648,6 +646,48 @@ mod cleanup_tests {
         let foreign_path = shard_dir_in(&sources_root, foreign_name).join(foreign_name);
         assert!(foreign_path.exists(), "foreign files are never pruned");
         assert!(cleanup.bytes_freed > 0);
+    }
+
+    #[test]
+    fn shard_folders_are_single_alphanumeric_characters() {
+        // Deterministic mapping into the 0-9 / a-z alphabet.
+        let name = "3f9a1c2d00000000000000000000000000000000000000000000000000000000.jpg";
+        let folder = cache_shard_char(name).unwrap();
+        assert!(folder.is_ascii_alphanumeric());
+        assert_eq!(folder, cache_shard_char(name).unwrap());
+
+        // Every bucket the hash space can produce is a valid folder name, and
+        // a synthetic spread of keys covers essentially all of them.
+        let mut buckets = HashSet::new();
+        for index in 0..2000u64 {
+            // Vary the leading four hex chars (the sampled prefix) across the
+            // whole u16 range, with a scattered tail for realism.
+            let name = format!(
+                "{:04x}{:060x}.jpg",
+                index & 0xffff,
+                index.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            );
+            let folder = cache_shard_char(&name).expect("hex key yields a folder");
+            assert!(folder.is_ascii_alphanumeric(), "{folder} not 0-9a-z");
+            buckets.insert(folder);
+        }
+        assert_eq!(buckets.len(), 36, "spread covered only {buckets:?}");
+
+        // Foreign names have no hex prefix and land in 'misc'.
+        assert_eq!(cache_shard_char("notes.txt"), None);
+    }
+
+    #[test]
+    fn shard_folders_are_derived_from_the_key_not_the_directory() {
+        let fixture = Fixture::new();
+        let name = fixture.thumbnail_name("/photos/a.jpg", Some(1), Some(2));
+        let shard = shard_dir_in(&fixture.directory.join("files"), &name);
+        let shard_name = shard.file_name().and_then(|name| name.to_str()).unwrap();
+        assert_eq!(shard_name.len(), 1);
+        assert!(shard_name.chars().next().unwrap().is_ascii_alphanumeric());
+        // A single-character shard is also distinct from a hash prefix: 'misc'
+        // stays reserved for foreign names.
+        assert_ne!(shard_name, "misc");
     }
 
     #[test]
@@ -727,7 +767,7 @@ mod cleanup_tests {
         let fixture = Fixture::new();
         fixture.add_photo("/photos/a.jpg", Some(1), Some(2));
         fixture.add_photo("/photos/b.jpg", Some(3), Some(4));
-        let valid = fixture.valid_paths();
+        let valid = fixture.valid_names();
         let referenced = fixture.write(
             &fixture.thumbnail_name("/photos/a.jpg", Some(1), Some(2)),
             b"a",

@@ -89,14 +89,25 @@ pub fn shard_dir_for(file_name: &str) -> Result<PathBuf> {
     Ok(shard_dir_in(&cache_dir()?.join("files"), file_name))
 }
 
-/// The shard directory for `file_name` under a shard root: the first two hex
-/// characters of the key (256 buckets), or `misc` for foreign names.
+/// The shard directory for `file_name` under a shard root: one alphanumeric
+/// folder (`0-9`, `a-z`, 36 buckets) derived from the first four hex chars of
+/// the cache key, or `misc` for foreign names.
 fn shard_dir_in(shard_root: &Path, file_name: &str) -> PathBuf {
-    let prefix = file_name
-        .get(..2)
-        .filter(|prefix| prefix.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .unwrap_or("misc");
-    shard_root.join(prefix)
+    let folder = match cache_shard_char(file_name) {
+        Some(folder) => folder.to_string(),
+        None => "misc".to_string(),
+    };
+    shard_root.join(folder)
+}
+
+/// The alphanumeric shard folder for a cache file name. Hash keys are hex, so
+/// the first four characters (u16) are the widest cheap sample; `% 36` spreads
+/// them over `0-9a-z` with at most a 0.05% bucket-size skew (65536 % 36 = 16).
+pub fn cache_shard_char(file_name: &str) -> Option<char> {
+    const SHARDS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let prefix = file_name.get(..4)?;
+    let value = u16::from_str_radix(prefix, 16).ok()?;
+    Some(SHARDS[(value % 36) as usize] as char)
 }
 
 /// Materialized remote RAW sources: a sibling of the thumbnail directory, not

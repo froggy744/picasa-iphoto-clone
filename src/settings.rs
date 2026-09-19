@@ -470,7 +470,7 @@ fn library_page(
             clean_status.set_text("Cleaning thumbnail cache…");
             // The database connection is main-thread only, so build the
             // expected key sets here and let a worker do the file work.
-            let valid = match crate::thumbnail::valid_cache_paths(&connection.borrow()) {
+            let valid = match crate::thumbnail::valid_cache_names(&connection.borrow()) {
                 Ok(valid) => valid,
                 Err(error) => {
                     eprintln!("Could not collect thumbnail cache keys: {error:#}");
@@ -480,7 +480,7 @@ fn library_page(
                     return;
                 }
             };
-            let valid_sources = match crate::thumbnail::valid_source_paths(&connection.borrow()) {
+            let valid_sources = match crate::thumbnail::valid_source_names(&connection.borrow()) {
                 Ok(valid) => valid,
                 Err(error) => {
                     eprintln!("Could not collect source cache keys: {error:#}");
@@ -650,7 +650,7 @@ fn refresh_thumbnail_cache_stats(
     unused: gtk::Label,
     size: gtk::Label,
 ) {
-    let valid = match crate::thumbnail::valid_cache_paths(&connection.borrow()) {
+    let valid = match crate::thumbnail::valid_cache_names(&connection.borrow()) {
         Ok(valid) => valid,
         Err(error) => {
             eprintln!("Could not collect thumbnail cache keys: {error:#}");
