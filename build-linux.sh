@@ -527,9 +527,11 @@ fi
 
 # Flatpak redirects XDG_DATA_HOME to \$HOME/.var/app/<app-id>/data by default,
 # which would silently open a separate library. Keep the same library database
-# as the native build so shares opened in either mode stay in sync.
+# and thumbnail cache as the native build so shares opened in either mode stay
+# in sync.
 if [ -n "\${FLATPAK_ID:-}" ]; then
     export XDG_DATA_HOME="\$HOME/.local/share"
+    export XDG_CACHE_HOME="\$HOME/.cache"
 fi
 
 cd "\$PREFIX/share/$BIN_NAME"
