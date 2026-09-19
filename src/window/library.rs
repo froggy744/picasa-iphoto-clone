@@ -2,6 +2,8 @@ use std::sync::mpsc::TryRecvError;
 
 static REFRESH_GENERATION: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+static SHARE_READY_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// Invalidate any asynchronous grid result or delayed folder destination from
 /// an older navigation. Folder-to-folder reuse does not start a new database
@@ -289,6 +291,7 @@ fn refresh_grid_inner(
                     // The share snapshot is the COMPLETE requested view; do not
                     // prewarm/swap in a library-wide stream behind it.
                     gallery.replace_scoped_folder(&photos);
+                    SHARE_READY_GENERATION.store(generation, std::sync::atomic::Ordering::Relaxed);
                     crate::source::net_trace(format!("grid_share_ready op={op}"));
                 }
                 crate::source::clear_trace_op_after(op);

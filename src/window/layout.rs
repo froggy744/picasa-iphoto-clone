@@ -67,10 +67,14 @@
             // folder should be a scroll operation, not another database query
             // and model rebuild. An active global search is the exception: its
             // grid model is not the Folder stream, so it must be reloaded.
-            let reuse_folder_stream = can_reuse_folder_stream_for_destination(
-                folder_target.as_ref().is_some_and(|(_, path)| !crate::source::is_network_location(path)),
-                gallery.can_restore_folder_cache(),
-            );
+            let network_destination = folder_target.as_ref().is_some_and(|(_, path)| {
+                crate::source::is_network_location(path)
+            });
+            let reuse_folder_stream = !network_destination
+                && can_reuse_folder_stream_for_destination(
+                    folder_target.is_some(),
+                    gallery.can_restore_folder_cache(),
+                );
 
             if let Some(source) = debounce.borrow_mut().take() {
                 source.remove();
@@ -114,6 +118,18 @@
             }
             main_stack.set_visible_child_name("photos");
             apply_gallery_grouping(&gallery, new_filter, sort.get(), group_mode.get());
+            if network_destination {
+                // For a network photo, the exact destination is the scoped
+                // registered share, never the 73k-photo local Folder stream.
+                if let Some((folder_id, folder_path)) = folder_target {
+                    refresh_grid_to_folder(
+                        &connection, new_filter, "", sort.get(), &gallery,
+                        folder_id, folder_path,
+                    );
+                    crate::source::net_trace("apply_filter_done network_share_scoped");
+                }
+                return;
+            }
             match folder_destination_plan(exact_photo_target, reuse_folder_stream) {
                 FolderDestinationPlan::ReuseWithoutFolderScroll => {
                     // Open in Folder will select/scroll the exact photo below.
@@ -174,10 +190,16 @@
         let destination_click_with_target = destination_click_with_target.clone();
         let sidebar_selection = sidebar_selection_slot.clone();
         let gallery = gallery.clone();
+        let connection = connection.clone();
         let exact_target = open_in_folder_exact_target.clone();
         Rc::new(move |folder_id, photo_id| {
             exact_target.set(Some(photo_id));
+            let is_network_share = db::folder_path_by_id(&connection.borrow(), folder_id)
+                .ok().flatten().is_some_and(|path| crate::source::is_network_location(&path));
             destination_click_with_target(sidebar::SidebarFilter::Folder(folder_id), true);
+            let expected_share_generation = is_network_share.then(|| {
+                REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+            });
             let gallery = gallery.clone();
             let exact_target_for_timer = exact_target.clone();
             let attempts = Rc::new(Cell::new(0u32));
@@ -185,7 +207,10 @@
             glib::timeout_add_local(Duration::from_millis(25), move || {
                 let attempt = attempts_for_timer.get() + 1;
                 attempts_for_timer.set(attempt);
-                let building = gallery.stream_building();
+                let share_pending = expected_share_generation.is_some_and(|generation| {
+                    SHARE_READY_GENERATION.load(std::sync::atomic::Ordering::Relaxed) != generation
+                });
+                let building = gallery.stream_building() || share_pending;
                 let revealed = if building {
                     false
                 } else {
@@ -211,7 +236,11 @@
             if let Some(sidebar) = sidebar_selection.borrow().as_ref().cloned() {
                 // scroll_to_folder() already retries internally if Tree mode or
                 // ancestor expansion is required. Do not hammer it 24 times.
-                sidebar::scroll_to_folder(&sidebar, folder_id);
+                if is_network_share {
+                    sidebar::scroll_to_network_share(&sidebar, folder_id);
+                } else {
+                    sidebar::scroll_to_folder(&sidebar, folder_id);
+                }
             }
         })
     }));

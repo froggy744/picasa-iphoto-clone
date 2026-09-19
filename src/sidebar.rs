@@ -1,8 +1,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::time::Duration;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -42,6 +42,61 @@ impl FolderDisplayMode {
 }
 
 pub const FOLDER_DISPLAY_MODE_SETTING_KEY: &str = "folder-display-mode";
+
+/// Photo/source routing for the context menu. A GVfs FUSE path is a network
+/// source even though it is an absolute path; regular /mnt and /run/media
+/// mounts remain local.
+pub(crate) fn is_network_photo_path(path: &str) -> bool {
+    if crate::db::is_remote_path(path) {
+        return true;
+    }
+    let parts = path.split('/').collect::<Vec<_>>();
+    parts.len() >= 5
+        && parts[0].is_empty()
+        && parts[1] == "run"
+        && parts[2] == "user"
+        && parts[3].parse::<u32>().is_ok()
+        && parts[4] == "gvfs"
+}
+
+/// Only physical/local filesystem folders belong in Folders. Network share
+/// photos indexed via GVfs have absolute FUSE paths, but these are still
+/// network-backed and must not create a second folder tree in the local pane.
+/// Ordinary mounts such as /mnt/4TBP and /run/media/peet/... remain local.
+fn is_local_sidebar_folder(folder: &Folder) -> bool {
+    let path = folder.path.as_str();
+    if crate::db::is_remote_path(path) {
+        return false;
+    }
+    // GVfs's FUSE root is /run/user/UID/gvfs; exclude both the root and
+    // its children (including smb-share:, sftp:, etc.). Filter by mount
+    // location, not an SMB-specific name, to cover every network protocol.
+    let parts = path.split('/').collect::<Vec<_>>();
+    if parts.len() >= 5
+        && parts[0].is_empty()
+        && parts[1] == "run"
+        && parts[2] == "user"
+        && parts[3].parse::<u32>().is_ok()
+        && parts[4] == "gvfs"
+    {
+        return false;
+    }
+    // A scan may have created synthetic /run/user/UID ancestors purely for
+    // GVfs photos. They are not useful local photo sources. Explicitly
+    // imported local roots are still allowed (but never GVfs itself).
+    if !folder.imported_root
+        && (path == "/run"
+            || path == "/run/user"
+            || (parts.len() == 4
+                && parts[0].is_empty()
+                && parts[1] == "run"
+                && parts[2] == "user"
+                && parts[3].parse::<u32>().is_ok()))
+    {
+        return false;
+    }
+    true
+}
 
 #[derive(Debug)]
 struct SidebarState {
@@ -943,7 +998,7 @@ pub fn refresh_folder_rows(
     // Folders tree stays strictly local.
     let local_folders: Vec<Folder> = folders
         .iter()
-        .filter(|folder| !crate::db::is_remote_path(&folder.path))
+        .filter(|folder| is_local_sidebar_folder(folder))
         .cloned()
         .collect();
     populate_folders(&folder_list, &local_folders, &state, on_unavailable);
@@ -958,6 +1013,11 @@ pub fn append_folder(
     folder: &Folder,
     on_unavailable: Rc<dyn Fn()>,
 ) {
+    // Network scan events must never append GVfs or remote URI folders into
+    // the local pane, even temporarily before the next full refresh.
+    if !is_local_sidebar_folder(folder) {
+        return;
+    }
     let Some(state) = sidebar_state(scrolled) else {
         return;
     };
@@ -1096,7 +1156,7 @@ fn row_for_filter(list: &gtk::ListBox, filter: SidebarFilter) -> Option<gtk::Lis
         if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
             let matches = unsafe {
                 row.data::<SidebarFilter>("picasa-filter")
-                    .is_some_and(|value| *value.as_ref() == filter)
+                    .is_some_and(|value| unsafe { *value.as_ref() == filter })
             };
             if matches {
                 return Some(row);
@@ -1259,6 +1319,9 @@ pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) 
     if let Some(folder_list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) {
         folder_list.unselect_all();
     }
+    if let Some(share_list) = stored_widget::<gtk::ListBox>(scrolled, SHARE_LIST_KEY) {
+        share_list.unselect_all();
+    }
 
     match filter {
         SidebarFilter::All | SidebarFilter::Favorites | SidebarFilter::RecentlyAdded => {
@@ -1269,7 +1332,30 @@ pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) 
             select_matching_row(scrolled, ALBUM_LIST_KEY, filter);
         }
         SidebarFilter::Folder(_) => {
-            select_matching_row(scrolled, FOLDER_LIST_KEY, filter);
+            let shares = stored_widget::<gtk::ListBox>(scrolled, SHARE_LIST_KEY);
+            let is_share = shares.as_ref().is_some_and(|list| {
+                let mut child = list.first_child();
+                while let Some(widget) = child {
+                    if let Ok(row) = widget.clone().downcast::<gtk::ListBoxRow>() {
+                        if unsafe { row.data::<SidebarFilter>("picasa-filter") }
+                            .is_some_and(|value| unsafe { *value.as_ref() == filter })
+                        {
+                            return true;
+                        }
+                    }
+                    child = widget.next_sibling();
+                }
+                false
+            });
+            select_matching_row(
+                scrolled,
+                if is_share {
+                    SHARE_LIST_KEY
+                } else {
+                    FOLDER_LIST_KEY
+                },
+                filter,
+            );
         }
     }
     syncing.set(false);
@@ -1295,6 +1381,71 @@ fn restore_folder_scroll(scrolled: &gtk::ScrolledWindow, value: Option<f64>) {
         let adjustment = folder_scroll.vadjustment();
         let max_value = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
         adjustment.set_value(value.clamp(adjustment.lower(), max_value));
+    });
+}
+
+/// Select the independently registered Network Shares row without entering
+/// the local Folders tree or invoking a second gallery navigation.
+pub fn scroll_to_network_share(scrolled: &gtk::ScrolledWindow, share_id: i64) {
+    let Some(list) = stored_widget::<gtk::ListBox>(scrolled, SHARE_LIST_KEY) else {
+        return;
+    };
+    let Some(row) = (|| {
+        let mut child = list.first_child();
+        while let Some(widget) = child {
+            let next = widget.next_sibling();
+            if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+                if unsafe { row.data::<SidebarFilter>("picasa-filter") }
+                    .is_some_and(|f| unsafe { *f.as_ref() == SidebarFilter::Folder(share_id) })
+                {
+                    return Some(row);
+                }
+            }
+            child = next;
+        }
+        None
+    })() else {
+        return;
+    };
+    // set_active_filter selects this row with selection callbacks suppressed.
+    set_active_filter(scrolled, SidebarFilter::Folder(share_id));
+    // Explicitly scroll the Network Shares row into view. Focus alone is not
+    // sufficient when the local Folders pane has its own scroll adjustment.
+    let sidebar = scrolled.clone();
+    glib::idle_add_local_once(move || {
+        let Some(list) = stored_widget::<gtk::ListBox>(&sidebar, SHARE_LIST_KEY) else {
+            return;
+        };
+        let Some(folder_scroll) = stored_widget::<gtk::ScrolledWindow>(&sidebar, FOLDER_SCROLL_KEY) else {
+            return;
+        };
+        let mut child = list.first_child();
+        while let Some(widget) = child {
+            let next = widget.next_sibling();
+            if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+                let matches = unsafe { row.data::<SidebarFilter>("picasa-filter") }
+                    .is_some_and(|filter| unsafe { *filter.as_ref() == SidebarFilter::Folder(share_id) });
+                if matches {
+                    let scroll_widget = folder_scroll.clone().upcast::<gtk::Widget>();
+                    if let Some(point) = row.compute_point(
+                        &scroll_widget, &gtk::graphene::Point::new(0.0, 0.0),
+                    ) {
+                        let adjustment = folder_scroll.vadjustment();
+                        let target = adjustment.value() + f64::from(point.y())
+                            - adjustment.page_size() / 3.0;
+                        let maximum = (adjustment.upper() - adjustment.page_size())
+                            .max(adjustment.lower());
+                        adjustment.set_value(target.clamp(adjustment.lower(), maximum));
+                    }
+                    row.grab_focus();
+                    crate::source::net_trace(format!(
+                        "network_share_sidebar_focus folder={share_id} scrolled=true"
+                    ));
+                    break;
+                }
+            }
+            child = next;
+        }
     });
 }
 
@@ -1543,8 +1694,8 @@ fn connect_filter_list(
             // Share rows carry the op generated by their capture-phase press
             // gesture. Every other row (and keyboard activation) starts a fresh
             // op here so each click -> gallery interaction has a distinct id.
-            let stored = unsafe { row.data::<u64>("picasa-trace-op") }
-                .map(|op| unsafe { *op.as_ref() });
+            let stored =
+                unsafe { row.data::<u64>("picasa-trace-op") }.map(|op| unsafe { *op.as_ref() });
             if let Some(op) = stored {
                 crate::source::set_trace_op(op);
             } else if std::env::var_os("PICASA_TRACE").is_some() {
@@ -1643,23 +1794,14 @@ fn populate_folders(
     state: &Rc<RefCell<SidebarState>>,
     on_unavailable: &Rc<dyn Fn()>,
 ) {
-    // Registered network shares live in their own sidebar section; the local
-    // Folders tree never mixes URI sources in. refresh_folder_rows filters
-    // before calling, but the initial build() path passes the full list.
-    let folders_owned;
-    let folders = if folders
+    // Filter for every rebuild path, not just refresh_folder_rows(): startup,
+    // change-of-view and scan events all pass through this function.
+    let local_folders: Vec<Folder> = folders
         .iter()
-        .any(|folder| crate::db::is_remote_path(&folder.path))
-    {
-        folders_owned = folders
-            .iter()
-            .filter(|folder| !crate::db::is_remote_path(&folder.path))
-            .cloned()
-            .collect::<Vec<Folder>>();
-        &folders_owned
-    } else {
-        folders
-    };
+        .filter(|folder| is_local_sidebar_folder(folder))
+        .cloned()
+        .collect();
+    let folders = local_folders.as_slice();
     unsafe {
         list.set_data("picasa-folder-cache", folders.to_vec());
         list.set_data("picasa-folder-unavailable-callback", on_unavailable.clone());
@@ -2379,7 +2521,9 @@ fn refresh_network_shares(
     // as the share gallery, without blocking GTK or rebuilding any gallery.
     let share_paths: HashMap<i64, String> = shares.iter().map(|s| (s.id, s.path.clone())).collect();
     let folder_parents: HashMap<i64, Option<i64>> = folders
-        .iter().map(|folder| (folder.id, folder.parent_id)).collect();
+        .iter()
+        .map(|folder| (folder.id, folder.parent_id))
+        .collect();
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let counts = (|| -> anyhow::Result<HashMap<i64, i64>> {
@@ -2392,8 +2536,13 @@ fn refresh_network_shares(
                     let mut linked = false;
                     // Protect against a malformed/cyclic folder hierarchy.
                     for _ in 0..folder_parents.len() {
-                        let Some(id) = ancestor else { break; };
-                        if id == share.id { linked = true; break; }
+                        let Some(id) = ancestor else {
+                            break;
+                        };
+                        if id == share.id {
+                            linked = true;
+                            break;
+                        }
                         ancestor = folder_parents.get(&id).copied().flatten();
                     }
                     if linked
@@ -2435,7 +2584,9 @@ fn refresh_network_shares(
                 crate::source::net_trace(format!("shares_counts_ready count={}", counts.len()));
                 glib::ControlFlow::Break
             }
-            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                glib::ControlFlow::Break
+            }
             Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
         }
     });
@@ -2493,7 +2644,9 @@ fn append_share_row(
     // Show the previous path-matched value, or the stored folder count until
     // the new calculation arrives. Display zero explicitly when appropriate.
     let previous = SHARE_COUNT_CACHE.with(|cache| {
-        cache.borrow().get(&folder.id)
+        cache
+            .borrow()
+            .get(&folder.id)
             .filter(|(path, _)| path == &folder.path)
             .map(|(_, count)| *count)
     });
@@ -2580,6 +2733,21 @@ fn add_share_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &F
         }
         menu.append(&open_item);
 
+        // This opens the registered share in the system file manager without
+        // moving it into PIC's local Folders section.
+        let open_network_folder = gtk::Button::with_label("Open Network Folder in Files");
+        open_network_folder.add_css_class("flat");
+        {
+            let path = folder_for_menu.path.clone();
+            let popover_for_folder = popover.clone();
+            open_network_folder.connect_clicked(move |_| {
+                popover_for_folder.popdown();
+                let uri = crate::source::file(&path).uri();
+                let _ = gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>);
+            });
+        }
+        menu.append(&open_network_folder);
+
         let retry_item = gtk::Button::with_label("Retry Connection");
         retry_item.add_css_class("flat");
         {
@@ -2629,4 +2797,70 @@ fn add_share_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &F
         gesture.set_state(gtk::EventSequenceState::Claimed);
     });
     row.add_controller(right_click);
+}
+
+#[cfg(test)]
+mod local_network_section_tests {
+    use super::*;
+
+    fn folder(path: &str, imported_root: bool) -> Folder {
+        Folder {
+            id: 1,
+            path: path.to_owned(),
+            name: "test".to_owned(),
+            parent_id: None,
+            imported_root,
+            watched: false,
+            photo_count: 1,
+            subfolder_count: 0,
+            available: true,
+        }
+    }
+
+    #[test]
+    fn mounted_local_volumes_stay_under_folders() {
+        assert!(is_local_sidebar_folder(&folder("/mnt/4TBP", true)));
+        assert!(is_local_sidebar_folder(&folder("/mnt/4TBP/mypics", false)));
+        assert!(is_local_sidebar_folder(&folder(
+            "/run/media/peet/USB/Pics",
+            false
+        )));
+    }
+
+    #[test]
+    fn photo_context_routing_preserves_local_mounts() {
+        assert!(!is_network_photo_path("/mnt/4TBP/mypics/photo.jpg"));
+        assert!(!is_network_photo_path("/run/media/peet/USB/Pics/photo.jpg"));
+        assert!(is_network_photo_path(
+            "smb://dietpi.local/4tbp/Work/Denver/photo.jpg"
+        ));
+        assert!(is_network_photo_path(
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbp/Work/Denver/photo.jpg"
+        ));
+    }
+
+    #[test]
+    fn gvfs_backed_network_photos_never_appear_under_folders() {
+        assert!(!is_local_sidebar_folder(&folder(
+            "smb://dietpi.local/4tbp/Work/Denver",
+            true
+        )));
+        assert!(!is_local_sidebar_folder(&folder(
+            "/run/user/1000/gvfs",
+            false
+        )));
+        assert!(!is_local_sidebar_folder(&folder(
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbp/Work/Denver",
+            false
+        )));
+        assert!(!is_local_sidebar_folder(&folder(
+            "/run/user/1000/gvfs/sftp:host=somewhere/Photos",
+            false
+        )));
+        assert!(!is_local_sidebar_folder(&folder("/run/user/1000", false)));
+        assert!(is_local_sidebar_folder(&folder(
+            "/run/user/1000/explicit-local-mount",
+            true
+        )));
+    }
 }

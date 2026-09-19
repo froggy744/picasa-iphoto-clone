@@ -142,7 +142,9 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
     let id = connection.query_row("SELECT id FROM folders WHERE path = ?1", [path], |row| {
         row.get(0)
     })?;
-    let _reparented = if imported_root {
+    // Network shares are independent user registrations, even when one is
+    // inside another. Reparenting must never silently unregister a share.
+    let _reparented = if imported_root && !is_remote_path(path) {
         connection.execute(
             "UPDATE folders
              SET parent_id = ?1, imported_root = 0
@@ -163,11 +165,15 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
 pub fn mark_import_root(connection: &Connection, path: &str) -> Result<i64> {
     let id = insert_folder(connection, path)?;
     let transaction = connection.unchecked_transaction()?;
-    transaction.execute(
-        "UPDATE folders SET imported_root = 0
-         WHERE imported_root = 1 AND path != ?1 AND ?1 LIKE path || '/%'",
-        [path],
-    )?;
+    // Preserve nested network-share registrations. A parent share and its
+    // independently added child share must both remain in the sidebar.
+    if !is_remote_path(path) {
+        transaction.execute(
+            "UPDATE folders SET imported_root = 0
+             WHERE imported_root = 1 AND path != ?1 AND ?1 LIKE path || '/%'",
+            [path],
+        )?;
+    }
     transaction.execute("UPDATE folders SET imported_root = 1 WHERE id = ?1", [id])?;
     transaction.commit()?;
     Ok(id)
