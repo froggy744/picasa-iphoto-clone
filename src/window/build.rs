@@ -3503,6 +3503,48 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         glib::ControlFlow::Continue
     });
 
+    // Restore network shares after a reboot: gvfs mounts are session-scoped,
+    // so no registered share is mounted when the app starts. Remount each
+    // registered root in the background shortly after startup (guest and
+    // keyring-saved shares connect silently; a share needing credentials
+    // gets the normal mount dialog), then re-probe availability so the
+    // sidebar returns online without a manual Retry Connection per share.
+    {
+        let shares = db::network_shares(&connection.borrow()).unwrap_or_default();
+        let mut roots: Vec<String> = Vec::new();
+        for folder in shares {
+            let root = crate::source::normalize_nfs_uri(&folder.path);
+            if !roots.contains(&root) {
+                crate::source::net_trace(format!("startup_remount_queued uri={root}"));
+                roots.push(root);
+            }
+        }
+        for (index, root) in roots.into_iter().enumerate() {
+            let availability_refresh = availability_refresh.clone();
+            let window_for_mount: gtk::Window = window.clone().upcast();
+            // Staggered: a moment after startup, one root at a time.
+            glib::timeout_add_local_once(
+                std::time::Duration::from_millis(2500 + index as u64 * 600),
+                move || {
+                    crate::source::net_trace(format!("startup_remount uri={root}"));
+                    let root_for_mount = root.clone();
+                    crate::source::mount_share_async(
+                        &root_for_mount,
+                        Some(&window_for_mount),
+                        move |result| {
+                            crate::source::net_trace(format!(
+                                "startup_remount_done uri={root} ok={}",
+                                result.is_ok()
+                            ));
+                            crate::source::refresh_availability();
+                            availability_refresh();
+                        },
+                    );
+                },
+            );
+        }
+    }
+
     window
 }
 
