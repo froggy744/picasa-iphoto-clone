@@ -469,7 +469,7 @@ fn library_page(
             button_for_cleanup.set_sensitive(false);
             clean_status.set_text("Cleaning thumbnail cache…");
             // The database connection is main-thread only, so build the
-            // expected key set here and let a worker do the file work.
+            // expected key sets here and let a worker do the file work.
             let valid = match crate::thumbnail::valid_cache_paths(&connection.borrow()) {
                 Ok(valid) => valid,
                 Err(error) => {
@@ -480,12 +480,29 @@ fn library_page(
                     return;
                 }
             };
+            let valid_sources = match crate::thumbnail::valid_source_paths(&connection.borrow()) {
+                Ok(valid) => valid,
+                Err(error) => {
+                    eprintln!("Could not collect source cache keys: {error:#}");
+                    clean_status.set_text("Could not clean the thumbnail cache.");
+                    button_for_cleanup.set_sensitive(true);
+                    cleanup_running.set(false);
+                    return;
+                }
+            };
             let (sender, receiver) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let result = crate::thumbnail::cleanup_cache(&valid).and_then(|cleanup| {
-                    let stats = crate::thumbnail::cache_stats(&valid)?;
-                    Ok((cleanup, stats))
-                });
+                let result = crate::thumbnail::cleanup_cache(&valid)
+                    .and_then(|cleanup| {
+                        // Materialized remote sources dwarf the thumbnails;
+                        // prune what the current library no longer references.
+                        crate::thumbnail::cleanup_sources(&valid_sources)
+                            .map(|source_cleanup| (cleanup, source_cleanup))
+                    })
+                    .and_then(|(cleanup, source_cleanup)| {
+                        let stats = crate::thumbnail::cache_stats(&valid)?;
+                        Ok((cleanup, source_cleanup, stats))
+                    });
                 let _ = sender.send(result);
             });
             // The clicked handler may run again, so the polling closure gets
@@ -500,12 +517,15 @@ fn library_page(
             glib::timeout_add_local(std::time::Duration::from_millis(50), move || match receiver
                 .try_recv()
             {
-                Ok(Ok((cleanup, stats))) => {
-                    poll_status.set_text(&cleanup_result_text(&cleanup));
+                Ok(Ok((cleanup, source_cleanup, stats))) => {
+                    let mut combined = cleanup;
+                    combined.removed += source_cleanup.removed;
+                    combined.bytes_freed += source_cleanup.bytes_freed;
+                    poll_status.set_text(&cleanup_result_text(&combined));
                     poll_cached.set_text(&format_count(stats.cached));
                     poll_required.set_text(&format_count(stats.required));
                     poll_unused.set_text(&format_count(stats.unused()));
-                    poll_size.set_text(&format_bytes(stats.bytes));
+                    poll_size.set_text(&format_bytes(stats.bytes + stats.source_bytes));
                     poll_button.set_sensitive(true);
                     poll_running.set(false);
                     glib::ControlFlow::Break
@@ -651,7 +671,7 @@ fn refresh_thumbnail_cache_stats(
                 cached.set_text(&format_count(stats.cached));
                 required.set_text(&format_count(stats.required));
                 unused.set_text(&format_count(stats.unused()));
-                size.set_text(&format_bytes(stats.bytes));
+                size.set_text(&format_bytes(stats.bytes + stats.source_bytes));
                 glib::ControlFlow::Break
             }
             Ok(Err(error)) => {

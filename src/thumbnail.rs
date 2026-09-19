@@ -63,10 +63,19 @@ impl Drop for PendingGuard {
 /// tile that is currently being bound. The request is best-effort and
 /// deduplicated; the regular bulk recovery/import pass remains untouched.
 pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64>) {
-    let Ok(destination) = cache_path(&path, mtime, size_bytes) else {
+    let Ok(destination) = resolve_cache_path(&path, mtime, size_bytes) else {
         return;
     };
     if destination.is_file() {
+        // A legacy flat-layout thumbnail may have just migrated into the
+        // shard. The tile that triggered this saw a missing sharded path, so
+        // hand it the completion instead of waiting for a rebind.
+        if let Ok(mut completions) = PRIORITY_COMPLETIONS
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+        {
+            completions.push(PathBuf::from(&path));
+        }
         return;
     }
     if known_decode_failure(&path, &destination) {

@@ -14,11 +14,158 @@ pub fn cache_dir() -> Result<PathBuf> {
     fs::create_dir_all(&directory)
         .with_context(|| format!("could not create cache directory {}", directory.display()))?;
     let _ = CACHE_DIR.set(directory.clone());
+    relocate_legacy_aux_root(&directory, "source");
+    relocate_legacy_aux_root(&directory, "wallpaper");
     Ok(directory)
 }
 
+/// `source/` (materialized remote RAW files) and `wallpaper/` used to live
+/// inside the thumbnail directory. They are cache data, not thumbnails, and
+/// dominated its size, so they now live beside it. One-time move; failures
+/// are non-fatal (the legacy location keeps working).
+fn relocate_legacy_aux_root(thumbs: &Path, name: &str) {
+    let legacy = thumbs.join(name);
+    if !legacy.is_dir() {
+        return;
+    }
+    let Some(parent) = thumbs.parent() else {
+        return;
+    };
+    let destination = parent.join(name);
+    if destination.exists() {
+        return;
+    }
+    if fs::rename(&legacy, &destination).is_err() {
+        if fs::create_dir_all(&destination).is_ok() {
+            move_dir_contents(&legacy, &destination);
+            let _ = fs::remove_dir_all(&legacy);
+        }
+    }
+    prune_empty_shard_dirs(thumbs);
+}
+
+fn move_dir_contents(source: &Path, destination: &Path) {
+    let Ok(entries) = fs::read_dir(source) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let target = destination.join(entry.file_name());
+        if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            if fs::create_dir_all(&target).is_ok() {
+                move_dir_contents(&entry.path(), &target);
+            }
+            continue;
+        }
+        if fs::rename(entry.path(), &target).is_err() {
+            let _ = fs::copy(entry.path(), &target);
+        }
+    }
+}
+
+/// Remove shard directories that a finished operation emptied.
+fn prune_empty_shard_dirs(thumbs: &Path) {
+    let files_root = thumbs.join("files");
+    let Ok(shards) = fs::read_dir(&files_root) else {
+        return;
+    };
+    for shard in shards.flatten() {
+        if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let _ = fs::remove_dir(shard.path());
+    }
+}
+
 pub fn cache_path(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result<PathBuf> {
-    Ok(cache_dir()?.join(cache_file_name(path, mtime, size_bytes)))
+    let file_name = cache_file_name(path, mtime, size_bytes);
+    Ok(shard_dir_for(&file_name)?.join(file_name))
+}
+
+/// A 143k-file flat directory makes every scan, cleanup and stats pass crawl
+/// and can exceed filesystem directory limits, so thumbnails are sharded by
+/// the first two hex characters of the cache key (256 buckets). The shard
+/// prefix is derived from the key, never from a directory listing.
+pub fn shard_dir_for(file_name: &str) -> Result<PathBuf> {
+    Ok(shard_dir_in(&cache_dir()?.join("files"), file_name))
+}
+
+/// The shard directory for `file_name` under a shard root: the first two hex
+/// characters of the key (256 buckets), or `misc` for foreign names.
+fn shard_dir_in(shard_root: &Path, file_name: &str) -> PathBuf {
+    let prefix = file_name
+        .get(..2)
+        .filter(|prefix| prefix.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .unwrap_or("misc");
+    shard_root.join(prefix)
+}
+
+/// Materialized remote RAW sources: a sibling of the thumbnail directory, not
+/// inside it (they dominate its size and are cache data, not thumbnails).
+pub fn sources_dir() -> Result<PathBuf> {
+    aux_dir("source")
+}
+
+/// Composed wallpaper exports: a sibling of the thumbnail directory.
+pub fn wallpaper_dir() -> Result<PathBuf> {
+    aux_dir("wallpaper")
+}
+
+fn aux_dir(name: &str) -> Result<PathBuf> {
+    let thumbs = cache_dir()?;
+    let directory = thumbs
+        .parent()
+        .map(|parent| parent.join(name))
+        .unwrap_or_else(|| thumbs.join(name));
+    fs::create_dir_all(&directory)
+        .with_context(|| format!("could not create cache directory {}", directory.display()))?;
+    Ok(directory)
+}
+
+/// The shard directory for a materialized source file under the sources
+/// root. Public because `source::materialize` writes into this layout.
+pub fn shard_dir_for_sources(sources_root: &Path, file_name: &str) -> PathBuf {
+    shard_dir_in(sources_root, file_name)
+}
+
+/// Resolve a thumbnail's current sharded path, transparently migrating the
+/// legacy flat-layout file on first access. After this returns an existing
+/// path, only the sharded copy remains: reads, rename-flows and cleanup all
+/// see one canonical location, and the flat directory empties over time.
+pub fn resolve_cache_path(
+    path: &str,
+    mtime: Option<i64>,
+    size_bytes: Option<i64>,
+) -> Result<PathBuf> {
+    resolve_cache_path_in(&cache_dir()?, path, mtime, size_bytes)
+}
+
+pub(crate) fn resolve_cache_path_in(
+    thumbs: &Path,
+    path: &str,
+    mtime: Option<i64>,
+    size_bytes: Option<i64>,
+) -> Result<PathBuf> {
+    let file_name = cache_file_name(path, mtime, size_bytes);
+    let destination = shard_dir_in(&thumbs.join("files"), &file_name).join(&file_name);
+    if destination.exists() {
+        return Ok(destination);
+    }
+    let legacy = thumbs.join(&file_name);
+    if legacy.is_file() {
+        let _ = fs::create_dir_all(destination.parent().expect("shard path has a parent"));
+        if fs::rename(&legacy, &destination).is_ok() {
+            let _ = fs::remove_file(legacy.with_extension("failed"));
+            return Ok(destination);
+        }
+        if destination.exists() {
+            let _ = fs::remove_file(&legacy);
+            return Ok(destination);
+        }
+        // The legacy file could not be moved (permissions, transient loss);
+        // keep serving it where it is rather than regenerating.
+        return Ok(legacy);
+    }
+    Ok(destination)
 }
 
 /// The cache file name for a photo's current fingerprint: pure hashing with no
@@ -30,10 +177,7 @@ pub fn cache_file_name(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) 
     hasher.update(path.as_bytes());
     let cache_version = if is_dng(path) {
         DNG_THUMBNAIL_CACHE_VERSION
-    } else if crate::image_format::uses(
-        path,
-        crate::image_format::DecoderKind::Raw,
-    ) {
+    } else if crate::image_format::uses(path, crate::image_format::DecoderKind::Raw) {
         RAW_THUMBNAIL_CACHE_VERSION
     } else {
         THUMBNAIL_CACHE_VERSION
@@ -51,15 +195,14 @@ pub fn existing_cache_path(
     mtime: Option<i64>,
     size_bytes: Option<i64>,
 ) -> Result<Option<PathBuf>> {
-    let candidate = cache_path(path, mtime, size_bytes)?;
+    let candidate = resolve_cache_path(path, mtime, size_bytes)?;
     Ok(candidate.is_file().then_some(candidate))
 }
 
 pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result<PathBuf> {
-    let destination = cache_path(path, mtime, size_bytes)?;
+    let destination = resolve_cache_path(path, mtime, size_bytes)?;
     let failure_marker = destination.with_extension("failed");
     if destination.is_file() {
-        
         return Ok(destination);
     }
     if failure_marker.is_file() {
@@ -68,7 +211,6 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
             // once; only confirmed decode failures now suppress future work.
             let _ = fs::remove_file(&failure_marker);
         } else {
-            
             return Ok(destination);
         }
     }
@@ -78,7 +220,6 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
         .map_err(|_| anyhow::anyhow!("thumbnail in-flight registry poisoned"))?
         .insert(destination.clone());
     if !claimed {
-        
         return Ok(destination);
     }
 

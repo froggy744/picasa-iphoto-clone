@@ -47,6 +47,9 @@ mod recovery_tests {
                 path.to_string_lossy().into_owned()
             };
             let destination = cache_path(&reference, Some(123), Some(456)).unwrap();
+            // The sharded destination may not exist until a thumbnail is
+            // created; tests that pre-seed markers need the shard directory.
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
             Self {
                 directory,
                 item: (reference, Some(123), Some(456)),

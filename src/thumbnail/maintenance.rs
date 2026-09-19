@@ -19,14 +19,16 @@ pub struct CacheCleanup {
 /// Snapshot of the cache directory for the Library statistics page.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CacheStats {
-    /// `.jpg` thumbnail files present in the cache directory.
+    /// `.jpg` thumbnail files present in the cache shards.
     pub cached: u64,
     /// Present `.jpg` files whose cache key matches a current library photo.
     pub referenced: u64,
     /// Cache keys expected from the current (non-trashed) library photos.
     pub required: u64,
-    /// Bytes used by the top-level cache files (thumbnails, markers, other).
+    /// Bytes used by the cached thumbnails, markers and other files.
     pub bytes: u64,
+    /// Bytes used by materialized remote sources (`../source`).
+    pub source_bytes: u64,
 }
 
 impl CacheStats {
@@ -57,19 +59,46 @@ fn valid_cache_paths_in(directory: &Path, connection: &Connection) -> Result<Has
     Ok(rows
         .map(|row| {
             let (path, mtime, size_bytes) = row?;
-            Ok(directory.join(cache_file_name(&path, mtime, size_bytes)))
+            let file_name = cache_file_name(&path, mtime, size_bytes);
+            Ok(shard_dir_in(&directory.join("files"), &file_name).join(file_name))
         })
         .collect::<rusqlite::Result<HashSet<_>>>()?)
 }
 
+/// The materialized remote source files the current library still needs,
+/// keyed exactly like `source::materialize` derives them: blake3 over the
+/// normalized reference, with the reference's extension. Files whose names do
+/// not decode to that key shape (foreign files) are never pruned.
+pub fn valid_source_paths(connection: &Connection) -> Result<HashSet<PathBuf>> {
+    valid_source_paths_in(&sources_dir()?, connection)
+}
+
+fn valid_source_paths_in(sources_root: &Path, connection: &Connection) -> Result<HashSet<PathBuf>> {
+    let mut statement = connection.prepare("SELECT path FROM photos WHERE trashed = 0")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut paths = HashSet::new();
+    for row in rows {
+        let reference = crate::smb_transport::normalize_smb_reference(&row?);
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(reference.as_bytes());
+        let stem = hasher.finalize().to_hex();
+        let extension = Path::new(&reference)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("raw");
+        let file_name = format!("{stem}.{extension}");
+        paths.insert(shard_dir_in(sources_root, &file_name).join(file_name));
+    }
+    Ok(paths)
+}
+
 /// Delete thumbnails the current library no longer references.
 ///
-/// Only `.jpg` files directly inside the cache directory are considered, and a
-/// file is removed only when its cache key matches no current photo. Stale
-/// `.failed` markers go with their keys; a marker whose key is still current
-/// stays so known-bad sources keep being suppressed. Subdirectories (such as
-/// the materialized remote RAW sources under `thumbs/source`), symlinks and
-/// unrelated files are never touched, and neither are the originals.
+/// Only `.jpg`/`.failed` files inside the cache shards are considered, and a
+/// file is removed only when its cache key matches no current photo. Empty
+/// shard directories are pruned afterwards. Stale `.failed` markers go with
+/// their keys; a marker whose key is still current stays so known-bad sources
+/// keep being suppressed. Unrelated files and the originals are never touched.
 pub fn cleanup_cache(valid: &HashSet<PathBuf>) -> Result<CacheCleanup> {
     // A thumbnail being generated right now may not be part of the key
     // snapshot yet. Both registries cover every `create()` destination that
@@ -84,40 +113,49 @@ fn cleanup_cache_in(
     reserved: &HashSet<PathBuf>,
 ) -> Result<CacheCleanup> {
     let mut cleanup = CacheCleanup::default();
-    for entry in read_cache_entries(directory)? {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        // Only regular files are candidates; this also skips directories that
-        // merely carry a thumbnail-looking name.
-        if !file_type.is_file() {
+    let files_root = directory.join("files");
+    for shard in read_dir_entries(&files_root)? {
+        if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
             continue;
         }
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if name.ends_with(".jpg") {
-            if valid.contains(&path) || reserved.contains(&path) {
-                cleanup.valid += 1;
-            } else {
-                // Read the size before the file disappears; DirEntry::metadata
-                // no longer resolves once the entry is deleted.
-                let bytes = entry_len(&entry);
-                if fs::remove_file(&path).is_ok() {
-                    cleanup.removed += 1;
-                    cleanup.bytes_freed += bytes;
-                }
+        let shard_path = shard.path();
+        for entry in read_dir_entries(&shard_path)? {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            // Only regular files are candidates; nested directories that
+            // merely carry a thumbnail-looking name are left alone.
+            if !file_type.is_file() {
+                continue;
             }
-        } else if name.ends_with(".failed") {
-            let thumbnail = path.with_extension("jpg");
-            if !valid.contains(&thumbnail) && !reserved.contains(&thumbnail) {
-                let bytes = entry_len(&entry);
-                if fs::remove_file(&path).is_ok() {
-                    cleanup.bytes_freed += bytes;
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if name.ends_with(".jpg") {
+                if valid.contains(&path) || reserved.contains(&path) {
+                    cleanup.valid += 1;
+                } else {
+                    // Read the size before the file disappears; DirEntry::metadata
+                    // no longer resolves once the entry is deleted.
+                    let bytes = entry_len(&entry);
+                    if fs::remove_file(&path).is_ok() {
+                        cleanup.removed += 1;
+                        cleanup.bytes_freed += bytes;
+                    }
+                }
+            } else if name.ends_with(".failed") {
+                let thumbnail = path.with_extension("jpg");
+                if !valid.contains(&thumbnail) && !reserved.contains(&thumbnail) {
+                    let bytes = entry_len(&entry);
+                    if fs::remove_file(&path).is_ok() {
+                        cleanup.bytes_freed += bytes;
+                    }
                 }
             }
         }
+        // Drop shards this pass emptied so the bucket count reflects use.
+        let _ = fs::remove_dir(&shard_path);
     }
     Ok(cleanup)
 }
@@ -132,30 +170,155 @@ fn cache_stats_in(directory: &Path, valid: &HashSet<PathBuf>) -> Result<CacheSta
         required: valid.len() as u64,
         ..CacheStats::default()
     };
-    for entry in read_cache_entries(directory)? {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_file() {
+    let files_root = directory.join("files");
+    for shard in read_dir_entries(&files_root)? {
+        if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
             continue;
         }
-        let path = entry.path();
-        stats.bytes += entry_len(&entry);
-        let is_jpg = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(".jpg"));
-        if is_jpg {
-            stats.cached += 1;
-            if valid.contains(&path) {
-                stats.referenced += 1;
+        for entry in read_dir_entries(&shard.path())? {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            stats.bytes += entry_len(&entry);
+            let is_jpg = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".jpg"));
+            if is_jpg {
+                stats.cached += 1;
+                if valid.contains(&path) {
+                    stats.referenced += 1;
+                }
             }
         }
+    }
+    // Legacy flat-layout files migrate on first access; anything left there
+    // still counts so the numbers do not silently shrink mid-migration.
+    for entry in read_dir_entries(directory)? {
+        if entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
+            stats.bytes += entry_len(&entry);
+        }
+    }
+    if let Ok(source_bytes) = source_dir_bytes(directory) {
+        stats.source_bytes = source_bytes;
     }
     Ok(stats)
 }
 
-fn read_cache_entries(directory: &Path) -> Result<Vec<fs::DirEntry>> {
+/// Bytes used by the materialized remote sources (`../source`), reported
+/// separately because they dwarf the thumbnails themselves.
+fn source_dir_bytes(directory: &Path) -> Result<u64> {
+    let sources_root = directory
+        .parent()
+        .map(|parent| parent.join("source"))
+        .unwrap_or_else(|| directory.join("source"));
+    let mut total = 0;
+    for shard in read_dir_entries(&sources_root)? {
+        if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        for entry in read_dir_entries(&shard.path())? {
+            if entry
+                .file_type()
+                .map(|kind| kind.is_file())
+                .unwrap_or(false)
+            {
+                total += entry_len(&entry);
+            }
+        }
+    }
+    Ok(total)
+}
+
+/// Delete materialized remote sources the current library no longer
+/// references. Aggressive by design: a source can be re-materialized from the
+/// original share at any time, and these multi-megabyte files dominate the
+/// cache. Foreign/unknown files are never touched.
+pub fn cleanup_sources(valid: &HashSet<PathBuf>) -> Result<CacheCleanup> {
+    cleanup_source_cache_in(&sources_dir()?, valid)
+}
+
+fn cleanup_source_cache_in(sources_root: &Path, valid: &HashSet<PathBuf>) -> Result<CacheCleanup> {
+    let mut cleanup = CacheCleanup::default();
+    // Legacy flat-layout files (pre-sharding): a referenced one is kept for
+    // lazy migration on next use, an unreferenced one is garbage.
+    for entry in read_dir_entries(sources_root)? {
+        if !entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let path = entry.path();
+        let Some(key) = source_key(path.file_name().and_then(|name| name.to_str())) else {
+            continue;
+        };
+        if valid.contains(&sources_root.join(&key)) {
+            continue;
+        }
+        let bytes = entry_len(&entry);
+        if fs::remove_file(&path).is_ok() {
+            cleanup.removed += 1;
+            cleanup.bytes_freed += bytes;
+        }
+    }
+    for shard in read_dir_entries(sources_root)? {
+        if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let shard_path = shard.path();
+        for entry in read_dir_entries(&shard_path)? {
+            if !entry
+                .file_type()
+                .map(|kind| kind.is_file())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let path = entry.path();
+            // Only exact cache-key shapes are prunable; unknown names stay.
+            let Some(key) = source_key(path.file_name().and_then(|name| name.to_str())) else {
+                continue;
+            };
+            if valid.contains(&shard_path.join(&key)) {
+                continue;
+            }
+            let bytes = entry_len(&entry);
+            if fs::remove_file(&path).is_ok() {
+                cleanup.removed += 1;
+                cleanup.bytes_freed += bytes;
+            }
+        }
+        let _ = fs::remove_dir(&shard_path);
+    }
+    Ok(cleanup)
+}
+
+/// Reconstruct the deterministic part of a source cache file name: 64 hex
+/// characters plus an extension. Anything else (temp files, foreign data) is
+/// not a prunable key.
+fn source_key(file_name: Option<&str>) -> Option<String> {
+    let file_name = file_name?;
+    let (stem, extension) = file_name.split_once('.')?;
+    if stem.len() != 64 || !stem.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    if extension.is_empty() || extension.contains('/') {
+        return None;
+    }
+    Some(file_name.to_string())
+}
+
+fn read_dir_entries(directory: &Path) -> Result<Vec<fs::DirEntry>> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         // A missing cache directory simply holds nothing to clean or count.
@@ -249,7 +412,12 @@ mod cleanup_tests {
                 .unwrap();
         }
 
-        fn thumbnail_name(&self, path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> String {
+        fn thumbnail_name(
+            &self,
+            path: &str,
+            mtime: Option<i64>,
+            size_bytes: Option<i64>,
+        ) -> String {
             cache_file_name(path, mtime, size_bytes)
         }
 
@@ -268,6 +436,14 @@ mod cleanup_tests {
         }
 
         fn write(&self, name: &str, contents: &[u8]) -> PathBuf {
+            let path = shard_dir_in(&self.directory.join("files"), name).join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, contents).unwrap();
+            path
+        }
+
+        /// Write a file in the legacy flat layout (pre-sharding location).
+        fn write_legacy(&self, name: &str, contents: &[u8]) -> PathBuf {
             let path = self.directory.join(name);
             fs::write(&path, contents).unwrap();
             path
@@ -300,7 +476,14 @@ mod cleanup_tests {
         let cleanup = fixture.clean();
 
         assert!(thumbnail.is_file());
-        assert_eq!(cleanup, CacheCleanup { valid: 1, removed: 0, bytes_freed: 0 });
+        assert_eq!(
+            cleanup,
+            CacheCleanup {
+                valid: 1,
+                removed: 0,
+                bytes_freed: 0
+            }
+        );
     }
 
     #[test]
@@ -327,7 +510,10 @@ mod cleanup_tests {
         let fixture = Fixture::new();
         fixture.add_photo("/photos/retagged.png", Some(7), Some(9));
         // Marker left by an earlier fingerprint (older mtime) of the photo.
-        let marker = fixture.write(&fixture.failure_marker_name("/photos/retagged.png", Some(6), Some(9)), DECODE_FAILURE_MARKER);
+        let marker = fixture.write(
+            &fixture.failure_marker_name("/photos/retagged.png", Some(6), Some(9)),
+            DECODE_FAILURE_MARKER,
+        );
         let expected_bytes = marker.metadata().unwrap().len();
 
         let cleanup = fixture.clean();
@@ -342,7 +528,10 @@ mod cleanup_tests {
     fn valid_failure_marker_is_preserved() {
         let fixture = Fixture::new();
         fixture.add_photo("/photos/broken.png", Some(11), Some(22));
-        let marker = fixture.write(&fixture.failure_marker_name("/photos/broken.png", Some(11), Some(22)), DECODE_FAILURE_MARKER);
+        let marker = fixture.write(
+            &fixture.failure_marker_name("/photos/broken.png", Some(11), Some(22)),
+            DECODE_FAILURE_MARKER,
+        );
 
         fixture.clean();
 
@@ -350,12 +539,13 @@ mod cleanup_tests {
     }
 
     #[test]
-    fn subdirectories_are_untouched() {
+    fn directories_outside_the_shards_are_untouched() {
         let fixture = Fixture::new();
-        // Materialized remote RAW sources live in a subdirectory of the cache.
-        let sources = fixture.directory.join("source");
-        fs::create_dir_all(&sources).unwrap();
-        let raw = sources.join("abcdef.raw");
+        // Legacy-layout leftovers and unrelated top-level directories are
+        // never part of the sharded cleanup sweep.
+        let legacy_sources = fixture.directory.join("source");
+        fs::create_dir_all(&legacy_sources).unwrap();
+        let raw = legacy_sources.join("abcdef.raw");
         fs::write(&raw, b"raw bytes").unwrap();
         // A directory that merely looks like a thumbnail is also left alone.
         let directory_named_jpg = fixture.directory.join("feedface.jpg");
@@ -365,6 +555,119 @@ mod cleanup_tests {
 
         assert!(raw.is_file());
         assert!(directory_named_jpg.is_dir());
+    }
+
+    #[test]
+    fn legacy_flat_thumbnail_migrates_into_its_shard() {
+        let fixture = Fixture::new();
+        fixture.add_photo("/photos/old.jpg", Some(10), Some(20));
+        let name = fixture.thumbnail_name("/photos/old.jpg", Some(10), Some(20));
+        let legacy = fixture.write_legacy(&name, b"jpeg bytes");
+        let marker = fixture.write_legacy(
+            Path::new(&name)
+                .with_extension("failed")
+                .to_string_lossy()
+                .as_ref(),
+            DECODE_FAILURE_MARKER,
+        );
+
+        let resolved =
+            resolve_cache_path_in(&fixture.directory, "/photos/old.jpg", Some(10), Some(20))
+                .unwrap();
+
+        assert!(resolved.is_file());
+        assert!(resolved.starts_with(fixture.directory.join("files")));
+        assert_eq!(resolved.file_name().unwrap(), name.as_str());
+        assert!(!legacy.exists(), "legacy copy must move, not duplicate");
+        assert!(!marker.exists(), "stale marker goes with the migration");
+    }
+
+    #[test]
+    fn cleanup_prunes_shard_directories_it_emptied() {
+        let fixture = Fixture::new();
+        fixture.add_photo("/photos/keep.jpg", Some(1), Some(2));
+        // Only a stale thumbnail exists; its shard must vanish with it.
+        fixture.write(
+            &fixture.thumbnail_name("/photos/gone.jpg", Some(3), Some(4)),
+            b"stale",
+        );
+
+        let files_root = fixture.directory.join("files");
+        let before = fs::read_dir(&files_root).unwrap().count();
+        assert!(before > 0);
+        fixture.clean();
+        let after = fs::read_dir(&files_root).unwrap().count();
+
+        assert_eq!(after, 0, "empty shards must be removed");
+    }
+
+    #[test]
+    fn source_cache_keeps_referenced_and_prunes_stale() {
+        let fixture = Fixture::new();
+        fixture.add_photo("smb://host/share/keep.NEF", Some(1), Some(2));
+        fixture.add_photo("smb://host/share/stale.NEF", Some(3), Some(4));
+        // Simulate a share that no longer holds 'stale' (removed from library
+        // paths but its source file lingers): drop it from the DB instead.
+        fixture
+            .connection
+            .execute(
+                "DELETE FROM photos WHERE path = 'smb://host/share/stale.NEF'",
+                [],
+            )
+            .unwrap();
+
+        let sources_root = fixture.directory.join("source");
+        let valid = valid_source_paths_in(&sources_root, &fixture.connection).unwrap();
+        assert_eq!(valid.len(), 1);
+        let referenced_key = valid.iter().next().unwrap().file_name().unwrap();
+        let stale_stem = {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update("smb://host/share/stale.NEF".as_bytes());
+            hasher.finalize().to_hex()
+        };
+        let stale_name = format!("{stale_stem}.NEF");
+        let foreign_name = "172e0c6c-not-a-key.txt";
+
+        for name in [
+            referenced_key.to_str().unwrap(),
+            stale_name.as_str(),
+            foreign_name,
+        ] {
+            let path = shard_dir_in(&sources_root, name).join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"source bytes").unwrap();
+        }
+
+        let cleanup = cleanup_source_cache_in(&sources_root, &valid).unwrap();
+
+        let referenced = valid.iter().next().unwrap().clone();
+        assert!(referenced.is_file(), "referenced source must survive");
+        assert_eq!(cleanup.removed, 1, "only the stale source is pruned");
+        let stale_path = shard_dir_in(&sources_root, &stale_name).join(&stale_name);
+        assert!(!stale_path.exists());
+        let foreign_path = shard_dir_in(&sources_root, foreign_name).join(foreign_name);
+        assert!(foreign_path.exists(), "foreign files are never pruned");
+        assert!(cleanup.bytes_freed > 0);
+    }
+
+    #[test]
+    fn relocated_aux_roots_leave_the_thumbnail_directory() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "picasa-aux-relocate-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let thumbs = root.join("thumbs");
+        let source = thumbs.join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("abc.raw"), b"raw").unwrap();
+
+        relocate_legacy_aux_root(&thumbs, "source");
+
+        assert!(root.join("source").join("abc.raw").is_file());
+        assert!(!source.exists(), "legacy aux directory must be gone");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -430,7 +733,10 @@ mod cleanup_tests {
             b"a",
         );
         let unused_thumbnail = fixture.write("deadbeef.jpg", b"stale");
-        let marker = fixture.write(&fixture.failure_marker_name("/photos/b.jpg", Some(3), Some(4)), DECODE_FAILURE_MARKER);
+        let marker = fixture.write(
+            &fixture.failure_marker_name("/photos/b.jpg", Some(3), Some(4)),
+            DECODE_FAILURE_MARKER,
+        );
         let notes = fixture.write("notes.txt", b"x");
         let expected_bytes: u64 = [&referenced, &unused_thumbnail, &marker, &notes]
             .into_iter()

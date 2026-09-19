@@ -74,9 +74,9 @@ fn thumbnail_worker_threads(items: &[(String, Option<i64>, Option<i64>)]) -> usi
     // RAW preview decoding is substantially more CPU- and memory-intensive
     // than JPEG thumbnailing. Keep mixed refreshes responsive while still
     // allowing ordinary image batches to use the available cores.
-    let has_raw = items.iter().any(|(path, _, _)| {
-        crate::image_format::uses(path, crate::image_format::DecoderKind::Raw)
-    });
+    let has_raw = items
+        .iter()
+        .any(|(path, _, _)| crate::image_format::uses(path, crate::image_format::DecoderKind::Raw));
     if has_raw {
         available.clamp(1, 2)
     } else {
@@ -90,10 +90,27 @@ pub fn clear_cache() -> Result<()> {
         return Ok(());
     }
 
-    for entry in fs::read_dir(directory)? {
+    for entry in fs::read_dir(&directory)? {
         let path = entry?.path();
         if path.is_file() {
+            // Legacy flat-layout thumbnails left from before sharding.
             fs::remove_file(path)?;
+        }
+    }
+    let files_root = directory.join("files");
+    if files_root.is_dir() {
+        for shard in fs::read_dir(&files_root)? {
+            let shard_path = shard?.path();
+            if !shard_path.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(&shard_path)? {
+                let path = entry?.path();
+                if path.is_file() {
+                    fs::remove_file(path)?;
+                }
+            }
+            let _ = fs::remove_dir(&shard_path);
         }
     }
     Ok(())

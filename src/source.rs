@@ -856,13 +856,26 @@ fn materialize_inner(reference: &str) -> Result<PathBuf> {
         .unwrap_or("raw");
     let mut hasher = blake3::Hasher::new();
     hasher.update(reference.as_bytes());
-    let path = crate::thumbnail::cache_dir()?.join("source").join(format!(
-        "{}.{}",
-        hasher.finalize().to_hex(),
-        extension
-    ));
+    let hex = hasher.finalize().to_hex();
+    let file_name = format!("{hex}.{extension}");
+    let sources_root = crate::thumbnail::sources_dir()?;
+    let path = crate::thumbnail::shard_dir_for_sources(&sources_root, &file_name).join(&file_name);
     if !path.is_file() {
-        let parent = path.parent().expect("cached source has a parent");
+        // Pre-sharding materialized sources live flat in the sources root;
+        // move them into the shard on first use instead of re-downloading.
+        let legacy = sources_root.join(&file_name);
+        if legacy.is_file() {
+            let parent = path.parent().expect("shard path has a parent");
+            let _ = fs::create_dir_all(parent);
+            if fs::rename(&legacy, &path).is_ok() {
+                return Ok(path);
+            }
+            if path.is_file() {
+                let _ = fs::remove_file(&legacy);
+                return Ok(path);
+            }
+        }
+        let parent = path.parent().expect("shard path has a parent");
         fs::create_dir_all(parent)?;
         fs::write(&path, read(&reference)?)?;
     }
