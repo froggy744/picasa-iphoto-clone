@@ -1,10 +1,15 @@
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::time::Instant;
 
 use gio::prelude::*;
 
-pub(super) fn reveal_file(file: &gio::File) -> bool {
-    let Some(path) = file.path() else {
+pub(super) fn reveal_reference(
+    target_uri: &str,
+    _parent_uri: Option<&str>,
+    _started: Instant,
+) -> bool {
+    let Some(path) = gio::File::for_uri(target_uri).path() else {
         return false;
     };
     std::process::Command::new("open")

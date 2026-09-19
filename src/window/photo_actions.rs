@@ -619,11 +619,16 @@ fn show_photo_context_menu(
         dismiss_menu_for_copy();
     });
 
-    let file_for_manager = file.clone();
+    // Pass the stored reference, not a materialized/cached path: the platform
+    // layer normalizes it back to the canonical SMB URI for network photos.
+    let reference_for_manager = photo.path();
     let dismiss_menu_for_manager = dismiss_menu.clone();
     file_manager.connect_clicked(move |_| {
-        open_file_in_manager(&file_for_manager);
+        // Close the popover immediately, independently of the launch result.
+        // Revealing is asynchronous and must never keep the GTK main loop
+        // (or the menu) waiting on D-Bus or a network resolve.
         dismiss_menu_for_manager();
+        crate::platform::reveal_reference(&reference_for_manager);
     });
 
     let wallpaper_path = photo.path();
@@ -793,10 +798,6 @@ fn show_photo_context_menu(
 
     host.add_overlay(&menu_host);
     menu_host.set_visible(true);
-}
-
-fn open_file_in_manager(file: &gio::File) {
-    crate::platform::reveal_file(file);
 }
 
 fn prepare_wallpaper(

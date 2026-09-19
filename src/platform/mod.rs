@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::time::Instant;
 
 use gio::prelude::*;
 
@@ -18,15 +19,69 @@ mod linux;
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 use linux as imp;
 
-/// Reveal a file in the host file manager. Each platform first tries its
-/// selection-capable native command and then falls back to opening the parent.
-pub(crate) fn reveal_file(file: &gio::File) {
-    if imp::reveal_file(file) {
-        return;
+/// Reveal a photograph in the host file manager from its stored reference.
+///
+/// The reference may be a plain local path, a canonical network URI
+/// (`smb://`, `nfs://`, ...) or a legacy GVfs-FUSE path. Legacy FUSE paths are
+/// normalized back to their canonical `smb://` URI first, so a stale gvfs
+/// mount can never be handed to the file manager or block the UI. The reveal
+/// never blocks the GTK main thread: D-Bus traffic and network resolution run
+/// through the async GIO pipeline, and when the selection-capable file-manager
+/// service is unavailable the containing folder is opened through GIO instead.
+pub(crate) fn reveal_reference(reference: &str) {
+    let (target_uri, parent_uri) = reveal_target_uris(reference);
+    crate::source::net_trace(format!(
+        "reveal_start reference={reference} uri={target_uri} parent={}",
+        parent_uri.as_deref().unwrap_or("<none>")
+    ));
+    let started = Instant::now();
+    if !imp::reveal_reference(&target_uri, parent_uri.as_deref(), started) {
+        open_parent_directory(&target_uri, parent_uri.as_deref(), started);
     }
-    if let Some(parent) = file.parent() {
-        let _ = gio::AppInfo::launch_default_for_uri(&parent.uri(), None::<&gio::AppLaunchContext>);
-    }
+}
+
+/// Canonical target/parent URIs for a stored photo reference. Canonical
+/// network URIs (`smb://`, `nfs://`, ...) pass through unchanged; legacy
+/// GVfs-FUSE paths normalize back to their canonical `smb://` URI; plain
+/// local paths and `file://` URIs become `file://` URIs. A materialized
+/// thumbnail/source-cache path must never reach this function - callers pass
+/// the photo's stored reference.
+fn reveal_target_uris(reference: &str) -> (String, Option<String>) {
+    let reference = crate::smb_transport::normalize_smb_reference(reference);
+    let file = crate::source::file(&reference);
+    let target_uri = file.uri().to_string();
+    let parent_uri = file.parent().map(|parent| parent.uri().to_string());
+    (target_uri, parent_uri)
+}
+
+/// Open the containing folder (or the folder itself when the target has no
+/// parent) through GIO's default handler, asynchronously so the GTK thread is
+/// never blocked by a gvfs mount or a missing app handler. `started` anchors
+/// the completion timing log for the whole reveal operation.
+fn open_parent_directory(target_uri: &str, parent_uri: Option<&str>, started: Instant) {
+    let directory = parent_uri
+        .filter(|parent| !parent.is_empty())
+        .unwrap_or(target_uri);
+    crate::source::net_trace(format!("reveal_fallback_start directory={directory}"));
+    let fallback_started = Instant::now();
+    let directory = directory.to_string();
+    glib::spawn_future_local(async move {
+        let result =
+            gio::AppInfo::launch_default_for_uri_future(&directory, None::<&gio::AppLaunchContext>)
+                .await;
+        match result {
+            Ok(()) => crate::source::net_trace(format!(
+                "reveal_fallback_done directory={directory} ms={:.1} total={:.1}",
+                fallback_started.elapsed().as_secs_f64() * 1000.0,
+                started.elapsed().as_secs_f64() * 1000.0,
+            )),
+            Err(error) => crate::source::net_trace(format!(
+                "reveal_fallback_failed directory={directory} error={error} ms={:.1} total={:.1}",
+                fallback_started.elapsed().as_secs_f64() * 1000.0,
+                started.elapsed().as_secs_f64() * 1000.0,
+            )),
+        }
+    });
 }
 
 /// Additional mount roots that are not exposed by GIO's cross-platform
@@ -43,4 +98,45 @@ pub(crate) fn install_native_mount_monitor(
     refresh: Rc<dyn Fn()>,
 ) {
     imp::install_native_mount_monitor(window, refresh);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reveal_target_uris;
+
+    #[test]
+    fn canonical_smb_uri_is_used_unchanged() {
+        let (target, parent) = reveal_target_uris("smb://dietpi.local/4tbp/Work/SuperHero/Pow.png");
+        assert_eq!(target, "smb://dietpi.local/4tbp/Work/SuperHero/Pow.png");
+        assert_eq!(
+            parent.as_deref(),
+            Some("smb://dietpi.local/4tbp/Work/SuperHero")
+        );
+    }
+
+    #[test]
+    fn legacy_gvfs_fuse_path_normalizes_to_canonical_smb_uri() {
+        let (target, parent) = reveal_target_uris(
+            "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbp/Work/SuperHero/Pow.png",
+        );
+        assert_eq!(target, "smb://dietpi.local/4tbp/Work/SuperHero/Pow.png");
+        assert_eq!(
+            parent.as_deref(),
+            Some("smb://dietpi.local/4tbp/Work/SuperHero")
+        );
+    }
+
+    #[test]
+    fn local_path_becomes_file_uri_with_file_parent() {
+        let (target, parent) = reveal_target_uris("/home/peet/Pictures/a.jpg");
+        assert_eq!(target, "file:///home/peet/Pictures/a.jpg");
+        assert_eq!(parent.as_deref(), Some("file:///home/peet/Pictures"));
+    }
+
+    #[test]
+    fn other_network_schemes_pass_through() {
+        let (target, parent) = reveal_target_uris("nfs://host/export/a.png");
+        assert_eq!(target, "nfs://host/export/a.png");
+        assert_eq!(parent.as_deref(), Some("nfs://host/export"));
+    }
 }
