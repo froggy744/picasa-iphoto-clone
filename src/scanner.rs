@@ -367,7 +367,7 @@ fn collect_smb_files(
             let info = gio::FileInfo::new();
             info.set_name(&entry.name);
             info.set_file_type(gio::FileType::Regular);
-            info.set_size(meta.map(|meta| meta.size).unwrap_or(0) as i64);
+            info.set_size(meta.as_ref().map(|meta| meta.size).unwrap_or(0) as i64);
             if let Some(mtime) = meta.and_then(|meta| meta.mtime) {
                 if let Ok(date_time) = glib::DateTime::from_unix_utc(mtime) {
                     info.set_modification_date_time(&date_time);

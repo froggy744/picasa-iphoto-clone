@@ -245,12 +245,11 @@ fn refresh_grid_inner(
         }
 
         if folder_stream {
-            // Picasa-style Folder mode is a single continuous stream. The
-            // selected folder is a scroll destination, not a query boundary,
-            // so the whole library is used below. First present a scoped
-            // snapshot of only the destination folder: without it a Folder
-            // click after a model reset leaves an empty grid while the
-            // continuous stream is progressively constructed.
+            // Picasa-style Folder mode shows the selected folder's subtree.
+            // With a concrete folder target the scoped payload below IS the
+            // destination; only target-less Folder refreshes (and All
+            // Photos/searches via the branches below) build a whole-library
+            // view.
             //
             // Folder ordering for the stream sort uses the probe-free listing:
             // availability is resolved separately and asynchronously by the
@@ -264,15 +263,20 @@ fn refresh_grid_inner(
                     .flatten()
                     .as_deref(),
             );
+            // Fedora regression (v15): selecting a folder must not build the
+            // whole-library continuous stream (62k scoped + 73k stream for
+            // one click, with multi-hundred-ms main-thread stalls). A folder
+            // with a concrete target now shows exactly that folder's subtree;
+            // the full-library stream remains available via All Photos and
+            // searches, which take the branches below.
             if let Some((folder_id, _)) = scoped_target {
                 let mut scoped = db::photos(&connection, Some(folder_id), false, None)
                     .unwrap_or_default();
                 retain_enabled_formats(&connection, &mut scoped);
-                // Reuse the stream ordering so the swap-in does not visibly
-                // reorder the folder the user is already looking at.
                 sort_folder_stream(&mut scoped, &stream_folders, sort, display_mode);
                 crate::source::net_trace(format!("grid_scoped op={op} count={}", scoped.len()));
-                let _ = sender.send(GridPayload::Scoped(scoped));
+                let _ = sender.send(GridPayload::Share(scoped));
+                return;
             }
 
             let mut stream = db::photos(&connection, None, false, None).unwrap_or_default();

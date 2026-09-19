@@ -3519,10 +3519,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 roots.push(root);
             }
         }
-        let coalesced_refresh = CoalescedAvailabilityRefresh {
-            scheduled: Rc::new(std::cell::Cell::new(false)),
-            refresh: availability_refresh.clone(),
-        };
+        let coalesced_refresh = CoalescedAvailabilityRefresh::new(availability_refresh.clone());
         for (index, root) in roots.into_iter().enumerate() {
             if root.starts_with("nfs://") {
                 crate::source::net_trace(format!(
@@ -3533,11 +3530,60 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if !root.starts_with("smb://") {
                 continue;
             }
+            // A share that came online but has no indexed photos yet (e.g.
+            // its first scan never completed while it was offline) is
+            // scanned once, using the same authorized-scan path as
+            // registration - this is what makes a share "appear" without
+            // any gvfs mount.
+            let scan_job_for_root = scan_job.clone();
+            let start_next_scan_for_root = start_next_scan.clone();
+            let connection_for_root = connection.clone();
+            let root_for_scan = root.clone();
+            let queue_scan_if_empty: Rc<dyn Fn()> = Rc::new(move || {
+                let prefix = format!(
+                    "{}",
+                    root_for_scan.trim_end_matches('/')
+                );
+                let prefix = format!("{prefix}/");
+                let indexed = db::photo_fingerprints(&connection_for_root.borrow());
+                let indexed_count = match indexed {
+                    Ok(fingerprints) => fingerprints
+                        .keys()
+                        .filter(|photo_path| photo_path.starts_with(&prefix))
+                        .count(),
+                    Err(_) => 0,
+                };
+                if indexed_count > 0 {
+                    crate::source::net_trace(format!(
+                        "startup_scan_skipped uri={root_for_scan} indexed={indexed_count}"
+                    ));
+                    return;
+                }
+                crate::source::net_trace(format!(
+                    "startup_scan_queued uri={root_for_scan} indexed=0"
+                ));
+                if let Ok(mut job) = scan_job_for_root.try_borrow_mut() {
+                    job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
+                        .expect("import is an authorized scan reason");
+                    job.pending.push_back(root_for_scan.clone());
+                }
+                start_next_scan_for_root();
+            });
+            // Disabled after Fedora regression (v15): auto-scanning every
+            // zero-index root queued scans for share/discovery roots and
+            // duplicate subtrees. Scanning stays manual (Add Folder,
+            // Retry/Rescan). Flip the constant to re-enable.
+            const STARTUP_AUTO_SCAN: bool = false;
             schedule_startup_smb_probe(
                 root,
                 startup_remount_delay(0, index),
                 coalesced_refresh.clone(),
                 true,
+                if STARTUP_AUTO_SCAN {
+                    Some(queue_scan_if_empty)
+                } else {
+                    None
+                },
             );
         }
     }
@@ -3545,25 +3591,50 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     window
 }
 
-/// Trailing-edge debounce for availability refreshes: many SMB probe
-/// completions collapse into ONE refresh_availability_ui pass. Without this,
-/// a 15-root startup burst re-probed and republished the whole library 15
-/// times (repeated full-library grid work).
+/// Throttled availability refresh: many SMB probe completions collapse into
+/// ONE refresh_availability_ui pass, and passes are spaced at least
+/// `MIN_INTERVAL` apart. The pure 500 ms trailing-edge debounce was not
+/// enough on Fedora (v15): probes finish ~600 ms apart, so every probe
+/// scheduled its own full-library pass (15 re-probe + republish cycles).
 #[derive(Clone)]
 struct CoalescedAvailabilityRefresh {
     scheduled: Rc<std::cell::Cell<bool>>,
+    last_run: Rc<std::cell::Cell<Option<std::time::Instant>>>,
     refresh: Rc<dyn Fn()>,
 }
 
 impl CoalescedAvailabilityRefresh {
+    const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+    fn new(refresh: Rc<dyn Fn()>) -> Self {
+        Self {
+            scheduled: Rc::new(std::cell::Cell::new(false)),
+            last_run: Rc::new(std::cell::Cell::new(None)),
+            refresh,
+        }
+    }
+
     fn schedule(&self) {
         if self.scheduled.replace(true) {
             return;
         }
+        // Wait out the remainder of the minimum interval so a probe burst
+        // spread over several seconds collapses into one pass.
+        let delay = self
+            .last_run
+            .get()
+            .map(|last| {
+                Self::MIN_INTERVAL
+                    .saturating_sub(last.elapsed())
+                    .max(std::time::Duration::from_millis(250))
+            })
+            .unwrap_or(std::time::Duration::from_millis(250));
         let scheduled = self.scheduled.clone();
+        let last_run = self.last_run.clone();
         let refresh = self.refresh.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+        glib::timeout_add_local_once(delay, move || {
             scheduled.set(false);
+            last_run.set(Some(std::time::Instant::now()));
             refresh();
         });
     }
@@ -3579,6 +3650,7 @@ fn schedule_startup_smb_probe(
     delay_ms: u64,
     availability_refresh: CoalescedAvailabilityRefresh,
     allow_reprobe: bool,
+    queue_scan_if_empty: Option<Rc<dyn Fn()>>,
 ) {
     crate::source::net_trace(format!("startup_smb_probe uri={root} delay_ms={delay_ms}"));
     glib::timeout_add_local_once(
@@ -3609,12 +3681,20 @@ fn schedule_startup_smb_probe(
                         ));
                         // Coalesced: one refresh per probe burst.
                         availability_refresh.schedule();
-                        if !ok {
-                            if let Some((root, availability_refresh)) =
-                                reprobe_state.borrow_mut().take()
-                            {
-                                schedule_startup_smb_probe(root, 300_000, availability_refresh, false);
+                        if ok {
+                            if let Some(queue_scan) = &queue_scan_if_empty {
+                                queue_scan();
                             }
+                        } else if let Some((root, availability_refresh)) =
+                            reprobe_state.borrow_mut().take()
+                        {
+                            schedule_startup_smb_probe(
+                                root,
+                                300_000,
+                                availability_refresh,
+                                false,
+                                None,
+                            );
                         }
                         glib::ControlFlow::Break
                     }

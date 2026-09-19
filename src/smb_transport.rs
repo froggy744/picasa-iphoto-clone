@@ -36,11 +36,24 @@ pub struct SmbEntry {
 }
 
 /// Result of stat-ing a path.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SmbFileMeta {
     pub size: u64,
     pub is_dir: bool,
     pub mtime: Option<i64>,
+    /// Server-root probes only: the shares the server advertises.
+    pub shares: Vec<String>,
+}
+
+impl SmbFileMeta {
+    fn file(size: u64, is_dir: bool, mtime: Option<i64>) -> Self {
+        Self {
+            size,
+            is_dir,
+            mtime,
+            shares: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -493,11 +506,11 @@ impl SmbClient {
             if result != 0 {
                 return Err(SmbOpError::of(format!("cannot stat: {url}")));
             }
-            Ok(SmbFileMeta {
-                size: st.st_size.max(0) as u64,
-                is_dir: (st.st_mode & libc::S_IFMT) == libc::S_IFDIR,
-                mtime: Some(st.st_mtime as i64),
-            })
+            Ok(SmbFileMeta::file(
+                st.st_size.max(0) as u64,
+                (st.st_mode & libc::S_IFMT) == libc::S_IFDIR,
+                Some(st.st_mtime as i64),
+            ))
         }
     }
 
@@ -969,7 +982,35 @@ pub fn stat(uri: &str) -> Result<SmbFileMeta, SmbTransportError> {
 pub fn stat_in_lane(uri: &str, lane: SmbLane) -> Result<SmbFileMeta, SmbTransportError> {
     let target = parse_smb_uri(uri).ok_or(SmbTransportError::NotSmb)?;
     if target.share.is_empty() {
-        return Err(SmbTransportError::NoShare);
+        // A registered SERVER root has no share to stat; availability is
+        // proven by listing the server's shares over the credential ladder.
+        let host = target.host.clone();
+        let url = format!("smb://{host}/");
+        return run_with_ladder(
+            lane,
+            "stat_server_root",
+            &target,
+            SMB_OP_TIMEOUT,
+            None,
+            move |client, cancel| {
+                client.opendir(&url, cancel).map(|entries| SmbFileMeta {
+                    size: 0,
+                    is_dir: true,
+                    mtime: None,
+                    shares: entries
+                        .iter()
+                        .filter(|entry| entry.is_dir)
+                        .map(|entry| entry.name.clone())
+                        .collect::<Vec<String>>(),
+                })
+            },
+        )
+        .map(|meta| SmbFileMeta {
+            size: 0,
+            is_dir: true,
+            mtime: None,
+            shares: meta.shares,
+        });
     }
     let url = target.smbc_url();
     crate::source::net_trace(format!(
