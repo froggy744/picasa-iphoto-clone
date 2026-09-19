@@ -50,16 +50,26 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     } else {
         grid::GroupMode::None
     }));
-    let mut all_startup_photos = db::photos(&connection.borrow(), None, false, None)
-        .unwrap_or_default();
-    retain_enabled_formats(&connection.borrow(), &mut all_startup_photos);
-    let mut photos = all_startup_photos.clone();
-    limit_recently_added(
-        &connection.borrow(),
-        sidebar::SidebarFilter::RecentlyAdded,
-        &mut photos,
-    );
+    let startup_phase = |name: &'static str, started: &Instant| {
+        crate::source::net_trace(format!(
+            "startup_phase {name} ms={:.1}",
+            started.elapsed().as_secs_f64() * 1000.0
+        ));
+    };
+    let phase_started = Instant::now();
+    // The startup view is Recently Added (a bounded, newest-first slice):
+    // fetch it at SQL level instead of materializing the whole 70k+ library
+    // on the main thread (which cost ~200ms of the startup stall plus
+    // ~100MB RSS). Over-fetch so the enabled-format filter below still
+    // yields a full view.
+    let recently_added_limit = db::recently_added_limit(&connection.borrow());
+    let mut photos =
+        db::recently_added_photos(&connection.borrow(), recently_added_limit * 3 + 50)
+            .unwrap_or_default();
+    retain_enabled_formats(&connection.borrow(), &mut photos);
+    photos.truncate(recently_added_limit);
     sort_photos(&mut photos, sort.get());
+    startup_phase("recent_view_loaded", &phase_started);
     let startup_photos = Rc::new(photos);
     eprintln!(
         "STARTUP cold_start_ms={} photos={} displayed={} folders={} albums={} scan=disabled rss_mb={}",
@@ -2461,6 +2471,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         print_photos(&window_for_print, &connection_for_print, requests);
     });
 
+    let widgets_started = Instant::now();
     let (
         main_split,
         main_surface,
@@ -2473,6 +2484,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         right_header,
         search,
     ) = include!("layout.rs");
+    startup_phase("layout_built", &widgets_started);
 
     // Appearance button: opens Settings → Themes, where the theme list is
     // built from the theme folders on disk. toolbar.rs appends the
@@ -2496,6 +2508,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     window.set_content(Some(&main_surface));
 
+    startup_phase("gallery_and_actions_built", &widgets_started);
     let startup_gallery = gallery.clone();
     let startup_photos_for_idle = startup_photos.clone();
     let startup_total = startup_photos_for_idle.len();
@@ -2509,6 +2522,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let end = (startup_offset + STARTUP_BATCH_SIZE).min(startup_total);
         let batch = &startup_photos_for_idle[startup_offset..end];
         if startup_offset == 0 {
+            crate::source::net_trace(format!(
+                "startup_phase first_idle_batch ms={:.1}",
+                widgets_started.elapsed().as_secs_f64() * 1000.0
+            ));
             startup_gallery.replace(batch);
         } else {
             startup_gallery.append_photos(batch);
@@ -3587,6 +3604,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             );
         }
     }
+
+    startup_phase("build_done_pre_present", &widgets_started);
 
     window
 }
