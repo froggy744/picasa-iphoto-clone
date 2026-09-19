@@ -3503,102 +3503,129 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         glib::ControlFlow::Continue
     });
 
-    // Restore network shares after a reboot: gvfs mounts are session-scoped,
-    // so no registered share is mounted when the app starts. Remount each
-    // registered root SILENTLY in the background (plain GMountOperation: no
-    // auth dialogs at startup; saved keyring credentials, guest SMB and NFS
-    // exports still connect). A share whose credentials are unavailable
-    // stays registered and offline - the trace records the reason and the
-    // sidebar's interactive Retry Connection handles the password. Offline
-    // servers are retried with bounded backoff; attempts are strictly
-    // sequential per share and stop on success.
+    // Startup network availability (REDESIGN SHARES MOUNT):
+    // - SMB shares are probed DIRECTLY through libsmbclient: no gvfs mount,
+    //   nothing appears in Nautilus, guest or Secret Service credentials are
+    //   used silently, and a failed login never prompts at startup.
+    // - NFS exports are manual-only: they stay registered and offline until
+    //   the user runs Retry Connection (interactive gvfs), by design.
+    // Registered folders and cached thumbnails stay visible either way.
     {
         let shares = db::network_shares(&connection.borrow()).unwrap_or_default();
         let mut roots: Vec<String> = Vec::new();
         for folder in shares {
-            let root = crate::source::normalize_nfs_uri(&folder.path);
+            let root = folder.path.clone();
             if !roots.contains(&root) {
-                crate::source::net_trace(format!("startup_remount_queued uri={root}"));
                 roots.push(root);
             }
         }
+        let coalesced_refresh = CoalescedAvailabilityRefresh {
+            scheduled: Rc::new(std::cell::Cell::new(false)),
+            refresh: availability_refresh.clone(),
+        };
         for (index, root) in roots.into_iter().enumerate() {
-            let availability_refresh = availability_refresh.clone();
-            // Sequential retry chain per share: the next attempt is scheduled
-            // only from the previous attempt's completion, so two silent
-            // mounts for the same share never overlap.
-            let retry: Rc<RefCell<Option<Rc<dyn Fn(u32)>>>> = Rc::new(RefCell::new(None));
-            let retry_for_run = retry.clone();
-            *retry.borrow_mut() = Some(Rc::new(move |attempt: u32| {
-                let availability = availability_refresh.clone();
-                let retry_for_schedule = retry_for_run.clone();
-                let root_for_attempt = root.clone();
-                let delay_ms = startup_remount_delay(attempt, index);
-                glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(delay_ms),
-                    move || {
-                        crate::source::net_trace(format!(
-                            "startup_remount uri={root_for_attempt} attempt={attempt} delay_ms={delay_ms}"
-                        ));
-                        let retry_for_callback = retry_for_schedule.clone();
-                        let availability_for_callback = availability.clone();
-                        let root_for_callback = root_for_attempt.clone();
-                        crate::source::mount_share_async_silent(
-                            &root_for_attempt,
-                            move |result| {
-                                match result {
-                                    Ok(()) => {
-                                        crate::source::net_trace(format!(
-                                            "startup_remount_done uri={root_for_callback} ok=true attempt={attempt}"
-                                        ));
-                                    }
-                                    Err(failure) => {
-                                        let exhausted = attempt as usize
-                                            >= REMOUNT_BACKOFF_MS.len();
-                                        let may_retry =
-                                            !failure.auth_required && !exhausted;
-                                        crate::source::net_trace(format!(
-                                            "startup_remount_failed uri={root_for_callback} attempt={attempt} auth_required={} retry={} message={}",
-                                            failure.auth_required,
-                                            may_retry,
-                                            failure.message
-                                        ));
-                                        if may_retry {
-                                            if let Some(run) =
-                                                retry_for_callback.borrow().as_ref()
-                                            {
-                                                run(attempt + 1);
-                                            }
-                                        } else {
-                                            crate::source::net_trace(format!(
-                                                "startup_remount_stopped uri={root_for_callback} reason={}",
-                                                if failure.auth_required {
-                                                    "auth-required (interactive Retry Connection will prompt)"
-                                                } else {
-                                                    "backoff exhausted (share stays registered and offline)"
-                                                }
-                                            ));
-                                        }
-                                    }
-                                }
-                                // Update the sidebar either way: a failed
-                                // attempt keeps the share registered and
-                                // offline, a success flips it back online.
-                                crate::source::refresh_availability();
-                                availability_for_callback();
-                            },
-                        );
-                    },
-                );
-            }));
-            let run_first = retry.borrow().as_ref().cloned();
-            if let Some(run) = run_first {
-                run(0);
+            if root.starts_with("nfs://") {
+                crate::source::net_trace(format!(
+                    "startup_nfs_manual uri={root} (no automatic NFS mounts)"
+                ));
+                continue;
             }
+            if !root.starts_with("smb://") {
+                continue;
+            }
+            schedule_startup_smb_probe(
+                root,
+                startup_remount_delay(0, index),
+                coalesced_refresh.clone(),
+                true,
+            );
         }
     }
 
     window
+}
+
+/// Trailing-edge debounce for availability refreshes: many SMB probe
+/// completions collapse into ONE refresh_availability_ui pass. Without this,
+/// a 15-root startup burst re-probed and republished the whole library 15
+/// times (repeated full-library grid work).
+#[derive(Clone)]
+struct CoalescedAvailabilityRefresh {
+    scheduled: Rc<std::cell::Cell<bool>>,
+    refresh: Rc<dyn Fn()>,
+}
+
+impl CoalescedAvailabilityRefresh {
+    fn schedule(&self) {
+        if self.scheduled.replace(true) {
+            return;
+        }
+        let scheduled = self.scheduled.clone();
+        let refresh = self.refresh.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+            scheduled.set(false);
+            refresh();
+        });
+    }
+}
+
+/// Probe one SMB root through the direct transport, off the GTK thread, and
+/// publish the result back on the main thread. `allow_reprobe` schedules a
+/// single follow-up probe after five minutes for a root that was offline
+/// (bounded: no background retry storm; later recovery goes through the
+/// periodic availability refresher or the interactive Retry Connection).
+fn schedule_startup_smb_probe(
+    root: String,
+    delay_ms: u64,
+    availability_refresh: CoalescedAvailabilityRefresh,
+    allow_reprobe: bool,
+) {
+    crate::source::net_trace(format!("startup_smb_probe uri={root} delay_ms={delay_ms}"));
+    glib::timeout_add_local_once(
+        std::time::Duration::from_millis(delay_ms),
+        move || {
+            let (sender, receiver) = std::sync::mpsc::channel::<(bool, String)>();
+            let root_for_worker = root.clone();
+            std::thread::spawn(move || {
+                let outcome =
+                    crate::smb_transport::stat_in_lane(&root_for_worker, crate::smb_transport::SmbLane::Background);
+                let ok = outcome.is_ok();
+                let reason = outcome
+                    .err()
+                    .map(|error| error.to_string())
+                    .unwrap_or_else(|| String::from("ok"));
+                let _ = sender.send((ok, reason));
+            });
+            let reprobe_state = std::cell::RefCell::new(if allow_reprobe {
+                Some((root.clone(), availability_refresh.clone()))
+            } else {
+                None
+            });
+            glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+                match receiver.try_recv() {
+                    Ok((ok, reason)) => {
+                        crate::source::net_trace(format!(
+                            "startup_smb_probe_done uri={root} ok={ok} reason={reason}"
+                        ));
+                        // Coalesced: one refresh per probe burst.
+                        availability_refresh.schedule();
+                        if !ok {
+                            if let Some((root, availability_refresh)) =
+                                reprobe_state.borrow_mut().take()
+                            {
+                                schedule_startup_smb_probe(root, 300_000, availability_refresh, false);
+                            }
+                        }
+                        glib::ControlFlow::Break
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        glib::ControlFlow::Break
+                    }
+                }
+            });
+        },
+    );
 }
 
 /// Backoff schedule for the silent startup reconnect. Attempt 0 is the

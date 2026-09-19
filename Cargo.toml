@@ -18,6 +18,10 @@ gtk4 = { version = "0.10", features = ["v4_12"] }
 heif-oxide = "0.1"
 image = "0.25"
 kamadak-exif = "0.6"
+keyring = { version = "3", default-features = false, features = [
+    "sync-secret-service",
+    "vendored",
+] }
 libadwaita = { version = "0.8", features = ["v1_5"] }
 rayon = "1"
 rawler = "0.8"

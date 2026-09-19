@@ -1306,3 +1306,191 @@ pub fn show_network_folder_browser(
     load_uri(root_uri);
     dialog.present();
 }
+
+/// PIC-owned SMB credentials dialog, shown ONLY during an explicit user
+/// action (Retry Connection) after guest + Secret Service credentials were
+/// rejected by the server. The entered credentials are handed back on the
+/// main thread; storing them is the caller's decision.
+fn show_smb_credentials_dialog(
+    parent: &gtk::Window,
+    share: String,
+    on_credentials: Rc<dyn Fn(String, String)>,
+) {
+    use gtk::prelude::*;
+
+    let dialog = gtk::Dialog::new();
+    dialog.set_title(Some("Sign in to the share"));
+    dialog.set_transient_for(Some(parent));
+    dialog.set_modal(true);
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    let connect_button = dialog.add_button("Connect", gtk::ResponseType::Accept);
+    dialog.set_default_response(gtk::ResponseType::Accept);
+
+    let content = dialog.content_area();
+    content.set_spacing(10);
+    content.set_margin_top(14);
+    content.set_margin_bottom(6);
+    content.set_margin_start(14);
+    content.set_margin_end(14);
+
+    let share_label = gtk::Label::new(Some(&share));
+    share_label.set_xalign(0.0);
+    share_label.set_wrap(true);
+    share_label.add_css_class("dim-label");
+    content.append(&share_label);
+
+    let message = gtk::Label::new(Some(
+        "The share did not accept guest access. Enter the username and password for this server - they are stored in the system keyring.",
+    ));
+    message.set_xalign(0.0);
+    message.set_wrap(true);
+    content.append(&message);
+
+    let grid = gtk::Grid::new();
+    grid.set_row_spacing(8);
+    grid.set_column_spacing(10);
+    let make_label = |text: &str| {
+        let label = gtk::Label::new(Some(text));
+        label.set_xalign(0.0);
+        label.add_css_class("dim-label");
+        label
+    };
+    let username = gtk::Entry::new();
+    username.set_placeholder_text(Some("username (empty = guest)"));
+    username.set_hexpand(true);
+    let password = gtk::PasswordEntry::new();
+    password.set_placeholder_text(Some("password"));
+    password.set_hexpand(true);
+    password.set_show_peek_icon(true);
+    grid.attach(&make_label("Username"), 0, 0, 1, 1);
+    grid.attach(&username, 1, 0, 1, 1);
+    grid.attach(&make_label("Password"), 0, 1, 1, 1);
+    grid.attach(&password, 1, 1, 1, 1);
+    content.append(&grid);
+
+    let username_for_response = username.clone();
+    let password_for_response = password.clone();
+    let on_credentials_for_response = on_credentials.clone();
+    dialog.connect_response(move |dialog, response| {
+        match response {
+            gtk::ResponseType::Accept => {
+                let user = username_for_response.text().trim().to_string();
+                let pass = password_for_response.text().to_string();
+                crate::source::net_trace(format!(
+                    "smb_credentials_entered share={share} user={}",
+                    if user.is_empty() { "guest" } else { &user }
+                ));
+                on_credentials_for_response(user, pass);
+                dialog.close();
+            }
+            gtk::ResponseType::Cancel => {
+                crate::source::net_trace("smb_credentials_cancelled");
+                dialog.close();
+            }
+            _ => {}
+        }
+    });
+
+    username.grab_focus();
+    dialog.present();
+}
+
+/// Reconnect one SMB share through the direct transport (REDESIGN SHARES
+/// MOUNT). `typed` credentials come from the credentials dialog; without
+/// them the silent ladder (guest, then Secret Service) is tried first. Runs
+/// the network work on a worker thread and delivers the verdict back on the
+/// main thread via a polled channel. A rejected typed password is reported
+/// but never stored; accepted typed credentials are persisted to the Secret
+/// Service. Registered folders and cached thumbnails are never touched.
+fn retry_smb_direct(
+    path: String,
+    parent: gtk::Window,
+    on_unavailable: Rc<dyn Fn()>,
+    typed: Option<(String, String)>,
+) {
+    let (sender, receiver) =
+        std::sync::mpsc::channel::<Result<(), crate::smb_transport::SmbTransportError>>();
+    let path_for_worker = path.clone();
+    let typed_for_worker = typed.clone();
+    std::thread::spawn(move || {
+        let outcome = match &typed_for_worker {
+            Some((user, pass)) => {
+                crate::smb_transport::check_available_with(&path_for_worker, user, pass)
+                    .map(|_| ())
+            }
+            None => crate::smb_transport::stat(&path_for_worker).map(|_| ()),
+        };
+        let _ = sender.send(outcome);
+    });
+    let parent_for_dialog = parent.clone();
+    let path_for_dialog = path.clone();
+    let on_unavailable_for_dialog = on_unavailable.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                // Accepted typed credentials are stored for future silent
+                // reconnects. A keyring failure keeps the session working
+                // but is reported in the trace.
+                if let Some((user, pass)) = &typed {
+                    if let Err(error) =
+                        crate::smb_transport::store_smb_credentials(&path, user, pass)
+                    {
+                        crate::source::net_trace(format!(
+                            "smb_credentials_store_failed uri={path} error={error}"
+                        ));
+                    }
+                }
+                crate::source::net_trace(format!("connect_smb_ok uri={path}"));
+                crate::source::refresh_availability();
+                on_unavailable();
+                glib::ControlFlow::Break
+            }
+            Ok(Err(crate::smb_transport::SmbTransportError::AuthRequired(detail))) => {
+                crate::source::net_trace(format!(
+                    "connect_smb_auth_required uri={path} detail={detail}"
+                ));
+                if typed.is_some() {
+                    // The freshly typed credentials were rejected too; the
+                    // stored entry (if any) is left untouched.
+                    let parent_for_error = parent.clone().upcast::<gtk::Widget>();
+                    show_error(
+                        &parent_for_error,
+                        "Could not connect to network share",
+                        "The server rejected those credentials.",
+                    );
+                } else {
+                    let on_credentials: Rc<dyn Fn(String, String)> = {
+                        let parent = parent_for_dialog.clone();
+                        let path = path_for_dialog.clone();
+                        let on_unavailable = on_unavailable_for_dialog.clone();
+                        Rc::new(move |user, pass| {
+                            retry_smb_direct(
+                                path.clone(),
+                                parent.clone(),
+                                on_unavailable.clone(),
+                                Some((user, pass)),
+                            );
+                        })
+                    };
+                    show_smb_credentials_dialog(&parent_for_dialog, path.clone(), on_credentials);
+                }
+                crate::source::refresh_availability();
+                on_unavailable();
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                let parent_for_error = parent.clone().upcast::<gtk::Widget>();
+                show_error(
+                    &parent_for_error,
+                    "Could not connect to network share",
+                    &error.to_string(),
+                );
+                crate::source::refresh_availability();
+                on_unavailable();
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+}

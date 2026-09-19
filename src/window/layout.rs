@@ -450,15 +450,24 @@
             let parent: gtk::Window = window.clone().upcast();
             let parent_for_error = parent.clone().upcast::<gtk::Widget>();
             Rc::new(move |folder| {
-                // "Retry Connection" = reconnect through gvfs: if the share
-                // is not mounted yet, this mounts it (guest shares connect
-                // silently; password-protected ones get the mount dialog),
-                // then availability is re-probed off the UI thread.
                 let path = folder.path.clone();
                 let on_unavailable = on_unavailable.clone();
                 let parent_for_mount = parent.clone();
                 let parent_for_error = parent_for_error.clone();
                 crate::source::net_trace(format!("connect_requested uri={path}"));
+                if path.starts_with("smb://") {
+                    // SMB reconnects go through the direct transport: guest
+                    // and Secret Service credentials are tried silently; a
+                    // PIC-owned credentials dialog appears only on an auth
+                    // failure (this is an explicit user action).
+                    let parent_for_smb = parent_for_mount.clone();
+                    retry_smb_direct(path, parent_for_smb, on_unavailable, None);
+                    return;
+                }
+                // NFS and every other scheme keep the interactive gvfs path:
+                // "Retry Connection" mounts through gvfs (guest shares
+                // connect silently; password-protected ones get the mount
+                // dialog), then availability is re-probed off the UI thread.
                 crate::source::mount_share_async(&path, Some(&parent_for_mount), move |result| {
                     match result {
                         Ok(()) => {}
@@ -483,8 +492,7 @@
             let gallery = gallery.clone();
             let group_mode = group_mode.clone();
             let open_in_folder_exact_target = open_in_folder_exact_target.clone();
-            Rc::new(move |mode| {
-                if let Err(error) = db::set_setting(
+            Rc::new(move |mode| {                if let Err(error) = db::set_setting(
                     &connection.borrow(),
                     sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY,
                     mode.setting_value(),

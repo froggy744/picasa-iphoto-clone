@@ -33,13 +33,19 @@ pub fn folder_available(folder_id: Option<i64>) -> bool {
         .unwrap_or(true)
 }
 
-fn query_exists(reference: &str, directory: bool) -> bool {
+fn query_exists(reference: &str, directory: bool, lane: crate::smb_transport::SmbLane) -> bool {
     if !reference.contains("://") {
         return if directory {
             Path::new(reference).is_dir()
         } else {
             Path::new(reference).is_file()
         };
+    }
+    if reference.starts_with("smb://") {
+        // Direct SMB probe through libsmbclient (worker threads only - this
+        // blocks up to the transport timeout). The lane keeps availability
+        // probes from delaying photo reads. NFS stays on gvfs.
+        return crate::smb_transport::stat_in_lane(reference, lane).is_ok();
     }
     uri_query_exists(&file(&normalize_nfs_uri(reference)))
 }
@@ -75,7 +81,7 @@ fn uri_query_exists(uri_file: &gio::File) -> bool {
 /// Blocking (up to `URI_PROBE_TIMEOUT` for a remote probe); only call from a
 /// worker thread. No cache lock is held while the probe runs.
 pub fn file_available(reference: &str) -> bool {
-    query_exists(reference, false)
+    query_exists(reference, false, crate::smb_transport::SmbLane::Background)
 }
 
 /// Read the cached availability of an imported source root. Never probes:
@@ -137,7 +143,7 @@ fn local_exists(reference: &str, directory: bool) -> bool {
 /// `URI_PROBE_TIMEOUT`, but the cache lock is never held while it runs.
 pub fn probe_source_available(reference: &str) -> bool {
     let key = format!("source:{reference}");
-    let result = query_exists(reference, true);
+    let result = query_exists(reference, true, crate::smb_transport::SmbLane::Background);
     availability_cache().lock().unwrap().insert(key, result);
     result
 }
@@ -149,7 +155,7 @@ pub fn probe_file_available(reference: &str) -> bool {
         return Path::new(reference).is_file();
     }
     let key = format!("file:{reference}");
-    let result = query_exists(reference, false);
+    let result = query_exists(reference, false, crate::smb_transport::SmbLane::Background);
     availability_cache().lock().unwrap().insert(key, result);
     result
 }
@@ -365,7 +371,11 @@ fn mount_share_run(
     // "Already mounted" counts as success: skip straight to the reachability
     // check when the location has an enclosing mount.
     if file.find_enclosing_mount(gio::Cancellable::NONE).is_ok()
-        && query_exists(&reference_for_callback, true)
+        && query_exists(
+            &reference_for_callback,
+            true,
+            crate::smb_transport::SmbLane::User,
+        )
     {
         net_trace(format!(
             "mount_success uri={reference_for_callback} (already mounted)"
@@ -380,7 +390,13 @@ fn mount_share_run(
         move |result| {
             let mut auth_required = false;
             let outcome = match result {
-                Ok(()) if query_exists(&reference_for_callback, true) => {
+                Ok(())
+                    if query_exists(
+                        &reference_for_callback,
+                        true,
+                        crate::smb_transport::SmbLane::User,
+                    ) =>
+                {
                     net_trace(format!("mount_success uri={}", reference_for_callback));
                     Ok(())
                 }
@@ -835,10 +851,17 @@ fn materialize_inner(reference: &str) -> Result<PathBuf> {
 pub fn read(reference: &str) -> Result<Vec<u8>> {
     net_trace(format!("read_start uri={reference}"));
     let read_started = Instant::now();
-    let loaded = file(reference)
-        .load_contents(gio::Cancellable::NONE)
-        .with_context(|| format!("could not read {reference}"));
-    let result = loaded.map(|(contents, _)| contents.as_ref().to_vec());
+    // Direct SMB: reads go through libsmbclient (no gvfs mount, nothing in
+    // Nautilus). NFS and every other scheme keep riding gvfs.
+    let loaded = if reference.starts_with("smb://") {
+        crate::smb_transport::read_file(reference).map_err(anyhow::Error::msg)
+    } else {
+        file(reference)
+            .load_contents(gio::Cancellable::NONE)
+            .map(|(contents, _)| contents.as_ref().to_vec())
+            .with_context(|| format!("could not read {reference}"))
+    };
+    let result = loaded;
     match &result {
         Ok(bytes) => net_trace(format!(
             "read_done uri={reference} bytes={} ms={:.1}",

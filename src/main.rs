@@ -14,6 +14,8 @@ mod platform;
 mod scanner;
 mod settings;
 mod sidebar;
+#[cfg(target_os = "linux")]
+mod smb_transport;
 mod source;
 mod thumbnail;
 mod thumbnail_display;

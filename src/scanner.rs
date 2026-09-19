@@ -98,7 +98,11 @@ fn scan_with_control(
     }
     let indexed = db::photo_fingerprints(&connection)?;
     let root_file = crate::source::file(root);
-    let (files, discovered_folders) = collect_files(&root_file, control)?;
+    let (files, discovered_folders) = if root.starts_with("smb://") {
+        collect_smb_files(root, control)?
+    } else {
+        collect_files(&root_file, control)?
+    };
     if control.is_cancelled() {
         send(events, ScanEvent::Cancelled { imported: 0 });
         return Ok(0);
@@ -299,11 +303,80 @@ fn scan_with_control(
 }
 
 fn root_is_available(root: &str) -> bool {
+    if root.starts_with("smb://") {
+        // Direct SMB availability (libsmbclient; worker thread only).
+        return crate::smb_transport::stat_in_lane(root, crate::smb_transport::SmbLane::User)
+            .is_ok();
+    }
     if root.contains("://") {
         crate::source::file(root).query_exists(gio::Cancellable::NONE)
     } else {
         Path::new(root).is_dir()
     }
+}
+
+/// Enumerate an SMB tree through the direct transport. Children are wrapped
+/// in synthetic gio::FileInfo objects so the downstream metadata pipeline
+/// (fingerprints, source::read / materialize) works unchanged.
+fn collect_smb_files(
+    root_path: &str,
+    control: &ScanControl,
+) -> Result<(
+    Vec<(gio::File, gio::FileInfo, String)>,
+    Vec<(String, Option<String>)>,
+)> {
+    let mut pending = vec![(root_path.trim_end_matches('/').to_string(), None)];
+    let mut files = Vec::new();
+    let mut folders = Vec::new();
+    let mut visited = 0usize;
+    while let Some((directory, parent_path)) = pending.pop() {
+        if control.is_cancelled() {
+            break;
+        }
+        visited += 1;
+        if visited > 20_000 {
+            anyhow::bail!("SMB scan runaway: more than 20000 directories under {root_path}");
+        }
+        let dir_uri = format!("{directory}/");
+        folders.push((dir_uri.clone(), parent_path));
+        let entries = crate::smb_transport::list_dir(&dir_uri)
+            .map_err(|error| anyhow::anyhow!("could not list {dir_uri}: {error}"))?;
+        for entry in entries {
+            if control.is_cancelled() {
+                break;
+            }
+            let child_uri = format!(
+                "{dir_uri}{}",
+                crate::smb_transport::percent_encode_segment(&entry.name)
+            );
+            if entry.is_dir {
+                // Same Lightroom-artifact skip as the gvfs walk.
+                let name = entry.name.to_ascii_lowercase();
+                if !name.ends_with(".lrdata") && name != "previews" && name != "cache" {
+                    pending.push((child_uri, Some(dir_uri.clone())));
+                }
+                continue;
+            }
+            if !supported(Path::new(&entry.name)) {
+                continue;
+            }
+            // Fingerprint attributes come from a stat (size + mtime).
+            let meta =
+                crate::smb_transport::stat_in_lane(&child_uri, crate::smb_transport::SmbLane::User)
+                    .ok();
+            let info = gio::FileInfo::new();
+            info.set_name(&entry.name);
+            info.set_file_type(gio::FileType::Regular);
+            info.set_size(meta.map(|meta| meta.size).unwrap_or(0) as i64);
+            if let Some(mtime) = meta.and_then(|meta| meta.mtime) {
+                if let Ok(date_time) = glib::DateTime::from_unix_utc(mtime) {
+                    info.set_modification_date_time(&date_time);
+                }
+            }
+            files.push((gio::File::for_uri(&child_uri), info, dir_uri.clone()));
+        }
+    }
+    Ok((files, folders))
 }
 
 pub fn spawn_scan(root: String, events: Sender<ScanEvent>) -> ScanControl {
