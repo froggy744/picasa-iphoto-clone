@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS folders (
 CREATE TABLE IF NOT EXISTS albums (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-  created_at INTEGER NOT NULL DEFAULT 0
+  created_at INTEGER NOT NULL DEFAULT 0,
+  cover_frame TEXT,
+  cover_photo_id INTEGER REFERENCES photos(id) ON DELETE SET NULL
 );
 CREATE TABLE IF NOT EXISTS album_photos (
   album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
@@ -46,6 +48,13 @@ CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at DESC);
 CREATE INDEX IF NOT EXISTS idx_photos_folder ON photos(folder_id);
 CREATE INDEX IF NOT EXISTS idx_album_photos_photo ON album_photos(photo_id);
 "#;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderSearchResult {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct Folder {
@@ -66,6 +75,9 @@ pub struct Album {
     pub name: String,
     pub created_at: i64,
     pub photo_count: i64,
+    pub cover_frame: Option<String>,
+    /// Photo the album shows on its card, chosen from the thumbnail menu.
+    pub cover_photo_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]

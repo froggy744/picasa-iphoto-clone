@@ -4,7 +4,6 @@ use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::Instant;
 
 use anyhow::{Context, Result};
 use fast_image_resize::{
@@ -19,14 +18,6 @@ const THUMBNAIL_SIZE: u32 = 320;
 const THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v4-heif-orientation";
 const RAW_THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v6-generic-raw";
 const DNG_THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v7-dng-full-raw";
-
-macro_rules! thumb_trace {
-    ($($arg:tt)*) => {
-        if false {
-            eprintln!($($arg)*);
-        }
-    };
-}
 
 // A folder import, startup recovery, and a manual refresh can overlap their
 // thumbnail passes. Keep cache-key ownership separate from the filesystem
@@ -46,15 +37,6 @@ const PRIORITY_QUEUE_CAPACITY: usize = 512;
 const PRIORITY_WORKERS: usize = 2;
 const PRIORITY_NEWEST_DISPATCHES: usize = 7;
 const PRIORITY_HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-
-fn priority_trace(event: &str, path: &str, destination: &Path) {
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "THUMB PRIORITY {event} path={path} cache={}",
-            destination.display()
-        );
-    }
-}
 
 fn cache_entry_in_flight(destination: &Path) -> bool {
     IN_FLIGHT
@@ -85,15 +67,12 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
         return;
     };
     if destination.is_file() {
-        priority_trace("skip_existing", &path, &destination);
         return;
     }
     if known_decode_failure(&path, &destination) {
-        priority_trace("skip_known_bad", &path, &destination);
         return;
     }
     if !crate::source::cached_file_available(&path) {
-        priority_trace("skip_offline", &path, &destination);
         return;
     }
 
@@ -102,14 +81,16 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
         return;
     };
     if !pending.insert(destination.clone()) {
-        priority_trace("skip_pending", &path, &destination);
         return;
     }
     drop(pending);
 
     let queue = PRIORITY_QUEUE.get_or_init(|| {
-        let queue = Arc::new((Mutex::new(VecDeque::<PriorityRequest>::new()), Condvar::new()));
-        for worker_id in 0..PRIORITY_WORKERS {
+        let queue = Arc::new((
+            Mutex::new(VecDeque::<PriorityRequest>::new()),
+            Condvar::new(),
+        ));
+        for _ in 0..PRIORITY_WORKERS {
             let queue = queue.clone();
             std::thread::spawn(move || loop {
                 let (path, mtime, size_bytes, destination) = {
@@ -128,7 +109,6 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
                     }
                 };
                 let started = std::time::Instant::now();
-                priority_trace("worker_start", &path, &destination);
                 let failure_marker = destination.with_extension("failed");
                 let _pending_guard = PendingGuard(destination.clone());
                 let deadline = started + PRIORITY_HANDOFF_TIMEOUT;
@@ -143,7 +123,8 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
                     if create(&path, mtime, size_bytes).is_err() {
                         break;
                     }
-                    if destination.is_file() || failure_marker.is_file()
+                    if destination.is_file()
+                        || failure_marker.is_file()
                         || std::time::Instant::now() >= deadline
                     {
                         break;
@@ -157,16 +138,6 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
                     {
                         completions.push(PathBuf::from(&path));
                     }
-                }
-                priority_trace("worker_done", &path, &destination);
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "THUMB PRIORITY worker_done_detail worker={} cache_exists={} failed_marker={} elapsed_ms={}",
-                        worker_id,
-                        destination.is_file(),
-                        failure_marker.is_file(),
-                        started.elapsed().as_millis()
-                    );
                 }
             });
         }
@@ -183,16 +154,10 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
             {
                 pending.remove(&evicted);
             }
-            priority_trace("evicted_oldest", "", &evicted);
         }
     }
-    let queued = queue.len() + 1;
-    priority_trace("queued_front", &path, &destination);
     queue.push_front((path, mtime, size_bytes, destination.clone()));
     wake.notify_one();
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!("THUMB PRIORITY queue_len={queued}");
-    }
 }
 
 /// Return the source paths whose foreground thumbnails finished since the last UI poll.
@@ -222,6 +187,7 @@ pub fn wait_for_priority_requests() {
 
 // Structural split only: included files remain in this module scope.
 include!("thumbnail/cache.rs");
+include!("thumbnail/maintenance.rs");
 include!("thumbnail/recovery.rs");
 include!("thumbnail/viewer.rs");
 include!("thumbnail/nef.rs");

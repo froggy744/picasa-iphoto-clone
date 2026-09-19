@@ -63,11 +63,9 @@ pub fn create_many_cancellable(
 /// A hardcoded `4` leaves most cores idle on anything bigger than a quad-core
 /// laptop, which is a large part of why bulk imports feel slow. The pool is
 /// still capped (not `available_parallelism()` unbounded) because thumbnail
-/// generation also does a fair amount of disk I/O per item; if profiling
-/// with `PICASA_TRACE=1` shows the `read_ms`/`write_ms` fields dominating
-/// `THUMB PERF` lines on your machine (e.g. a slow spinning disk or network
-/// share), lower this cap — more threads won't help an I/O-bound workload
-/// and can even hurt by causing seek contention.
+/// generation also does a fair amount of disk I/O per item; on a slow
+/// spinning disk or network share, lower this cap — more threads won't help
+/// an I/O-bound workload and can even hurt by causing seek contention.
 fn thumbnail_worker_threads(items: &[(String, Option<i64>, Option<i64>)]) -> usize {
     let available = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)

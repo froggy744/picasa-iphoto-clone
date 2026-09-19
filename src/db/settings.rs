@@ -1,9 +1,12 @@
 pub const RECENTLY_ADDED_LIMIT_SETTING_KEY: &str = "recently-added-limit";
 pub const DEFAULT_RECENTLY_ADDED_LIMIT: usize = 100;
 const MAX_RECENTLY_ADDED_LIMIT: usize = 1_000_000;
+pub const THUMBNAIL_SQUARE_CORNERS_SETTING_KEY: &str = "thumbnail-square-corners";
+pub const THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY: &str = "thumbnail-fit-whole-photo";
 pub const LIBRARY_AVAILABLE_SETTING_KEY: &str = "library-stats-available";
 pub const LIBRARY_UNAVAILABLE_SETTING_KEY: &str = "library-stats-unavailable";
 pub const LIBRARY_STATS_UPDATED_SETTING_KEY: &str = "library-stats-updated";
+pub const FOLDER_WATCHING_ENABLED_SETTING_KEY: &str = "folder-watching-enabled";
 
 pub fn setting(connection: &Connection, key: &str) -> Result<Option<String>> {
     Ok(connection
@@ -11,6 +14,22 @@ pub fn setting(connection: &Connection, key: &str) -> Result<Option<String>> {
             row.get(0)
         })
         .optional()?)
+}
+
+pub fn folder_watching_enabled(connection: &Connection) -> bool {
+    setting(connection, FOLDER_WATCHING_ENABLED_SETTING_KEY)
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some("false")
+}
+
+pub fn set_folder_watching_enabled(connection: &Connection, enabled: bool) -> Result<()> {
+    set_setting(
+        connection,
+        FOLDER_WATCHING_ENABLED_SETTING_KEY,
+        if enabled { "true" } else { "false" },
+    )
 }
 
 pub fn recently_added_limit(connection: &Connection) -> usize {
@@ -28,6 +47,12 @@ pub fn set_setting(connection: &Connection, key: &str, value: &str) -> Result<()
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         params![key, value],
     )?;
+    Ok(())
+}
+
+/// Remove a stored preference so it falls back to its default.
+pub fn delete_setting(connection: &Connection, key: &str) -> Result<()> {
+    connection.execute("DELETE FROM settings WHERE key = ?1", [key])?;
     Ok(())
 }
 

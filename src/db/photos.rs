@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 fn ensure_parent_folder(connection: &Connection, path: &str) -> Result<Option<i64>> {
     let Some(parent) = Path::new(path).parent().and_then(|parent| parent.to_str()) else {
@@ -115,8 +115,7 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
         if let Some(sibling_parent) = sibling_parent {
             let parent_id = insert_folder(connection, &sibling_parent)?;
             imported_parent = Some(parent_id);
-            if std::env::var_os("PICASA_TRACE").is_some() {
-            }
+            
         }
     }
     let (parent_id, imported_root) = match existing {
@@ -133,8 +132,7 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
             (parent_id, parent_id.is_none())
         }
     };
-    if std::env::var_os("PICASA_TRACE").is_some() {
-    }
+    
     connection.execute(
         "INSERT INTO folders(path, name, parent_id, imported_root) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(path) DO UPDATE SET name = excluded.name,
@@ -144,7 +142,7 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
     let id = connection.query_row("SELECT id FROM folders WHERE path = ?1", [path], |row| {
         row.get(0)
     })?;
-    let reparented = if imported_root {
+    let _reparented = if imported_root {
         connection.execute(
             "UPDATE folders
              SET parent_id = ?1, imported_root = 0
@@ -154,8 +152,7 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
     } else {
         0
     };
-    if std::env::var_os("PICASA_TRACE").is_some() {
-    }
+    
     repair_existing_folder_parents(connection)?;
     Ok(id)
 }
@@ -178,7 +175,7 @@ pub fn mark_import_root(connection: &Connection, path: &str) -> Result<i64> {
 
 pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: i64) -> Result<i64> {
     let name = path.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or(path);
-    let existing: Option<(i64, Option<i64>, bool)> = connection
+    let _existing: Option<(i64, Option<i64>, bool)> = connection
         .query_row("SELECT id, parent_id, imported_root FROM folders WHERE path = ?1", [path], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .optional()?;
     connection.execute(
@@ -188,12 +185,142 @@ pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: 
         params![path, name, parent_id],
     )?;
     let id = connection.query_row("SELECT id FROM folders WHERE path = ?1", [path], |row| row.get(0))?;
-    if std::env::var_os("PICASA_TRACE").is_some() {
-    }
+    
     Ok(id)
 }
 
+/// Register a network share (such as `smb://host/share`) as an independent
+/// library root with a user-chosen display name. The share behaves like an
+/// imported folder: it is scanned, indexed and availability-tracked through
+/// the ordinary GIO source layer. Registered shares persist in the folders
+/// table, so they remain visible (with cached thumbnails) while offline.
+pub fn insert_network_share(connection: &Connection, uri: &str, name: &str) -> Result<i64> {
+    let id = mark_import_root(connection, uri)?;
+    connection.execute(
+        "UPDATE folders SET name = ?1 WHERE id = ?2",
+        params![name, id],
+    )?;
+    Ok(id)
+}
+
+/// Registered network share roots: URI-based folders the user added. Their
+/// indexed subfolders stay descendants in the folders table but are presented
+/// only inside the sidebar's Network Shares section.
+pub fn network_shares(connection: &Connection) -> Result<Vec<Folder>> {
+    Ok(folders_cached(connection)?
+        .into_iter()
+        .filter(|folder| folder.imported_root && is_remote_path(&folder.path))
+        .collect())
+}
+
+/// True when a folder path is a remote URI (smb://, nfs://, ...) rather than a
+/// local filesystem path. Local-only sidebar sections and local-only behaviour
+/// key off this.
+///
+/// Detection is scheme-based, not `contains("://")`: a manually NFS-mounted
+/// share lives at a plain local path (e.g. `/mnt/4TBP`) and an imported folder
+/// may be stored with a `file://` URI, neither of which is a network share.
+pub fn is_remote_path(path: &str) -> bool {
+    crate::source::is_network_location(path)
+}
+
+pub fn search_folders(
+    connection: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<FolderSearchResult>> {
+    let query = query.trim();
+    if query.chars().count() < 2 || limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut statement = connection.prepare(
+        "SELECT f.id, f.path, COALESCE(f.name, f.path)
+         FROM folders f
+         WHERE (instr(lower(COALESCE(f.name, f.path)), lower(?1)) > 0
+            OR instr(lower(f.path), lower(?1)) > 0)
+           AND EXISTS (
+             WITH RECURSIVE descendants(id) AS (
+               SELECT f.id
+               UNION ALL
+               SELECT child.id
+               FROM folders child
+               JOIN descendants ON child.parent_id = descendants.id
+             )
+             SELECT 1
+             FROM photos p
+             WHERE p.trashed = 0
+               AND p.folder_id IN (SELECT id FROM descendants)
+           )
+         ORDER BY
+           CASE
+             WHEN lower(COALESCE(f.name, f.path)) = lower(?1) THEN 0
+             WHEN instr(lower(COALESCE(f.name, f.path)), lower(?1)) = 1 THEN 1
+             ELSE 2
+           END,
+           COALESCE(f.name, f.path) COLLATE NOCASE,
+           f.path COLLATE NOCASE
+         LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![query, limit as i64], |row| {
+        Ok(FolderSearchResult {
+            id: row.get(0)?,
+            path: row.get(1)?,
+            name: row.get(2)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn folder_path_by_id(connection: &Connection, folder_id: i64) -> Result<Option<String>> {
+    Ok(connection
+        .query_row(
+            "SELECT path FROM folders WHERE id = ?1",
+            [folder_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
 pub fn folders(connection: &Connection) -> Result<Vec<Folder>> {
+    // Worker threads only: resolves availability by probing every imported
+    // source root, which may block for up to `URI_PROBE_TIMEOUT` per unmounted
+    // remote. This is the availability refresher's job.
+    folders_query(
+        connection,
+        true,
+        |path| crate::source::probe_source_available(path),
+    )
+}
+
+/// Availability resolved from the cached probe results only (never probes the
+/// filesystem/GIO). Safe on the GTK thread. The asynchronous availability
+/// refresher keeps the cache populated; until it has run, uncached roots read
+/// as available (the historical online default).
+pub fn folders_cached(connection: &Connection) -> Result<Vec<Folder>> {
+    folders_query(
+        connection,
+        true,
+        |path| crate::source::cached_source_available(path),
+    )
+}
+
+/// Ordering-only folder listing for the grid read path (continuous Folder
+/// stream and navigation). Availability is resolved separately and
+/// asynchronously by the availability refresher; the grid never needs to probe
+/// imported roots itself. Probing here would stall the caller (the GTK thread
+/// or the grid worker) for up to `URI_PROBE_TIMEOUT` per unmounted remote
+/// root, which is exactly the multi-second freeze when navigating to a network
+/// share.
+pub fn folders_light(connection: &Connection) -> Result<Vec<Folder>> {
+    folders_query(connection, false, |_path| true)
+}
+
+fn folders_query(
+    connection: &Connection,
+    resolve_availability: bool,
+    mut resolve_source: impl FnMut(&str) -> bool,
+) -> Result<Vec<Folder>> {
     let mut statement = connection.prepare(
         "SELECT f.id, f.path, COALESCE(f.name, f.path), f.parent_id, f.imported_root, f.watched,
                 (WITH RECURSIVE descendants(id) AS (
@@ -216,18 +343,108 @@ pub fn folders(connection: &Connection) -> Result<Vec<Folder>> {
             watched: row.get(5)?,
             photo_count: row.get(6)?,
             subfolder_count: row.get(7)?,
-            available: crate::source::cached_source_available(&row.get::<_, String>(1)?),
+            // Availability is resolved below from imported roots so a USB
+            // library checks its one registered source, not every descendant.
+            available: true,
         })
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut folders = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    if resolve_availability {
+        let availability = folder_availability_by_id(&folders, &mut resolve_source);
+        for folder in &mut folders {
+            folder.available = availability.get(&folder.id).copied().unwrap_or(true);
+        }
+        crate::source::replace_folder_availability(availability);
+    }
+    Ok(folders)
 }
 
-pub fn set_folder_watched(connection: &Connection, folder_id: i64, watched: bool) -> Result<()> {
-    connection.execute(
+/// Return only user-selected scan roots. Discovered descendants are never
+/// refresh roots, even when they contain photos or are marked watched.
+pub fn imported_root_paths(connection: &Connection) -> Result<Vec<String>> {
+    let mut statement = connection.prepare(
+        "SELECT path FROM folders
+         WHERE imported_root = 1
+           AND NOT EXISTS (
+             SELECT 1
+             FROM folders ancestor
+             WHERE ancestor.imported_root = 1
+               AND ancestor.id != folders.id
+               AND folders.path LIKE ancestor.path || '/%'
+           )
+         ORDER BY path COLLATE NOCASE",
+    )?;
+    let rows = statement.query_map([], |row| row.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<String>>>()?)
+}
+
+/// Persist whether a registered library folder should be watched.
+/// Any indexed folder can be watched independently; the watcher runtime remains
+/// responsible for coalescing filesystem activity safely.
+pub fn set_folder_watched(connection: &Connection, folder_id: i64, watched: bool) -> Result<bool> {
+    let changed = connection.execute(
         "UPDATE folders SET watched = ?1 WHERE id = ?2",
         params![watched, folder_id],
     )?;
-    Ok(())
+    Ok(changed > 0)
+}
+
+/// Resolve every indexed folder to the availability of its imported source
+/// root. Only imported roots touch the filesystem; discovered descendants
+/// inherit their root's state.
+pub fn folder_availability_by_id(
+    folders: &[Folder],
+    mut source_available: impl FnMut(&str) -> bool,
+) -> HashMap<i64, bool> {
+    let by_id = folders
+        .iter()
+        .map(|folder| (folder.id, folder))
+        .collect::<HashMap<_, _>>();
+    let mut root_availability = HashMap::new();
+    for folder in folders.iter().filter(|folder| folder.imported_root) {
+        root_availability.insert(folder.id, source_available(&folder.path));
+    }
+
+    fn resolve(
+        folder_id: i64,
+        by_id: &HashMap<i64, &Folder>,
+        root_availability: &HashMap<i64, bool>,
+        resolved: &mut HashMap<i64, bool>,
+        visiting: &mut HashSet<i64>,
+    ) -> bool {
+        if let Some(available) = resolved.get(&folder_id) {
+            return *available;
+        }
+        if !visiting.insert(folder_id) {
+            return true;
+        }
+        let available = by_id.get(&folder_id).map_or(true, |folder| {
+            if folder.imported_root {
+                root_availability.get(&folder.id).copied().unwrap_or(true)
+            } else {
+                folder
+                    .parent_id
+                    .map(|parent_id| resolve(parent_id, by_id, root_availability, resolved, visiting))
+                    .unwrap_or(true)
+            }
+        });
+        visiting.remove(&folder_id);
+        resolved.insert(folder_id, available);
+        available
+    }
+
+    let mut resolved = HashMap::with_capacity(folders.len());
+    let mut visiting = HashSet::new();
+    for folder in folders {
+        resolve(
+            folder.id,
+            &by_id,
+            &root_availability,
+            &mut resolved,
+            &mut visiting,
+        );
+    }
+    resolved
 }
 
 /// Remove a folder and its indexed descendants from the application database.

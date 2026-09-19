@@ -2,6 +2,24 @@ use gio::prelude::{AppInfoExt, SettingsExt};
 
 thread_local! {
     static ACTIVE_PHOTO_MENU: RefCell<Option<gtk::Widget>> = RefCell::new(None);
+    static CONTEXT_MENU_CSS_INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Installs the context-menu stylesheet exactly once per process. The menu
+/// opens on every right-click, so installing here would add a new display
+/// provider each time and accumulate them over a session.
+fn ensure_context_menu_css(display: &gtk::gdk::Display) {
+    if CONTEXT_MENU_CSS_INSTALLED.with(std::cell::Cell::get) {
+        return;
+    }
+    let css = gtk::CssProvider::new();
+    css.load_from_data(crate::css::PHOTO_CONTEXT_MENU);
+    gtk::style_context_add_provider_for_display(
+        display,
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    CONTEXT_MENU_CSS_INSTALLED.with(|cell| cell.set(true));
 }
 
 fn dismiss_active_photo_context_menu() -> bool {
@@ -13,9 +31,7 @@ fn dismiss_active_photo_context_menu() -> bool {
         if menu.parent().is_some() {
             menu.unparent();
         }
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("UI TRACE photo_context_menu_dismiss");
-        }
+        
         true
     })
 }
@@ -35,6 +51,48 @@ fn photo_context_menu_contains(widget: &gtk::Widget) -> bool {
         }
         false
     })
+}
+
+/// A submenu trigger inside the photo context menu: flat row, label and arrow,
+/// matching the other submenu entries.
+fn context_submenu_button(label: &str, css_class: &str) -> gtk::MenuButton {
+    let button = gtk::MenuButton::new();
+    button.set_focus_on_click(false);
+    button.set_focusable(false);
+    button.set_direction(gtk::ArrowType::None);
+    button.set_halign(gtk::Align::Fill);
+    button.add_css_class("flat");
+    button.add_css_class("photo-context-submenu");
+    button.add_css_class(css_class);
+    button.set_height_request(28);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let text = gtk::Label::new(Some(label));
+    text.set_xalign(0.0);
+    text.set_hexpand(true);
+    row.append(&text);
+    row.append(&gtk::Image::from_icon_name("pan-end-symbolic"));
+    button.set_child(Some(&row));
+    button
+}
+
+/// This submenu lives inside a mouse context menu. Keep its transient buttons
+/// from becoming the window focus: removing a focused submenu and parent menu
+/// makes GtkGridView focus its first item and scroll to top. The separately
+/// built infobar album menu remains keyboard-focusable.
+fn unfocus_submenu(popover: &gtk::Popover) {
+    popover.set_focusable(false);
+    let mut pending = popover.child().into_iter().collect::<Vec<_>>();
+    while let Some(widget) = pending.pop() {
+        if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+            button.set_focus_on_click(false);
+            button.set_focusable(false);
+        }
+        let mut child = widget.first_child();
+        while let Some(descendant) = child {
+            child = descendant.next_sibling();
+            pending.push(descendant);
+        }
+    }
 }
 
 fn show_photo_context_menu(
@@ -74,80 +132,7 @@ fn show_photo_context_menu(
     // theme would otherwise give every GtkButton regular toolbar/dialog
     // padding.  Apply a small context-menu-specific CSS class so rows look
     // and measure like menu items instead of large push buttons.
-    let css = gtk::CssProvider::new();
-    css.load_from_data(
-        ".photo-context-menu {
-             padding: 6px;
-             border-radius: 12px;
-             border: 1px solid alpha(currentColor, 0.10);
-             background-color: @popover_bg_color;
-             box-shadow: 0 4px 14px alpha(black, 0.16);
-         }
-         .photo-context-item {
-             min-height: 28px;
-             padding: 0 12px;
-             margin: 0;
-             border: 0;
-             border-radius: 6px;
-             background: transparent;
-             box-shadow: none;
-             font-size: 14px;
-             font-weight: 400;
-         }
-         .photo-context-item:hover {
-             background-color: alpha(currentColor, 0.07);
-         }
-         .photo-context-item:disabled {
-             background: transparent;
-             box-shadow: none;
-             opacity: 0.45;
-         }
-         .photo-context-item > label {
-             padding: 0;
-             margin: 0;
-             font-size: 14px;
-             font-weight: 400;
-         }
-         .photo-context-album {
-             min-height: 28px;
-             padding: 0;
-             margin: 0;
-             background: transparent;
-             box-shadow: none;
-         }
-         .photo-context-album > button {
-             min-height: 28px;
-             padding: 0 12px;
-             margin: 0;
-             border: 0;
-             border-radius: 6px;
-             background: transparent;
-             box-shadow: none;
-             font-size: 14px;
-             font-weight: 400;
-         }
-         .photo-context-album > button:hover {
-             background-color: alpha(currentColor, 0.07);
-         }
-         .photo-context-album label {
-             font-size: 14px;
-             font-weight: 400;
-         }
-         .photo-context-album > button > box {
-             padding: 0;
-             margin: 0;
-         }
-         .photo-context-separator {
-             min-height: 1px;
-             padding: 0;
-             margin: 4px 8px;
-         }"
-    );
-    gtk::style_context_add_provider_for_display(
-        &host.display(),
-        &css,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+    ensure_context_menu_css(&host.display());
 
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
     menu.set_width_request(236);
@@ -206,32 +191,11 @@ fn show_photo_context_menu(
     }
 
     let selection_ids = selected_photo_ids(&context, Some(photo.id()));
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "COLLAGE TRACE context clicked_id={} selected_ids={:?}",
-            photo.id(),
-            selection_ids
-        );
-    }
+    
     let selection_for_provider = selection_ids.clone();
     let selection_provider: Rc<dyn Fn() -> Vec<i64>> =
         Rc::new(move || selection_for_provider.clone());
-    let add_to_album = gtk::MenuButton::new();
-    add_to_album.set_focus_on_click(false);
-    add_to_album.set_focusable(false);
-    add_to_album.set_direction(gtk::ArrowType::None);
-    add_to_album.set_halign(gtk::Align::Fill);
-    add_to_album.add_css_class("flat");
-    add_to_album.add_css_class("photo-context-album");
-    add_to_album.set_height_request(28);
-    let album_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let album_label = gtk::Label::new(Some("Add to Album"));
-    album_label.set_xalign(0.0);
-    album_label.set_hexpand(true);
-    let album_arrow = gtk::Image::from_icon_name("pan-end-symbolic");
-    album_row.append(&album_label);
-    album_row.append(&album_arrow);
-    add_to_album.set_child(Some(&album_row));
+    let add_to_album = context_submenu_button("Add to Album", "photo-context-album");
     let album_scroll_y = context
         .gallery
         .borrow()
@@ -251,24 +215,9 @@ fn show_photo_context_menu(
         {
             dismiss_menu.clone()
         },
-        restore_album_view,
+        restore_album_view.clone(),
     );
-    // This submenu lives inside a mouse context menu. Keep its transient
-    // buttons from becoming the window focus: removing a focused submenu and
-    // parent menu makes GtkGridView focus its first item and scroll to top.
-    // The separately built infobar album menu remains keyboard-focusable.
-    album_popover.set_focusable(false);
-    if let Some(album_menu) = album_popover.child() {
-        let mut child = album_menu.first_child();
-        while let Some(widget) = child {
-            let next = widget.next_sibling();
-            if let Ok(button) = widget.downcast::<gtk::Button>() {
-                button.set_focus_on_click(false);
-                button.set_focusable(false);
-            }
-            child = next;
-        }
-    }
+    unfocus_submenu(&album_popover);
     add_to_album.set_popover(Some(&album_popover));
     menu.append(&add_to_album);
 
@@ -279,9 +228,7 @@ fn show_photo_context_menu(
     let dismiss_menu_for_collage = dismiss_menu.clone();
     collage.connect_clicked(move |_| {
         dismiss_menu_for_collage();
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("COLLAGE TRACE open ids={:?}", collage_ids);
-        }
+        
         (collage_context.open_collage)(collage_ids.clone());
     });
 
@@ -437,6 +384,36 @@ fn show_photo_context_menu(
     });
 
     if let sidebar::SidebarFilter::Album(album_id) = context.filter.get() {
+        // The cover only makes sense inside an album, and always applies to
+        // the album being viewed: no album list, no cross-album choices.
+        let already_cover = db::albums(&context.connection.borrow())
+            .unwrap_or_default()
+            .into_iter()
+            .find(|album| album.id == album_id)
+            .and_then(|album| album.cover_photo_id)
+            == Some(photo.id());
+        let set_cover = add_action("Set as Album Cover");
+        set_cover.set_sensitive(!already_cover);
+        let set_cover_context = context.clone();
+        let set_cover_photo_id = photo.id();
+        let dismiss_menu_for_cover = dismiss_menu.clone();
+        set_cover.connect_clicked(move |button| {
+            dismiss_menu_for_cover();
+            if let Err(error) = db::set_album_cover_photo(
+                &set_cover_context.connection.borrow(),
+                album_id,
+                set_cover_photo_id,
+            ) {
+                show_error(
+                    button.upcast_ref(),
+                    "Could not set album cover",
+                    &error.to_string(),
+                );
+                return;
+            }
+            refresh_album_ui(&set_cover_context);
+        });
+
         let remove = add_action("Remove from Album");
         let remove_context = context.clone();
         let remove_selection = selection_provider.clone();
@@ -502,11 +479,27 @@ fn show_photo_context_menu(
     let photo_for_open = photo.clone();
     let dismiss_menu_for_open = dismiss_menu.clone();
     let lightbox_for_open = context.lightbox.clone();
+    let gallery_for_open = context.gallery.clone();
     open.connect_clicked(move |_| {
-        if let Some(lightbox) = lightbox_for_open.upgrade() {
-            lightbox.open(vec![photo_for_open.clone()], 0);
-        }
+        // Remove the menu before opening so unparenting it cannot steal focus
+        // from the newly opened lightbox. Keep the gallery's current photo
+        // collection so wheel/arrow navigation continues normally.
         dismiss_menu_for_open();
+        if let Some(lightbox) = lightbox_for_open.upgrade() {
+            let photos = gallery_for_open
+                .borrow()
+                .upgrade()
+                .map(|gallery| gallery.photo_objects())
+                .unwrap_or_default();
+            if let Some(index) = photos
+                .iter()
+                .position(|item| item.id() == photo_for_open.id())
+            {
+                lightbox.open(photos, index);
+            } else {
+                lightbox.open(vec![photo_for_open.clone()], 0);
+            }
+        }
     });
 
     let file = crate::source::file(&photo.path());
@@ -528,8 +521,31 @@ fn show_photo_context_menu(
         let navigate_to_folder = context.navigate_to_folder.clone();
         let dismiss_menu_for_folder = dismiss_menu.clone();
         let photo_id = photo.id();
+        let current_filter = context.filter.clone();
+        let current_search = context.search.clone();
+        let gallery_for_folder = context.gallery.clone();
+        let sidebar_for_folder = context.sidebar.clone();
         open_in_folder.connect_clicked(move |_| {
             if folder_id != 0 {
+                // If we are already in the continuous Folder tree/stream and no
+                // search filter is active, do not route through destination
+                // navigation again. That path can first scroll to the folder
+                // header and then re-select the photo, which is fragile for
+                // virtualized folder rows. Directly select/scroll the clicked
+                // photo instead, and still reveal its folder in the sidebar.
+                if matches!(current_filter.get(), sidebar::SidebarFilter::Folder(_))
+                    && current_search.borrow().is_empty()
+                {
+                    if let Some(gallery) = gallery_for_folder.borrow().upgrade() {
+                        if gallery.select_photo(photo_id) {
+                            if let Some(sidebar) = sidebar_for_folder.borrow().as_ref() {
+                                sidebar::scroll_to_folder(sidebar, folder_id);
+                            }
+                            dismiss_menu_for_folder();
+                            return;
+                        }
+                    }
+                }
                 navigate_to_folder(folder_id, photo_id);
             }
             dismiss_menu_for_folder();
@@ -657,12 +673,14 @@ fn show_photo_context_menu(
     let photo_for_delete = photo;
     let anchor_for_delete = anchor.clone();
     let context_for_delete = context;
+    let delete_selection = selection_ids;
     let dismiss_menu_for_delete = dismiss_menu.clone();
     delete.connect_clicked(move |_| {
         dismiss_menu_for_delete();
         show_delete_confirmation(
             &anchor_for_delete,
             photo_for_delete.clone(),
+            delete_selection.clone(),
             context_for_delete.clone(),
         );
     });
@@ -696,10 +714,13 @@ fn show_photo_context_menu(
         .max(1)
         .min(menu_host.max_content_height().max(1));
 
+    const MENU_EDGE_INSET: i32 = 4;
+    let max_x = (host.width() - measured_width - MENU_EDGE_INSET).max(MENU_EDGE_INSET);
+    let max_y = (host.height() - measured_height - MENU_EDGE_INSET).max(MENU_EDGE_INSET);
     let menu_x = (click_point.x().round() as i32 - measured_width / 2)
-        .clamp(0, (host.width() - measured_width).max(0));
+        .clamp(MENU_EDGE_INSET, max_x);
     let menu_y = (click_point.y().round() as i32 - measured_height / 2)
-        .clamp(0, (host.height() - measured_height).max(0));
+        .clamp(MENU_EDGE_INSET, max_y);
     menu_host.set_margin_start(menu_x);
     menu_host.set_margin_top(menu_y);
 
@@ -709,46 +730,14 @@ fn show_photo_context_menu(
         active.borrow_mut().replace(menu_widget);
     });
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "UI TRACE photo_context_menu_show host=GtkOverlay anchor={} host_size={}x{} point=({:.1},{:.1}) menu=({}, {}) measured={}x{}",
-            anchor.type_().name(),
-            host.width(),
-            host.height(),
-            click_point.x(),
-            click_point.y(),
-            menu_x,
-            menu_y,
-            measured_width,
-            measured_height
-        );
-    }
+    
 
     host.add_overlay(&menu_host);
     menu_host.set_visible(true);
 }
 
 fn open_file_in_manager(file: &gio::File) {
-    if let Some(path) = file.path() {
-        // Nautilus is the only file manager whose selection option is verified
-        // in the supported Linux environment. Spawn it so the GTK main thread
-        // remains responsive while it opens and selects the file.
-        if std::process::Command::new("nautilus")
-            .arg("--select")
-            .arg(path)
-            .spawn()
-            .is_ok()
-        {
-            return;
-        }
-    }
-
-    if let Some(parent) = file.parent() {
-        let _ = gio::AppInfo::launch_default_for_uri(
-            &parent.uri(),
-            None::<&gio::AppLaunchContext>,
-        );
-    }
+    crate::platform::reveal_file(file);
 }
 
 fn prepare_wallpaper(
@@ -1076,11 +1065,25 @@ fn valid_file_name(name: &str) -> bool {
 fn show_delete_confirmation(
     parent: &gtk::Widget,
     photo: crate::photo_object::PhotoObject,
+    selection: Vec<i64>,
     context: PhotoActionContext,
 ) {
+    // The selection always contains the clicked photo (selected_photo_ids
+    // falls back to it), so the single-photo heading can stay personalized.
+    let single = selection.len() <= 1;
+    let heading = if single {
+        format!("Move “{}” to Trash?", photo.filename())
+    } else {
+        format!("Move {} photos to Trash?", selection.len())
+    };
+    let body = if single {
+        "The photo will be removed from the library and moved to the system Trash."
+    } else {
+        "The photos will be removed from the library and moved to the system Trash."
+    };
     let dialog = adw::AlertDialog::builder()
-        .heading(format!("Move “{}” to Trash?", photo.filename()))
-        .body("The photo will be removed from the library and moved to the system Trash.")
+        .heading(heading)
+        .body(body)
         .close_response("cancel")
         .default_response("cancel")
         .build();
@@ -1090,23 +1093,40 @@ fn show_delete_confirmation(
 
     let parent_for_response = parent.clone();
     dialog.connect_response(Some("delete"), move |_, _| {
-        if let Err(error) = db::set_trashed(&context.connection.borrow(), photo.id(), true) {
-            show_error(
-                &parent_for_response,
-                "Could not delete photo",
-                &error.to_string(),
-            );
-            return;
-        }
+        for id in &selection {
+            // Resolve the on-disk path from the database instead of trusting
+            // grid tiles: menu actions must not depend on tile recycling.
+            let path = match db::photo(&context.connection.borrow(), *id) {
+                Ok(Some(record)) => record.path,
+                Ok(None) => continue,
+                Err(error) => {
+                    show_error(
+                        &parent_for_response,
+                        "Could not delete photo",
+                        &error.to_string(),
+                    );
+                    return;
+                }
+            };
 
-        if let Err(error) = crate::source::file(&photo.path()).trash(gio::Cancellable::NONE) {
-            let _ = db::set_trashed(&context.connection.borrow(), photo.id(), false);
-            show_error(
-                &parent_for_response,
-                "Could not move photo to Trash",
-                &error.to_string(),
-            );
-            return;
+            if let Err(error) = db::set_trashed(&context.connection.borrow(), *id, true) {
+                show_error(
+                    &parent_for_response,
+                    "Could not delete photo",
+                    &error.to_string(),
+                );
+                return;
+            }
+
+            if let Err(error) = crate::source::file(&path).trash(gio::Cancellable::NONE) {
+                let _ = db::set_trashed(&context.connection.borrow(), *id, false);
+                show_error(
+                    &parent_for_response,
+                    "Could not move photo to Trash",
+                    &error.to_string(),
+                );
+                return;
+            }
         }
 
         if let Some(lightbox) = context.lightbox.upgrade() {
@@ -1213,4 +1233,230 @@ fn show_error(parent: &gtk::Widget, heading: &str, message: &str) {
         .build();
     dialog.add_response("close", "Close");
     dialog.present(Some(parent));
+}
+
+#[cfg(test)]
+mod photo_actions_tests {
+    use super::*;
+
+    fn settle_gtk_layout() {
+        let main_loop = gtk::glib::MainLoop::new(None, false);
+        let loop_to_quit = main_loop.clone();
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+            loop_to_quit.quit();
+        });
+        main_loop.run();
+    }
+
+    fn find_action(root: &gtk::Widget, text: &str) -> Option<gtk::Button> {
+        if let Some(button) = root.downcast_ref::<gtk::Button>() {
+            let label = button.label().map(|label| label.to_string()).or_else(|| {
+                button
+                    .child()
+                    .and_then(|child| child.downcast::<gtk::Label>().ok())
+                    .map(|label| label.text().to_string())
+            });
+            if label.as_deref() == Some(text) {
+                return Some(button.clone());
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            let next = widget.next_sibling();
+            if let Some(found) = find_action(&widget, text) {
+                return Some(found);
+            }
+            child = next;
+        }
+        None
+    }
+
+    fn menu() -> gtk::Widget {
+        ACTIVE_PHOTO_MENU
+            .with(|active| active.borrow().clone())
+            .expect("photo context menu is showing")
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn add_to_album_popover_scrolls_when_the_album_list_is_long() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-add-to-album-scroll-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        for index in 1..=30 {
+            db::create_album(&connection.borrow(), &format!("Album {index:02}")).unwrap();
+        }
+        let context = PhotoActionContext {
+            connection: connection.clone(),
+            gallery: Rc::new(RefCell::new(std::rc::Weak::new())),
+            filter: Rc::new(Cell::new(sidebar::SidebarFilter::All)),
+            search: Rc::new(RefCell::new(String::new())),
+            sort: Rc::new(Cell::new(PhotoSort {
+                field: SortField::DateTaken,
+                direction: SortDirection::Descending,
+            })),
+            info: Rc::new(InfoBar::new()),
+            selected_photo: Rc::new(RefCell::new(None)),
+            lightbox: std::rc::Weak::new(),
+            sidebar: Rc::new(RefCell::new(None)),
+            create_album: Rc::new(|| {}),
+            import_folder: Rc::new(|| {}),
+            delete_album: Rc::new(|_| {}),
+            on_unavailable: Rc::new(|| {}),
+            refresh_albums_home: Rc::new(|_| {}),
+            navigate_to_folder: Rc::new(|_, _| {}),
+            open_collage: Rc::new(|_| {}),
+            open_edit: Rc::new(|_| {}),
+            edit_clipboard: Rc::new(RefCell::new(None)),
+            window: glib::WeakRef::new(),
+            context_menu_host: Rc::new(RefCell::new(None)),
+        };
+
+        let popover = build_album_popover(
+            context,
+            Rc::new(Vec::new),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+        );
+        let scroll = popover
+            .child()
+            .and_then(|child| child.downcast::<gtk::ScrolledWindow>().ok())
+            .expect("a long album chooser must have a scrollable viewport");
+
+        assert_eq!(scroll.vscrollbar_policy(), gtk::PolicyType::Automatic);
+        assert!(scroll.propagates_natural_height());
+        assert!(scroll.max_content_height() > 0);
+        let last_album = find_action(scroll.upcast_ref(), "Album 30")
+            .expect("the final album must remain available inside the viewport");
+        unfocus_submenu(&popover);
+        assert!(!last_album.is_focusable());
+
+        drop(popover);
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn album_cover_action_is_only_offered_inside_an_album() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-photo-context-cover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        connection
+            .borrow()
+            .execute_batch(
+                "INSERT INTO photos (id, path) VALUES (1, 'samples/01-Start Up.jpg');",
+            )
+            .unwrap();
+        let album = db::create_album(&connection.borrow(), "Holiday").unwrap();
+        db::add_photos_to_album(&connection.borrow(), album.id, &[1]).unwrap();
+        let photo = db::photo(&connection.borrow(), 1).unwrap().unwrap();
+        let photo_object = crate::photo_object::PhotoObject::from_photo(&photo);
+
+        let overlay = gtk::Overlay::new();
+        let window = gtk::Window::builder()
+            .default_width(640)
+            .default_height(480)
+            .child(&overlay)
+            .build();
+        window.present();
+        settle_gtk_layout();
+
+        let context_for = |filter: sidebar::SidebarFilter| PhotoActionContext {
+            connection: connection.clone(),
+            gallery: Rc::new(RefCell::new(std::rc::Weak::new())),
+            filter: Rc::new(Cell::new(filter)),
+            search: Rc::new(RefCell::new(String::new())),
+            sort: Rc::new(Cell::new(PhotoSort {
+                field: SortField::DateTaken,
+                direction: SortDirection::Descending,
+            })),
+            info: Rc::new(InfoBar::new()),
+            selected_photo: Rc::new(RefCell::new(None)),
+            lightbox: std::rc::Weak::new(),
+            sidebar: Rc::new(RefCell::new(None)),
+            create_album: Rc::new(|| {}),
+            import_folder: Rc::new(|| {}),
+            delete_album: Rc::new(|_| {}),
+            on_unavailable: Rc::new(|| {}),
+            refresh_albums_home: Rc::new(|_| {}),
+            navigate_to_folder: Rc::new(|_, _| {}),
+            open_collage: Rc::new(|_| {}),
+            open_edit: Rc::new(|_| {}),
+            edit_clipboard: Rc::new(RefCell::new(None)),
+            window: glib::WeakRef::new(),
+            context_menu_host: Rc::new(RefCell::new(Some(overlay.clone().downgrade()))),
+        };
+
+        // Inside the album the action targets the album being viewed, with no
+        // album list and no "Add to Album"-style chooser.
+        show_photo_context_menu(
+            photo_object.clone(),
+            overlay.clone().upcast(),
+            context_for(sidebar::SidebarFilter::Album(album.id)),
+            10.0,
+            10.0,
+        );
+        let open_menu = menu();
+        assert!(find_action(&open_menu, "Set as Album Cover").is_some());
+        assert!(find_action(&open_menu, "Remove from Album").is_some());
+
+        find_action(&open_menu, "Set as Album Cover")
+            .unwrap()
+            .emit_clicked();
+        assert_eq!(
+            db::albums(&connection.borrow()).unwrap().remove(0).cover_photo_id,
+            Some(1)
+        );
+
+        // The action greys out once the photo already is the album's cover.
+        show_photo_context_menu(
+            photo_object.clone(),
+            overlay.clone().upcast(),
+            context_for(sidebar::SidebarFilter::Album(album.id)),
+            10.0,
+            10.0,
+        );
+        assert!(
+            !find_action(&menu(), "Set as Album Cover")
+                .unwrap()
+                .is_sensitive()
+        );
+        dismiss_active_photo_context_menu();
+
+        // Outside an album the cover action is not offered at all.
+        show_photo_context_menu(
+            photo_object,
+            overlay.clone().upcast(),
+            context_for(sidebar::SidebarFilter::All),
+            10.0,
+            10.0,
+        );
+        let open_menu = menu();
+        assert!(find_action(&open_menu, "Set as Album Cover").is_none());
+        assert!(find_action(&open_menu, "Remove from Album").is_none());
+        dismiss_active_photo_context_menu();
+
+        window.close();
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

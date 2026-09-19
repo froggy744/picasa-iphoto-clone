@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::{Local, TimeZone};
@@ -14,14 +13,6 @@ use gio::prelude::*;
 
 use crate::db::{self, PhotoMetadata};
 use crate::thumbnail;
-
-macro_rules! trace {
-    ($($arg:tt)*) => {
-        if false {
-            eprintln!($($arg)*);
-        }
-    };
-}
 
 #[derive(Debug, Clone)]
 pub enum ScanEvent {
@@ -94,8 +85,6 @@ fn scan_with_control(
     events: Option<&Sender<ScanEvent>>,
     control: &ScanControl,
 ) -> Result<usize> {
-    let scan_started = Instant::now();
-    trace!("IMPORT start root={root}");
     if !root_is_available(root) {
         anyhow::bail!("scan root is unavailable: {root}");
     }
@@ -114,11 +103,6 @@ fn scan_with_control(
         send(events, ScanEvent::Cancelled { imported: 0 });
         return Ok(0);
     }
-    trace!(
-        "IMPORT discovery root={root} files={} elapsed_ms={}",
-        files.len(),
-        scan_started.elapsed().as_millis()
-    );
 
     // Only reconcile deletions after the complete tree was enumerated and the
     // root is still available. If a removable drive went offline, discovery
@@ -131,9 +115,7 @@ fn scan_with_control(
         .map(|(file, _, _)| crate::source::reference(file))
         .collect::<HashSet<_>>();
     let removed = db::remove_missing_photos(&connection, folder_id, &present_paths)?;
-    if removed > 0 {
-        trace!("IMPORT removed_missing root={root} count={removed}");
-    }
+    if removed > 0 {}
 
     let mut imported = 0;
     let mut failed = 0;
@@ -151,13 +133,7 @@ fn scan_with_control(
             .copied()
             .unwrap_or(folder_id);
         let id = db::insert_discovered_folder(transaction.as_ref().unwrap(), &path, parent_id)?;
-        trace!(
-            "FOLDER TRACE scanner_register path={} parent_path={:?} parent_id={} id={}",
-            path,
-            parent_path,
-            parent_id,
-            id
-        );
+
         folder_ids.insert(path, id);
     }
     for (file, info, folder_path) in files {
@@ -259,11 +235,7 @@ fn scan_with_control(
             for event in indexed_events.drain(..) {
                 send(events, event);
             }
-            trace!(
-                "IMPORT db_batch root={root} indexed={} elapsed_ms={}",
-                imported,
-                scan_started.elapsed().as_millis()
-            );
+
             transaction = Some(connection.unchecked_transaction()?);
         }
     }
@@ -284,13 +256,11 @@ fn scan_with_control(
             total: thumbnails.len(),
         },
     );
-    let thumbnail_total = thumbnails.len();
     // Do not hold the import worker open for thumbnail generation. This worker
     // continues independently while indexing and browsing remain available.
     if let Some(sender) = events.cloned() {
         let control = control.clone();
         std::thread::spawn(move || {
-            trace!("IMPORT thumbnails_start total={thumbnail_total}");
             let progress_sender = sender.clone();
             let thumbnail_results = thumbnail::create_many_cancellable(
                 &thumbnails,
@@ -325,14 +295,6 @@ fn scan_with_control(
     } else {
         send(events, ScanEvent::Finished { imported, failed });
     }
-    eprintln!(
-        "SCAN SUMMARY root={} indexed={} thumbnails_ok={} thumbnails_failed={} elapsed_ms={}",
-        root,
-        imported,
-        thumbnail_total,
-        0,
-        scan_started.elapsed().as_millis()
-    );
     Ok(imported)
 }
 
@@ -390,6 +352,7 @@ fn collect_files(
         if control.is_cancelled() {
             break;
         }
+
         folders.push((folder_path.clone(), parent_path));
         let enumerator = directory
             .enumerate_children(
@@ -535,4 +498,37 @@ fn is_raw(path: &str) -> bool {
 
 fn is_heif(path: &str) -> bool {
     crate::image_format::uses(path, crate::image_format::DecoderKind::Heif)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn recursive_collection_reaches_nested_photo_below_imported_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "picasa-rs-scanner-recursion-{}-{unique}",
+            std::process::id()
+        ));
+        let nested = root.join("Marianne Lotter").join("FB-Marianne");
+        fs::create_dir_all(&nested).unwrap();
+        let photo = nested.join("photo.jpg");
+        fs::write(&photo, []).unwrap();
+
+        let (files, folders) =
+            collect_files(&gio::File::for_path(&root), &ScanControl::default()).unwrap();
+        assert!(files
+            .iter()
+            .any(|(_, _, folder)| folder.ends_with("FB-Marianne")));
+        assert!(folders
+            .iter()
+            .any(|(folder, _)| folder.ends_with("FB-Marianne")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

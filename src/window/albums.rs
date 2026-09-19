@@ -8,7 +8,7 @@ fn selected_photo_ids(context: &PhotoActionContext, fallback_id: Option<i64>) ->
 }
 
 fn refresh_album_ui(context: &PhotoActionContext) {
-    let folders = db::folders(&context.connection.borrow()).unwrap_or_default();
+    let folders = db::folders_cached(&context.connection.borrow()).unwrap_or_default();
     let albums = db::albums(&context.connection.borrow()).unwrap_or_default();
     let counts = db::sidebar_counts(&context.connection.borrow()).unwrap_or_default();
     if let Some(sidebar) = context.sidebar.borrow().as_ref() {
@@ -114,7 +114,13 @@ fn build_album_popover(
         });
         menu.append(&item);
     }
-    popover.set_child(Some(&menu));
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_propagate_natural_width(true);
+    scroll.set_propagate_natural_height(true);
+    scroll.set_max_content_height(360);
+    scroll.set_child(Some(&menu));
+    popover.set_child(Some(&scroll));
     popover
 }
 

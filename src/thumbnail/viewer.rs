@@ -50,7 +50,6 @@ fn decode_raw_thumbnail_inner(reference: &str) -> Result<DecodedThumbnailSource>
 
     // Prefer rawler's larger decoded preview for the cached thumbnail. This is
     // the generic path used by DNG and every other supported RAW format.
-    let raw_preview_started = Instant::now();
     match rawler::analyze::extract_preview_pixels(
         local_path.clone(),
         &rawler::decoders::RawDecodeParams::default(),
@@ -58,12 +57,7 @@ fn decode_raw_thumbnail_inner(reference: &str) -> Result<DecodedThumbnailSource>
         Ok(image) => {
             let source_width = image.width();
             let source_height = image.height();
-            thumb_trace!(
-                "THUMB TRACE RAW preview decoder=rawler source={}x{} elapsed_ms={}",
-                source_width,
-                source_height,
-                raw_preview_started.elapsed().as_millis()
-            );
+
             return Ok(DecodedThumbnailSource {
                 image: image.to_rgb8(),
                 source_width,
@@ -73,7 +67,7 @@ fn decode_raw_thumbnail_inner(reference: &str) -> Result<DecodedThumbnailSource>
         }
         Err(error) => {
             failures.push(format!("preview extraction: {error}"));
-            thumb_trace!("THUMB TRACE RAW preview_failed reason={error}");
+
         }
     }
 
@@ -190,51 +184,22 @@ pub fn decode_for_viewer_with_cancel<F>(
 where
     F: Fn() -> bool,
 {
-    let started = Instant::now();
-    thumb_trace!("VIEW TRACE decode_start path={reference}");
-
     check_viewer_cancelled(&cancelled, "before_orientation_metadata")?;
-    let stage = Instant::now();
     // HEIF container transforms are applied by heif-oxide during decode.
     let orientation = if is_heif(reference) {
         1
     } else {
         exif_orientation(reference)
     };
-    thumb_trace!(
-        "VIEW PERF orientation_metadata_ms={} orientation={}",
-        stage.elapsed().as_millis(),
-        orientation
-    );
     check_viewer_cancelled(&cancelled, "after_orientation_metadata")?;
 
-    let (image, source_width, source_height, target_width, target_height) = if is_raw(reference) {
-        let read_started = Instant::now();
-        let stage = Instant::now();
+    let (image, target_width, target_height) = if is_raw(reference) {
         let local_path = crate::source::materialize(reference)?;
         check_viewer_cancelled(&cancelled, "after_materialize")?;
-        thumb_trace!(
-            "VIEW TRACE materialize_ms={} path={}",
-            stage.elapsed().as_millis(),
-            local_path.display()
-        );
-        let stage = Instant::now();
+
         if let Some(bytes) = nef_embedded_preview(&local_path)? {
             check_viewer_cancelled(&cancelled, "after_embedded_preview_read")?;
-            let scan_ms = stage.elapsed().as_millis();
-            thumb_trace!(
-                "VIEW TRACE embedded_scan_ms={} bytes={}",
-                scan_ms,
-                bytes.len()
-            );
-            thumb_trace!(
-                "VIEW PERF read_ms={} format=raw_embedded bytes={}",
-                read_started.elapsed().as_millis(),
-                bytes.len()
-            );
-
             let (source_width, source_height) = jpeg_dimensions(&bytes)?;
-            let target_started = Instant::now();
             let (target_width, target_height) = viewer_target_dimensions(
                 source_width,
                 source_height,
@@ -242,55 +207,19 @@ where
                 viewport_width,
                 viewport_height,
             );
-            trace_viewer_target(
-                target_started,
-                source_width,
-                source_height,
-                orientation,
-                viewport_width,
-                viewport_height,
-                target_width,
-                target_height,
-            );
 
-            let stage = Instant::now();
             check_viewer_cancelled(&cancelled, "before_turbojpeg_decode")?;
-            let (decoded, decoder) =
-                match decode_jpeg_turbo_with_target(&bytes, target_width, target_height) {
-                    Ok(decoded) => (decoded, "turbojpeg"),
-                    Err(error) => {
-                        thumb_trace!("VIEW TRACE turbojpeg_fallback reason={error}");
-                        (decode_with_image(&bytes)?, "image")
-                    }
-                };
+            let decoded = match decode_jpeg_turbo_with_target(&bytes, target_width, target_height) {
+                Ok(decoded) => decoded,
+                Err(_) => decode_with_image(&bytes)?,
+            };
             check_viewer_cancelled(&cancelled, "after_turbojpeg_decode")?;
-            thumb_trace!(
-                "VIEW PERF decode_ms={} format=raw_embedded decoder={} dct_scale={} source={}x{} output={}x{}",
-                stage.elapsed().as_millis(),
-                decoder,
-                decoded.scale,
-                decoded.source_width,
-                decoded.source_height,
-                decoded.image.width(),
-                decoded.image.height()
-            );
             (
                 DynamicImage::ImageRgb8(decoded.image),
-                source_width,
-                source_height,
                 target_width,
                 target_height,
             )
         } else {
-            thumb_trace!(
-                "VIEW TRACE embedded_scan_ms={} result=none",
-                stage.elapsed().as_millis()
-            );
-            thumb_trace!(
-                "VIEW PERF read_ms={} format=raw_preview",
-                read_started.elapsed().as_millis()
-            );
-            let stage = Instant::now();
             check_viewer_cancelled(&cancelled, "before_raw_preview_decode")?;
             let raw_params = rawler::decoders::RawDecodeParams::default();
             let image = match rawler::analyze::extract_preview_pixels(&local_path, &raw_params) {
@@ -300,9 +229,6 @@ where
                     // their sensor data is still readable. Develop the RAW
                     // image as a viewer fallback. DNG thumbnails have a
                     // separate bounded recovery path after preview failure.
-                    thumb_trace!(
-                        "VIEW TRACE raw_preview_failed; trying_full_raw reason={preview_error}"
-                    );
                     check_viewer_cancelled(&cancelled, "before_full_raw_decode")?;
                     let full = rawler::analyze::extract_full_pixels(&local_path, &raw_params)
                         .map_err(|full_error| {
@@ -311,26 +237,12 @@ where
                             )
                         })?;
                     check_viewer_cancelled(&cancelled, "after_full_raw_decode")?;
-                    thumb_trace!(
-                        "VIEW TRACE full_raw_decode source={}x{}",
-                        full.width(),
-                        full.height()
-                    );
                     full
                 }
             };
             check_viewer_cancelled(&cancelled, "after_raw_preview_decode")?;
             let source_width = image.width();
             let source_height = image.height();
-            thumb_trace!(
-                "VIEW PERF decode_ms={} format=raw_preview decoder=rawler source={}x{} output={}x{}",
-                stage.elapsed().as_millis(),
-                source_width,
-                source_height,
-                source_width,
-                source_height
-            );
-            let target_started = Instant::now();
             let (target_width, target_height) = viewer_target_dimensions(
                 source_width,
                 source_height,
@@ -338,35 +250,11 @@ where
                 viewport_width,
                 viewport_height,
             );
-            trace_viewer_target(
-                target_started,
-                source_width,
-                source_height,
-                orientation,
-                viewport_width,
-                viewport_height,
-                target_width,
-                target_height,
-            );
-            (
-                image,
-                source_width,
-                source_height,
-                target_width,
-                target_height,
-            )
+            (image, target_width, target_height)
         }
     } else if is_jpeg(reference) {
-        let stage = Instant::now();
         let bytes = crate::source::read(reference)?;
-        thumb_trace!(
-            "VIEW PERF read_ms={} format=jpeg bytes={}",
-            stage.elapsed().as_millis(),
-            bytes.len()
-        );
-
         let (source_width, source_height) = jpeg_dimensions(&bytes)?;
-        let target_started = Instant::now();
         let (target_width, target_height) = viewer_target_dimensions(
             source_width,
             source_height,
@@ -374,50 +262,20 @@ where
             viewport_width,
             viewport_height,
         );
-        trace_viewer_target(
-            target_started,
-            source_width,
-            source_height,
-            orientation,
-            viewport_width,
-            viewport_height,
-            target_width,
-            target_height,
-        );
 
-        let stage = Instant::now();
         check_viewer_cancelled(&cancelled, "before_jpeg_decode")?;
-        let (decoded, decoder) =
-            match decode_jpeg_turbo_with_target(&bytes, target_width, target_height) {
-                Ok(decoded) => (decoded, "turbojpeg"),
-                Err(error) => {
-                    thumb_trace!("VIEW TRACE turbojpeg_fallback reason={error}");
-                    (decode_with_image(&bytes)?, "image")
-                }
-            };
+        let decoded = match decode_jpeg_turbo_with_target(&bytes, target_width, target_height) {
+            Ok(decoded) => decoded,
+            Err(_) => decode_with_image(&bytes)?,
+        };
         check_viewer_cancelled(&cancelled, "after_jpeg_decode")?;
-        thumb_trace!(
-            "VIEW PERF decode_ms={} format=jpeg decoder={} dct_scale={} source={}x{} output={}x{}",
-            stage.elapsed().as_millis(),
-            decoder,
-            decoded.scale,
-            decoded.source_width,
-            decoded.source_height,
-            decoded.image.width(),
-            decoded.image.height()
-        );
         (
             DynamicImage::ImageRgb8(decoded.image),
-            source_width,
-            source_height,
             target_width,
             target_height,
         )
     } else if is_heif(reference) {
-        let stage = Instant::now();
         let bytes = crate::source::read(reference)?;
-        let read_ms = stage.elapsed().as_millis();
-        let stage = Instant::now();
         check_viewer_cancelled(&cancelled, "before_heif_decode")?;
         let decoded = decode_heif(&bytes)?;
         check_viewer_cancelled(&cancelled, "after_heif_decode")?;
@@ -431,55 +289,15 @@ where
             viewport_width,
             viewport_height,
         );
-        thumb_trace!(
-            "VIEW PERF read_ms={} decode_ms={} format=heif decoder=heif-oxide source={}x{}",
-            read_ms,
-            stage.elapsed().as_millis(),
-            source_width,
-            source_height
-        );
-        (
-            image,
-            source_width,
-            source_height,
-            target_width,
-            target_height,
-        )
+        (image, target_width, target_height)
     } else {
-        let stage = Instant::now();
         let bytes = crate::source::read(reference)?;
-        thumb_trace!(
-            "VIEW PERF read_ms={} format=generic bytes={}",
-            stage.elapsed().as_millis(),
-            bytes.len()
-        );
         let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
-        let format = reader
-            .format()
-            .map(|format| {
-                format
-                    .extensions_str()
-                    .first()
-                    .copied()
-                    .unwrap_or("unknown")
-            })
-            .unwrap_or("unknown");
-        let stage = Instant::now();
         check_viewer_cancelled(&cancelled, "before_generic_decode")?;
         let image = reader.decode()?;
         check_viewer_cancelled(&cancelled, "after_generic_decode")?;
         let source_width = image.width();
         let source_height = image.height();
-        thumb_trace!(
-            "VIEW PERF decode_ms={} format={} decoder=image source={}x{} output={}x{}",
-            stage.elapsed().as_millis(),
-            format,
-            source_width,
-            source_height,
-            source_width,
-            source_height
-        );
-        let target_started = Instant::now();
         let (target_width, target_height) = viewer_target_dimensions(
             source_width,
             source_height,
@@ -487,73 +305,21 @@ where
             viewport_width,
             viewport_height,
         );
-        trace_viewer_target(
-            target_started,
-            source_width,
-            source_height,
-            orientation,
-            viewport_width,
-            viewport_height,
-            target_width,
-            target_height,
-        );
-        (
-            image,
-            source_width,
-            source_height,
-            target_width,
-            target_height,
-        )
+        (image, target_width, target_height)
     };
 
-    let stage = Instant::now();
     check_viewer_cancelled(&cancelled, "before_pixel_conversion")?;
     let image = image.into_rgba8();
-    let resize_input_width = image.width();
-    let resize_input_height = image.height();
-    thumb_trace!(
-        "VIEW PERF pixel_conversion_ms={} output={}x{}",
-        stage.elapsed().as_millis(),
-        image.width(),
-        image.height()
-    );
 
     // Resize before orientation. Rotating only display-sized pixels avoids a
     // large copy for orientations 5-8.
-    let stage = Instant::now();
     check_viewer_cancelled(&cancelled, "before_resize")?;
-    let skipped_resize = image.width() == target_width && image.height() == target_height;
     let image = resize_viewer_rgba(image, target_width, target_height)?;
     check_viewer_cancelled(&cancelled, "after_resize")?;
-    thumb_trace!(
-        "VIEW PERF resize_ms={} filter=hamming skipped={} full_source={}x{} input={}x{} output={}x{}",
-        stage.elapsed().as_millis(),
-        skipped_resize,
-        source_width,
-        source_height,
-        resize_input_width,
-        resize_input_height,
-        image.width(),
-        image.height()
-    );
 
-    let stage = Instant::now();
     check_viewer_cancelled(&cancelled, "before_final_orientation")?;
     let oriented = apply_orientation(DynamicImage::ImageRgba8(image), orientation).into_rgba8();
     check_viewer_cancelled(&cancelled, "after_final_orientation")?;
-    thumb_trace!(
-        "VIEW PERF orientation_ms={} orientation={} output={}x{}",
-        stage.elapsed().as_millis(),
-        orientation,
-        oriented.width(),
-        oriented.height()
-    );
-    thumb_trace!(
-        "VIEW PERF viewer_pipeline_total_ms={} output={}x{}",
-        started.elapsed().as_millis(),
-        oriented.width(),
-        oriented.height()
-    );
     Ok(oriented)
 }
 
@@ -562,33 +328,10 @@ where
     F: Fn() -> bool,
 {
     if cancelled() {
-        thumb_trace!("VIEW TRACE viewer_decode_cancelled stage={stage}");
+
         anyhow::bail!("cancelled at {stage}");
     }
     Ok(())
-}
-
-fn trace_viewer_target(
-    started: Instant,
-    source_width: u32,
-    source_height: u32,
-    orientation: u16,
-    viewport_width: u32,
-    viewport_height: u32,
-    target_width: u32,
-    target_height: u32,
-) {
-    thumb_trace!(
-        "VIEW PERF target_calculation_ms={} viewport={}x{} source={}x{} orientation={} target_pre_orientation={}x{}",
-        started.elapsed().as_millis(),
-        viewport_width,
-        viewport_height,
-        source_width,
-        source_height,
-        orientation,
-        target_width,
-        target_height
-    );
 }
 
 fn viewer_target_dimensions(
@@ -662,7 +405,7 @@ pub fn exif_orientation(reference: &str) -> u16 {
     let key = (local.clone(), modified);
     let cache = VIEWER_ORIENTATION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(orientation) = cache.lock().unwrap().get(&key).copied() {
-        thumb_trace!("VIEW PERF orientation_cache_hit path={}", reference);
+
         return orientation;
     }
 
@@ -758,15 +501,11 @@ mod raw_thumbnail_tests {
         let params = rawler::decoders::RawDecodeParams::default();
         assert!(rawler::analyze::extract_preview_pixels(&path, &params).is_err());
         assert!(rawler::analyze::extract_thumbnail_pixels(&path, &params).is_err());
-        let started = Instant::now();
         let decoded = decode_raw_thumbnail(&path).unwrap();
         assert_eq!(decoded.scale, "full RAW recovery");
         assert!(decoded.source_width > THUMBNAIL_SIZE);
         assert!(decoded.source_height > THUMBNAIL_SIZE);
         assert_eq!(decoded.image.width().max(decoded.image.height()), THUMBNAIL_SIZE);
-        eprintln!("DNG recovery: {}x{} -> {}x{} in {}ms",
-            decoded.source_width, decoded.source_height,
-            decoded.image.width(), decoded.image.height(), started.elapsed().as_millis());
 
         let destination = std::env::temp_dir().join(format!("picasa-dng-test-{}.jpg", std::process::id()));
         create_uncached(&path, &destination).unwrap();

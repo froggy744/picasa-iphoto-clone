@@ -1,102 +1,22 @@
-fn show_folder_statistics(
-    parent: &gtk::Widget,
-    connection: Rc<RefCell<Connection>>,
-    folder: db::Folder,
-) {
-    let photos = db::photos(&connection.borrow(), Some(folder.id), false, None).unwrap_or_default();
-    let direct_photos = photos
-        .iter()
-        .filter(|photo| photo.folder_id == Some(folder.id))
-        .count();
-    let available = photos
-        .iter()
-        .filter(|photo| crate::source::cached_file_available(&photo.path))
-        .count();
-    let total_bytes: u64 = photos
-        .iter()
-        .filter_map(|photo| photo.size_bytes)
-        .filter_map(|size| u64::try_from(size).ok())
-        .sum();
-    let body = format!(
-        "{}\n\nTotal photos: {}\nPhotos directly in this folder: {}\nSubfolders: {}\nOriginals available: {}\nOriginals unavailable: {}\nTotal file size: {}",
-        folder.path,
-        photos.len(),
-        direct_photos,
-        folder.subfolder_count,
-        available,
-        photos.len().saturating_sub(available),
-        format_folder_bytes(total_bytes),
-    );
-    let dialog = adw::AlertDialog::builder()
-        .heading(format!("{} statistics", folder.name))
-        .body(body)
-        .close_response("close")
-        .build();
-    dialog.add_response("close", "Close");
-    dialog.present(Some(parent));
-}
-
-fn format_folder_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
+include!("dialogs.rs");
+include!("navigation.rs");
 
 pub fn build(app: &adw::Application, connection: Connection) -> adw::ApplicationWindow {
     let build_started = Instant::now();
     let window = adw::ApplicationWindow::new(app);
+    // Test hook: fullscreen layout for UI automation.
+    if std::env::var_os("PIC_TEST_FULLSCREEN").is_some() {
+        window.fullscreen();
+    }
     window.set_title(Some("PIC - Picasa iPhoto Clone"));
     window.set_default_size(1440, 900);
 
-    let close_confirmation_open = Rc::new(Cell::new(false));
-    let close_confirmation_allowed = Rc::new(Cell::new(false));
-    let close_confirmation_open_for_request = close_confirmation_open.clone();
-    let close_confirmation_allowed_for_request = close_confirmation_allowed.clone();
-    window.connect_close_request(move |window| {
-        if close_confirmation_allowed_for_request.get() {
-            return glib::Propagation::Proceed;
-        }
-        if close_confirmation_open_for_request.replace(true) {
-            return glib::Propagation::Stop;
-        }
+    crate::source::install_ui_heartbeat();
 
-        let dialog = adw::AlertDialog::builder()
-            .heading("Close Picasa?")
-            .body("Are you sure you want to close the application?")
-            .default_response("cancel")
-            .close_response("cancel")
-            .build();
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("close", "Close Picasa");
-        dialog.set_response_appearance("close", adw::ResponseAppearance::Destructive);
-
-        let window_for_response = window.clone();
-        let close_confirmation_open_for_response = close_confirmation_open_for_request.clone();
-        let close_confirmation_allowed_for_response = close_confirmation_allowed_for_request.clone();
-        dialog.connect_response(None, move |dialog, response| {
-            close_confirmation_open_for_response.set(false);
-            if response == "close" {
-                close_confirmation_allowed_for_response.set(true);
-                window_for_response.close();
-            } else {
-                dialog.close();
-            }
-        });
-        dialog.present(Some(window));
-        glib::Propagation::Stop
-    });
+    install_close_confirmation(&window);
 
     let connection = Rc::new(RefCell::new(connection));
-    let folders = db::folders(&connection.borrow()).unwrap_or_default();
+    let folders = db::folders_cached(&connection.borrow()).unwrap_or_default();
     let folder_cache = Rc::new(RefCell::new(folders.clone()));
     let albums = db::albums(&connection.borrow()).unwrap_or_default();
     let sidebar_counts = db::sidebar_counts(&connection.borrow()).unwrap_or_default();
@@ -136,17 +56,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     );
     sort_photos(&mut photos, sort.get());
     let startup_photos = Rc::new(photos);
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!(
-            "STARTUP cold_start_ms={} photos={} displayed={} folders={} albums={} scan=disabled rss_mb={}",
-            build_started.elapsed().as_millis(),
-            sidebar_counts.photos,
-            startup_photos.len(),
-            folders.len(),
-            albums.len(),
-            crate::diagnostics::rss_mb()
-        );
-    }
+    eprintln!(
+        "STARTUP cold_start_ms={} photos={} displayed={} folders={} albums={} scan=disabled rss_mb={}",
+        build_started.elapsed().as_millis(),
+        sidebar_counts.photos,
+        startup_photos.len(),
+        folders.len(),
+        albums.len(),
+        crate::diagnostics::rss_mb()
+    );
 
     let info = Rc::new(InfoBar::new());
     info.set_photo(None);
@@ -156,6 +74,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let lightbox = Rc::new(Lightbox::new());
     let info_for_lightbox = info.clone();
     let selected_photo_for_lightbox = selected_photo.clone();
+
+    // Appearance themes are discovered from the themes folder at runtime; the
+    // engine applies them, persists the choice, and is shared with the
+    // Settings → Themes picker (the single theme list in the app).
+    let display = gtk::gdk::Display::default().expect("a display is required");
+    let theme_engine = crate::window::theme::ThemeEngine::new(
+        display.clone(),
+        connection.clone(),
+        lightbox.clone(),
+    );
     lightbox.set_photo_changed_handler(move |photo| {
         info_for_lightbox.set_photo(Some(&photo));
         // Navigating to another photo restores the viewer's normal fit state.
@@ -167,98 +95,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // is open, it toggles between fit and 1:1 viewing.
     // The actual open action is installed after Gallery exists.
     let space_open_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let edit_space_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let collection_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i32)>>>> =
         Rc::new(RefCell::new(None));
     let search_popup_slot: Rc<RefCell<Option<gtk::Popover>>> = Rc::new(RefCell::new(None));
     let space_toggle_in_progress = Rc::new(Cell::new(false));
 
-    // Handle viewer keyboard shortcuts at the window boundary as well as
-    // inside the lightbox. Capture prevents GtkGridView from interpreting
-    // Space as a selection toggle.
-    let window_escape = gtk::EventControllerKey::new();
-    window_escape.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let lightbox_for_window_escape = lightbox.clone();
-    let space_open_slot_for_key = space_open_slot.clone();
-    let one_to_one_for_key = info.one_to_one.clone();
-    let space_toggle_in_progress_for_key = space_toggle_in_progress.clone();
-    let search_popup_for_key = search_popup_slot.clone();
-    let window_for_fullscreen_key = window.clone();
-    window_escape.connect_key_pressed(move |_, key, _, _| {
-        // Escape dismisses the photo context menu before it closes the
-        // lightbox or affects the gallery. This mirrors normal context-menu
-        // behaviour and keeps one Escape press scoped to one UI layer.
-        if key == gtk::gdk::Key::Escape && dismiss_active_photo_context_menu() {
-            return glib::Propagation::Stop;
-        }
-
-        // Editing text must not invoke gallery Space/arrow-key shortcuts.
-        if !lightbox_for_window_escape.root.is_visible()
-            && gtk::prelude::RootExt::focus(&window_for_fullscreen_key)
-                .is_some_and(|focus| focus.is::<gtk::Editable>())
-            && key != gtk::gdk::Key::F11
-        {
-            return glib::Propagation::Proceed;
-        }
-        if (key == gtk::gdk::Key::Escape || key == gtk::gdk::Key::BackSpace)
-            && lightbox_for_window_escape.root.is_visible()
-        {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-            }
-            lightbox_for_window_escape.close();
-            glib::Propagation::Stop
-        } else if key == gtk::gdk::Key::F11 {
-            if window_for_fullscreen_key.is_fullscreen() {
-                window_for_fullscreen_key.unfullscreen();
-            } else {
-                window_for_fullscreen_key.fullscreen();
-            }
-            glib::Propagation::Stop
-        } else if lightbox_for_window_escape.root.is_visible()
-            && (key == gtk::gdk::Key::Up || key == gtk::gdk::Key::Down)
-            && search_popup_for_key
-                .borrow()
-                .as_ref()
-                .is_some_and(|popup| popup.is_visible())
-        {
-            // Search suggestions own Up/Down while visible, even with the
-            // photo viewer open underneath.
-            glib::Propagation::Proceed
-        } else if lightbox_for_window_escape.root.is_visible()
-            && (key == gtk::gdk::Key::Left || key == gtk::gdk::Key::Right)
-        {
-            lightbox_for_window_escape.navigate_photo(if key == gtk::gdk::Key::Left { -1 } else { 1 });
-            glib::Propagation::Stop
-        } else if lightbox_for_window_escape.root.is_visible()
-            && (key == gtk::gdk::Key::Up || key == gtk::gdk::Key::Down)
-        {
-            lightbox_for_window_escape.navigate_collection(if key == gtk::gdk::Key::Up { -1 } else { 1 });
-            glib::Propagation::Stop
-        } else if key == gtk::gdk::Key::space {
-            if lightbox_for_window_escape.root.is_visible() {
-                if one_to_one_for_key.is_active() {
-                    space_toggle_in_progress_for_key.set(true);
-                    one_to_one_for_key.set_active(false);
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("UI TRACE lightbox_space active=false");
-                    }
-                } else {
-                    space_toggle_in_progress_for_key.set(true);
-                    one_to_one_for_key.set_active(true);
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("UI TRACE lightbox_space active=true");
-                    }
-                }
-            } else if let Some(open_selected) = space_open_slot_for_key.borrow().as_ref() {
-                open_selected();
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                }
-            }
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    window.add_controller(window_escape);
+    include!("shortcuts.rs");
 
     let info_for_grid = info.clone();
     let selected_photo_for_grid = selected_photo.clone();
@@ -267,6 +110,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let search_text = Rc::new(RefCell::new(String::new()));
     let search_entry_slot: Rc<RefCell<Option<gtk::SearchEntry>>> = Rc::new(RefCell::new(None));
     let search_suppressed = Rc::new(Cell::new(false));
+    let cleared_search_query = Rc::new(RefCell::new(None::<String>));
     let search_debounce: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
     let gallery_for_actions: Rc<RefCell<Weak<grid::Gallery>>> = Rc::new(RefCell::new(Weak::new()));
     let sidebar_for_unavailable: Rc<RefCell<Option<gtk::ScrolledWindow>>> =
@@ -283,6 +127,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         })
     };
     let import_folder_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let add_network_share_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let edit_open_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> = Rc::new(RefCell::new(None));
     let edit_clipboard: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let open_edit: Rc<dyn Fn(i64)> = {
@@ -301,6 +146,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         Rc::new(RefCell::new(None));
     let collage_close_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
         Rc::new(RefCell::new(None));
+    // True while the user is on the photos page picking images for the open
+    // collage. The collage editor must survive that detour; every other
+    // transition away from the collage page tears it down.
+    let collage_add_mode: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    // True while the photo editor is editing a photo that belongs to the
+    // open collage. The collage editor survives that detour, and the
+    // editor's Back/Done return to the collage instead of the photos page.
+    let collage_editing: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let open_collage: Rc<dyn Fn(Vec<i64>)> = {
         let slot = collage_open_slot.clone();
         Rc::new(move |ids| {
@@ -309,13 +162,81 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         })
     };
-    let refresh_folder_slot: Rc<RefCell<Option<Rc<dyn Fn(String)>>>> =
+    let refresh_folder_slot: Rc<
+        RefCell<Option<Rc<dyn Fn(PhotoScanRequestReason, String)>>>,
+    > =
         Rc::new(RefCell::new(None));
-    let folder_watch_manager = Rc::new(RefCell::new(
-        crate::folder_watcher::FolderWatchManager::default(),
-    ));
-    let (folder_watch_sender, folder_watch_receiver) =
-        std::sync::mpsc::channel::<String>();
+
+    // Keep filesystem monitors alive for exactly the folders the user marked
+    // for watching. Raw monitor callbacks only mark the owning imported root
+    // dirty; they never start a scan directly.
+    let folder_watch_monitors: Rc<RefCell<Vec<gio::FileMonitor>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let pending_watch_refreshes: Rc<
+        RefCell<std::collections::HashMap<String, Instant>>,
+    > = Rc::new(RefCell::new(std::collections::HashMap::new()));
+    let rebuild_folder_watches: Rc<dyn Fn()> = {
+        let connection = connection.clone();
+        let monitors = folder_watch_monitors.clone();
+        let pending = pending_watch_refreshes.clone();
+        Rc::new(move || {
+            for monitor in monitors.borrow_mut().drain(..) {
+                monitor.cancel();
+            }
+            pending.borrow_mut().clear();
+
+            if !db::folder_watching_enabled(&connection.borrow()) {
+                
+                return;
+            }
+
+            let Ok(folders) = db::folders_cached(&connection.borrow()) else {
+                eprintln!("WATCH ERROR could not read folders");
+                return;
+            };
+            for folder in folders.iter().filter(|folder| folder.watched && folder.available) {
+                let Some(scan_root) = watch_scan_root(&folders, folder.id) else {
+                    
+                    continue;
+                };
+                let watched_path = folder.path.clone();
+                let file = crate::source::file(&watched_path);
+                let monitor = match file.monitor_directory(
+                    gio::FileMonitorFlags::NONE,
+                    gio::Cancellable::NONE,
+                ) {
+                    Ok(monitor) => monitor,
+                    Err(error) => {
+                        eprintln!(
+                            "WATCH ERROR monitor path={} error={}",
+                            watched_path, error
+                        );
+                        continue;
+                    }
+                };
+                let pending_for_event = pending.clone();
+                let scan_root_for_event = scan_root.clone();
+                monitor.connect_changed(move |_, file, other_file, event| {
+                    // Ignore metadata-only monitor noise. Content changes are
+                    // coalesced below before they can authorize any scan.
+                    if matches!(
+                        event,
+                        gio::FileMonitorEvent::AttributeChanged
+                            | gio::FileMonitorEvent::PreUnmount
+                            | gio::FileMonitorEvent::Unmounted
+                    ) {
+                        return;
+                    }
+                    pending_for_event
+                        .borrow_mut()
+                        .insert(scan_root_for_event.clone(), Instant::now());
+                    
+                });
+                monitors.borrow_mut().push(monitor);
+            }
+            
+        })
+    };
     let import_folder: Rc<dyn Fn()> = {
         let slot = import_folder_slot.clone();
         Rc::new(move || {
@@ -344,11 +265,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let import_folder = import_folder.clone();
         let delete_album = delete_album.clone();
         Rc::new(move || {
-            if let Ok(folders) = db::folders(&connection.borrow()) {
-                folder_cache.replace(folders);
-            }
+            
+            debug_assert!(PhotoScanRequestReason::AvailabilityUpdate
+                .scan_kind()
+                .is_none());
             refresh_availability_ui(
                 &connection,
+                &folder_cache,
                 &gallery,
                 &sidebar,
                 &slot,
@@ -365,6 +288,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         Rc::new(RefCell::new(None));
     let folder_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i64, i64)>>>> =
         Rc::new(RefCell::new(None));
+    // Open in Folder keeps this exact target alive briefly so a sidebar
+    // Tree-mode reorder cannot replace it with a generic folder-header scroll.
+    let open_in_folder_exact_target: Rc<Cell<Option<i64>>> = Rc::new(Cell::new(None));
     let navigate_to_folder: Rc<dyn Fn(i64, i64)> = {
         let slot = folder_navigation_slot.clone();
         Rc::new(move |folder_id, photo_id| {
@@ -404,17 +330,50 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         window: window.clone().upcast::<gtk::Window>().downgrade(),
         context_menu_host: context_menu_host.clone(),
     };
-    let grid_thumbnail_size = grid_thumbnail_size_from_setting(&connection.borrow());
+    let saved_grid_thumbnail_size = grid_thumbnail_size_from_setting(&connection.borrow());
+
+    // Result activation should dismiss the visible search UI without running the
+    // normal empty-query handler. Running that handler here would immediately
+    // rebuild the current full library/folder model while the user is opening a
+    // result, which is both unnecessary and can stall the GTK thread.
+    let clear_search_after_result: Rc<dyn Fn()> = {
+        let search_entry = search_entry_slot.clone();
+        let search_text = search_text.clone();
+        let suppressed = search_suppressed.clone();
+        let debounce = search_debounce.clone();
+        let cleared_query = cleared_search_query.clone();
+        Rc::new(move || {
+            if let Some(source) = debounce.borrow_mut().take() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.remove()));
+            }
+            let query = search_text.borrow().clone();
+            cleared_query.replace(Some(query.clone()));
+            suppressed.set(true);
+            if let Some(entry) = search_entry.borrow().as_ref() {
+                entry.set_text("");
+            }
+            search_text.replace(String::new());
+            suppressed.set(false);
+            let cleared_query_for_timeout = cleared_query.clone();
+            glib::timeout_add_local_once(Duration::from_millis(500), move || {
+                if cleared_query_for_timeout.borrow().as_deref() == Some(query.as_str()) {
+                    cleared_query_for_timeout.replace(None);
+                }
+            });
+            
+        })
+    };
 
     let gallery = Rc::new(grid::Gallery::new(
         &[],
-        grid_thumbnail_size,
+        saved_grid_thumbnail_size.unwrap_or(DEFAULT_GRID_THUMBNAIL_SIZE),
         move |photo| {
             info_for_grid.set_photo(photo.as_ref());
             selected_photo_for_grid.replace(photo);
         },
         {
             let availability_refresh = availability_refresh.clone();
+            let clear_search_after_result = clear_search_after_result.clone();
             move |photos, selected_index| {
                 if photos
                     .get(selected_index)
@@ -423,6 +382,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     availability_refresh();
                 }
                 lightbox_for_grid.open(photos, selected_index);
+                clear_search_after_result();
             }
         },
         {
@@ -456,6 +416,32 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         },
     ));
+    // No stored size (or only the untouched legacy default): adopt the
+    // ~4-thumbnails-per-row view level on the first real layout.
+    if saved_grid_thumbnail_size.is_none() {
+        gallery.enable_auto_default_zoom();
+    }
+    // Resolved size for views that only need a number (album covers).
+    let grid_thumbnail_size = saved_grid_thumbnail_size.unwrap_or(DEFAULT_GRID_THUMBNAIL_SIZE);
+
+    // Thumbnail appearance (Settings > Library). Square corners toggle a CSS
+    // class on the main window; whole-photo fit is applied to the gallery and
+    // re-applied live when the toggles change.
+    if crate::settings::saved_bool(
+        &connection.borrow(),
+        crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY,
+    )
+    .unwrap_or(false)
+    {
+        window.add_css_class("square-corners");
+    }
+    gallery.set_fit_whole_photo(
+        crate::settings::saved_bool(
+            &connection.borrow(),
+            crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+        )
+        .unwrap_or(false),
+    );
     gallery_for_actions.replace(Rc::downgrade(&gallery));
     apply_gallery_grouping(&gallery, filter.get(), sort.get(), group_mode.get());
 
@@ -468,18 +454,46 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let availability_refresh = availability_refresh.clone();
 
         space_open_slot.replace(Some(Rc::new(move || {
-            let Some(selected) = selected_photo.borrow().clone() else {
+            let photos = gallery.photo_objects();
+            // Scroll-then-open: when 1:1/Space is activated within a short
+            // grace after a wheel/touchpad scroll and the pointer rests on a
+            // thumbnail, that photo becomes the selection and opens. This is
+            // the fast "scroll, then Space through photos" flow. Hover alone
+            // never changes anything: the plain selection always wins.
+            let scroll_hovered =
+                gallery.hovered_photo_after_scroll(grid::SCROLL_HOVER_OPEN_GRACE);
+            if let Some(hovered) = scroll_hovered.as_ref() {
+                gallery.set_selected_photo_ids(&[hovered.id()]);
+            }
+            if std::env::var_os("PIC_DEBUG_SPACE").is_some() {
+                match scroll_hovered.as_ref() {
+                    Some(hovered) => eprintln!(
+                        "[space-debug] slot: scroll-hover wins -> {}",
+                        hovered.filename()
+                    ),
+                    None => eprintln!("[space-debug] slot: no scroll-hover -> selection decides"),
+                }
+            }
+            let selected_id = scroll_hovered
+                .as_ref()
+                .map(|photo| photo.id())
+                .or_else(|| {
+                    selected_photo
+                        .borrow()
+                        .as_ref()
+                        .map(|photo| photo.id())
+                })
+                .filter(|id| photos.iter().any(|photo| photo.id() == *id))
+                .or_else(|| gallery.selected_photo_ids(None).into_iter().next());
+            let Some(selected_id) = selected_id else {
                 return;
             };
-
-            if !selected.original_available() {
+            let Some(index) = photos.iter().position(|photo| photo.id() == selected_id) else {
+                return;
+            };
+            if !photos[index].original_available() {
                 availability_refresh();
             }
-
-            let photos = gallery.photo_objects();
-            let Some(index) = photos.iter().position(|photo| photo.id() == selected.id()) else {
-                return;
-            };
             lightbox.open(photos, index);
         })));
     }
@@ -505,8 +519,82 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     configure_infobar_album_menu(&info.add_to_album, action_context.clone());
 
+    // Destructive maintenance actions for the Settings → Library page. The
+    // settings window owns the buttons and confirmation dialogs; the actual
+    // behaviour stays here where the gallery and refresh context live.
+    let settings_maintenance = crate::settings::LibraryMaintenance {
+        clear_thumbnails: {
+            let connection = connection.clone();
+            let gallery = gallery.clone();
+            let filter = filter.clone();
+            let search = search_text.clone();
+            let sort = sort.clone();
+            let availability_refresh = availability_refresh.clone();
+            Rc::new(move || {
+                if let Err(error) = crate::thumbnail::clear_cache() {
+                    eprintln!("Could not clear thumbnails: {error}");
+                }
+                refresh_grid(
+                    &connection,
+                    filter.get(),
+                    &search.borrow(),
+                    sort.get(),
+                    &gallery,
+                );
+                availability_refresh();
+            })
+        },
+        clear_database: {
+            let connection = connection.clone();
+            let gallery = gallery.clone();
+            let filter = filter.clone();
+            let search = search_text.clone();
+            let sort = sort.clone();
+            let availability_refresh = availability_refresh.clone();
+            Rc::new(move || {
+                if let Err(error) = db::clear_photos(&connection.borrow()) {
+                    eprintln!("Could not clear database: {error}");
+                }
+                refresh_grid(
+                    &connection,
+                    filter.get(),
+                    &search.borrow(),
+                    sort.get(),
+                    &gallery,
+                );
+                availability_refresh();
+            })
+        },
+        clear_all: {
+            let connection = connection.clone();
+            let gallery = gallery.clone();
+            let filter = filter.clone();
+            let search = search_text.clone();
+            let sort = sort.clone();
+            let availability_refresh = availability_refresh.clone();
+            Rc::new(move || {
+                if let Err(error) = db::clear_all(&connection.borrow()) {
+                    eprintln!("Could not clear database: {error}");
+                }
+                if let Err(error) = crate::thumbnail::clear_cache() {
+                    eprintln!("Could not clear thumbnails: {error}");
+                }
+                refresh_grid(
+                    &connection,
+                    filter.get(),
+                    &search.borrow(),
+                    sort.get(),
+                    &gallery,
+                );
+                availability_refresh();
+            })
+        },
+    };
+
     let settings_window = crate::settings::SettingsWindow::default();
     let settings_parent = window.clone();
+    let settings_surface = window.clone();
+    let settings_gallery_for_thumbs = gallery.clone();
     let settings_connection = connection.clone();
     let settings_gallery = gallery.clone();
     let settings_filter = filter.clone();
@@ -515,26 +603,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let settings_lightbox = lightbox.clone();
     let settings_sidebar = sidebar_for_unavailable.clone();
     let settings_on_unavailable = availability_refresh.clone();
-    let settings_folder_watch_changed = {
-        let connection = connection.clone();
-        let manager = folder_watch_manager.clone();
-        let updates = folder_watch_sender.clone();
-        Rc::new(move |folder_id: i64, watched: bool| {
-            if watched {
-                if let Some(folder) = db::folders(&connection.borrow())
-                    .ok()
-                    .and_then(|folders| folders.into_iter().find(|folder| folder.id == folder_id))
-                {
-                    manager
-                        .borrow_mut()
-                        .watch(folder_id, folder.path, updates.clone());
-                }
-            } else {
-                manager.borrow_mut().unwatch(folder_id);
-            }
-        }) as Rc<dyn Fn(i64, bool)>
-    };
-    info.more.connect_clicked(move |_| {
+    let settings_albums_refresh = albums_home_refresh_slot.clone();
+    let settings_rebuild_folder_watches = rebuild_folder_watches.clone();
+    let settings_theme_engine = theme_engine.clone();
+    let present_settings: Rc<dyn Fn(Option<&'static str>)> = Rc::new(move |initial_page| {
         let connection = settings_connection.clone();
         let gallery = settings_gallery.clone();
         let filter = settings_filter.clone();
@@ -543,7 +615,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let lightbox = settings_lightbox.clone();
         let sidebar = settings_sidebar.clone();
         let on_unavailable = settings_on_unavailable.clone();
-        let folder_watch_changed = settings_folder_watch_changed.clone();
+        let theme_connection = settings_connection.clone();
+        let theme_albums_refresh = settings_albums_refresh.clone();
+        let watch_connection = settings_connection.clone();
+        let watch_sidebar = settings_sidebar.clone();
+        let watch_on_unavailable = settings_on_unavailable.clone();
+        let maintenance = settings_maintenance.clone();
+        let thumbs_window = settings_surface.clone();
+        let thumbs_gallery = settings_gallery_for_thumbs.clone();
+        let thumbs_connection = settings_connection.clone();
         settings_window.present(
             &settings_parent,
             settings_connection.clone(),
@@ -557,7 +637,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     &gallery,
                 );
                 if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
-                    if let Ok(folders) = db::folders(&connection.borrow()) {
+                    if let Ok(folders) = db::folders_cached(&connection.borrow()) {
                         sidebar::refresh_folder_rows(&sidebar, &folders, &on_unavailable);
                     }
                     if let Ok(counts) = db::sidebar_counts(&connection.borrow()) {
@@ -565,8 +645,65 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     }
                 }
             }),
-            folder_watch_changed,
+            Rc::new(move || {
+                let albums = db::albums(&theme_connection.borrow()).unwrap_or_default();
+                if let Some(refresh) = theme_albums_refresh.borrow().as_ref() {
+                    refresh(&albums);
+                }
+            }),
+            Rc::new(move || {
+                crate::window::debug_log("THUMB SETTINGS: apply callback entered");
+                let square = crate::settings::saved_bool(
+                    &thumbs_connection.borrow(),
+                    crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY,
+                )
+                .unwrap_or(false);
+                let fit = crate::settings::saved_bool(
+                    &thumbs_connection.borrow(),
+                    crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+                )
+                .unwrap_or(false);
+                if square {
+                    thumbs_window.add_css_class("square-corners");
+                } else {
+                    thumbs_window.remove_css_class("square-corners");
+                }
+                crate::window::debug_log(&format!(
+                    "THUMB SETTINGS: css class applied (square={square}), deferring fit={fit} to idle"
+                ));
+                // Defer the tile walk out of the switch notification so the
+                // settings UI settles before the gallery relayouts.
+                let gallery_for_fit = thumbs_gallery.clone();
+                glib::idle_add_local_once(move || {
+                    crate::window::debug_log("THUMB SETTINGS: set_fit_whole_photo begin");
+                    gallery_for_fit.set_fit_whole_photo(fit);
+                    crate::window::debug_log("THUMB SETTINGS: set_fit_whole_photo end");
+                });
+                crate::window::debug_log("THUMB SETTINGS: apply callback exit");
+            }),
+            {
+                let rebuild_folder_watches = settings_rebuild_folder_watches.clone();
+                Rc::new(move || {
+                    rebuild_folder_watches();
+                    if let Some(sidebar) = watch_sidebar.borrow().as_ref().cloned() {
+                        if let Ok(folders) = db::folders_cached(&watch_connection.borrow()) {
+                            sidebar::refresh_folder_rows(
+                                &sidebar,
+                                &folders,
+                                &watch_on_unavailable,
+                            );
+                        }
+                    }
+                })
+            },
+            maintenance,
+            settings_theme_engine.clone(),
+            initial_page,
         );
+    });
+    let present_settings_from_more = present_settings.clone();
+    info.more.connect_clicked(move |_| {
+        present_settings_from_more(None);
     });
 
     let action_context_for_lightbox = action_context.clone();
@@ -606,7 +743,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 // Navigate in the order the user can actually see in the
                 // Folders sidebar. Tree mode therefore follows visible tree
                 // rows, while Imported-only mode contains only imported roots.
-                let folders = db::folders(&connection_for_collection_nav.borrow())
+                let folders = db::folders_cached(&connection_for_collection_nav.borrow())
                     .unwrap_or_default();
                 let folder_ids = sidebar_selection_for_collection_nav
                     .borrow()
@@ -744,7 +881,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                 // The last album connects to the first available folder.
                 if direction > 0 && Some(current_index) == last_available_album {
-                    let folders = db::folders(&connection_for_collection_nav.borrow())
+                    let folders = db::folders_cached(&connection_for_collection_nav.borrow())
                         .unwrap_or_default();
                     for folder in folders {
                         let mut photos = db::photos(
@@ -1034,7 +1171,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 else {
                     return;
                 };
-                let folders = db::folders(&connection_for_collection_nav.borrow())
+                let folders = db::folders_cached(&connection_for_collection_nav.borrow())
                     .unwrap_or_default();
                 let Some(current_index) = folders
                     .iter()
@@ -1113,6 +1250,25 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
+    let refresh_status_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    refresh_status_box.set_margin_start(12);
+    refresh_status_box.set_margin_end(12);
+    refresh_status_box.set_margin_top(8);
+    refresh_status_box.set_margin_bottom(8);
+    refresh_status_box.add_css_class("toolbar");
+    refresh_status_box.add_css_class("card");
+    refresh_status_box.set_visible(false);
+    let refresh_status_spinner = gtk::Spinner::new();
+    refresh_status_spinner.set_spinning(false);
+    refresh_status_box.append(&refresh_status_spinner);
+    let refresh_status_label = gtk::Label::new(Some("Refreshing library…"));
+    refresh_status_label.set_xalign(0.0);
+    refresh_status_label.set_hexpand(true);
+    refresh_status_box.append(&refresh_status_label);
+    let refresh_status_stop = gtk::Button::with_label("Stop");
+    refresh_status_box.append(&refresh_status_stop);
+    content.append(&refresh_status_box);
+
     let grid_scroll = gtk::ScrolledWindow::new();
     grid_scroll.set_vexpand(true);
     grid_scroll.set_hexpand(true);
@@ -1126,151 +1282,560 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // Folder mode uses its own virtualized ListView. Full-width folder headers
     // are ordinary ListView rows, so they move away naturally with the photos.
     folder_scroll.set_child(Some(&gallery.folder_root));
+    let folder_scroll_overlay = gtk::Overlay::new();
+    folder_scroll_overlay.set_hexpand(true);
+    folder_scroll_overlay.set_vexpand(true);
+    folder_scroll_overlay.set_child(Some(&folder_scroll));
+    folder_scroll_overlay.add_overlay(&gallery.folder_rubberband);
+
+    // A temporary date bubble makes a long chronological All Photos scrollbar
+    // usable like a timeline. It is deliberately attached only to the GridView
+    // scrollbar: Folder mode is not globally date-sorted.
+    let scrub_date_label = gtk::Label::new(None);
+    scrub_date_label.set_halign(gtk::Align::End);
+    scrub_date_label.set_valign(gtk::Align::Center);
+    scrub_date_label.set_margin_end(34);
+    scrub_date_label.set_can_target(false);
+    scrub_date_label.set_visible(false);
+    scrub_date_label.add_css_class("scroll-scrub-date");
+    let scrub_dragging = Rc::new(Cell::new(false));
+    let scrub_hide_generation = Rc::new(Cell::new(0_u64));
+    let update_scrub_date: Rc<dyn Fn(f64)> = Rc::new({
+        let gallery = gallery.clone();
+        let filter = filter.clone();
+        let sort = sort.clone();
+        let label = scrub_date_label.clone();
+        move |scroll_y: f64| {
+            let date = match sort.get().field {
+                SortField::DateTaken => grid::GroupDate::Taken,
+                SortField::DateAdded => grid::GroupDate::Added,
+                _ => {
+                    label.set_visible(false);
+                    return;
+                }
+            };
+            if filter.get() != sidebar::SidebarFilter::All {
+                label.set_visible(false);
+                return;
+            }
+            label.set_text(&gallery.month_label_for_scroll_position(scroll_y, date));
+            label.set_visible(true);
+        }
+    });
+    let scrollbar = grid_scroll.vscrollbar();
+    let scrub_press = gtk::GestureClick::new();
+    scrub_press.set_button(0);
+    {
+        let dragging = scrub_dragging.clone();
+        let hide_generation = scrub_hide_generation.clone();
+        let adjustment = grid_scroll.vadjustment();
+        let update = update_scrub_date.clone();
+        scrub_press.connect_pressed(move |_, _, _, _| {
+            hide_generation.set(hide_generation.get().wrapping_add(1));
+            dragging.set(true);
+            update(adjustment.value());
+        });
+    }
+    {
+        let dragging = scrub_dragging.clone();
+        let hide_generation = scrub_hide_generation.clone();
+        let label = scrub_date_label.clone();
+        scrub_press.connect_released(move |_, _, _, _| {
+            if !dragging.replace(false) {
+                return;
+            }
+            let generation = hide_generation.get().wrapping_add(1);
+            hide_generation.set(generation);
+            let label = label.clone();
+            let hide_generation = hide_generation.clone();
+            glib::timeout_add_local_once(Duration::from_millis(550), move || {
+                if hide_generation.get() == generation {
+                    label.set_visible(false);
+                }
+            });
+        });
+    }
+    scrollbar.add_controller(scrub_press);
+    {
+        let dragging = scrub_dragging.clone();
+        let update = update_scrub_date.clone();
+        grid_scroll.vadjustment().connect_value_changed(move |adjustment| {
+            if dragging.get() {
+                update(adjustment.value());
+            }
+        });
+    }
 
     let gallery_scroll_stack = gtk::Stack::new();
     gallery_scroll_stack.set_hexpand(true);
     gallery_scroll_stack.set_vexpand(true);
     gallery_scroll_stack.add_named(&grid_scroll, Some("grid"));
-    gallery_scroll_stack.add_named(&folder_scroll, Some("folders"));
+    gallery_scroll_stack.add_named(&folder_scroll_overlay, Some("folders"));
     {
         let gallery_scroll_stack = gallery_scroll_stack.clone();
+        let gallery_for_folder_view = gallery.clone();
         gallery.set_folder_view_changed_handler(move |folder_mode| {
             gallery_scroll_stack.set_visible_child_name(if folder_mode {
                 "folders"
             } else {
                 "grid"
             });
+            if folder_mode {
+                // The Folder model rebuild is synchronous. This timeout runs
+                // after that work returns to GTK and paints only the final
+                // visible viewport instead of every intermediate bound row.
+                let gallery = gallery_for_folder_view.clone();
+                glib::timeout_add_local_once(Duration::from_millis(90), move || {
+                    gallery.refresh_visible_folder_tiles();
+                });
+            }
         });
     }
+
+    // Non-Folder GridView (Library, Favourites, Recently Added, Albums,
+    // Search) needs the same current-viewport protection as Folder mode. Fast
+    // scrollbar motion can otherwise leave hundreds of stale bind requests in
+    // front of the final viewport and make thumbnails appear blank until idle.
+    const GRID_THUMBNAIL_MOTION_PUMP_FRAMES: u8 = 12;
+    let grid_thumbnail_motion_frames = Rc::new(Cell::new(0u8));
+    let grid_thumbnail_motion_frames_for_event = grid_thumbnail_motion_frames.clone();
+    let grid_thumbnail_motion_frames_for_tick = grid_thumbnail_motion_frames.clone();
+    let grid_thumbnail_motion_phase = Rc::new(Cell::new(0u8));
+    let grid_thumbnail_motion_phase_for_tick = grid_thumbnail_motion_phase.clone();
+    let grid_scroll_direction = Rc::new(Cell::new(0.0_f64));
+    let grid_scroll_direction_for_event = grid_scroll_direction.clone();
+    let grid_scroll_direction_for_tick = grid_scroll_direction.clone();
+    let last_grid_scroll_y = Rc::new(Cell::new(0.0_f64));
+    let last_grid_scroll_y_for_event = last_grid_scroll_y.clone();
+    // Large adjustment jumps are scrollbar/page teleports. For a few frames
+    // after one, do not spend decoder capacity on speculative ahead-prefetch;
+    // the newly targeted viewport must become useful first.
+    let grid_scrub_frames = Rc::new(Cell::new(0u8));
+    let grid_scrub_frames_for_event = grid_scrub_frames.clone();
+    let grid_scrub_frames_for_tick = grid_scrub_frames.clone();
+    let grid_scrub_generation = Rc::new(Cell::new(0u64));
+    let grid_scrub_generation_for_event = grid_scrub_generation.clone();
+    let grid_scrub_active = Rc::new(Cell::new(false));
+    let grid_scrub_active_for_event = grid_scrub_active.clone();
+    let grid_scrub_active_for_tick = grid_scrub_active.clone();
+    // GtkAdjustment emits tiny correction events (often -1/0/+1) while the
+    // scrollbar thumb is being dragged. Replacing the visible decode queue on
+    // every correction cancels almost-finished work and leaves a wall of
+    // placeholders. Coalesce scrub destinations so one viewport gets enough
+    // time to finish before we replace it with a newer one.
+    let grid_scrub_last_queue = Rc::new(RefCell::new(None::<std::time::Instant>));
+    let grid_scrub_last_queue_for_event = grid_scrub_last_queue.clone();
+    let grid_scrub_latest_value = Rc::new(Cell::new(0.0_f64));
+    let grid_scrub_latest_value_for_event = grid_scrub_latest_value.clone();
+    let grid_scrub_latest_page = Rc::new(Cell::new(0.0_f64));
+    let grid_scrub_latest_page_for_event = grid_scrub_latest_page.clone();
 
     let gallery_for_group_scroll = gallery.clone();
     grid_scroll
         .vadjustment()
         .connect_value_changed(move |adjustment| {
-            gallery_for_group_scroll.update_group_header_for_scroll(adjustment.value());
+            let value = adjustment.value();
+            let previous = last_grid_scroll_y_for_event.replace(value);
+            let delta = value - previous;
+            grid_scroll_direction_for_event.set(delta.signum());
+            grid_thumbnail_motion_frames_for_event.set(GRID_THUMBNAIL_MOTION_PUMP_FRAMES);
+
+            // A scrollbar scrub can teleport farther than GTK can realize
+            // GridView children in the same frame. Queue the destination from
+            // the photo model immediately instead of waiting for widget binds.
+            // Treat only multi-page motion as the *start* of a direct
+            // scrollbar scrub. Once started, every following adjustment belongs
+            // to that same drag until the bar has been quiet for 90 ms. This is
+            // important because the user's final thumb movement can be much
+            // smaller than the first large jump.
+            let jump_threshold = (adjustment.page_size() * 1.75).max(900.0);
+            if delta.abs() >= jump_threshold {
+                grid_scrub_active_for_event.set(true);
+                crate::grid::set_grid_scrub_active(true);
+            }
+
+            if grid_scrub_active_for_event.get() {
+                grid_scrub_frames_for_event.set(6);
+                grid_scrub_latest_value_for_event.set(value);
+                grid_scrub_latest_page_for_event.set(adjustment.page_size());
+
+                // Do not repeatedly replace the visible queue for GTK's tiny
+                // adjustment corrections. At 40 ms the four/eight local-cache
+                // workers get several decode slots per scrub sample, while the
+                // newest scrollbar position still wins quickly enough to feel
+                // live. A final forced sample is queued when the drag settles.
+                let now = std::time::Instant::now();
+                let should_queue = grid_scrub_last_queue_for_event
+                    .borrow()
+                    .as_ref()
+                    .map(|last| now.duration_since(*last) >= Duration::from_millis(40))
+                    .unwrap_or(true);
+                if should_queue {
+                    *grid_scrub_last_queue_for_event.borrow_mut() = Some(now);
+                    gallery_for_group_scroll.queue_grid_scroll_target_cached_tiles_async(
+                        value,
+                        adjustment.page_size(),
+                        192,
+                    );
+                }
+
+                // End scrub mode only after the adjustment has stayed quiet for
+                // a short interval. Old timeout callbacks are ignored by the
+                // generation check, so an active drag cannot be ended early.
+                let generation = grid_scrub_generation_for_event
+                    .get()
+                    .wrapping_add(1);
+                grid_scrub_generation_for_event.set(generation);
+                let generation_cell = grid_scrub_generation_for_event.clone();
+                let scrub_active_cell = grid_scrub_active_for_event.clone();
+                let last_queue_cell = grid_scrub_last_queue_for_event.clone();
+                let latest_value_cell = grid_scrub_latest_value_for_event.clone();
+                let latest_page_cell = grid_scrub_latest_page_for_event.clone();
+                let gallery = gallery_for_group_scroll.clone();
+                glib::timeout_add_local_once(Duration::from_millis(90), move || {
+                    if generation_cell.get() != generation {
+                        return;
+                    }
+
+                    // Force the final destination once more. The user may have
+                    // released the thumb less than 40 ms after our last sample.
+                    gallery.queue_grid_scroll_target_cached_tiles_async(
+                        latest_value_cell.get(),
+                        latest_page_cell.get(),
+                        192,
+                    );
+                    *last_queue_cell.borrow_mut() = None;
+                    scrub_active_cell.set(false);
+                    crate::grid::set_grid_scrub_active(false);
+                    gallery.refresh_visible_grid_tiles();
+                });
+
+            }
+
+
+            gallery_for_group_scroll.update_group_header_for_scroll(value);
         });
 
+    let gallery_for_grid_motion_tick = gallery.clone();
+    grid_scroll.add_tick_callback(move |_, _| {
+        let frames_left = grid_thumbnail_motion_frames_for_tick.get();
+        if frames_left == 0 {
+            return glib::ControlFlow::Continue;
+        }
+        grid_thumbnail_motion_frames_for_tick.set(frames_left.saturating_sub(1));
+
+        // During direct scrollbar scrubbing the model-derived target queued by
+        // the adjustment callback is authoritative. Do NOT replace it with
+        // widget-derived visibility here: GtkGridView may still expose recycled
+        // cells from the previous viewport for several frames. Applying the
+        // paintables the workers already finished is still required, though:
+        // during fast movement a tile binds once, usually before its decode
+        // completes, and the completion drain misses tiles that were recycled
+        // again before the decode arrived. Re-checking visible tiles against
+        // the RAM cache every frame heals exactly those tiles.
+        if grid_scrub_active_for_tick.get() {
+            gallery_for_grid_motion_tick.apply_visible_grid_cached_paintables();
+        } else {
+            gallery_for_grid_motion_tick.queue_visible_grid_cached_tiles_async(128);
+        }
+
+        let scrub_left = grid_scrub_frames_for_tick.get();
+        if scrub_left > 0 {
+            grid_scrub_frames_for_tick.set(scrub_left.saturating_sub(1));
+        }
+
+        let phase = grid_thumbnail_motion_phase_for_tick.get().wrapping_add(1);
+        grid_thumbnail_motion_phase_for_tick.set(phase);
+        // During a scrollbar teleport, all decode capacity belongs to the
+        // target viewport. Normal directional warming resumes once GTK has had
+        // several frames to rebind the destination cells.
+        if scrub_left == 0 && phase % 3 == 0 {
+            gallery_for_grid_motion_tick
+                .prefetch_grid_cached_tiles(32, grid_scroll_direction_for_tick.get());
+        }
+
+        glib::ControlFlow::Continue
+    });
+
     let gallery_for_folder_scroll = gallery.clone();
-    let sidebar_for_scroll_location = sidebar_selection_slot.clone();
-    let filter_for_scroll_location = filter.clone();
-    let scroll_handler_calls = Rc::new(Cell::new(0u64));
-    let scroll_handler_calls_for_event = scroll_handler_calls.clone();
+    let latest_folder_scroll_y = Rc::new(Cell::new(0.0_f64));
+    // Last scroll direction, used to warm thumbnails ahead of the user rather
+    // than both sides equally.
+    let folder_scroll_direction = Rc::new(Cell::new(0.0_f64));
+    let folder_scroll_direction_for_event = folder_scroll_direction.clone();
+    // Thumbnail loading is intentionally debounced until Folder motion stops.
+    // GtkListView may rebind thousands of intermediate rows during a scrollbar
+    // jump; loading thumbnails from each bind is pure wasted main-thread work.
+    let folder_thumbnail_debounce: Rc<RefCell<Option<glib::SourceId>>> =
+        Rc::new(RefCell::new(None));
+    let folder_thumbnail_debounce_for_event = folder_thumbnail_debounce.clone();
+    let folder_thumbnail_prefetch: Rc<RefCell<Option<glib::SourceId>>> =
+        Rc::new(RefCell::new(None));
+    let folder_thumbnail_prefetch_for_event = folder_thumbnail_prefetch.clone();
+    // Coalesces scrub-target sampling: one sample in the jump frame itself,
+    // then at most once per 50 ms while the drag continues. Frame-driven from
+    // the motion tick below, not from a wall-clock timeout.
+    let folder_scrub_sampler = Rc::new(RefCell::new(FolderScrollbarScrub::default()));
+    let folder_scrub_sampler_for_event = folder_scrub_sampler.clone();
+    let folder_scrub_sampler_for_tick = folder_scrub_sampler.clone();
+    let latest_folder_scroll_y_for_tick = latest_folder_scroll_y.clone();
+    let folder_vadjustment = folder_scroll.vadjustment();
+    // True only for a real multi-page Folder scrollbar scrub. Page Up/Down is
+    // deliberately excluded: Folder row bind now submits its own async visible
+    // request, so page navigation must not repeatedly replace the queue.
+    let folder_direct_scrub_active = Rc::new(Cell::new(false));
+    let folder_direct_scrub_active_for_event = folder_direct_scrub_active.clone();
+    let folder_direct_scrub_active_for_tick = folder_direct_scrub_active.clone();
+    // The settled loader paints the final viewport after motion stops. During
+    // active motion, drive thumbnail work from GTK frame ticks instead of a
+    // 16 ms timeout. A timeout can run before GtkListView has rebound/allocated
+    // the rows for a large scrollbar jump, which warms the old viewport and
+    // leaves the new one blank. The short frame pump keeps retrying long enough
+    // for recycled rows and async cache decodes to catch up.
+    const FOLDER_THUMBNAIL_MOTION_PUMP_FRAMES: u8 = 12;
+    let folder_thumbnail_motion_frames = Rc::new(Cell::new(0u8));
+    let folder_thumbnail_motion_frames_for_event = folder_thumbnail_motion_frames.clone();
+    let folder_thumbnail_motion_frames_for_tick = folder_thumbnail_motion_frames.clone();
+    let folder_thumbnail_motion_phase = Rc::new(Cell::new(0u8));
+    let folder_thumbnail_motion_phase_for_tick = folder_thumbnail_motion_phase.clone();
+    let gallery_for_thumbnail_motion_tick = gallery.clone();
+    let folder_scroll_direction_for_tick = folder_scroll_direction.clone();
+    folder_scroll.add_tick_callback(move |_, _| {
+        let frames_left = folder_thumbnail_motion_frames_for_tick.get();
+        if frames_left == 0 {
+            return glib::ControlFlow::Continue;
+        }
+        folder_thumbnail_motion_frames_for_tick.set(frames_left.saturating_sub(1));
+
+        // Always prioritise the tiles actually visible in the frame GTK is
+        // about to paint. queue_visible... uses reserved async capacity, so
+        // stale prefetch requests cannot starve a scrollbar jump.
+        if folder_direct_scrub_active_for_tick.get() {
+            // The model-derived scrub target is authoritative while the thumb is
+            // teleporting. GtkListView may still expose rows from the previous
+            // viewport, so never let those recycled widgets replace the target
+            // queue during an active direct scrub. Thumbnails the workers have
+            // already finished must still be displayed: rows bind once, usually
+            // before their decode completes, and the completion drain misses
+            // rows recycled again mid-scrub. Applying RAM hits every frame
+            // heals those rows without touching the decode queue.
+            gallery_for_thumbnail_motion_tick.apply_visible_folder_cached_paintables();
+        } else {
+            gallery_for_thumbnail_motion_tick.queue_visible_folder_cached_tiles_async(96);
+        }
+
+        // Scrub decode targets are frame-driven: the first sample fires in the
+        // jump frame itself (not a wall-clock interval later), then at most
+        // every 50 ms while the drag continues. Coalescing keeps the decode
+        // queue owned by one destination instead of one per ±1 px anchor
+        // correction GtkListView emits during drags.
+        let _scrub_target_queued = if folder_direct_scrub_active_for_tick.get()
+            && folder_scrub_sampler_for_tick
+                .borrow_mut()
+                .sample_due(Instant::now())
+        {
+            let page = folder_vadjustment.page_size().max(1.0);
+            gallery_for_thumbnail_motion_tick.queue_folder_scroll_target_cached_tiles_async(
+                latest_folder_scroll_y_for_tick.get(),
+                page,
+                192,
+            )
+        } else {
+            0
+        };
+
+        // Warming ahead is useful, but doing the larger offscreen scan on every
+        // frame is unnecessary. Run it every third pump frame so visible work
+        // remains dominant and GTK has plenty of time to render.
+        let phase = folder_thumbnail_motion_phase_for_tick
+            .get()
+            .wrapping_add(1);
+        folder_thumbnail_motion_phase_for_tick.set(phase);
+        if !folder_direct_scrub_active_for_tick.get() && phase % 3 == 0 {
+            gallery_for_thumbnail_motion_tick.prefetch_folder_cached_tiles(
+                24,
+                folder_scroll_direction_for_tick.get(),
+            );
+        }
+
+        glib::ControlFlow::Continue
+    });
+
     folder_scroll
         .vadjustment()
         .connect_value_changed(move |adjustment| {
-            let trace = std::env::var_os("PICASA_TRACE").is_some();
-            let handler_started = trace.then(Instant::now);
-            if trace {
-                scroll_handler_calls_for_event
-                    .set(scroll_handler_calls_for_event.get().wrapping_add(1));
+            let raw_scroll_y = adjustment.value();
+            // GtkListView keeps its scroll anchor on device-pixel boundaries
+            // (same reason the wheel path quantizes in
+            // install_smooth_gallery_scroll). Fractional scrollbar-drag values
+            // make GTK immediately write a rounded value back, which reads as
+            // a tiny bounce at drag end. Snap to whole pixels instead; the
+            // re-entrant value_changed sees an integral value and no-ops.
+            let scroll_y = raw_scroll_y.round();
+            if scroll_y != raw_scroll_y {
+                adjustment.set_value(scroll_y);
             }
-            let scroll_y = adjustment.value();
-            // This stores the active adjustment for view restoration. Folder
-            // mode deliberately has no external/sticky group heading.
-            let header_started = trace.then(Instant::now);
+            let previous_y = latest_folder_scroll_y.replace(scroll_y);
+            let direction = scroll_y - previous_y;
+            if direction != 0.0 {
+                folder_scroll_direction_for_event.set(direction);
+            }
+
+            // Folder bind now submits its own visible-priority async request on
+            // every RAM miss. That is sufficient for wheel motion and Page
+            // Up/Down, and avoids the old failure mode where each ~one-page
+            // adjustment step replaced another 30-60 useful requests.
+            //
+            // Only true multi-page scrollbar teleports use model-derived target
+            // preloading. Coalesce those samples so workers can finish useful
+            // work instead of decoding every intermediate thumb position.
+            let page_size = adjustment.page_size().max(1.0);
+            let direct_scrub = direction.abs() > page_size * 1.60;
+            if direct_scrub {
+                folder_direct_scrub_active_for_event.set(true);
+                // Folder and grid views are never visible at the same time,
+                // so reuse the shared scrub thread-local: it keeps recycled
+                // folder tiles from being blanked at unbind while rows are
+                // rebound faster than thumbnail decodes can land. The folder
+                // settle callback clears it again.
+                crate::grid::set_grid_scrub_active(true);
+                // First target sample fires in the next frame tick; further
+                // samples are coalesced to one per 50 ms by the sampler.
+                folder_scrub_sampler_for_event.borrow_mut().begin();
+            }
+
+            // Keep only the cheap position bookkeeping in the raw adjustment
+            // callback. Widget picking and sidebar work are throttled below so
+            // wheel/touchpad/scrollbar motion cannot spend a frame walking GTK
+            // widgets merely to update a visual location marker.
             gallery_for_folder_scroll.update_group_header_for_scroll(scroll_y);
-            let header_ms = header_started
-                .map(|started| started.elapsed().as_millis())
-                .unwrap_or(0);
 
-            // Sidebar follow is Folder-mode only. It is visual tracking, not
-            // navigation: changing the highlighted row must never reload the
-            // continuous stream.
-            let mut sidebar_ms = 0u128;
-            if matches!(
-                filter_for_scroll_location.get(),
-                sidebar::SidebarFilter::Folder(_)
-            ) {
-                let folder_id = gallery_for_folder_scroll
-                    .photo_for_scroll_position(scroll_y)
-                    .map(|photo| photo.folder_id())
-                    .filter(|folder_id| *folder_id > 0);
-                if let Some(folder_id) = folder_id {
-                    filter_for_scroll_location
-                        .set(sidebar::SidebarFilter::Folder(folder_id));
-                }
-                let sidebar_started = trace.then(Instant::now);
-                if let Some(sidebar) = sidebar_for_scroll_location.borrow().as_ref() {
-                    sidebar::set_scroll_location(sidebar, folder_id);
-                }
-                sidebar_ms = sidebar_started
-                    .map(|started| started.elapsed().as_millis())
-                    .unwrap_or(0);
+            // Cancel the previous settle callback and arm a new one. Only the
+            // final viewport after ~90 ms of idle motion gets a full visible
+            // refresh. During sustained scrolling, separately warm a tiny
+            // budgeted batch so the viewport does not remain blank until the
+            // user fully stops.
+            if let Some(source) = folder_thumbnail_debounce_for_event.borrow_mut().take() {
+                source.remove();
             }
-
-            if trace {
-                let (pick_calls, pick_ns, scan_ns) = crate::grid::take_scroll_probe_stats();
-                eprintln!(
-                    "UI PERF scroll_handler pick_calls={} pick_ms={} scan_ms={} header_ms={} sidebar_ms={} total_ms={} y={}",
-                    pick_calls,
-                    pick_ns / 1_000_000,
-                    scan_ns / 1_000_000,
-                    header_ms,
-                    sidebar_ms,
-                    handler_started
-                        .map(|started| started.elapsed().as_millis())
-                        .unwrap_or(0),
-                    scroll_y
+            if let Some(source) = folder_thumbnail_prefetch_for_event.borrow_mut().take() {
+                source.remove();
+            }
+            // Keep a frame-synchronised thumbnail pump alive after every
+            // movement. Re-arming it is cheap and covers wheel/touchpad motion,
+            // kinetic scrolling, and direct scrollbar jumps with the same path.
+            // The pump runs after GtkListView has had frame opportunities to
+            // recycle/rebind rows, so it follows the new viewport instead of a
+            // stale one captured by a wall-clock timeout.
+            folder_thumbnail_motion_frames_for_event
+                .set(FOLDER_THUMBNAIL_MOTION_PUMP_FRAMES);
+            let gallery_for_visible = gallery_for_folder_scroll.clone();
+            let debounce_slot = folder_thumbnail_debounce_for_event.clone();
+            let prefetch_slot = folder_thumbnail_prefetch_for_event.clone();
+            let direction_for_settle = folder_scroll_direction_for_event.get();
+            let final_scroll_y = latest_folder_scroll_y.clone();
+            let final_page_size = adjustment.page_size().max(1.0);
+            let direct_scrub_active_for_settle = folder_direct_scrub_active_for_event.clone();
+            let folder_scrub_sampler_for_settle = folder_scrub_sampler_for_event.clone();
+            let source = glib::timeout_add_local(Duration::from_millis(110), move || {
+                debounce_slot.borrow_mut().take();
+                direct_scrub_active_for_settle.set(false);
+                folder_scrub_sampler_for_settle.borrow_mut().end();
+                // End the shared scrub window before the visible refresh so
+                // tiles that never received their thumbnail drop the stale
+                // backstop image and return to the normal placeholder state.
+                crate::grid::set_grid_scrub_active(false);
+                gallery_for_visible.queue_folder_scroll_target_cached_tiles_async(
+                    final_scroll_y.get(),
+                    final_page_size,
+                    192,
                 );
-            }
-        });
+                // Defer the visible refresh to the next main-loop pass so GTK
+                // can finish this frame's post-jump anchor/allocation work
+                // before tiles drop their stale backstop paintables. Unloading
+                // in the same callback interleaves with the ListView's row
+                // re-positioning and reads as a small bounce at drag end.
+                // Queueing decodes stays inline; it does not touch widgets.
+                let gallery_for_settle_refresh = gallery_for_visible.clone();
+                glib::timeout_add_local_once(Duration::ZERO, move || {
+                    gallery_for_settle_refresh.refresh_visible_folder_tiles();
+                });
 
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        let scroll_handler_calls = scroll_handler_calls.clone();
-        glib::timeout_add_local(Duration::from_secs(1), move || {
-            let calls = scroll_handler_calls.replace(0);
-            if calls > 0 {
-                eprintln!("UI PERF scroll_handler_freq calls={calls}");
-            }
-            let (loads, reloads, max_ms, fs_ms, apply_ms) =
-                crate::grid::take_thumb_load_stats();
-            if loads > 0 {
-                eprintln!(
-                    "UI PERF thumb_load_freq loads={} reloads={} max_ms={} fs_ms={} apply_ms={}",
-                    loads, reloads, max_ms, fs_ms, apply_ms
+                // GtkListView can realize the last destination row a few frames
+                // *after* the settle callback above. Give those newly-created
+                // tiles a short visible-only catch-up window before spending
+                // worker capacity on speculative ahead/behind prefetch. This is
+                // deliberately additive: it never replaces queued visible work.
+                let gallery_for_prefetch = gallery_for_visible.clone();
+                let prefetch_slot_for_tick = prefetch_slot.clone();
+                let catchup_frames = Rc::new(Cell::new(6u8));
+                let catchup_frames_for_tick = catchup_frames.clone();
+                let prefetch_source = glib::timeout_add_local(
+                    Duration::from_millis(16),
+                    move || {
+                        let frames_left = catchup_frames_for_tick.get();
+                        if frames_left > 0 {
+                            gallery_for_prefetch.refresh_visible_folder_tiles();
+                            catchup_frames_for_tick.set(frames_left - 1);
+                            return glib::ControlFlow::Continue;
+                        }
+
+                        let loaded =
+                            gallery_for_prefetch.prefetch_folder_cached_tiles(24, direction_for_settle);
+                        if loaded == 0 && !gallery_for_prefetch.thumbnail_display_work_pending() {
+                            prefetch_slot_for_tick.borrow_mut().take();
+                            glib::ControlFlow::Break
+                        } else {
+                            glib::ControlFlow::Continue
+                        }
+                    },
                 );
-            }
-            glib::ControlFlow::Continue
-        });
-    }
+                prefetch_slot.replace(Some(prefetch_source));
+                glib::ControlFlow::Break
+            });
+            folder_thumbnail_debounce_for_event.replace(Some(source));
 
-    let make_zoom_controller = |gallery: Rc<grid::Gallery>| {
-        let controller =
-            gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
-        controller.connect_scroll(move |controller, _, dy| {
-            if controller
-                .current_event_state()
-                .contains(gtk::gdk::ModifierType::CONTROL_MASK)
-            {
-                if dy < 0.0 {
-                    gallery.zoom_in();
-                } else if dy > 0.0 {
-                    gallery.zoom_out();
-                }
-                return glib::Propagation::Stop;
-            }
-
-            // Plain wheel/touchpad input is never intercepted. The current
-            // folder header and the following folder are part of one scroll.
-            glib::Propagation::Proceed
         });
-        controller
-    };
-    grid_scroll.add_controller(make_zoom_controller(gallery.clone()));
-    folder_scroll.add_controller(make_zoom_controller(gallery.clone()));
+
+    
+
+    install_smooth_gallery_scroll(&grid_scroll, gallery.clone(), true);
+    // Folder mode uses a variable-height GtkListView. Use relative wheel
+    // easing rather than an absolute spring target so GTK anchor corrections
+    // cannot pull the viewport backwards. Precision touchpads remain native.
+    install_folder_smooth_gallery_scroll(&folder_scroll, gallery.clone());
 
     // While the sidebar divider is being dragged, keep the gallery column
     // count fixed. Otherwise every few pixels can cross a column threshold
     // and repeatedly rebuild visible rows. Apply the final width once after
     // the drag ends.
     let sidebar_resize_active = Rc::new(Cell::new(false));
+    // Temporary hover-autohide is presentation only. While that overlay is
+    // sliding in or out, keep the gallery's logical width/column model frozen
+    // so Folder mode does not rebuild rows just because the pointer touched
+    // the left edge. Pin/unpin remains a real layout change and uses the settle
+    // gate below to perform one final responsive update after the animation.
+    let sidebar_hover_layout_freeze = Rc::new(Cell::new(false));
+    // Generation protects against a delayed hide callback unfreezing a newer
+    // hover reveal when the pointer returns to the edge very quickly.
+    let sidebar_hover_freeze_generation = Rc::new(Cell::new(0u64));
+    let sidebar_layout_settle = Rc::new(RefCell::new(WidthSettleGate::new(3)));
     let gallery_for_resize = gallery.clone();
     let sidebar_resize_active_for_tick = sidebar_resize_active.clone();
+    let sidebar_hover_layout_freeze_for_tick = sidebar_hover_layout_freeze.clone();
+    let sidebar_layout_settle_for_tick = sidebar_layout_settle.clone();
     gallery_scroll_stack.add_tick_callback(move |surface, _clock| {
-        crate::diagnostics::scroll_tick();
-        if !sidebar_resize_active_for_tick.get() {
+        gallery_for_resize.drain_thumbnail_display_completions();
+        if should_observe_width(
+            sidebar_resize_active_for_tick.get(),
+            sidebar_hover_layout_freeze_for_tick.get(),
+        ) {
             let width = surface.width();
-            if width > 100 {
+            if width > 100
+                && sidebar_layout_settle_for_tick
+                    .borrow_mut()
+                    .observe(width)
+            {
                 gallery_for_resize.update_width(width);
             }
         }
@@ -1290,6 +1855,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     grid_overlay.set_hexpand(true);
     grid_overlay.set_vexpand(true);
     grid_overlay.set_child(Some(&grid_surface));
+    grid_overlay.add_overlay(&scrub_date_label);
     grid_overlay.add_overlay(&lightbox.root);
     context_menu_host.borrow_mut().replace(grid_overlay.downgrade());
 
@@ -1301,12 +1867,18 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     context_menu_autohide.set_button(0);
     context_menu_autohide.set_propagation_phase(gtk::PropagationPhase::Capture);
     let window_for_menu_autohide = window.clone();
+    let lightbox_for_menu_autohide = lightbox.clone();
     context_menu_autohide.connect_pressed(move |_, _, x, y| {
         let inside_menu = window_for_menu_autohide
             .pick(x, y, gtk::PickFlags::DEFAULT)
             .is_some_and(|picked| photo_context_menu_contains(&picked));
-        if !inside_menu {
-            dismiss_active_photo_context_menu();
+        if !inside_menu && dismiss_active_photo_context_menu() {
+            let root = lightbox_for_menu_autohide.root.clone();
+            glib::idle_add_local_once(move || {
+                if root.is_visible() {
+                    root.grab_focus();
+                }
+            });
         }
     });
     window.add_controller(context_menu_autohide);
@@ -1316,9 +1888,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     photo_page.set_vexpand(true);
     photo_page.append(&grid_overlay);
 
+    let album_theme_changed: Rc<dyn Fn()> = {
+        let connection = connection.clone();
+        let refresh_slot = albums_home_refresh_slot.clone();
+        Rc::new(move || {
+            let albums = db::albums(&connection.borrow()).unwrap_or_default();
+            if let Some(refresh) = refresh_slot.borrow().as_ref() {
+                refresh(&albums);
+            }
+        })
+    };
+    // Clone for the theme engine: the original is captured by the layout.rs
+    // include below.
+    let theme_post_apply = album_theme_changed.clone();
     let albums_home = albums_view::build(
         &albums,
-        &connection.borrow(),
+        connection.clone(),
         grid_thumbnail_size,
         {
             let slot = album_home_click_slot.clone();
@@ -1328,7 +1913,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 }
             })
         },
+        album_theme_changed.clone(),
+        {
+            let present_settings = present_settings.clone();
+            Rc::new(move || present_settings(Some("themes")))
+        },
     );
+    // Albums home is a separate ScrolledWindow, so it needs the same wheel
+    // easing as the photo views. Ctrl+wheel must not zoom the hidden gallery.
+    install_smooth_gallery_scroll(&albums_home, gallery.clone(), false);
+    albums_view::connect_create_album(&albums_home, create_album.clone());
     let main_stack = gtk::Stack::new();
     main_stack.set_hexpand(true);
     main_stack.set_vexpand(true);
@@ -1356,9 +1950,21 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let collage_editor = collage_editor.clone();
         let collage_add_mode_slot = collage_add_mode_slot.clone();
         let collage_close_slot = collage_close_slot.clone();
+        let collage_add_mode = collage_add_mode.clone();
+        // Opens the photo editor while marking the trip as collage-owned so
+        // the collage editor survives and Back/Done return to the collage.
+        let open_edit_from_collage = {
+            let open_edit = open_edit.clone();
+            let collage_editing = collage_editing.clone();
+            Rc::new(move |id: i64| {
+                collage_editing.set(true);
+                open_edit(id);
+            }) as Rc<dyn Fn(i64)>
+        };
         collage_open_slot.replace(Some(Rc::new(move |ids| {
             let add_mode_slot = collage_add_mode_slot.clone();
             let close_slot = collage_close_slot.clone();
+            let collage_add_mode = collage_add_mode.clone();
             crate::collage::open(
                 &parent,
                 connection.clone(),
@@ -1368,10 +1974,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     let main_stack = main_stack.clone();
                     let collage_page = collage_page.clone();
                     let collage_editor = collage_editor.clone();
-                    move |photos| {
+                    let collage_add_mode = collage_add_mode.clone();
+                    let open_edit_from_collage = open_edit_from_collage.clone();
+                    move |photos, draft| {
                         while let Some(child) = collage_page.first_child() {
                             collage_page.remove(&child);
                         }
+                        // A fresh editor starts with no add-photos detour
+                        // pending; clear any stale picking state so leaving
+                        // the collage page tears it down normally.
+                        collage_add_mode.set(false);
                         let add_photos = {
                             let slot = add_mode_slot.clone();
                             Rc::new(move || {
@@ -1393,6 +2005,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             photos,
                             add_photos,
                             close,
+                            draft,
+                            open_edit_from_collage.clone(),
                         );
                         collage_page.append(&editor.root);
                         collage_editor.replace(Some(editor));
@@ -1404,6 +2018,63 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     }
 
     let edit_editor: Rc<RefCell<Option<crate::edit::EditEditor>>> = Rc::new(RefCell::new(None));
+    // Catch-all teardown when the collage/edit pages are left by any path
+    // (sidebar navigation, search, opening the editor mid-collage, ...).
+    // GtkStack reports the maximum minimum size of all its pages, hidden
+    // ones included, so an editor left attached keeps demanding its tall
+    // minimum and pushes the shared bottom bar offscreen on short windows.
+    // The Exit/Done handlers tear down directly; this runs idempotently for
+    // every other transition. The collage editor survives transitions to
+    // the photos page while the user is picking images to add.
+    {
+        let main_stack_for_teardown = main_stack.clone();
+        let collage_page = collage_page.clone();
+        let collage_editor = collage_editor.clone();
+        let edit_page = edit_page.clone();
+        let edit_editor = edit_editor.clone();
+        let collage_add_mode = collage_add_mode.clone();
+        let collage_editing = collage_editing.clone();
+        let gallery = gallery.clone();
+        let connection_for_teardown = connection.clone();
+        main_stack_for_teardown.connect_visible_child_notify(move |stack| {
+            let visible = stack.visible_child_name();
+            if visible.as_deref() != Some("collage")
+                && !collage_add_mode.get()
+                && !collage_editing.get()
+            {
+                // try_borrow: the add-photos handler holds the editor borrow
+                // while switching pages; skip rather than panic.
+                if collage_editor.try_borrow().map(|editor| editor.is_some()).unwrap_or(false) {
+                    // Persist the draft on every path out of the editor.
+                    if let Ok(editor_handle) = collage_editor.try_borrow() {
+                        if let Some(editor) = editor_handle.as_ref() {
+                            let json = editor.draft_json();
+                            let guard = connection_for_teardown.borrow();
+                            let _ =
+                                db::set_setting(&guard, crate::collage::DRAFT_SETTING_KEY, &json);
+                        }
+                    }
+                    // Clear the grid selection so the next toolbar collage
+                    // click is a blank start and can offer the resume prompt.
+                    gallery.set_selected_photo_ids(&[]);
+                    while let Some(child) = collage_page.first_child() {
+                        collage_page.remove(&child);
+                    }
+                    collage_editor.replace(None);
+                }
+            }
+            if visible.as_deref() != Some("edit")
+                && edit_editor.try_borrow().map(|editor| editor.is_some()).unwrap_or(false)
+            {
+                // Any exit from the photo editor ends the collage detour.
+                collage_editing.set(false);
+                while let Some(child) = edit_page.first_child() {
+                    edit_page.remove(&child);
+                }
+                edit_editor.replace(None);
+            }
+        });
+    }
     {
         let parent = window.clone().upcast::<gtk::Window>();
         let connection = connection.clone();
@@ -1414,10 +2085,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let selected_photo = selected_photo.clone();
         let info = info.clone();
         let lightbox = lightbox.clone();
+        let edit_space_slot = edit_space_slot.clone();
+        let collage_editing = collage_editing.clone();
+        let collage_editor = collage_editor.clone();
         edit_open_slot.replace(Some(Rc::new(move |id| {
             let Some(db_photo) = db::photo(&connection.borrow(), id).ok().flatten() else {
+                // The open failed; drop any pending collage-edit marker so
+                // the flag cannot get stuck and spare the collage forever.
+                collage_editing.set(false);
                 return;
             };
+            edit_space_slot.borrow_mut().take();
             lightbox.close();
             let library_scroll_y = gallery.scroll_position();
             while let Some(child) = edit_page.first_child() {
@@ -1429,10 +2107,42 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 let main_stack = main_stack.clone();
                 let one_to_one = info.one_to_one.clone();
                 let gallery = gallery.clone();
+                let edit_space_slot = edit_space_slot.clone();
+                let edit_page = edit_page.clone();
+                let edit_editor = edit_editor.clone();
+                let collage_editing = collage_editing.clone();
+                let collage_editor = collage_editor.clone();
+                let connection = connection.clone();
                 Rc::new(move || {
+                    edit_space_slot.borrow_mut().take();
                     one_to_one.set_active(false);
-                    main_stack.set_visible_child_name("photos");
-                    gallery.restore_view(id, library_scroll_y);
+                    let returning_to_collage = collage_editing.get();
+                    if returning_to_collage {
+                        // Bring the collage tile up to date with any edits
+                        // saved during this detour.
+                        if let Ok(editor_handle) = collage_editor.try_borrow() {
+                            if let Some(collage) = editor_handle.as_ref() {
+                                if let Some(updated) =
+                                    db::photo(&connection.borrow(), id).ok().flatten()
+                                {
+                                    collage.refresh_photo_metadata(&[
+                                        crate::photo_object::PhotoObject::from_photo(&updated),
+                                    ]);
+                                }
+                            }
+                        }
+                        main_stack.set_visible_child_name("collage");
+                    } else {
+                        main_stack.set_visible_child_name("photos");
+                        gallery.restore_view(id, library_scroll_y);
+                    }
+                    // Detach the editor so it stops contributing to the
+                    // stack's size request and its preview memory is
+                    // released; the editor is rebuilt on the next open.
+                    while let Some(child) = edit_page.first_child() {
+                        edit_page.remove(&child);
+                    }
+                    edit_editor.replace(None);
                 }) as Rc<dyn Fn()>
             };
             let saved = {
@@ -1452,8 +2162,29 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 close,
                 saved,
             );
+            {
+                let one_to_one = info.one_to_one.clone();
+                editor.set_one_to_one_sync_handler(move |enabled| {
+                    one_to_one.set_active(enabled);
+                });
+            }
+            // Make the way back explicit when the editor was opened from a
+            // collage tile; Done saves and follows the same return path.
+            if collage_editing.get() {
+                editor.set_back_label("Back to Collage", "Return to the collage");
+            }
             edit_page.append(&editor.root);
             edit_editor.replace(Some(editor));
+            {
+                let main_stack = main_stack.clone();
+                let one_to_one = info.one_to_one.clone();
+                let edit_space_slot = edit_space_slot.clone();
+                edit_space_slot.replace(Some(Rc::new(move || {
+                    if main_stack.visible_child_name().as_deref() == Some("edit") {
+                        one_to_one.set_active(!one_to_one.is_active());
+                    }
+                })));
+            }
             main_stack.set_visible_child_name("edit");
         })));
     }
@@ -1496,15 +2227,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 );
             }
         }
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE photo_favourite_changed id={} favourite={} filter={:?} lightbox_visible={}",
-                photo.id(),
-                favorite,
-                filter_for_favorite.get(),
-                lightbox_for_favorite.root.is_visible()
-            );
-        }
+        
     });
 
     let lightbox_for_one_to_one = lightbox.clone();
@@ -1519,13 +2242,26 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let edit_editor_for_one_to_one = edit_editor.clone();
     let main_stack_for_one_to_one = main_stack.clone();
     let space_toggle_in_progress_for_toggle = space_toggle_in_progress.clone();
+    let space_open_slot_for_one_to_one = space_open_slot.clone();
     info.one_to_one.connect_toggled(move |button| {
+        let enabled = button.is_active();
         if main_stack_for_one_to_one.visible_child_name().as_deref() == Some("edit") {
             if let Some(editor) = edit_editor_for_one_to_one.borrow().as_ref() {
-                editor.set_one_to_one(button.is_active());
+                editor.set_one_to_one(enabled);
             }
+        } else if enabled && !lightbox_for_one_to_one.root.is_visible() {
+            if let Some(open_selected) = space_open_slot_for_one_to_one.borrow().as_ref() {
+                open_selected();
+            }
+            let lightbox = lightbox_for_one_to_one.clone();
+            glib::idle_add_local_once(move || {
+                if lightbox.root.is_visible() {
+                    lightbox.set_one_to_one(true);
+                    lightbox.root.grab_focus();
+                }
+            });
         } else {
-            lightbox_for_one_to_one.set_one_to_one(button.is_active());
+            lightbox_for_one_to_one.set_one_to_one(enabled);
         }
         if space_toggle_in_progress_for_toggle.get() {
             space_toggle_in_progress_for_toggle.set(false);
@@ -1575,7 +2311,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 editor.fit();
             }
         } else {
-            gallery_for_zoom_reset.set_zoom(DEFAULT_GRID_THUMBNAIL_SIZE);
+            gallery_for_zoom_reset.reset_zoom();
         }
     });
     let gallery_for_zoom_in = gallery.clone();
@@ -1596,6 +2332,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let info_rotate = info.clone();
     let gallery_for_rotate = gallery.clone();
     let lightbox_for_rotate = lightbox.clone();
+    let edit_editor_for_rotate = edit_editor.clone();
+    let main_stack_for_rotate = main_stack.clone();
 
     info.rotate.connect_clicked(move |_| {
         let Some(photo) = selected_for_rotate.borrow().clone() else {
@@ -1611,13 +2349,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         info_rotate.set_photo(Some(&photo));
         gallery_for_rotate.refresh_thumbnails();
         lightbox_for_rotate.refresh_current();
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE photo_rotated id={} rotation={}",
-                photo.id(),
-                rotation
-            );
+        if main_stack_for_rotate.visible_child_name().as_deref() == Some("edit") {
+            if let Some(editor) = edit_editor_for_rotate.borrow().as_ref() {
+                if editor.photo_id() == photo.id() {
+                    editor.set_library_rotation(rotation);
+                }
+            }
         }
+        
     });
 
     let selected_for_export = selected_photo.clone();
@@ -1680,1409 +2419,85 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         dialog.show();
     });
 
-    let main_split = adw::OverlaySplitView::new();
-
-    let destination_click: Rc<dyn Fn(sidebar::SidebarFilter)> = {
-        let search_entry = search_entry_slot.clone();
-        let search_text = search_text.clone();
-        let suppressed = search_suppressed.clone();
-        let debounce = search_debounce.clone();
-        let filter = filter.clone();
-        let connection = connection.clone();
-        let gallery = gallery.clone();
-        let lightbox = lightbox.clone();
-        let sort = sort.clone();
-        let group_mode = group_mode.clone();
-        let sidebar_selection = sidebar_selection_slot.clone();
-        let main_stack = main_stack.clone();
-        let albums_home = albums_home.clone();
-        let connection_for_albums = connection.clone();
-        let album_home_click_slot = album_home_click_slot.clone();
-        Rc::new(move |new_filter| {
-            let folder_target = if let sidebar::SidebarFilter::Folder(folder_id) = new_filter {
-                db::folders(&connection.borrow())
-                    .ok()
-                    .and_then(|folders| folders.into_iter().find(|folder| folder.id == folder_id))
-                    .map(|folder| (folder.id, folder.path))
-            } else {
-                None
-            };
-            // Once the continuous Folder stream is loaded, clicking another
-            // folder should be a scroll operation, not another database query
-            // and model rebuild. An active global search is the exception: its
-            // grid model is not the Folder stream, so it must be reloaded.
-            let reuse_folder_stream = search_text.borrow().is_empty()
-                && matches!(filter.get(), sidebar::SidebarFilter::Folder(_))
-                && folder_target.is_some();
-
-            if let Some(source) = debounce.borrow_mut().take() {
-                source.remove();
-            }
-            suppressed.set(true);
-            if let Some(entry) = search_entry.borrow().as_ref() {
-                entry.set_text("");
-            }
-            suppressed.set(false);
-            search_text.replace(String::new());
-            lightbox.close();
-            filter.set(new_filter);
-            if let Some(sidebar) = sidebar_selection.borrow().as_ref() {
-                sidebar::set_active_filter(sidebar, new_filter);
-            }
-            if new_filter == sidebar::SidebarFilter::Albums {
-                main_stack.set_visible_child_name("albums");
-                if let Ok(albums) = db::albums(&connection_for_albums.borrow()) {
-                    let on_album = album_home_click_slot
-                        .borrow()
-                        .as_ref()
-                        .cloned()
-                        .unwrap_or_else(|| Rc::new(|_| {}));
-                    albums_view::refresh(
-                        &albums_home,
-                        &albums,
-                        &connection_for_albums.borrow(),
-                        grid_thumbnail_size,
-                        on_album,
-                    );
-                }
-                return;
-            }
-            main_stack.set_visible_child_name("photos");
-            apply_gallery_grouping(&gallery, new_filter, sort.get(), group_mode.get());
-            if let Some((folder_id, folder_path)) = folder_target {
-                if reuse_folder_stream && gallery.scroll_to_folder(folder_id, &folder_path) {
-                    return;
-                }
-                refresh_grid_to_folder(
-                    &connection,
-                    new_filter,
-                    "",
-                    sort.get(),
-                    &gallery,
-                    folder_id,
-                    folder_path,
-                );
-            } else {
-                refresh_grid(&connection, new_filter, "", sort.get(), &gallery);
-            }
-        })
-    };
-
-    album_home_click_slot.replace(Some({
-        let destination_click = destination_click.clone();
-        Rc::new(move |album_id| destination_click(sidebar::SidebarFilter::Album(album_id)))
-    }));
-    folder_navigation_slot.replace(Some({
-        let destination_click = destination_click.clone();
-        let sidebar_selection = sidebar_selection_slot.clone();
-        let gallery = gallery.clone();
-        Rc::new(move |folder_id, photo_id| {
-            destination_click(sidebar::SidebarFilter::Folder(folder_id));
-            let gallery = gallery.clone();
-            let attempts = Rc::new(Cell::new(0));
-            let attempts_for_timer = attempts.clone();
-            glib::timeout_add_local(Duration::from_millis(25), move || {
-                attempts_for_timer.set(attempts_for_timer.get() + 1);
-                if gallery.select_photo(photo_id) || attempts_for_timer.get() >= 200 {
-                    glib::ControlFlow::Break
-                } else {
-                    glib::ControlFlow::Continue
-                }
-            });
-            let sidebar = sidebar_selection.borrow().as_ref().cloned();
-            if let Some(sidebar) = sidebar {
-                // set_active_filter() restores the previous folder scroll
-                // position on idle; reveal and scroll after that restoration
-                // so repeated navigation cannot overwrite the target.
-                glib::timeout_add_local_once(Duration::from_millis(100), move || {
-                    sidebar::scroll_to_folder(&sidebar, folder_id);
-                });
-            }
-        })
-    }));
-    albums_home_refresh_slot.replace(Some({
-        let albums_home = albums_home.clone();
-        let connection = connection.clone();
-        let click_slot = album_home_click_slot.clone();
-        Rc::new(move |albums| {
-            let on_album = click_slot
-                .borrow()
-                .as_ref()
-                .cloned()
-                .unwrap_or_else(|| Rc::new(|_| {}));
-            // Album cards keep using existing cached thumbnails; this only
-            // replaces the index data after an album mutation.
-            albums_view::refresh(
-                &albums_home,
-                albums,
-                &connection.borrow(),
-                grid_thumbnail_size,
-                on_album,
-            );
-        })
-    }));
-
-    // Wrap the split view in an overlay so sidebar resizing can show a live
-    // preview divider without reallocating the actual sidebar/content panes.
-    // The real width is committed only when the drag finishes, keeping the
-    // GtkGridView completely stable during pointer motion.
-    let main_surface = gtk::Overlay::new();
-    main_surface.set_hexpand(true);
-    main_surface.set_vexpand(true);
-    main_surface.set_child(Some(&main_split));
-
-    let sidebar_resize_preview = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    sidebar_resize_preview.set_width_request(2);
-    sidebar_resize_preview.set_vexpand(true);
-    sidebar_resize_preview.set_halign(gtk::Align::Start);
-    sidebar_resize_preview.set_valign(gtk::Align::Fill);
-    sidebar_resize_preview.set_can_target(false);
-    sidebar_resize_preview.set_visible(false);
-    sidebar_resize_preview.add_css_class("sidebar-resize-preview");
-    main_surface.add_overlay(&sidebar_resize_preview);
-
-    let folder_display_mode = sidebar::FolderDisplayMode::from_setting(
-        db::setting(
-            &connection.borrow(),
-            sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY,
-        )
-        .ok()
-        .flatten()
-        .as_deref(),
-    );
-
-    let sidebar = sidebar::build(
-        &folders,
-        &albums,
-        sidebar_counts,
-        {
-            let main_split = main_split.clone();
-            let destination_click = destination_click.clone();
-            move |new_filter| {
-                destination_click(new_filter);
-                // In the compact overlay layout, selecting a destination should
-                // immediately return the available width to the photo grid.
-                if main_split.is_collapsed() {
-                    main_split.set_show_sidebar(false);
-                }
-            }
-        },
-        create_album.clone(),
-        import_folder.clone(),
-        delete_album.clone(),
-        availability_refresh.clone(),
-        {
-            let slot = refresh_folder_slot.clone();
-            Rc::new(move |path| {
-                if let Some(callback) = slot.borrow().as_ref() {
-                    callback(path);
-                }
-            })
-        },
-        {
-            let connection = connection.clone();
-            let parent: gtk::Widget = window.clone().upcast();
-            Rc::new(move |folder| {
-                show_folder_statistics(&parent, connection.clone(), folder);
-            })
-        },
-        {
-            let parent: gtk::Widget = window.clone().upcast();
-            let context = action_context.clone();
-            Rc::new(move |folder| {
-                show_remove_folder_confirmation(parent.clone(), folder, context.clone());
-            })
-        },
-        {
-            let context = action_context.clone();
-            Rc::new(move |folder, favorite| {
-                match db::set_favorite_for_folder(
-                    &context.connection.borrow(),
-                    folder.id,
-                    favorite,
-                ) {
-                    Ok(changed) => {
-                        eprintln!(
-                            "FAVORITE TRACE folder={} favorite={} changed={}",
-                            folder.id, favorite, changed
-                        );
-                        refresh_photo_actions_grid(&context);
-                        (context.on_unavailable)();
-                    }
-                    Err(error) => {
-                        show_error(
-                            context.info.root.upcast_ref(),
-                            "Could not update folder favourites",
-                            &error.to_string(),
-                        );
-                    }
-                }
-            })
-        },
-        folder_display_mode,
-        {
-            let connection = connection.clone();
-            let filter = filter.clone();
-            let sort = sort.clone();
-            let gallery = gallery.clone();
-            let group_mode = group_mode.clone();
-            Rc::new(move |mode| {
-                if let Err(error) = db::set_setting(
-                    &connection.borrow(),
-                    sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY,
-                    mode.setting_value(),
-                ) {
-                    eprintln!("Could not save folder display mode: {error}");
-                }
-
-                let current_filter = filter.get();
-                if let sidebar::SidebarFilter::Folder(folder_id) = current_filter {
-                    let folders = db::folders(&connection.borrow()).unwrap_or_default();
-                    let folder_path = folders
-                        .iter()
-                        .find(|folder| folder.id == folder_id)
-                        .map(|folder| folder.path.clone());
-                    apply_gallery_grouping(
-                        &gallery,
-                        current_filter,
-                        sort.get(),
-                        group_mode.get(),
-                    );
-                    // A sidebar tree-mode change only reorders folder sections.
-                    // Reorder the existing stream instead of a full database
-                    // refresh and 66k PhotoObject rebuild (measured 2565 ms).
-                    let order = folder_stream_order(&folders, mode);
-                    gallery.reorder_folder_stream(&order);
-                    if let Some(folder_path) = folder_path {
-                        gallery.scroll_to_folder(folder_id, &folder_path);
-                    }
-                }
-            })
-        },
-    );
-    sidebar::set_keyboard_grid_target(&sidebar, gallery.root.upcast_ref());
-    sidebar_for_unavailable.replace(Some(sidebar.clone()));
-    sidebar_selection_slot.replace(Some(sidebar.clone()));
-    sidebar::set_active_filter(&sidebar, filter.get());
-    if matches!(filter.get(), sidebar::SidebarFilter::Folder(_)) {
-        sidebar::set_scroll_location(
-            &sidebar,
-            gallery
-                .photo_for_scroll_position(gallery.scroll_position())
-                .map(|photo| photo.folder_id()),
-        );
-    }
-
-    // Reconnecting sources also resumes previews for already indexed photos.
-    let thumbnail_recovery_requested = Rc::new(Cell::new(true));
-    let thumbnail_recovery_deferred = Rc::new(Cell::new(false));
-    let reconnected_sources = Rc::new(RefCell::new(ReconnectedSources {
-        mounted: mounted_source_roots(),
-        ..Default::default()
-    }));
-    let volume_monitor = gio::VolumeMonitor::get();
-    let mount_refresh_pending = Rc::new(Cell::new(false));
-    let schedule_mount_refresh: Rc<dyn Fn()> = {
-        let availability_refresh = availability_refresh.clone();
-        let pending = mount_refresh_pending.clone();
-        let reconnected_sources = reconnected_sources.clone();
-        Rc::new(move || {
-            if pending.replace(true) {
-                return;
-            }
-            let availability_refresh = availability_refresh.clone();
-            let pending = pending.clone();
-            let reconnected_sources = reconnected_sources.clone();
-            glib::timeout_add_local_once(Duration::from_millis(250), move || {
-                pending.set(false);
-                reconnected_sources.borrow_mut().update(mounted_source_roots());
-                availability_refresh();
-            });
-        })
-    };
-    let schedule_mount_refresh_for_mount = schedule_mount_refresh.clone();
-    volume_monitor.connect_mount_added(move |_, mount| {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE availability_mount_added uri={}",
-                mount.root().uri()
-            );
-        }
-        schedule_mount_refresh_for_mount();
-    });
-    let schedule_mount_refresh_for_unmount = schedule_mount_refresh.clone();
-    volume_monitor.connect_mount_removed(move |_, mount| {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE availability_mount_removed uri={}",
-                mount.root().uri()
-            );
-        }
-        schedule_mount_refresh_for_unmount();
-    });
-    let schedule_mount_refresh_for_change = schedule_mount_refresh.clone();
-    volume_monitor.connect_mount_changed(move |_, mount| {
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "UI TRACE availability_mount_changed uri={}",
-                mount.root().uri()
-            );
-        }
-        schedule_mount_refresh_for_change();
-    });
-    unsafe {
-        window.set_data("picasa-volume-monitor", volume_monitor);
-        #[cfg(unix)]
-        {
-            let unix_mount_monitor = gio::UnixMountMonitor::get();
-            let schedule_unix_mount_refresh = schedule_mount_refresh.clone();
-            unix_mount_monitor.connect_mountpoints_changed(move |_| {
-                schedule_unix_mount_refresh();
-            });
-            let schedule_unix_mount_refresh = schedule_mount_refresh.clone();
-            unix_mount_monitor.connect_mounts_changed(move |_| {
-                schedule_unix_mount_refresh();
-            });
-            window.set_data("picasa-unix-mount-monitor", unix_mount_monitor);
-        }
-    }
-    let sidebar_for_events = sidebar.clone();
-
-    let left_header = adw::HeaderBar::new();
-    left_header.set_height_request(46);
-    left_header.set_show_start_title_buttons(false);
-    left_header.set_show_end_title_buttons(false);
-    left_header.add_css_class("layout-left-header");
-
-    let display_for_sidebar_toggle = gtk::gdk::Display::default().expect("a display is required");
-    let sidebar_toggle_icon_theme = gtk::IconTheme::for_display(&display_for_sidebar_toggle);
-    let sidebar_toggle_icon = if sidebar_toggle_icon_theme.has_icon("sidebar-hide-symbolic") {
-        "sidebar-hide-symbolic"
-    } else if sidebar_toggle_icon_theme.has_icon("view-sidebar-symbolic") {
-        "view-sidebar-symbolic"
-    } else {
-        "pan-start-symbolic"
-    };
-    let menu = gtk::Button::from_icon_name(sidebar_toggle_icon);
-    menu.set_tooltip_text(Some("Hide sidebar"));
-    menu.add_css_class("flat");
-    menu.add_css_class("sidebar-toggle-button");
-    menu.set_size_request(28, 28);
-    left_header.pack_start(&menu);
-
-    let left_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    left_column.set_vexpand(true);
-    left_column.add_css_class("layout-left-column");
-    sidebar.set_vexpand(true);
-    left_column.append(&left_header);
-    left_column.append(&sidebar);
-
-    // Overlay a narrow drag handle on the sidebar's right edge.
-    // AdwOverlaySplitView does not expose a built-in draggable divider, so we
-    // adjust its sidebar_width_fraction ourselves while preserving its compact
-    // overlay behaviour. Long folder names can therefore be given more room
-    // without permanently making the sidebar wide.
-    let sidebar_shell = gtk::Overlay::new();
-    sidebar_shell.set_hexpand(true);
-    sidebar_shell.set_vexpand(true);
-    sidebar_shell.set_child(Some(&left_column));
-
-    let sidebar_resize_handle = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    // Keep a forgiving hit area around the visible divider. The handle is
-    // intentionally transparent, so this does not change the sidebar's
-    // appearance.
-    sidebar_resize_handle.set_width_request(12);
-    sidebar_resize_handle.set_hexpand(false);
-    sidebar_resize_handle.set_vexpand(true);
-    sidebar_resize_handle.set_halign(gtk::Align::End);
-    sidebar_resize_handle.set_valign(gtk::Align::Fill);
-    sidebar_resize_handle.set_cursor_from_name(Some("col-resize"));
-    sidebar_resize_handle.add_css_class("sidebar-resize-handle");
-    sidebar_shell.add_overlay(&sidebar_resize_handle);
-
-    let right_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    right_column.set_hexpand(true);
-    right_column.set_vexpand(true);
-
-    main_split.set_sidebar(Some(&sidebar_shell));
-    main_split.set_content(Some(&right_column));
-    main_split.set_min_sidebar_width(200.0);
-    main_split.set_max_sidebar_width(600.0);
-    main_split.set_sidebar_width_fraction(0.22);
-    main_split.set_enable_show_gesture(true);
-    main_split.set_enable_hide_gesture(true);
-
-    // Sidebar pin/hover state lives in sidebar.rs. Keep one authoritative
-    // state store so manual pinning and temporary hover-open behavior cannot
-    // drift apart.
-    sidebar::set_pinned(&sidebar, true);
-    sidebar::clear_hover_open(&sidebar);
-
-    // When the sidebar is hidden, expose a very small hover target at the
-    // far-left edge. Hover-opening does not change the pinned state.
-    let sidebar_hover_reveal = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    sidebar_hover_reveal.set_width_request(10);
-    sidebar_hover_reveal.set_hexpand(false);
-    sidebar_hover_reveal.set_vexpand(true);
-    sidebar_hover_reveal.set_halign(gtk::Align::Start);
-    sidebar_hover_reveal.set_valign(gtk::Align::Fill);
-    sidebar_hover_reveal.set_visible(!main_split.shows_sidebar());
-    sidebar_hover_reveal.set_cursor_from_name(Some("default"));
-    main_surface.add_overlay(&sidebar_hover_reveal);
-
-    let sidebar_hover_motion = gtk::EventControllerMotion::new();
-    let main_split_for_hover_reveal = main_split.clone();
-    let sidebar_for_hover_reveal = sidebar.clone();
-    sidebar_hover_motion.connect_enter(move |_, _, _| {
-        if !main_split_for_hover_reveal.shows_sidebar()
-            && !sidebar::is_pinned(&sidebar_for_hover_reveal)
-        {
-            sidebar::set_hover_open(&sidebar_for_hover_reveal, true);
-            main_split_for_hover_reveal.set_show_sidebar(true);
-        }
-    });
-    sidebar_hover_reveal.add_controller(sidebar_hover_motion);
-
-    // Auto-close only a sidebar that was opened by hover. A pinned sidebar
-    // must remain open when the pointer leaves.
-    let sidebar_leave_motion = gtk::EventControllerMotion::new();
-    let main_split_for_hover_hide = main_split.clone();
-    let sidebar_for_hover_hide = sidebar.clone();
-    sidebar_leave_motion.connect_leave(move |_| {
-        if sidebar::is_hover_open(&sidebar_for_hover_hide) {
-            sidebar::clear_hover_open(&sidebar_for_hover_hide);
-            main_split_for_hover_hide.set_show_sidebar(false);
-        }
-    });
-    sidebar_shell.add_controller(sidebar_leave_motion);
-
-    let sidebar_hover_reveal_for_state = sidebar_hover_reveal.clone();
-    main_split.connect_show_sidebar_notify(move |split| {
-        sidebar_hover_reveal_for_state.set_visible(!split.shows_sidebar());
-    });
-
-    // Keep resize geometry stable for the full drag gesture. Recomputing the
-    // starting width from sidebar_width_fraction() * the *current* split width
-    // on every motion made the denominator move while GTK was reallocating the
-    // two panes, which produced the visible jumping/jerking.
-    //
-    // Capture actual allocated pixels once at drag begin, then derive every
-    // subsequent fraction from that fixed geometry.
-    let sidebar_drag_start_width = Rc::new(Cell::new(0.0f64));
-    let sidebar_drag_split_width = Rc::new(Cell::new(1.0f64));
-    let sidebar_drag = gtk::GestureDrag::new();
-    sidebar_drag.set_button(1);
-    sidebar_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
-    sidebar_drag.set_exclusive(true);
-
-    let sidebar_shell_for_drag_begin = sidebar_shell.clone();
-    let main_split_for_drag_begin = main_split.clone();
-    let sidebar_drag_start_width_begin = sidebar_drag_start_width.clone();
-    let sidebar_drag_split_width_begin = sidebar_drag_split_width.clone();
-    let sidebar_resize_active_for_begin = sidebar_resize_active.clone();
-    sidebar_drag.connect_drag_begin(move |_, _, _| {
-        sidebar_resize_active_for_begin.set(true);
-        sidebar_drag_start_width_begin
-            .set(sidebar_shell_for_drag_begin.width().max(1) as f64);
-        sidebar_drag_split_width_begin
-            .set(main_split_for_drag_begin.width().max(1) as f64);
-    });
-
-    // Keep the real split allocation unchanged during pointer motion. Instead
-    // move a 2px preview divider across the full window. This gives immediate
-    // resize feedback without making every GtkGridView cell reallocate.
-    let pending_sidebar_fraction = Rc::new(Cell::new(main_split.sidebar_width_fraction()));
-    let pending_sidebar_fraction_update = pending_sidebar_fraction.clone();
-    let sidebar_drag_start_width_update = sidebar_drag_start_width.clone();
-    let sidebar_drag_split_width_update = sidebar_drag_split_width.clone();
-    let sidebar_resize_preview_update = sidebar_resize_preview.clone();
-    sidebar_drag.connect_drag_update(move |_, offset_x, _| {
-        let split_width = sidebar_drag_split_width_update.get().max(1.0);
-        let target_width = (sidebar_drag_start_width_update.get() + offset_x)
-            .clamp(200.0, 600.0)
-            .min(split_width * 0.70);
-        let fraction = (target_width / split_width).clamp(0.10, 0.70);
-        pending_sidebar_fraction_update.set(fraction);
-
-        sidebar_resize_preview_update.set_margin_start(target_width.round() as i32 - 1);
-        sidebar_resize_preview_update.set_visible(true);
-    });
-
-    let main_split_for_drag_end = main_split.clone();
-    let pending_sidebar_fraction_end = pending_sidebar_fraction.clone();
-    let sidebar_resize_active_for_end = sidebar_resize_active.clone();
-    let sidebar_resize_preview_end = sidebar_resize_preview.clone();
-    let gallery_for_sidebar_drag_end = gallery.clone();
-    let gallery_surface_for_sidebar_drag_end = gallery_scroll_stack.clone();
-    sidebar_drag.connect_drag_end(move |_, _, _| {
-        sidebar_resize_preview_end.set_visible(false);
-        main_split_for_drag_end
-            .set_sidebar_width_fraction(pending_sidebar_fraction_end.get());
-        sidebar_resize_active_for_end.set(false);
-
-        // Wait until the split view has received its single final allocation,
-        // then perform exactly one responsive grid update.
-        let gallery = gallery_for_sidebar_drag_end.clone();
-        let surface = gallery_surface_for_sidebar_drag_end.clone();
-        glib::idle_add_local_once(move || {
-            let width = surface.width();
-            if width > 100 {
-                gallery.update_width(width);
-            }
-        });
-    });
-    sidebar_resize_handle.add_controller(sidebar_drag);
-
-    let main_split_for_hide = main_split.clone();
-    let sidebar_for_hide = sidebar.clone();
-    menu.connect_clicked(move |_| {
-        sidebar::set_pinned(&sidebar_for_hide, false);
-        sidebar::clear_hover_open(&sidebar_for_hide);
-        main_split_for_hide.set_show_sidebar(false);
-    });
-
-    let right_header = adw::HeaderBar::new();
-    right_header.set_height_request(46);
-    right_header.set_hexpand(true);
-    right_header.set_show_start_title_buttons(true);
-    right_header.set_show_end_title_buttons(true);
-    right_header.add_css_class("layout-right-header");
-
-    let show_sidebar = gtk::Button::from_icon_name("sidebar-show-symbolic");
-    show_sidebar.set_tooltip_text(Some("Show sidebar"));
-    show_sidebar.add_css_class("flat");
-    show_sidebar.set_visible(false);
-    let main_split_for_show = main_split.clone();
-    let sidebar_for_show = sidebar.clone();
-    show_sidebar.connect_clicked(move |_| {
-        sidebar::set_pinned(&sidebar_for_show, true);
-        main_split_for_show.set_show_sidebar(true);
-    });
-    right_header.pack_start(&show_sidebar);
-
-    let show_sidebar_for_state = show_sidebar.clone();
-    main_split.connect_show_sidebar_notify(move |split| {
-        show_sidebar_for_state.set_visible(!split.shows_sidebar());
-    });
-
-    let search = gtk::SearchEntry::new();
-    search.set_placeholder_text(Some("Search photos"));
-    search.set_width_chars(18);
-    // Do not force a 320px minimum. The fixed minimum was wider than the
-    // available header centre area in smaller windows and pushed toolbar
-    // buttons outside the visible allocation.
-    search.set_size_request(220, -1);
-    search.set_hexpand(true);
-    search.add_css_class("search-field");
-    search_entry_slot.replace(Some(search.clone()));
-    let search_area = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    search_area.set_valign(gtk::Align::Center);
-    search_area.set_size_request(220, -1);
-    search_area.set_hexpand(true);
-    search_area.append(&search);
-    let (suggestion_popover, suggestion_list) = folder_suggestion_popup(&search);
-    search_popup_slot.replace(Some(suggestion_popover.clone()));
-    connect_search_popup_dismissal(window.upcast_ref(), &search, &suggestion_popover);
-
-    let add_selected_to_collage = gtk::Button::with_label("Add Selected to Collage");
-    add_selected_to_collage.set_visible(false);
-    add_selected_to_collage.add_css_class("suggested-action");
-    add_selected_to_collage
-        .set_tooltip_text(Some("Add the selected library photos to the collage"));
-    right_header.pack_end(&add_selected_to_collage);
-    collage_add_mode_slot.replace(Some({
-        let prepare = collage_prepare_add_slot.clone();
-        Rc::new(move || {
-            if let Some(prepare) = prepare.borrow().as_ref() {
-                prepare();
-            }
-        })
-    }));
-    collage_close_slot.replace(Some({
-        let main_stack = main_stack.clone();
-        let button = add_selected_to_collage.clone();
-        let gallery = gallery.clone();
-        Rc::new(move || {
-            gallery.set_collage_selection_mode(false);
-            main_stack.set_visible_child_name("photos");
-            button.set_visible(false);
-        })
-    }));
-    collage_prepare_add_slot.replace(Some({
-        let main_stack = main_stack.clone();
-        let button = add_selected_to_collage.clone();
-        let gallery = gallery.clone();
-        let collage_editor = collage_editor.clone();
-        Rc::new(move || {
-            let editor_handle = collage_editor.borrow();
-            let Some(editor) = editor_handle.as_ref() else {
-                return;
-            };
-            gallery.set_collage_selection_mode(true);
-            gallery.set_selected_photo_ids(&editor.photo_ids());
-            main_stack.set_visible_child_name("photos");
-            button.set_visible(true);
-        })
-    }));
-    {
-        let main_stack = main_stack.clone();
-        let button = add_selected_to_collage.clone();
-        let gallery = gallery.clone();
-        let connection = connection.clone();
-        let collage_editor = collage_editor.clone();
-        add_selected_to_collage.connect_clicked(move |_| {
-            let photos = gallery
-                .selected_photo_ids(None)
-                .into_iter()
-                .filter_map(|id| db::photo(&connection.borrow(), id).ok().flatten())
-                .map(|photo| crate::photo_object::PhotoObject::from_photo(&photo))
-                .collect::<Vec<_>>();
-            if photos.len() < 2 {
-                return;
-            }
-            if let Some(editor) = collage_editor.borrow().as_ref() {
-                editor.set_photos(photos);
-                gallery.set_collage_selection_mode(false);
-                main_stack.set_visible_child_name("collage");
-                button.set_visible(false);
-            }
-        });
-    }
-    {
-        let open_edit = open_edit.clone();
-        let selected_photo = selected_photo.clone();
-        let main_stack = main_stack.clone();
-        let one_to_one = info.one_to_one.clone();
-        info.edit.connect_clicked(move |_| {
-            // The bottom Edit button is a true open/close toggle. This keeps
-            // the editing workspace optional instead of forcing users to use
-            // Back/Done just to return to normal browsing.
-            if main_stack.visible_child_name().as_deref() == Some("edit") {
-                one_to_one.set_active(false);
-                main_stack.set_visible_child_name("photos");
-                return;
-            }
-            if let Some(photo) = selected_photo.borrow().as_ref() {
-                open_edit(photo.id());
-            }
-        });
-    }
-    {
-        let open_collage = open_collage.clone();
-        let gallery = gallery.clone();
-        info.collage.connect_clicked(move |_| {
-            open_collage(gallery.selected_photo_ids(None));
-        });
-    }
-    // Keep the search field centered in the header. Its allocation is traced
-    // below because HeaderBar title sizing changes when the split sidebar is
-    // shown or hidden.
-    right_header.set_title_widget(Some(&search_area));
-
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        let search_for_trace = search.clone();
-        let search_area_for_trace = search_area.clone();
-        let header_for_trace = right_header.clone();
-        main_split.connect_show_sidebar_notify(move |split| {
-            let search = search_for_trace.clone();
-            let search_area = search_area_for_trace.clone();
-            let header = header_for_trace.clone();
-            let split = split.clone();
-            let shown = split.shows_sidebar();
-            let collapsed = split.is_collapsed();
-            glib::idle_add_local_once(move || {
-                eprintln!(
-                    "SEARCH TRACE sidebar shown={} collapsed={} split_width={} header_width={} area_width={} entry_width={} text_chars={}",
-                    shown,
-                    collapsed,
-                    split.width(),
-                    header.width(),
-                    search_area.width(),
-                    search.width(),
-                    search.text().chars().count(),
-                );
-            });
-        });
-    }
-
-    // The lightbox takes keyboard focus while it is open and covers the
-    // header, so the search entry cannot be clicked or receive typed input.
-    // Keep the existing search entry and handlers, but provide the standard
-    // shortcut to close the overlay and return focus to search.
-    let search_keyboard = gtk::EventControllerKey::new();
-    search_keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let search_for_keyboard = search.clone();
-    let lightbox_for_search_keyboard = lightbox.clone();
-    search_keyboard.connect_key_pressed(move |_, key, _, modifiers| {
-        if key == gtk::gdk::Key::f
-            && modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
-        {
-            if lightbox_for_search_keyboard.root.is_visible() {
-                lightbox_for_search_keyboard.close();
-            }
-            search_for_keyboard.grab_focus();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    window.add_controller(search_keyboard);
-
-    let begin_typed_search: Rc<dyn Fn() -> bool> = {
-        let stack = main_stack.downgrade();
-        let split = main_split.downgrade();
-        Rc::new(move || {
-            let (Some(stack), Some(split)) = (stack.upgrade(), split.upgrade()) else {
-                return false;
-            };
-            // The current photo viewer remains open while the gallery behind
-            // it updates to the new search results.
-            if stack.visible_child_name().as_deref() != Some("photos") {
-                return false;
-            }
-            if split.is_collapsed() && split.shows_sidebar() {
-                split.set_show_sidebar(false);
-            }
-            true
-        })
-    };
-    // Attach this at the window boundary so typing still starts a search when
-    // the fullscreen photo viewer is the widget currently receiving input.
-    connect_type_to_search(window.upcast_ref::<gtk::Widget>(), &search, begin_typed_search);
-
-    // Once a search has been entered, the entry retains focus. Forward the
-    // gallery navigation keys so they do not only move the text cursor after
-    // a folder suggestion has been selected.
-    let gallery_for_search_navigation = gallery.clone();
-    let search_for_navigation = search.clone();
-    let popup_for_navigation = suggestion_popover.clone();
-    let search_navigation = gtk::EventControllerKey::new();
-    search_navigation.set_propagation_phase(gtk::PropagationPhase::Capture);
-    search_navigation.connect_key_pressed(move |controller, key, _, modifiers| {
-        if modifiers.intersects(
-            gtk::gdk::ModifierType::CONTROL_MASK
-                | gtk::gdk::ModifierType::ALT_MASK
-                | gtk::gdk::ModifierType::SUPER_MASK
-                | gtk::gdk::ModifierType::META_MASK,
-        ) || !matches!(
-            key,
-            gtk::gdk::Key::Left
-                | gtk::gdk::Key::Right
-                | gtk::gdk::Key::Up
-                | gtk::gdk::Key::Down
-        )
-        {
-            return glib::Propagation::Proceed;
-        }
-        let Some(root) = search_for_navigation.root() else {
-            return glib::Propagation::Proceed;
-        };
-        let focused_in_search = root.focus().is_some_and(|focus| {
-            focus == search_for_navigation.upcast_ref::<gtk::Widget>().clone()
-                || focus.is_ancestor(&search_for_navigation)
-        });
-        if !focused_in_search
-            || (popup_for_navigation.is_visible()
-                && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::Down))
-        {
-            return glib::Propagation::Proceed;
-        }
-        gallery_for_search_navigation.root.grab_focus();
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("SEARCH TRACE gallery_navigation key={key:?}");
-        }
-        let _ = controller.forward(
-            gallery_for_search_navigation
-                .root
-                .upcast_ref::<gtk::Widget>(),
-        );
-        glib::Propagation::Stop
-    });
-    window.add_controller(search_navigation);
-
-    // The split layout has two in-content header bars instead of one native
-    // titlebar. Preserve the usual titlebar double-click behavior on both:
-    // maximize when normal, and restore the previous window size when maximized.
-    for header in [&left_header, &right_header] {
-        let window_for_titlebar = window.clone();
-        let titlebar_double_click = gtk::GestureClick::new();
-        titlebar_double_click.set_button(1);
-        titlebar_double_click.connect_pressed(move |gesture, n_press, _, _| {
-            if n_press != 2 {
-                return;
-            }
-            if window_for_titlebar.is_maximized() {
-                window_for_titlebar.unmaximize();
-            } else {
-                window_for_titlebar.maximize();
-            }
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-        });
-        header.add_controller(titlebar_double_click);
-    }
-
-    let gallery_for_search = gallery.clone();
-    let connection_for_search = connection.clone();
-    let folder_cache_for_search = folder_cache.clone();
-    let filter_for_search = filter.clone();
-    let search_text_for_search = search_text.clone();
-    let sort_for_search = sort.clone();
-    let group_mode_for_search = group_mode.clone();
-    let search_suppressed_for_search = search_suppressed.clone();
-    let search_debounce_for_search = search_debounce.clone();
-    let destination_click_for_search = destination_click.clone();
-    let sidebar_selection_for_search = sidebar_selection_slot.clone();
-    let suggestion_popover_for_search = suggestion_popover.clone();
-    let suggestion_list_for_search = suggestion_list.clone();
-    let search_area_for_search = search_area.clone();
-    let right_header_for_search = right_header.clone();
-    let main_split_for_search = main_split.clone();
-
-    search.connect_search_changed(move |entry| {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let callback_started = Instant::now();
-            if search_suppressed_for_search.get() {
-                return;
-            }
-            if let Some(source) = search_debounce_for_search.borrow_mut().take() {
-                let removal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    source.remove();
-                }));
-                if removal.is_err() {
-                }
-            }
-            let query = entry.text().to_string();
-            // Imports and refreshes can change the folder hierarchy after the
-            // window was created. Read the current records so suggestions do
-            // not lag behind the sidebar and scan results.
-            let folders_for_search = folder_cache_for_search.borrow().clone();
-            search_text_for_search.replace(query.clone());
-            // Search is a global results view even when it was started from a
-            // folder. Temporarily leave the Folder stream while text is active;
-            // clearing the query restores the continuous Folder view.
-            if matches!(filter_for_search.get(), sidebar::SidebarFilter::Folder(_)) {
-                if query.is_empty() {
-                    apply_gallery_grouping(
-                        &gallery_for_search,
-                        filter_for_search.get(),
-                        sort_for_search.get(),
-                        group_mode_for_search.get(),
-                    );
-                } else {
-                    gallery_for_search.set_grouping(
-                        grid::GroupMode::None,
-                        grid::GroupDate::Taken,
-                    );
-                    if let Some(sidebar) = sidebar_selection_for_search.borrow().as_ref() {
-                        sidebar::set_scroll_location(sidebar, None);
-                    }
-                }
-            }
-            eprintln!(
-                "SEARCH TRACE changed folders_cached count={} query_chars={} entry_width={} area_width={} header_width={} sidebar_shown={} split_collapsed={}",
-                folders_for_search.len(),
-                query.chars().count(),
-                entry.width(),
-                search_area_for_search.width(),
-                right_header_for_search.width(),
-                main_split_for_search.shows_sidebar(),
-                main_split_for_search.is_collapsed(),
-            );
-            update_folder_suggestions(
-                &suggestion_popover_for_search,
-                &suggestion_list_for_search,
-                &folders_for_search,
-                &query,
-                Rc::new({
-                    let destination_click = destination_click_for_search.clone();
-                    let sidebar_selection = sidebar_selection_for_search.clone();
-                    move |folder_id| {
-                        destination_click(sidebar::SidebarFilter::Folder(folder_id));
-                        if let Some(sidebar) = sidebar_selection.borrow().as_ref().cloned() {
-                            glib::timeout_add_local_once(
-                                Duration::from_millis(100),
-                                move || sidebar::scroll_to_folder(&sidebar, folder_id),
-                            );
-                        }
-                    }
-                }),
-            );
-            trace_search_focus("suggestions-updated", entry, &suggestion_popover_for_search);
-
-            if query.is_empty() {
-                refresh_grid(
-                    &connection_for_search,
-                    filter_for_search.get(),
-                    "",
-                    sort_for_search.get(),
-                    &gallery_for_search,
-                );
-            } else {
-                let connection = connection_for_search.clone();
-                let filter = filter_for_search.clone();
-                let search_text = search_text_for_search.clone();
-                let sort = sort_for_search.clone();
-                let gallery = gallery_for_search.clone();
-                let debounce_slot = search_debounce_for_search.clone();
-                let query_for_refresh = query.clone();
-                let source = glib::timeout_add_local(Duration::from_millis(300), move || {
-                    let refresh_started = Instant::now();
-                    // The source removes itself after returning Break. Clear
-                    // the slot now so a later keystroke never tries to remove
-                    // an already-finished SourceId.
-                    debounce_slot.borrow_mut().take();
-                    if search_text.borrow().as_str() != query_for_refresh {
-                        return glib::ControlFlow::Break;
-                    }
-                    refresh_grid(&connection, filter.get(), &query_for_refresh, sort.get(), &gallery);
-                    eprintln!(
-                        "SEARCH TRACE global_refresh_done query={:?} elapsed_ms={}",
-                        query_for_refresh,
-                        refresh_started.elapsed().as_millis()
-                    );
-                    glib::ControlFlow::Break
-                });
-                search_debounce_for_search.replace(Some(source));
-            }
-            eprintln!(
-                "SEARCH TRACE changed done query={:?} elapsed_ms={}",
-                query,
-                callback_started.elapsed().as_millis()
-            );
-        }));
-        if let Err(payload) = result {
-            let message = payload
-                .downcast_ref::<&str>()
-                .copied()
-                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-                .unwrap_or("non-string panic payload");
-            eprintln!("SEARCH ERROR changed handler: {message}");
-        }
-    });
-
-    let search_text_for_activate = search_text.clone();
-    let search_debounce_for_activate = search_debounce.clone();
-    let filter_for_activate = filter.clone();
-    let connection_for_activate = connection.clone();
-    let sort_for_activate = sort.clone();
-    let group_mode_for_activate = group_mode.clone();
-    let gallery_for_activate = gallery.clone();
-    let suggestion_popover_for_activate = suggestion_popover.clone();
-    search.connect_activate(move |entry| {
-        if let Some(source) = search_debounce_for_activate.borrow_mut().take() {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.remove()));
-        }
-        let query = entry.text().to_string();
-        search_text_for_activate.replace(query.clone());
-        suggestion_popover_for_activate.popdown();
-        if matches!(filter_for_activate.get(), sidebar::SidebarFilter::Folder(_)) {
-            if query.is_empty() {
-                apply_gallery_grouping(
-                    &gallery_for_activate,
-                    filter_for_activate.get(),
-                    sort_for_activate.get(),
-                    group_mode_for_activate.get(),
-                );
-            } else {
-                gallery_for_activate.set_grouping(grid::GroupMode::None, grid::GroupDate::Taken);
-            }
-        }
-        refresh_grid(
-            &connection_for_activate,
-            filter_for_activate.get(),
-            &query,
-            sort_for_activate.get(),
-            &gallery_for_activate,
-        );
-        trace_search_focus("activate", entry, &suggestion_popover_for_activate);
-    });
-
-    let import = gtk::Button::from_icon_name("folder-open-symbolic");
-    import.set_tooltip_text(Some("Add Folder to Library"));
-    right_header.pack_end(&import);
-
-    let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
-    refresh.set_tooltip_text(Some("Refresh library"));
-    right_header.pack_end(&refresh);
-
-    let settings = gtk::MenuButton::new();
-    settings.set_icon_name("emblem-system-symbolic");
-    settings.set_tooltip_text(Some("Settings"));
-
-    // The iPhone presentation is the app's default. Keep the stock GTK4 /
-    // libadwaita presentation immediately available as an opt-in overlay,
-    // rather than making users restart or changing their system theme.
-    let standard_theme_provider = gtk::CssProvider::new();
-    standard_theme_provider.load_from_data(STANDARD_GTK4_CSS);
-    let display = gtk::gdk::Display::default().expect("a display is required");
-
-    let settings_popover = gtk::Popover::new();
-    let settings_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    settings_box.set_margin_top(8);
-    settings_box.set_margin_bottom(8);
-    settings_box.set_margin_start(8);
-    settings_box.set_margin_end(8);
-
-    let appearance = gtk::Label::new(Some("Appearance"));
-    appearance.set_xalign(0.0);
-    appearance.add_css_class("heading");
-
-    let saved_theme = db::setting(&connection.borrow(), THEME_SETTING_KEY)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "standard".to_string());
-
-    let iphone_theme = gtk::CheckButton::with_label("iPhoto Dark");
-    iphone_theme.set_tooltip_text(Some("Dark iPhoto-inspired gallery"));
-
-    let standard_theme = gtk::CheckButton::with_label("Standard GTK4");
-    standard_theme.set_group(Some(&iphone_theme));
-    if saved_theme == "iphone" {
-        iphone_theme.set_active(true);
-    } else {
-        standard_theme.set_active(true);
-    }
-    standard_theme.set_tooltip_text(Some("Use the regular GTK4 / libadwaita appearance"));
-
-    let style_manager = adw::StyleManager::default();
-    if saved_theme == "iphone" {
-        lightbox.use_iphone_backdrop();
-    } else {
-        lightbox.use_standard_backdrop(style_manager.is_dark());
-    }
-
-    let display_for_standard = display.clone();
-    let provider_for_standard = standard_theme_provider.clone();
-    let connection_for_standard = connection.clone();
-    let lightbox_for_standard = lightbox.clone();
-    let style_manager_for_standard = style_manager.clone();
-    standard_theme.connect_toggled(move |button| {
-        if button.is_active() {
-            gtk::style_context_add_provider_for_display(
-                &display_for_standard,
-                &provider_for_standard,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-            );
-            lightbox_for_standard.use_standard_backdrop(style_manager_for_standard.is_dark());
-            if let Err(error) = db::set_setting(
-                &connection_for_standard.borrow(),
-                THEME_SETTING_KEY,
-                "standard",
-            ) {
-                eprintln!("Could not save appearance theme: {error}");
-            }
-        }
-    });
-
-    let display_for_iphone = display.clone();
-    let provider_for_iphone = standard_theme_provider.clone();
-    let connection_for_iphone = connection.clone();
-    let lightbox_for_iphone = lightbox.clone();
-    iphone_theme.connect_toggled(move |button| {
-        if button.is_active() {
-            gtk::style_context_remove_provider_for_display(
-                &display_for_iphone,
-                &provider_for_iphone,
-            );
-            lightbox_for_iphone.use_iphone_backdrop();
-            if let Err(error) =
-                db::set_setting(&connection_for_iphone.borrow(), THEME_SETTING_KEY, "iphone")
-            {
-                eprintln!("Could not save appearance theme: {error}");
-            }
-        }
-    });
-
-    let standard_theme_for_dark = standard_theme.clone();
-    let lightbox_for_dark = lightbox.clone();
-    style_manager.connect_dark_notify(move |manager| {
-        if standard_theme_for_dark.is_active() {
-            lightbox_for_dark.use_standard_backdrop(manager.is_dark());
-        }
-    });
-
-    let clear_thumbnails = gtk::Button::with_label("Clear thumbnails");
-    clear_thumbnails.set_halign(gtk::Align::Fill);
-    clear_thumbnails.add_css_class("clear-action-button");
-    let clear_database = gtk::Button::with_label("Clear database");
-    clear_database.set_halign(gtk::Align::Fill);
-    clear_database.add_css_class("clear-action-button");
-    let clear_all = gtk::Button::with_label("Clear all");
-    clear_all.set_halign(gtk::Align::Fill);
-    clear_all.add_css_class("clear-action-button");
-    settings_box.append(&appearance);
-    settings_box.append(&iphone_theme);
-    settings_box.append(&standard_theme);
-    settings_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    settings_box.append(&clear_thumbnails);
-    settings_box.append(&clear_database);
-    settings_box.append(&clear_all);
-    settings_popover.set_child(Some(&settings_box));
-    settings.set_popover(Some(&settings_popover));
-
-    let sort_button = gtk::MenuButton::new();
-    sort_button.set_icon_name(match sort.get().direction {
-        SortDirection::Ascending => "view-sort-ascending-symbolic",
-        SortDirection::Descending => "view-sort-descending-symbolic",
-    });
-    sort_button.set_tooltip_text(Some("Sort photos"));
-
-    let sort_popover = gtk::Popover::new();
-    let sort_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    sort_box.set_margin_top(8);
-    sort_box.set_margin_bottom(8);
-    sort_box.set_margin_start(8);
-    sort_box.set_margin_end(8);
-
-    let sort_heading = gtk::Label::new(Some("Sort by"));
-    sort_heading.set_xalign(0.0);
-    sort_heading.add_css_class("heading");
-    sort_box.append(&sort_heading);
-
-    let date_taken_sort = gtk::CheckButton::with_label("Date taken");
-    let name_sort = gtk::CheckButton::with_label("Name");
-    let file_size_sort = gtk::CheckButton::with_label("File size");
-    let dimensions_sort = gtk::CheckButton::with_label("Dimensions");
-    let date_added_sort = gtk::CheckButton::with_label("Date added");
-    for button in [
-        &name_sort,
-        &file_size_sort,
-        &dimensions_sort,
-        &date_added_sort,
-    ] {
-        button.set_group(Some(&date_taken_sort));
-    }
-    match sort.get().field {
-        SortField::DateTaken => date_taken_sort.set_active(true),
-        SortField::Name => name_sort.set_active(true),
-        SortField::FileSize => file_size_sort.set_active(true),
-        SortField::Dimensions => dimensions_sort.set_active(true),
-        SortField::DateAdded => date_added_sort.set_active(true),
-    }
-    for button in [
-        &date_taken_sort,
-        &name_sort,
-        &file_size_sort,
-        &dimensions_sort,
-        &date_added_sort,
-    ] {
-        sort_box.append(button);
-    }
-
-    sort_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    let order_heading = gtk::Label::new(Some("Order"));
-    order_heading.set_xalign(0.0);
-    order_heading.add_css_class("heading");
-    sort_box.append(&order_heading);
-    let ascending_sort = gtk::CheckButton::with_label("Ascending");
-    let descending_sort = gtk::CheckButton::with_label("Descending");
-    descending_sort.set_group(Some(&ascending_sort));
-    match sort.get().direction {
-        SortDirection::Ascending => ascending_sort.set_active(true),
-        SortDirection::Descending => descending_sort.set_active(true),
-    }
-    sort_box.append(&ascending_sort);
-    sort_box.append(&descending_sort);
-
-    sort_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    let group_heading = gtk::Label::new(Some("Group by"));
-    group_heading.set_xalign(0.0);
-    group_heading.add_css_class("heading");
-    sort_box.append(&group_heading);
-
-    let group_none = gtk::CheckButton::with_label("None");
-    let group_day = gtk::CheckButton::with_label("Day");
-    let group_month = gtk::CheckButton::with_label("Month");
-    group_day.set_group(Some(&group_none));
-    group_month.set_group(Some(&group_none));
-    match group_mode.get() {
-        grid::GroupMode::None | grid::GroupMode::Folder => group_none.set_active(true),
-        grid::GroupMode::Day => group_day.set_active(true),
-        grid::GroupMode::Month => group_month.set_active(true),
-    }
-    // Grouping belongs to the Library section, not to a particular sort field.
-    // Date grouping will use Date Taken (or Date Added when that sort is active).
-    // Albums and Folders keep the controls disabled.
-    let group_available = is_library_filter(filter.get());
-    group_none.set_sensitive(group_available);
-    group_day.set_sensitive(group_available);
-    group_month.set_sensitive(group_available);
-    sort_box.append(&group_none);
-    sort_box.append(&group_day);
-    sort_box.append(&group_month);
-
-    let connect_sort_field = |button: &gtk::CheckButton, field: SortField| {
-        let sort = sort.clone();
-        let group_mode = group_mode.clone();
-        let group_none = group_none.clone();
-        let group_day = group_day.clone();
-        let group_month = group_month.clone();
-        let connection = connection.clone();
-        let filter = filter.clone();
-        let search = search_text.clone();
-        let gallery = gallery.clone();
-        button.connect_toggled(move |button| {
-            if !button.is_active() {
-                return;
-            }
-            let value = PhotoSort {
-                field,
-                ..sort.get()
-            };
-            sort.set(value);
-            // Name/size/dimensions sorting cannot form a coherent chronological
-            // group sequence. Keep Group by available in Library, but selecting a
-            // non-date sort while grouped returns the grouping mode to None.
-            if group_date_for_sort(value).is_none()
-                && group_mode.get() != grid::GroupMode::None
-            {
-                group_none.set_active(true);
-            }
-            apply_gallery_grouping(&gallery, filter.get(), value, group_mode.get());
-            if let Err(error) =
-                db::set_setting(&connection.borrow(), SORT_FIELD_SETTING_KEY, field.key())
-            {
-                eprintln!("Could not save photo sort field: {error}");
-            }
-            refresh_grid(&connection, filter.get(), &search.borrow(), value, &gallery);
-        });
-    };
-    connect_sort_field(&date_taken_sort, SortField::DateTaken);
-    connect_sort_field(&name_sort, SortField::Name);
-    connect_sort_field(&file_size_sort, SortField::FileSize);
-    connect_sort_field(&dimensions_sort, SortField::Dimensions);
-    connect_sort_field(&date_added_sort, SortField::DateAdded);
-
-    let connect_sort_direction = |button: &gtk::CheckButton, direction: SortDirection| {
-        let sort = sort.clone();
-        let sort_button = sort_button.clone();
-        let connection = connection.clone();
-        let filter = filter.clone();
-        let search = search_text.clone();
-        let gallery = gallery.clone();
-        button.connect_toggled(move |button| {
-            if !button.is_active() {
-                return;
-            }
-            let value = PhotoSort {
-                direction,
-                ..sort.get()
-            };
-            sort.set(value);
-            sort_button.set_icon_name(match direction {
-                SortDirection::Ascending => "view-sort-ascending-symbolic",
-                SortDirection::Descending => "view-sort-descending-symbolic",
-            });
-            if let Err(error) = db::set_setting(
-                &connection.borrow(),
-                SORT_DIRECTION_SETTING_KEY,
-                direction.key(),
-            ) {
-                eprintln!("Could not save photo sort direction: {error}");
-            }
-            refresh_grid(&connection, filter.get(), &search.borrow(), value, &gallery);
-        });
-    };
-    connect_sort_direction(&ascending_sort, SortDirection::Ascending);
-    connect_sort_direction(&descending_sort, SortDirection::Descending);
-
-    let connect_group_mode = |button: &gtk::CheckButton, mode: grid::GroupMode| {
-        let group_mode = group_mode.clone();
-        let sort = sort.clone();
-        let date_taken_sort = date_taken_sort.clone();
-        let connection = connection.clone();
-        let filter = filter.clone();
-        let gallery = gallery.clone();
-        button.connect_toggled(move |button| {
-            if !button.is_active() {
-                return;
-            }
-            if !is_library_filter(filter.get()) {
-                return;
-            }
-            // Day/Month are chronological groups. If the user was sorting by
-            // Name, Size or Dimensions, switch to Date Taken automatically
-            // instead of greying out Group by.
-            if mode != grid::GroupMode::None && group_date_for_sort(sort.get()).is_none() {
-                date_taken_sort.set_active(true);
-            }
-            group_mode.set(mode);
-            if let Err(error) = db::set_setting(
-                &connection.borrow(),
-                GROUP_MODE_SETTING_KEY,
-                group_mode_key(mode),
-            ) {
-                eprintln!("Could not save photo group mode: {error}");
-            }
-            apply_gallery_grouping(&gallery, filter.get(), sort.get(), mode);
-        });
-    };
-    connect_group_mode(&group_none, grid::GroupMode::None);
-    connect_group_mode(&group_day, grid::GroupMode::Day);
-    connect_group_mode(&group_month, grid::GroupMode::Month);
-
-    sort_popover.set_child(Some(&sort_box));
-
-    // The active sidebar destination can change after this popover is built.
-    // Re-evaluate Group by every time it is opened so all Library destinations
-    // stay enabled and Albums/Folders are visibly disabled.
-    let filter_for_group_controls = filter.clone();
-    let group_none_for_visibility = group_none.clone();
-    let group_day_for_visibility = group_day.clone();
-    let group_month_for_visibility = group_month.clone();
-    sort_popover.connect_visible_notify(move |popover| {
-        if !popover.is_visible() {
+    let selected_for_print = selected_photo.clone();
+    let window_for_print = window.clone();
+    let connection_for_print = connection.clone();
+    let gallery_for_print = gallery.clone();
+
+    info.print.connect_clicked(move |_| {
+        let Some(photo) = selected_for_print.borrow().clone() else {
             return;
-        }
-        let available = is_library_filter(filter_for_group_controls.get());
-        group_none_for_visibility.set_sensitive(available);
-        group_day_for_visibility.set_sensitive(available);
-        group_month_for_visibility.set_sensitive(available);
+        };
+
+        // Print every selected photo (the full multi-selection, falling back
+        // to the anchor photo when nothing extra is selected). PhotoObject is
+        // a GTK object and must stay on the GTK thread: copy only Send-safe
+        // scalar/string values into the print requests; the renders happen on
+        // a worker thread while the dialog runs here.
+        let ids = gallery_for_print.selected_photo_ids(Some(photo.id()));
+        let requests: Vec<PhotoPrintRequest> = ids
+            .iter()
+            .filter_map(|id| db::photo(&connection_for_print.borrow(), *id).ok().flatten())
+            .map(|record| PhotoPrintRequest {
+                job_name: record
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("photo")
+                    .to_string(),
+                reference: record.path,
+                rotation: record.rotation,
+                edit_recipe: record.edit_recipe,
+                source_width: record.width.unwrap_or(0),
+                source_height: record.height.unwrap_or(0),
+            })
+            .collect();
+
+        print_photos(&window_for_print, &connection_for_print, requests);
     });
 
-    sort_button.set_popover(Some(&sort_popover));
-    let header_tools = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    header_tools.append(&sort_button);
-    header_tools.append(&settings);
-    right_header.pack_end(&header_tools);
+    let (
+        main_split,
+        main_surface,
+        sidebar,
+        thumbnail_recovery_requested,
+        thumbnail_recovery_deferred,
+        reconnected_sources,
+        sidebar_for_events,
+        right_column,
+        right_header,
+        search,
+    ) = include!("layout.rs");
 
-    // Keep the search field usable on phone-sized windows. Import and refresh
-    // remain available from the sidebar/context actions, while the sort and
-    // settings menus stay in the header.
-    let tiny_header = adw::Breakpoint::new(
-        adw::BreakpointCondition::parse("max-width: 1050px")
-            .expect("valid tiny header breakpoint"),
-    );
-    tiny_header.add_setter(&import, "visible", Some(&false.to_value()));
-    tiny_header.add_setter(&refresh, "visible", Some(&false.to_value()));
-    tiny_header.add_setter(&header_tools, "visible", Some(&false.to_value()));
-    window.add_breakpoint(tiny_header);
+    // Appearance button: opens Settings → Themes, where the theme list is
+    // built from the theme folders on disk. toolbar.rs appends the
+    // `settings` button to the header tools.
+    let settings = crate::window::theme::appearance_button();
+    theme_engine.set_appearance_button(&settings);
+    // Theme switches redraw the albums home so covers pick up the palette.
+    // Window chrome (traffic lights vs native title buttons) is wired inside
+    // layout.rs, where the headers and the placement closure live.
+    theme_engine.set_post_apply(theme_post_apply);
+    {
+        let present_settings_for_appearance = present_settings.clone();
+        settings.connect_clicked(move |_| {
+            present_settings_for_appearance(Some("themes"));
+        });
+    }
+    let refresh = include!("toolbar.rs");
 
     right_column.append(&right_header);
     right_column.append(&content);
 
-    // Toasts for import/scan progress and results.
-    let toast_overlay = adw::ToastOverlay::new();
-    toast_overlay.set_child(Some(&main_surface));
+    window.set_content(Some(&main_surface));
 
-    window.set_content(Some(&toast_overlay));
-
-    let startup_toast = adw::Toast::new(&format!(
-        "Loading photos 0 / {}",
-        startup_photos.len()
-    ));
-    startup_toast.set_timeout(0);
-    toast_overlay.add_toast(startup_toast.clone());
     let startup_gallery = gallery.clone();
-    let startup_toast_for_idle = startup_toast.clone();
     let startup_photos_for_idle = startup_photos.clone();
     let startup_total = startup_photos_for_idle.len();
     let mut startup_offset = 0usize;
     const STARTUP_BATCH_SIZE: usize = 500;
     glib::idle_add_local(move || {
         if startup_offset >= startup_total {
-            startup_toast_for_idle.set_title("No photos");
-            startup_toast_for_idle.set_timeout(3);
             return glib::ControlFlow::Break;
         }
 
@@ -3095,13 +2510,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }
         startup_offset = end;
 
-        startup_toast_for_idle.set_title(&format!(
-            "Loading photos {} / {}",
-            startup_offset, startup_total
-        ));
         if startup_offset >= startup_total {
-            startup_toast_for_idle.set_title(&format!("Loaded {startup_total} photos"));
-            startup_toast_for_idle.set_timeout(3);
             glib::ControlFlow::Break
         } else {
             glib::ControlFlow::Continue
@@ -3119,108 +2528,34 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     compact.add_setter(&main_split, "show-sidebar", Some(&false.to_value()));
     window.add_breakpoint(compact);
 
-    let provider = gtk::CssProvider::new();
-    provider.load_from_data("\
-        window, .layout-left-column, .navigation-sidebar { background: #252525; color: #f2f2f2; }\
-        .layout-left-column { min-width: 200px; border-right: 1px solid #101010; }\
-        .sidebar-resize-handle { background: transparent; }\
-        .sidebar-resize-handle:hover { background: rgba(120,185,232,0.35); }\
-        .sidebar-resize-preview { background: rgba(120,185,232,0.95); }\
-        .layout-left-header, .layout-right-header { min-height: 46px; background: linear-gradient(to bottom, #404040, #2d2d2d); border-bottom: 1px solid #171717; color: #f5f5f5; }\
-        .app-title { font-weight: 700; font-size: 15px; margin-left: 4px; color: #f5f5f5; text-shadow: 0 1px #111; }\
-        .layout-left-header button, .layout-right-header button { color: #eeeeee; border-radius: 6px; }\
-        .layout-left-header .sidebar-toggle-button, .layout-left-header .sidebar-toggle-button image { color: #f5f5f5; opacity: 1; }\
-        .layout-left-header button:hover, .layout-right-header button:hover { background: rgba(255,255,255,0.12); }\
-        .search-field { min-width: 220px; min-height: 30px; padding: 0 10px; border-radius: 7px; background: #202020; border: 1px solid #151515; color: #f5f5f5; box-shadow: inset 0 1px rgba(0,0,0,0.55), 0 1px rgba(255,255,255,0.10); }\
-        .search-field image { color: #bdbdbd; }\
-        .search-field entry { background: transparent; border: none; box-shadow: none; color: #f5f5f5; }\
-        .photo-grid { background: #292929; }\
-        scrolledwindow undershoot { background: transparent; }\
-        listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }\
-        listview.folder-stream > row { padding: 0; margin: 0; background: transparent; background-image: none; box-shadow: none; }\
-        listview.folder-stream > row:hover, listview.folder-stream > row:selected, listview.folder-stream > row:focus, listview.folder-stream > row:active { background: transparent; background-image: none; outline: none; box-shadow: none; }\
-        .folder-section-header { background: transparent; }\
-        .folder-section-title { color: #f0f0f0; font-weight: 700; font-size: 14px; text-shadow: 0 1px #151515; }\
-        .folder-section-count { color: #a8a8a8; font-size: 12px; }\
-        .folder-section-icon { color: #c8c8c8; opacity: 0.9; }\
-        .folder-section-separator { margin-top: 7px; opacity: 0.42; }\
-        .folder-photo-row { background: transparent; }\
-        .folder-photo-selected { border-color: #78b9e8; box-shadow: 0 0 0 1px #c6e6ff, 0 3px 10px rgba(0,0,0,0.75); }\
-        .folder-photo-selected .selection-badge { opacity: 1; }\
-        gridview.section-grid { background: transparent; padding: 20px 20px 24px 20px; }\
-        gridview.section-grid > child, gridview.section-grid > item { padding: 6px; margin: 0; background: transparent; background-image: none; box-shadow: none; border-radius: 10px; }\
-        gridview.section-grid > child:hover, gridview.section-grid > child:selected, gridview.section-grid > child:focus, gridview.section-grid > child:active, gridview.section-grid > item:hover, gridview.section-grid > item:selected, gridview.section-grid > item:focus, gridview.section-grid > item:active { background: transparent; background-image: none; outline: none; box-shadow: none; }\
-        .photo-frame { box-shadow: 0 2px 5px rgba(0,0,0,0.62), 0 0 0 1px rgba(255,255,255,0.12); }\
-        .photo-tile { border-radius: 7px; border: 2px solid transparent; background: #3a3a3a; transition: border-color 150ms ease, box-shadow 150ms ease; }\
-        .photo-tile:hover { border-color: rgba(140,196,237,0.70); box-shadow: 0 3px 10px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.18); }\
-        .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }\
-        button.album-card { min-width: 0; padding: 0; margin: 0; background: transparent; background-image: none; border: none; box-shadow: none; }\
-        button.album-card:hover, button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }\
-        gridview.section-grid > child:selected .photo-tile, gridview.section-grid > item:selected .photo-tile { border-color: #78b9e8; box-shadow: 0 0 0 1px #c6e6ff, 0 3px 10px rgba(0,0,0,0.75); }\
-        .selection-badge { opacity: 0; transition: opacity 150ms ease; background: #4d9fdb; color: white; border-radius: 9999px; padding: 3px; box-shadow: 0 1px 3px rgba(0,0,0,0.55); }\
-        gridview.section-grid > child:selected .selection-badge, gridview.section-grid > item:selected .selection-badge { opacity: 1; }\
-        .offline-badge { min-width: 20px; min-height: 20px; padding: 0; border-radius: 9999px; color: #2a1a00; background: #f2c14e; font-weight: 700; }\
-        .sidebar-offline-badge { min-width: 16px; min-height: 16px; padding: 0; border-radius: 9999px; color: #2a1a00; background: #f2c14e; font-weight: 700; font-size: 10px; }\
-        .folder-disclosure { opacity: 0.68; }\
-        .navigation-sidebar .folder-count { color: #969696; }\
-        .thumbnail { border-radius: 5px; }\
-        .missing-thumbnail { background: #383838; }\
-        .section-heading-box { margin-top: 18px; margin-bottom: 7px; }\
-        .section-heading { color: #f0f0f0; font-weight: 700; font-size: 14px; text-shadow: 0 1px #151515; }\
-        .section-more-btn { opacity: 0.6; color: #d8d8d8; border-radius: 6px; min-width: 28px; min-height: 28px; padding: 2px 4px; }\
-        .section-more-btn:hover { opacity: 1.0; background: rgba(255,255,255,0.10); }\
-        .photo-info-bar { background: linear-gradient(to bottom, #3b3b3b, #2c2c2c); border-top: 1px solid #151515; min-height: 58px; color: #efefef; }\
-        .info-preview { min-width: 40px; min-height: 40px; border-radius: 6px; background: #333; border: 1px solid #555; }\
-        .info-title { font-weight: 700; font-size: 13px; color: #f4f4f4; }\
-        .metric-key { font-size: 11px; color: #bcbcbc; font-weight: 600; }\
-        .metric-val { font-size: 13px; font-weight: 500; color: #eeeeee; }\
-        .photo-action-button { min-width: 34px; min-height: 34px; padding: 0; border-radius: 7px; color: #ededed; background: #3a3a3a; border: 1px solid #1b1b1b; box-shadow: inset 0 1px rgba(255,255,255,0.12); transition: background 150ms ease; }\
-        .photo-action-button:hover { background: #505050; }\
-        .photo-context-menu, .photo-context-menu viewport { background: #3a3a3a; }\
-        .photo-context-menu { border: 1px solid #686868; border-radius: 8px; box-shadow: 0 5px 18px rgba(0,0,0,0.70); }\
-        .photo-context-menu button { min-height: 32px; padding: 6px 10px; color: #f5f5f5; }\
-        .photo-context-menu button:hover { background: #505050; }\
-        button.clear-action-button { color: #2e3436; background: #e6e6e6; border: 1px solid #9a9a9a; }\
-        button.clear-action-button:hover { color: #1f2325; background: #f0f0f0; border-color: #777777; }\
-        button.clear-action-button:active { background: #d2d2d2; }\
-        .favorite-btn.active, .favorite-btn.active image { color: #ff453a; }\
-        .favorite-badge { color: #ff453a; }\
-        .edited-badge { color: #ededed; }\
-        .one-to-one-btn:checked { color: #ffffff; background: #4d9fdb; }\
-        .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; color: #a9a9a9; }\
-        .section-count { font-size: 13px; color: #bcbcbc; }\
-        .group-heading-bar { background: transparent; padding: 0; }\
-        .navigation-sidebar row { border-radius: 6px; color: #e8e8e8; }\
-        .navigation-sidebar row:hover { background: rgba(255,255,255,0.07); }\
-        .navigation-sidebar row.sidebar-scroll-location { box-shadow: inset 3px 0 #4d9fdb; background: rgba(77,159,219,0.10); }\
-        .navigation-sidebar .sidebar-section-heading { margin-top: 8px; padding-top: 0; }\
-        .navigation-sidebar .sidebar-section-heading-title { color: #f0f0f0; font-size: inherit; font-weight: 700; }\
-        .navigation-sidebar row:selected { background: #4b7d9e; color: white; }\
-        .navigation-sidebar .heading { color: #a9a9a9; font-size: 11px; font-weight: 700; margin-top: 14px; margin-bottom: 4px; }\
-        .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: #bcbcbc; }\
-        .lightbox-backdrop { background: #292929; }\
-        .lightbox-backdrop.standard-light { background: @view_bg_color; }\
-        .lightbox-backdrop.standard-dark { background: #000000; }\
-        .lightbox-picture { background: transparent; }\
-    ");
-
-    gtk::style_context_add_provider_for_display(
-        &gtk::gdk::Display::default().expect("a display is required"),
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-    // Apply the persisted choice before the window's first rendered frame.
-    if saved_theme != "iphone" {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &standard_theme_provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-    }
+    crate::css::install_foundation(&display);
+    // Apply the persisted theme (and the base layer) before the window's
+    // first rendered frame. Must run after the foundation so the base theme
+    // is added after base.css at the same priority and wins.
+    theme_engine.startup();
 
     let (scan_sender, scan_receiver) = std::sync::mpsc::channel::<ScanUiEvent>();
+    let (refresh_prepare_sender, refresh_prepare_receiver) =
+        std::sync::mpsc::channel::<RefreshPrepareEvent>();
 
     let scan_job = Rc::new(RefCell::new(ScanJobState::default()));
+    sidebar::bind_refresh_gate(&sidebar, &refresh);
+    {
+        let job = scan_job.clone();
+        let refresh = refresh.downgrade();
+        let stop = refresh_status_stop.clone();
+        // Includes preparation and cancellation acknowledgement, not merely
+        // the time an individual folder worker is active.
+        glib::timeout_add_local(Duration::from_millis(50), move || {
+            let Some(refresh) = refresh.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let busy = job.borrow().kind.is_some();
+            refresh.set_sensitive(!busy);
+            stop.set_sensitive(busy);
+            glib::ControlFlow::Continue
+        });
+    }
     let stop_scan = gtk::Button::from_icon_name("process-stop-symbolic");
     stop_scan.set_tooltip_text(Some("Stop current scan"));
     stop_scan.set_visible(false);
@@ -3232,13 +2567,18 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         Rc::new(move || {
             let next = {
                 let mut job = scan_job.borrow_mut();
-                job.pending
-                    .pop_front()
-                    .map(|root| (root, job.generation))
+                if job.active.is_some() {
+                    None
+                } else {
+                    job.pending
+                        .pop_front()
+                        .map(|root| (root, job.generation, job.kind))
+                }
             };
-            let Some((root, generation)) = next else {
+            let Some((root, generation, kind)) = next else {
                 return;
             };
+            
             let control = spawn_tagged_scan(root, generation, scan_sender.clone());
             scan_job.borrow_mut().active = Some(control);
         })
@@ -3246,72 +2586,125 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     refresh_folder_slot.replace(Some({
         let scan_job = scan_job.clone();
-        let start_next_scan = start_next_scan.clone();
-        let connection = connection.clone();
-        Rc::new(move |path: String| {
-            let imported_root = db::folders(&connection.borrow())
-                .ok()
-                .into_iter()
-                .flatten()
-                .any(|folder| folder.path == path && folder.imported_root);
-            if !imported_root {
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                }
+        let refresh_prepare_sender = refresh_prepare_sender.clone();
+        let refresh_status_box = refresh_status_box.clone();
+        let refresh_status_spinner = refresh_status_spinner.clone();
+        let refresh_status_label = refresh_status_label.clone();
+        let stop_scan = stop_scan.clone();
+        let refresh = refresh.clone();
+        Rc::new(move |reason: PhotoScanRequestReason, path: String| {
+            
+            if reason.scan_kind().is_none() {
+                
                 return;
             }
-            if std::env::var_os("PICASA_TRACE").is_some() {
+            if scan_job.borrow().kind.is_some() {
+                
+                refresh_status_label.set_text("Refresh already running…");
+                refresh_status_spinner.set_spinning(true);
+                refresh_status_box.set_visible(true);
+                stop_scan.set_visible(true);
+                return;
             }
-            let mut job = scan_job.borrow_mut();
-            if let Some(previous) = job.active.take() {
-                previous.cancel();
-            }
-            job.generation = job.generation.wrapping_add(1);
-            job.kind = Some(ScanJobKind::Refresh);
-            job.pending.clear();
-            job.pending.push_back(path);
-            job.imported_total = 0;
-            job.failed_total = 0;
-            drop(job);
-            start_next_scan();
+            // A full Refresh All may still have a background availability/sidebar
+            // rebuild pending. Do not let that stale worker mutate the sidebar
+            // while a targeted folder refresh is starting.
+            refresh.set_sensitive(false);
+            invalidate_availability_refreshes();
+            refresh_status_label.set_text(&format!("Refreshing {}…", crate::source::filename(&path)));
+            refresh_status_spinner.set_spinning(true);
+            refresh_status_box.set_visible(true);
+            stop_scan.set_visible(true);
+            let generation = {
+                let mut job = scan_job.borrow_mut();
+                job.authorize_photo_scan(reason)
+                    .expect("folder refresh reason was authorized")
+            };
+            let sender = refresh_prepare_sender.clone();
+            std::thread::spawn(move || {
+                let imported_root = db::open_default()
+                    .and_then(|connection| db::folders_cached(&connection))
+                    .map(|folders| {
+                        folders
+                            .into_iter()
+                            .any(|folder| folder.path == path && folder.imported_root)
+                    })
+                    .map_err(|error| error.to_string());
+                let _ = sender.send(RefreshPrepareEvent::FolderReady {
+                    generation,
+                    path,
+                    imported_root,
+                });
+            });
         })
     }));
 
+    // Hover to focus: once the pointer rests on a thumbnail, it becomes the
+    // selection - so Space/1:1 always opens exactly what is under it.
     {
+        let gallery_for_hover = gallery.clone();
+        gallery.set_hover_select_handler(Rc::new(move || {
+            gallery_for_hover.select_photo_under_pointer();
+        }));
+    }
+
+
+    // Debounce/coalesce monitor activity independently from scan authorization.
+    // One busy scan cannot be interrupted by a watch event; the dirty root
+    // remains pending and is submitted after the current job becomes idle.
+    {
+        let pending = pending_watch_refreshes.clone();
+        let scan_job = scan_job.clone();
         let refresh_folder_slot = refresh_folder_slot.clone();
-        glib::timeout_add_local(Duration::from_millis(500), move || {
-            let mut paths = std::collections::HashSet::new();
-            while let Ok(path) = folder_watch_receiver.try_recv() {
-                paths.insert(path);
+        glib::timeout_add_local(Duration::from_millis(250), move || {
+            if scan_job.borrow().kind.is_some() {
+                return glib::ControlFlow::Continue;
             }
-            if let Some(refresh) = refresh_folder_slot.borrow().as_ref() {
-                for path in paths {
-                    refresh(path);
+            let now = Instant::now();
+            let ready = pending
+                .borrow()
+                .iter()
+                .find_map(|(path, changed_at)| {
+                    (now.duration_since(*changed_at) >= Duration::from_millis(750))
+                        .then(|| path.clone())
+                });
+            if let Some(path) = ready {
+                pending.borrow_mut().remove(&path);
+                
+                if let Some(callback) = refresh_folder_slot.borrow().as_ref() {
+                    callback(PhotoScanRequestReason::DebouncedWatchRefresh, path);
                 }
             }
             glib::ControlFlow::Continue
         });
     }
+    rebuild_folder_watches();
 
-    for folder in db::folders(&connection.borrow())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|folder| folder.watched)
+    let cancel_scan_job: Rc<dyn Fn()> = {
+        let scan_job = scan_job.clone();
+        let refresh_status_label = refresh_status_label.clone();
+        Rc::new(move || {
+            let mut job = scan_job.borrow_mut();
+            // Stop means the whole current job. In particular, a library refresh
+            // must not continue with the next queued folder after cancellation.
+            job.stop_requested = true;
+            job.pending.clear();
+            if matches!(job.kind, Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)) {
+                refresh_status_label.set_text("Stopping refresh…");
+            }
+            if let Some(control) = job.active.as_ref() {
+                control.cancel();
+            }
+        })
+    };
     {
-        folder_watch_manager
-            .borrow_mut()
-            .watch(folder.id, folder.path, folder_watch_sender.clone());
+        let cancel = cancel_scan_job.clone();
+        stop_scan.connect_clicked(move |_| cancel());
     }
-
-    let scan_job_for_stop = scan_job.clone();
-    stop_scan.connect_clicked(move |_| {
-        let mut job = scan_job_for_stop.borrow_mut();
-        // Stop means the whole current job. In particular, a library refresh
-        // must not continue with the next queued folder after cancellation.
-        job.pending.clear();
-        if let Some(control) = job.active.as_ref() {
-            control.cancel();
-        }
-    });
+    {
+        let cancel = cancel_scan_job.clone();
+        refresh_status_stop.connect_clicked(move |_| cancel());
+    }
 
     // Recover existing indexed photos at startup, on mount changes, or after
     // manual Refresh. Offline drives may stay disconnected for hours; leave
@@ -3353,6 +2746,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             job.kind = Some(ScanJobKind::Maintenance);
             job.imported_total = 0;
             job.failed_total = 0;
+            job.stop_requested = false;
             let control = scanner::ScanControl::default();
             job.active = Some(control.clone());
             spawn_thumbnail_recovery(
@@ -3365,6 +2759,109 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         })
     };
     start_thumbnail_recovery();
+
+    // Test hook: auto-open the Add Network Share dialog for UI automation.
+    if std::env::var_os("PIC_TEST_OPEN_SHARE").is_some() {
+        let slot = add_network_share_slot.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(2000), move || {
+            if let Some(callback) = slot.borrow().as_ref() {
+                callback();
+            }
+        });
+    }
+    let add_network_share_slot_for_import = add_network_share_slot.clone();
+    let connection_for_share = connection.clone();
+    let scan_job_for_share = scan_job.clone();
+    let start_next_scan_for_share = start_next_scan.clone();
+    let sidebar_refresh_for_share = availability_refresh.clone();
+    let window_for_share = window.clone();
+    add_network_share_slot.replace(Some(Rc::new(move || {
+        let connection = connection_for_share.clone();
+        let scan_job = scan_job_for_share.clone();
+        let start_next_scan = start_next_scan_for_share.clone();
+        let sidebar_refresh = sidebar_refresh_for_share.clone();
+        let parent_window = window_for_share.clone();
+        let parent_for_dialog = window_for_share.clone();
+        let on_connect: Rc<dyn Fn(String, String)> = Rc::new(move |name, browse_root| {
+            let parent = parent_window.clone().upcast::<gtk::Widget>();
+            crate::source::net_trace(format!("connect_requested uri={browse_root}"));
+            let connection = connection.clone();
+            let scan_job = scan_job.clone();
+            let start_next_scan = start_next_scan.clone();
+            let sidebar_refresh = sidebar_refresh.clone();
+            let parent_window = parent_window.clone();
+            let mount_parent = parent_window.clone().upcast::<gtk::Window>();
+            let browse_root_for_mount = browse_root.clone();
+            crate::source::mount_share_async(&browse_root_for_mount, Some(&mount_parent), move |result| {
+                if let Err(message) = result {
+                    show_error(&parent, "Could not connect to network share", &message);
+                    sidebar_refresh();
+                    return;
+                }
+                // Normalize the browse root (network:// discovery shortcuts
+                // resolve to their concrete target URI; smb:// / nfs:// roots
+                // stay canonical with a trailing slash).
+                let chooser_root = crate::source::network_browse_root(&browse_root);
+                if !chooser_root.contains("://") || !chooser_root.ends_with('/') {
+                    let message = format!(
+                        "could not browse {browse_root}: not a valid network location"
+                    );
+                    crate::source::net_trace(format!(
+                        "browse_failed uri={browse_root} error={message}"
+                    ));
+                    show_error(&parent, "Could not open network share", &message);
+                    sidebar_refresh();
+                    return;
+                }
+                crate::source::net_trace(format!("browse_opened root={chooser_root}"));
+
+                // Browse the mounted server (shares first, then folders) with
+                // the in-app GIO browser and register only the folder the user
+                // actually picks. The GTK file chooser cannot display remote
+                // gvfs locations (it falls back to $HOME).
+                let connection = connection.clone();
+                let scan_job = scan_job.clone();
+                let start_next_scan = start_next_scan.clone();
+                let sidebar_refresh = sidebar_refresh.clone();
+                let parent = parent.clone();
+                let parent_widget = parent_window.clone().upcast::<gtk::Widget>();
+                show_network_folder_browser(
+                    parent_widget,
+                    chooser_root,
+                    Rc::new(move |selected_uri: String| {
+                        let display_name = if name.is_empty() {
+                            crate::source::filename(&selected_uri)
+                        } else {
+                            name.clone()
+                        };
+                        crate::source::net_trace(format!(
+                            "register_start uri={selected_uri} name={display_name}"
+                        ));
+                        if let Err(error) = db::insert_network_share(
+                            &connection.borrow(),
+                            &selected_uri,
+                            &display_name,
+                        ) {
+                            show_error(&parent, "Could not add network share", &error.to_string());
+                            return;
+                        }
+                        crate::source::net_trace(format!("registered uri={selected_uri}"));
+                        sidebar_refresh();
+                        // The share is mounted and the folder was verified by
+                        // browsing into it, so the scan goes straight out.
+                        if let Ok(mut job) = scan_job.try_borrow_mut() {
+                            job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
+                                .expect("import is an authorized scan reason");
+                            job.pending.push_back(selected_uri.clone());
+                        }
+                        start_next_scan();
+                        crate::source::net_trace(format!("scan_queued uri={selected_uri}"));
+                    }),
+                );
+            });
+        });
+        show_add_network_share_dialog(parent_for_dialog.upcast::<gtk::Widget>(), on_connect);
+    })));
 
     let parent = window.clone();
     let connection_for_import = connection.clone();
@@ -3390,8 +2887,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if response == gtk::ResponseType::Accept {
                 if let Some(file) = dialog.file() {
                     let root = crate::source::reference(&file);
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                    }
+                    
                     if let Err(error) = db::mark_import_root(&connection.borrow(), &root) {
                         eprintln!("Could not register imported folder {root}: {error}");
                         return;
@@ -3403,15 +2899,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     sidebar_refresh();
                     {
                         let mut job = scan_job.borrow_mut();
-                        if let Some(previous) = job.active.take() {
-                            previous.cancel();
-                        }
-                        job.generation = job.generation.wrapping_add(1);
-                        job.kind = Some(ScanJobKind::Import);
-                        job.pending.clear();
+                        job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
+                            .expect("import is an authorized scan reason");
                         job.pending.push_back(root);
-                        job.imported_total = 0;
-                        job.failed_total = 0;
                     }
                     start_next_scan();
                 }
@@ -3423,162 +2913,62 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         dialog.show();
     })));
 
-    let import_folder_for_header = import_folder.clone();
-    import.connect_clicked(move |_| import_folder_for_header());
-
     let scan_job_for_refresh = scan_job.clone();
-    let start_next_scan_for_refresh = start_next_scan.clone();
-    let connection_for_refresh = connection.clone();
-    let availability_refresh_for_app_refresh = availability_refresh.clone();
-    let toast_overlay_for_refresh = toast_overlay.clone();
+    let refresh_prepare_sender_for_click = refresh_prepare_sender.clone();
     let recovery_requested_for_refresh = thumbnail_recovery_requested.clone();
+    let refresh_status_box_for_click = refresh_status_box.clone();
+    let refresh_status_spinner_for_click = refresh_status_spinner.clone();
+    let refresh_status_label_for_click = refresh_status_label.clone();
+    let stop_scan_for_refresh_click = stop_scan.clone();
 
-    refresh.connect_clicked(move |_| {
-        recovery_requested_for_refresh.set(true);
-        availability_refresh_for_app_refresh();
-
-        // Always read the live folder list. The list captured when the window
-        // was created becomes stale as soon as the user imports a new folder.
-        let folders = match db::folders(&connection_for_refresh.borrow()) {
-            Ok(folders) => folders,
-            Err(error) => {
-                eprintln!("Could not refresh library folders: {error}");
-                toast_overlay_for_refresh
-                    .add_toast(adw::Toast::new("Could not read library folders"));
-                return;
-            }
-        };
-        if folders.is_empty() {
-            toast_overlay_for_refresh.add_toast(adw::Toast::new("No library folders to refresh"));
+    refresh.connect_clicked(move |button| {
+        
+        let maintenance_was_active = scan_job_for_refresh
+            .borrow()
+            .kind
+            == Some(ScanJobKind::Maintenance);
+        if maintenance_was_active {
+            scan_job_for_refresh.borrow_mut().preempt_maintenance();
+            
+        } else if scan_job_for_refresh.borrow().kind.is_some() {
+            
+            refresh_status_label_for_click.set_text("Refresh already running…");
+            refresh_status_spinner_for_click.set_spinning(true);
+            refresh_status_box_for_click.set_visible(true);
+            stop_scan_for_refresh_click.set_visible(true);
             return;
         }
+        button.set_sensitive(false);
+        // Do not request a full post-refresh thumbnail recovery pass here.
+        // Refresh scans already create thumbnails for changed items; a recovery
+        // pass over the entire 66k-photo library immediately after repeated
+        // refreshes can monopolize the app. Startup/mount recovery remains.
+        recovery_requested_for_refresh.set(false);
+        refresh_status_label_for_click.set_text("Refreshing library…");
+        refresh_status_spinner_for_click.set_spinning(true);
+        refresh_status_box_for_click.set_visible(true);
+        stop_scan_for_refresh_click.set_visible(true);
+        
 
-        {
+        let generation = {
             let mut job = scan_job_for_refresh.borrow_mut();
-            if let Some(previous) = job.active.take() {
-                previous.cancel();
-            }
-            job.generation = job.generation.wrapping_add(1);
-            job.kind = Some(ScanJobKind::Refresh);
-            job.pending = folders
-                .into_iter()
-                .filter(|folder| folder.imported_root)
-                .map(|folder| folder.path)
-                .collect();
-            if std::env::var_os("PICASA_TRACE").is_some() {
-            }
-            job.imported_total = 0;
-            job.failed_total = 0;
-        }
-        // Refresh folders sequentially. The next one starts only after the
-        // current folder's thumbnail pass emits Finished, so scan progress
-        // from different folders cannot overwrite one another.
-        start_next_scan_for_refresh();
-    });
+            job.authorize_photo_scan(PhotoScanRequestReason::ManualLibraryRefresh)
+                .expect("manual library refresh is an authorized scan reason")
+        };
 
-    let parent_for_settings = window.clone();
-    let connection_for_clear_thumbnails = connection.clone();
-    let gallery_for_clear_thumbnails = gallery.clone();
-    let filter_for_clear_thumbnails = filter.clone();
-    let search_for_clear_thumbnails = search_text.clone();
-    let sort_for_clear_thumbnails = sort.clone();
-    let availability_refresh_for_clear_thumbnails = availability_refresh.clone();
-    clear_thumbnails.connect_clicked(move |_| {
-        let availability_refresh = availability_refresh_for_clear_thumbnails.clone();
-        let connection = connection_for_clear_thumbnails.clone();
-        let gallery = gallery_for_clear_thumbnails.clone();
-        let filter = filter_for_clear_thumbnails.clone();
-        let search = search_for_clear_thumbnails.clone();
-        let sort = sort_for_clear_thumbnails.clone();
-        confirm_action(
-            &parent_for_settings,
-            "Clear thumbnails?",
-            "Cached thumbnails will be deleted. Your photos and database will remain.",
-            move || {
-                if let Err(error) = crate::thumbnail::clear_cache() {
-                    eprintln!("Could not clear thumbnails: {error}");
-                }
-                refresh_grid(
-                    &connection,
-                    filter.get(),
-                    &search.borrow(),
-                    sort.get(),
-                    &gallery,
-                );
-                availability_refresh();
-            },
-        );
-    });
-
-    let parent_for_clear_database = window.clone();
-    let connection_for_clear_database = connection.clone();
-    let gallery_for_clear_database = gallery.clone();
-    let filter_for_clear_database = filter.clone();
-    let search_for_clear_database = search_text.clone();
-    let sort_for_clear_database = sort.clone();
-    let availability_refresh_for_clear_database = availability_refresh.clone();
-    clear_database.connect_clicked(move |_| {
-        let availability_refresh = availability_refresh_for_clear_database.clone();
-        let connection = connection_for_clear_database.clone();
-        let gallery = gallery_for_clear_database.clone();
-        let filter = filter_for_clear_database.clone();
-        let search = search_for_clear_database.clone();
-        let sort = sort_for_clear_database.clone();
-        confirm_action(
-            &parent_for_clear_database,
-            "Clear database?",
-            "Indexed photos and album links will be removed. Registered folders will remain.",
-            move || {
-                if let Err(error) = db::clear_photos(&connection.borrow()) {
-                    eprintln!("Could not clear database: {error}");
-                }
-                refresh_grid(
-                    &connection,
-                    filter.get(),
-                    &search.borrow(),
-                    sort.get(),
-                    &gallery,
-                );
-                availability_refresh();
-            },
-        );
-    });
-
-    let parent_for_clear_all = window.clone();
-    let connection_for_clear_all = connection.clone();
-    let gallery_for_clear_all = gallery.clone();
-    let filter_for_clear_all = filter.clone();
-    let search_for_clear_all = search_text.clone();
-    let sort_for_clear_all = sort.clone();
-    let availability_refresh_for_clear_all = availability_refresh.clone();
-    clear_all.connect_clicked(move |_| {
-        let availability_refresh = availability_refresh_for_clear_all.clone();
-        let connection = connection_for_clear_all.clone();
-        let gallery = gallery_for_clear_all.clone();
-        let filter = filter_for_clear_all.clone();
-        let search = search_for_clear_all.clone();
-        let sort = sort_for_clear_all.clone();
-        confirm_action(
-            &parent_for_clear_all,
-            "Clear everything?",
-            "Indexed photos, albums, registered folders, and cached thumbnails will be deleted.",
-            move || {
-                if let Err(error) = db::clear_all(&connection.borrow()) {
-                    eprintln!("Could not clear database: {error}");
-                }
-                if let Err(error) = crate::thumbnail::clear_cache() {
-                    eprintln!("Could not clear thumbnails: {error}");
-                }
-                refresh_grid(
-                    &connection,
-                    filter.get(),
-                    &search.borrow(),
-                    sort.get(),
-                    &gallery,
-                );
-                availability_refresh();
-            },
-        );
+        let sender = refresh_prepare_sender_for_click.clone();
+        std::thread::spawn(move || {
+            
+            let roots = db::open_default()
+                .and_then(|connection| db::imported_root_paths(&connection))
+                .map_err(|error| error.to_string());
+            let count = roots.as_ref().map(|roots| roots.len()).unwrap_or(0);
+            
+            let _ = sender.send(RefreshPrepareEvent::LibraryReady {
+                generation,
+                roots,
+            });
+        });
     });
 
     let gallery_for_events = gallery.clone();
@@ -3589,18 +2979,21 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let filter_for_events = filter.clone();
     let search_for_events = search_text.clone();
     let sort_for_events = sort.clone();
-    let toast_overlay_for_events = toast_overlay.clone();
     let scan_job_for_events = scan_job.clone();
     let start_next_scan_for_events = start_next_scan.clone();
     let stop_scan_for_events = stop_scan.clone();
+    let refresh_status_box_for_events = refresh_status_box.clone();
+    let refresh_status_spinner_for_events = refresh_status_spinner.clone();
+    let refresh_status_label_for_events = refresh_status_label.clone();
     let mut displayed_generation: Option<u64> = None;
     let mut scan_count: usize = 0;
-    let mut pending_photos: Vec<db::Photo> = Vec::new();
-    let mut thumbnails_dirty = false;
+    let mut pending_photos: VecDeque<db::Photo> = VecDeque::new();
+    let mut thumbnail_dirty_paths = VecDeque::<std::path::PathBuf>::new();
+    let mut thumbnail_dirty_seen = std::collections::HashSet::<std::path::PathBuf>::new();
     let mut priority_thumbnail_paths = Vec::new();
-    let mut failure_toast_shown = false;
-    let mut progress_toast: Option<adw::Toast> = None;
+    let mut failure_message_shown = false;
     let mut thumbnail_total: usize = 0;
+    let mut last_progress_update = Instant::now();
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
         // Drain event-triggered recovery requests once the current scan ends.
@@ -3609,35 +3002,135 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         priority_thumbnail_paths.extend(crate::thumbnail::take_priority_completions());
         let priority_completions = priority_thumbnail_paths.len();
         let priority_pending = crate::thumbnail::priority_pending_count();
-        if std::env::var_os("PICASA_TRACE").is_some()
-            && (priority_completions > 0 || priority_pending > 0)
-        {
-            eprintln!(
-                "THUMB PRIORITY ui_poll completions={} pending={}",
-                priority_completions, priority_pending
-            );
-        }
-        if priority_pending > 0 {
-            if let Some(toast) = progress_toast.as_ref() {
-                if thumbnail_total == 0 {
-                    toast.set_title(&format!("Creating visible thumbnails ({priority_pending} queued)"));
+        
+        while let Ok(prepare_event) = refresh_prepare_receiver.try_recv() {
+            match prepare_event {
+                RefreshPrepareEvent::LibraryReady {
+                    generation,
+                    roots,
+                } => {
+                    if generation != scan_job_for_events.borrow().generation {
+                        continue;
+                    }
+                    let roots = match roots {
+                        Ok(roots) => roots.into_iter().collect::<VecDeque<_>>(),
+                        Err(error) => {
+                            eprintln!("Could not refresh library folders: {error}");
+                            let mut job = scan_job_for_events.borrow_mut();
+                            job.kind = None;
+                            job.active = None;
+                            job.pending.clear();
+                            refresh_status_spinner_for_events.set_spinning(false);
+                            stop_scan_for_events.set_visible(false);
+                            refresh_status_label_for_events.set_text("Could not read library folders");
+                            refresh_status_box_for_events.set_visible(true);
+                            let panel = refresh_status_box_for_events.clone();
+                            glib::timeout_add_local_once(Duration::from_millis(3000), move || {
+                                panel.set_visible(false);
+                            });
+                            continue;
+                        }
+                    };
+                    
+                    if roots.is_empty() {
+                        let mut job = scan_job_for_events.borrow_mut();
+                        job.kind = None;
+                        job.active = None;
+                        job.pending.clear();
+                        refresh_status_spinner_for_events.set_spinning(false);
+                        stop_scan_for_events.set_visible(false);
+                        refresh_status_label_for_events.set_text("No library folders to refresh");
+                        refresh_status_box_for_events.set_visible(true);
+                        let panel = refresh_status_box_for_events.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(2500), move || {
+                            panel.set_visible(false);
+                        });
+                        continue;
+                    }
+                    let should_start = {
+                        let mut job = scan_job_for_events.borrow_mut();
+                        if job.stop_requested {
+                            job.kind = None;
+                            job.active = None;
+                            job.pending.clear();
+                            false
+                        } else {
+                            job.pending = roots;
+                            true
+                        }
+                    };
+                    if should_start {
+                        start_next_scan_for_events();
+                    } else {
+                        refresh_status_spinner_for_events.set_spinning(false);
+                        stop_scan_for_events.set_visible(false);
+                        refresh_status_label_for_events.set_text("Library refresh stopped");
+                        refresh_status_box_for_events.set_visible(true);
+                        let panel = refresh_status_box_for_events.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(2500), move || {
+                            panel.set_visible(false);
+                        });
+                    }
                 }
-            } else {
-                let toast = adw::Toast::new("Creating visible thumbnails…");
-                toast.set_timeout(0);
-                toast_overlay_for_events.add_toast(toast.clone());
-                progress_toast = Some(toast);
-            }
-        } else if priority_completions > 0 && thumbnail_total == 0 {
-            if let Some(toast) = progress_toast.take() {
-                toast.dismiss();
+                RefreshPrepareEvent::FolderReady {
+                    generation,
+                    path,
+                    imported_root,
+                } => {
+                    if generation != scan_job_for_events.borrow().generation {
+                        continue;
+                    }
+                    
+                    let ok = match imported_root {
+                        Ok(ok) => ok,
+                        Err(error) => {
+                            eprintln!("Could not validate refresh folder: {error}");
+                            false
+                        }
+                    };
+                    let should_start = {
+                        let mut job = scan_job_for_events.borrow_mut();
+                        if !ok || job.stop_requested {
+                            job.kind = None;
+                            job.active = None;
+                            job.pending.clear();
+                            false
+                        } else {
+                            job.pending.clear();
+                            job.pending.push_back(path);
+                            true
+                        }
+                    };
+                    if should_start {
+                        start_next_scan_for_events();
+                    } else {
+                        refresh_status_spinner_for_events.set_spinning(false);
+                        stop_scan_for_events.set_visible(false);
+                        refresh_status_label_for_events.set_text("Folder refresh stopped");
+                        refresh_status_box_for_events.set_visible(true);
+                        let panel = refresh_status_box_for_events.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(2500), move || {
+                            panel.set_visible(false);
+                        });
+                    }
+                }
             }
         }
-        let callback_started = Instant::now();
+
+        if priority_pending > 0 && thumbnail_total == 0 {
+            refresh_status_label_for_events
+                .set_text(&format!("Creating visible thumbnails ({priority_pending} queued)"));
+            refresh_status_box_for_events.set_visible(true);
+        } else if priority_completions > 0 && thumbnail_total == 0 {
+            refresh_status_box_for_events.set_visible(false);
+        }
         // Never monopolize the GTK loop when a fast scanner has queued many
         // results. Leaving some events queued lets GTK process input, redraws,
         // scrolling, and folder changes between import batches.
-        const MAX_EVENTS_PER_TICK: usize = 128;
+        // Keep scan/photo events from monopolizing GTK while a large refresh
+        // or thumbnail recovery is active. A smaller batch lets input,
+        // redraws, and the Stop button run between worker updates.
+        const MAX_EVENTS_PER_TICK: usize = 16;
         let mut handled_events = 0;
         while handled_events < MAX_EVENTS_PER_TICK {
             let Ok(ui_event) = scan_receiver.try_recv() else {
@@ -3649,13 +3142,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             // finish in their worker threads, but they must never overwrite
             // the progress UI or completion state of the newer job.
             if ui_event.generation != scan_job_for_events.borrow().generation {
-                if std::env::var_os("PICASA_TRACE").is_some() {
-                    eprintln!(
-                        "SCAN stale event ignored generation={} current={}",
-                        ui_event.generation,
-                        scan_job_for_events.borrow().generation
-                    );
-                }
+                
                 continue;
             }
 
@@ -3663,17 +3150,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 displayed_generation = Some(ui_event.generation);
                 scan_count = 0;
                 thumbnail_total = 0;
-                failure_toast_shown = false;
-                if let Some(toast) = progress_toast.take() {
-                    toast.dismiss();
-                }
+                failure_message_shown = false;
             }
 
             let event = ui_event.event;
             match &event {
                 scanner::ScanEvent::Started { root } => {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                    }
+                    
                     scan_count = 0;
                     thumbnail_total = 0;
                     let is_user_job = !matches!(
@@ -3686,26 +3169,26 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         .file_name()
                         .and_then(|name| name.to_str())
                         .unwrap_or_else(|| root.to_str().unwrap_or("folder"));
-                    if let Some(toast) = progress_toast.as_ref() {
-                        toast.set_title(&format!("Scanning {folder_name}…"));
-                    } else {
-                        let toast = adw::Toast::new(&format!("Scanning {folder_name}…"));
-                        toast.set_timeout(0);
-                        toast_overlay_for_events.add_toast(toast.clone());
-                        progress_toast = Some(toast);
-                    }
+                    refresh_status_label_for_events.set_text(&format!("Scanning {folder_name}…"));
+                    refresh_status_spinner_for_events.set_spinning(true);
+                    refresh_status_box_for_events.set_visible(true);
                 }
 
                 scanner::ScanEvent::FolderStarted { folder } => {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
+                    
+                    // Only imports should append rows immediately. Refreshing an
+                    // existing library/folder after Refresh All was appending
+                    // duplicate sidebar rows; right-clicking those stale rows
+                    // could start another refresh against duplicated UI state.
+                    if scan_job_for_events.borrow().kind == Some(ScanJobKind::Import) {
+                        run_ui_guarded("sidebar folder append", || {
+                            sidebar::append_folder(
+                                &sidebar_for_events,
+                                folder,
+                                availability_refresh_for_events.clone(),
+                            )
+                        });
                     }
-                    run_ui_guarded("sidebar folder append", || {
-                        sidebar::append_folder(
-                            &sidebar_for_events,
-                            folder,
-                            availability_refresh_for_events.clone(),
-                        )
-                    });
                 }
 
                 scanner::ScanEvent::PhotoIndexed {
@@ -3715,116 +3198,106 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     ..
                 } => {
                     scan_count += 1;
-                    if std::env::var_os("PICASA_TRACE").is_some() && scan_count.is_multiple_of(128)
-                    {
-                        eprintln!(
-                            "SCAN PhotoIndexed count={} latest={}",
-                            scan_count,
-                            path.display()
-                        );
-                    }
-                    if *newly_discovered
-                        && crate::image_format::path_is_enabled(
-                            &connection_for_events.borrow(),
-                            &photo.path,
-                        )
-                        && (matches!(filter_for_events.get(), sidebar::SidebarFilter::All)
-                            || matches!(filter_for_events.get(), sidebar::SidebarFilter::Folder(id) if Some(id) == photo.folder_id))
-                    {
-                        pending_photos.push(photo.clone());
-                    } else if !newly_discovered {
-                        gallery_for_events.update_dimensions(photo.id, photo.width, photo.height);
-                        if selected_photo_for_events
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|selected| selected.id() == photo.id)
+                    
+                    let search_active = !search_for_events.borrow().is_empty();
+                    if !search_active {
+                        if *newly_discovered
+                            && crate::image_format::path_is_enabled(
+                                &connection_for_events.borrow(),
+                                &photo.path,
+                            )
+                            && (matches!(filter_for_events.get(), sidebar::SidebarFilter::All)
+                                || matches!(filter_for_events.get(), sidebar::SidebarFilter::Folder(id) if Some(id) == photo.folder_id))
                         {
-                            let selected = selected_photo_for_events.borrow().clone();
-                            info_for_events.set_photo(selected.as_ref());
+                            pending_photos.push_back(photo.clone());
+                        } else if !newly_discovered {
+                            gallery_for_events.update_dimensions(photo.id, photo.width, photo.height);
+                            if selected_photo_for_events
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|selected| selected.id() == photo.id)
+                            {
+                                let selected = selected_photo_for_events.borrow().clone();
+                                info_for_events.set_photo(selected.as_ref());
+                            }
                         }
                     }
 
-                    if let Some(toast) = progress_toast.as_ref() {
-                        toast.set_title(&format!("Indexed {scan_count} photos"));
+                    if last_progress_update.elapsed() >= Duration::from_millis(150) {
+                        let text = format!("Indexed {scan_count} photos");
+                        refresh_status_label_for_events.set_text(&text);
+                        refresh_status_box_for_events.set_visible(true);
+                        last_progress_update = Instant::now();
                     }
                 }
 
                 scanner::ScanEvent::IndexingFinished { imported } => {
-                    // Progressive imports append quickly; rebuild once when
-                    // indexing settles so the chosen ordering is restored.
-                    refresh_grid(
-                        &connection_for_events,
-                        filter_for_events.get(),
-                        &search_for_events.borrow(),
-                        sort_for_events.get(),
-                        &gallery_for_events,
-                    );
-                    if let Some(toast) = progress_toast.as_ref() {
-                        toast.set_title(&format!("Indexed {imported} photos"));
+                    // Progressive imports append quickly; refresh jobs do one
+                    // final rebuild after the whole serialized multi-folder job.
+                    if !matches!(
+                        scan_job_for_events.borrow().kind,
+                        Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
+                    ) {
+                        refresh_grid(
+                            &connection_for_events,
+                            filter_for_events.get(),
+                            &search_for_events.borrow(),
+                            sort_for_events.get(),
+                            &gallery_for_events,
+                        );
                     }
+                    let text = format!("Indexed {imported} photos");
+                    refresh_status_label_for_events.set_text(&text);
+                    refresh_status_box_for_events.set_visible(true);
                 }
 
                 scanner::ScanEvent::ThumbnailsDeferred { total } => {
                     thumbnail_recovery_deferred.set(*total > 0);
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!("THUMB RECOVERY deferred_offline={total}");
-                    }
+                    
                 }
                 scanner::ScanEvent::ThumbnailsStarted { total } => {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                    }
+                    
                     scan_count = 0;
                     thumbnail_total = *total;
-                    if let Some(toast) = progress_toast.as_ref() {
-                        toast.set_title(&format!("Creating thumbnails 0 / {total}"));
-                    } else {
-                        let toast = adw::Toast::new(&format!("Creating thumbnails 0 / {total}"));
-                        toast.set_timeout(0);
-                        toast_overlay_for_events.add_toast(toast.clone());
-                        progress_toast = Some(toast);
-                    }
+                    refresh_status_label_for_events
+                        .set_text(&format!("Creating thumbnails 0 / {total}"));
+                    refresh_status_spinner_for_events.set_spinning(true);
+                    refresh_status_box_for_events.set_visible(true);
+                    stop_scan_for_events.set_visible(true);
                 }
 
                 scanner::ScanEvent::ThumbnailCreated { path } => {
                     scan_count += 1;
-                    if std::env::var_os("PICASA_TRACE").is_some() && scan_count.is_multiple_of(128)
-                    {
-                        eprintln!(
-                            "SCAN ThumbnailCreated count={} latest={}",
-                            scan_count,
-                            path.display()
-                        );
+                    
+                    // Coalesce source paths received in this timer tick and
+                    // refresh only matching realized tiles. Non-realized rows
+                    // will discover the new cache entry through the background
+                    // presentation loader when they bind later.
+                    if thumbnail_dirty_seen.insert(path.clone()) {
+                        thumbnail_dirty_paths.push_back(path.clone());
                     }
-                    // Coalesce all thumbnail completions received in this
-                    // timer tick into one virtualized-grid traversal.
-                    thumbnails_dirty = true;
-                    if let Some(toast) = progress_toast.as_ref() {
-                        toast.set_title(&format!(
-                            "Creating thumbnails {scan_count} / {thumbnail_total}"
-                        ));
+                    if last_progress_update.elapsed() >= Duration::from_millis(150) {
+                        let text = format!("Creating thumbnails {scan_count} / {thumbnail_total}");
+                        refresh_status_label_for_events.set_text(&text);
+                        refresh_status_box_for_events.set_visible(true);
+                        last_progress_update = Instant::now();
                     }
                 }
 
                 scanner::ScanEvent::Failed { path, error } => {
                     eprintln!("SCAN FAILED: {}: {}", path.display(), error);
-                    if let Some(toast) = progress_toast.as_ref() {
-                        toast.set_title("Scanning… some files failed");
+                    if !failure_message_shown {
+                        failure_message_shown = true;
+                        refresh_status_label_for_events
+                            .set_text(&format!("Some files could not be added: {error}"));
+                    } else {
+                        refresh_status_label_for_events.set_text("Scanning… some files failed");
                     }
-
-                    // Keep one failure visible in the toast area, but do not
-                    // enqueue thousands of toasts for a damaged folder.
-                    if !failure_toast_shown {
-                        failure_toast_shown = true;
-                        toast_overlay_for_events.add_toast(adw::Toast::new(&format!(
-                            "Some files could not be added: {}",
-                            error
-                        )));
-                    }
+                    refresh_status_box_for_events.set_visible(true);
                 }
 
                 scanner::ScanEvent::Finished { imported, failed } => {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                    }
+                    
                     eprintln!(
                         "===== SCAN COMPLETE: imported={} failed={} | progressive gallery updates complete =====",
                         imported,
@@ -3859,15 +3332,26 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         continue;
                     }
 
-                    crate::settings::refresh_library_availability_stats(
-                        connection_for_events.clone(),
-                    );
-
-                    stop_scan_for_events.set_visible(false);
-                    if let Some(toast) = progress_toast.take() {
-                        toast.dismiss();
+                    if matches!(kind, Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh))
+                        && !matches!(filter_for_events.get(), sidebar::SidebarFilter::Folder(_))
+                    {
+                        refresh_grid(
+                            &connection_for_events,
+                            filter_for_events.get(),
+                            &search_for_events.borrow(),
+                            sort_for_events.get(),
+                            &gallery_for_events,
+                        );
                     }
 
+                    if kind != Some(ScanJobKind::FolderRefresh) {
+                        crate::settings::refresh_library_availability_stats(
+                            connection_for_events.clone(),
+                        );
+                    }
+
+                    stop_scan_for_events.set_visible(false);
+                    refresh_status_spinner_for_events.set_spinning(false);
                     let message = match kind {
                         Some(ScanJobKind::Refresh) => {
                             if total_failed == 0 {
@@ -3875,6 +3359,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             } else {
                                 format!(
                                     "Library refresh complete · {total_imported} updated · {total_failed} failed"
+                                )
+                            }
+                        }
+                        Some(ScanJobKind::FolderRefresh) => {
+                            if total_failed == 0 {
+                                format!("Folder refresh complete · {total_imported} photos updated")
+                            } else {
+                                format!(
+                                    "Folder refresh complete · {total_imported} updated · {total_failed} failed"
                                 )
                             }
                         }
@@ -3898,8 +3391,23 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         }
                     };
                     scan_job_for_events.borrow_mut().kind = None;
-                    availability_refresh_for_events();
-                    toast_overlay_for_events.add_toast(adw::Toast::new(&message));
+                    if kind != Some(ScanJobKind::FolderRefresh) {
+                        availability_refresh_for_events();
+                    }
+                    // New photos outside Folder mode never touch the cached
+                    // Folder stream, so a restored stream would silently miss
+                    // the share that was just imported. Drop it; the next
+                    // folder click rebuilds (scoped preview, then background).
+                    if total_imported > 0 {
+                        gallery_for_events.invalidate_folder_cache();
+                    }
+                    
+                    refresh_status_label_for_events.set_text(&message);
+                    refresh_status_box_for_events.set_visible(true);
+                    let panel = refresh_status_box_for_events.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(2500), move || {
+                        panel.set_visible(false);
+                    });
                 }
 
                 scanner::ScanEvent::Cancelled { imported } => {
@@ -3913,52 +3421,70 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         kind
                     };
                     stop_scan_for_events.set_visible(false);
+                    refresh_status_spinner_for_events.set_spinning(false);
                     let message = match kind {
                         Some(ScanJobKind::Refresh) => {
                             format!("Library refresh stopped · {imported} photos updated")
                         }
+                        Some(ScanJobKind::FolderRefresh) => {
+                            format!("Folder refresh stopped · {imported} photos updated")
+                        }
                         _ => format!("Import stopped · {imported} photos added"),
                     };
-                    if let Some(toast) = progress_toast.take() {
-                        toast.dismiss();
+                    if *imported > 0 {
+                        gallery_for_events.invalidate_folder_cache();
                     }
-                    toast_overlay_for_events.add_toast(adw::Toast::new(&message));
+                    
+                    refresh_status_label_for_events.set_text(&message);
+                    refresh_status_box_for_events.set_visible(true);
+                    let panel = refresh_status_box_for_events.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(2500), move || {
+                        panel.set_visible(false);
+                    });
                 }
             }
         }
 
-        if std::env::var_os("PICASA_TRACE").is_some() && handled_events > 0 {
-            eprintln!(
-                "UI PERF event_tick events={} elapsed_ms={}",
-                handled_events,
-                callback_started.elapsed().as_millis()
-            );
-        }
+        
 
-        if !pending_photos.is_empty() {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "UI PERF photo_batch={} elapsed_ms={}",
-                    pending_photos.len(),
-                    callback_started.elapsed().as_millis()
-                );
-            }
-            run_ui_guarded("photo batch append", || {
-                gallery_for_events.append_photos(&pending_photos)
-            });
+        const PHOTO_APPEND_BATCH: usize = 192;
+        if !search_for_events.borrow().is_empty() {
+            // Search results supersede progressive scan appends. The next
+            // debounced refresh will replace the model from the DB.
             pending_photos.clear();
         }
-        if thumbnails_dirty {
-            run_ui_guarded("thumbnail refresh", || {
-                gallery_for_events.refresh_thumbnails()
+        if !pending_photos.is_empty() {
+            let mut batch = Vec::with_capacity(PHOTO_APPEND_BATCH.min(pending_photos.len()));
+            for _ in 0..PHOTO_APPEND_BATCH {
+                let Some(photo) = pending_photos.pop_front() else {
+                    break;
+                };
+                batch.push(photo);
+            }
+            run_ui_guarded("photo batch append", || {
+                gallery_for_events.append_photos(&batch)
             });
-            thumbnails_dirty = false;
-            priority_thumbnail_paths.clear();
-        } else if !priority_thumbnail_paths.is_empty() {
-            run_ui_guarded("visible thumbnail refresh", || {
-                gallery_for_events.refresh_thumbnails_for_paths(&priority_thumbnail_paths)
+            
+        }
+        for path in priority_thumbnail_paths.drain(..) {
+            if thumbnail_dirty_seen.insert(path.clone()) {
+                thumbnail_dirty_paths.push_back(path);
+            }
+        }
+        const THUMBNAIL_REFRESH_BATCH: usize = 128;
+        if !thumbnail_dirty_paths.is_empty() {
+            let mut paths = Vec::with_capacity(THUMBNAIL_REFRESH_BATCH.min(thumbnail_dirty_paths.len()));
+            for _ in 0..THUMBNAIL_REFRESH_BATCH {
+                let Some(path) = thumbnail_dirty_paths.pop_front() else {
+                    break;
+                };
+                thumbnail_dirty_seen.remove(&path);
+                paths.push(path);
+            }
+            run_ui_guarded("targeted thumbnail refresh", || {
+                gallery_for_events.refresh_thumbnails_for_paths(&paths)
             });
-            priority_thumbnail_paths.clear();
+            
         }
 
         glib::ControlFlow::Continue
@@ -3966,3 +3492,4 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     window
 }
+

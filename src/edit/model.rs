@@ -75,6 +75,7 @@ pub struct EditRecipe {
     pub crop: CropRect,
     pub straighten: f32,
     pub exposure: f32,
+    pub contrast: f32,
     pub fill_light: f32,
     pub highlights: f32,
     pub shadows: f32,
@@ -84,6 +85,7 @@ pub struct EditRecipe {
     pub auto_color: bool,
     pub black_white: bool,
     pub sepia: bool,
+    pub filter: super::filters::FilterPreset,
     pub sharpen: f32,
 }
 
@@ -93,6 +95,7 @@ impl Default for EditRecipe {
             crop: CropRect::default(),
             straighten: 0.0,
             exposure: 0.0,
+            contrast: 0.0,
             fill_light: 0.0,
             highlights: 0.0,
             shadows: 0.0,
@@ -102,6 +105,7 @@ impl Default for EditRecipe {
             auto_color: false,
             black_white: false,
             sepia: false,
+            filter: super::filters::FilterPreset::None,
             sharpen: 0.0,
         }
     }
@@ -137,6 +141,7 @@ impl EditRecipe {
                 }
                 "straighten" => recipe.straighten = number().unwrap_or(0.0).clamp(-10.0, 10.0),
                 "exposure" => recipe.exposure = number().unwrap_or(0.0).clamp(-2.0, 2.0),
+                "contrast" => recipe.contrast = number().unwrap_or(0.0).clamp(-1.0, 1.0),
                 "fill" => recipe.fill_light = number().unwrap_or(0.0).clamp(-1.0, 1.0),
                 "highlights" => recipe.highlights = number().unwrap_or(0.0).clamp(-1.0, 1.0),
                 "shadows" => recipe.shadows = number().unwrap_or(0.0).clamp(-1.0, 1.0),
@@ -146,6 +151,7 @@ impl EditRecipe {
                 "autocolor" => recipe.auto_color = flag(),
                 "bw" => recipe.black_white = flag(),
                 "sepia" => recipe.sepia = flag(),
+                "filter" => recipe.filter = super::filters::FilterPreset::decode(value),
                 "sharpen" => recipe.sharpen = number().unwrap_or(0.0).clamp(0.0, 1.0),
                 _ => {}
             }
@@ -158,13 +164,14 @@ impl EditRecipe {
             return String::new();
         }
         format!(
-            "v=1|crop={:.5},{:.5},{:.5},{:.5}|straighten={:.4}|exposure={:.4}|fill={:.4}|highlights={:.4}|shadows={:.4}|temp={:.4}|sat={:.4}|autocontrast={}|autocolor={}|bw={}|sepia={}|sharpen={:.4}",
+            "v=1|crop={:.5},{:.5},{:.5},{:.5}|straighten={:.4}|exposure={:.4}|contrast={:.4}|fill={:.4}|highlights={:.4}|shadows={:.4}|temp={:.4}|sat={:.4}|autocontrast={}|autocolor={}|bw={}|sepia={}|filter={}|sharpen={:.4}",
             self.crop.left,
             self.crop.top,
             self.crop.right,
             self.crop.bottom,
             self.straighten,
             self.exposure,
+            self.contrast,
             self.fill_light,
             self.highlights,
             self.shadows,
@@ -174,6 +181,7 @@ impl EditRecipe {
             self.auto_color as u8,
             self.black_white as u8,
             self.sepia as u8,
+            self.filter.key(),
             self.sharpen,
         )
     }
@@ -182,6 +190,7 @@ impl EditRecipe {
         self.crop.is_full()
             && self.straighten.abs() < 0.0001
             && self.exposure.abs() < 0.0001
+            && self.contrast.abs() < 0.0001
             && self.fill_light.abs() < 0.0001
             && self.highlights.abs() < 0.0001
             && self.shadows.abs() < 0.0001
@@ -191,6 +200,7 @@ impl EditRecipe {
             && !self.auto_color
             && !self.black_white
             && !self.sepia
+            && self.filter == super::filters::FilterPreset::None
             && self.sharpen.abs() < 0.0001
     }
 }
@@ -245,6 +255,11 @@ impl EditSession {
         self.redo.clear();
     }
 
+    /// True while a continuous UI action (a slider drag) is in progress.
+    pub fn action_active(&self) -> bool {
+        self.active_action.is_some()
+    }
+
     pub fn end_action(&mut self) {
         let Some(previous) = self.active_action.take() else {
             return;
@@ -294,22 +309,63 @@ impl EditSession {
 
 #[cfg(test)]
 mod tests {
+    use super::super::filters::FilterPreset;
     use super::*;
 
     #[test]
     fn recipe_round_trip() {
         let mut recipe = EditRecipe::default();
-        recipe.crop = CropRect { left: 0.1, top: 0.2, right: 0.8, bottom: 0.9 };
+        recipe.crop = CropRect {
+            left: 0.1,
+            top: 0.2,
+            right: 0.8,
+            bottom: 0.9,
+        };
         recipe.exposure = 0.7;
+        recipe.contrast = 0.45;
         recipe.auto_color = true;
         recipe.sepia = true;
+        recipe.filter = FilterPreset::Valencia;
         recipe.sharpen = 0.4;
         let decoded = EditRecipe::decode(&recipe.encode());
         assert!((decoded.crop.left - 0.1).abs() < 0.001);
         assert!((decoded.exposure - 0.7).abs() < 0.001);
+        assert!((decoded.contrast - 0.45).abs() < 0.001);
         assert!(decoded.auto_color);
         assert!(decoded.sepia);
+        assert_eq!(decoded.filter, FilterPreset::Valencia);
         assert!((decoded.sharpen - 0.4).abs() < 0.001);
+    }
+
+    #[test]
+    fn filter_is_persisted_and_makes_recipe_non_default() {
+        let mut recipe = EditRecipe::default();
+        assert!(recipe.is_default());
+        recipe.filter = FilterPreset::Clarendon;
+        assert!(!recipe.is_default());
+        assert_eq!(
+            EditRecipe::decode(&recipe.encode()).filter,
+            FilterPreset::Clarendon
+        );
+    }
+
+    #[test]
+    fn legacy_bw_and_sepia_recipes_still_decode_without_a_named_filter() {
+        let bw = EditRecipe::decode("v=1|bw=1");
+        let sepia = EditRecipe::decode("v=1|sepia=1");
+        assert_eq!(bw.filter, FilterPreset::None);
+        assert_eq!(sepia.filter, FilterPreset::None);
+        assert!(bw.black_white);
+        assert!(sepia.sepia);
+    }
+
+    #[test]
+    fn old_recipe_without_contrast_defaults_to_zero() {
+        let decoded = EditRecipe::decode("v=1|exposure=0.2500|sat=0.1000|bw=1");
+        assert!((decoded.exposure - 0.25).abs() < 0.001);
+        assert!(decoded.contrast.abs() < 0.001);
+        assert!((decoded.saturation - 0.1).abs() < 0.001);
+        assert!(decoded.black_white);
     }
 
     #[test]
@@ -326,8 +382,18 @@ mod tests {
 
     #[test]
     fn composed_crop_stays_normalized() {
-        let outer = CropRect { left: 0.1, top: 0.1, right: 0.9, bottom: 0.9 };
-        let inner = CropRect { left: 0.25, top: 0.25, right: 0.75, bottom: 0.75 };
+        let outer = CropRect {
+            left: 0.1,
+            top: 0.1,
+            right: 0.9,
+            bottom: 0.9,
+        };
+        let inner = CropRect {
+            left: 0.25,
+            top: 0.25,
+            right: 0.75,
+            bottom: 0.75,
+        };
         let result = outer.compose(inner);
         assert!((result.left - 0.3).abs() < 0.001);
         assert!((result.right - 0.7).abs() < 0.001);
@@ -348,5 +414,33 @@ mod tests {
         assert!(!session.undo());
         assert!(session.redo());
         assert!((session.recipe.exposure - 1.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn removing_filter_preserves_tool_adjustments() {
+        let mut recipe = EditRecipe::default();
+        recipe.filter = FilterPreset::Clarendon;
+        recipe.exposure = 0.65;
+        recipe.saturation = 0.25;
+        let mut session = EditSession::new(recipe);
+
+        session.mutate(|recipe| recipe.filter = FilterPreset::None);
+
+        assert_eq!(session.recipe.filter, FilterPreset::None);
+        assert!((session.recipe.exposure - 0.65).abs() < 0.001);
+        assert!((session.recipe.saturation - 0.25).abs() < 0.001);
+    }
+
+    #[test]
+    fn reset_clears_filter_and_tool_adjustments() {
+        let mut recipe = EditRecipe::default();
+        recipe.filter = FilterPreset::Clarendon;
+        recipe.exposure = 0.65;
+        recipe.saturation = 0.25;
+        let mut session = EditSession::new(recipe);
+
+        session.reset();
+
+        assert_eq!(session.recipe, EditRecipe::default());
     }
 }

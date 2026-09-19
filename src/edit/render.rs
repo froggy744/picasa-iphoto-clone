@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use image::{DynamicImage, Rgba, RgbaImage};
+use rayon::prelude::*;
 
+use super::filters;
 use super::model::{CropRect, EditRecipe};
 
 pub fn apply_library_rotation(image: RgbaImage, rotation: i32) -> RgbaImage {
@@ -12,14 +14,18 @@ pub fn apply_library_rotation(image: RgbaImage, rotation: i32) -> RgbaImage {
     }
 }
 
-pub fn apply_recipe(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+pub fn apply_geometry(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
     if recipe.straighten.abs() >= 0.01 {
         image = rotate_autocrop(&image, recipe.straighten.to_radians());
     }
     if !recipe.crop.is_full() {
         image = crop_normalized(&image, recipe.crop);
     }
-    apply_tone(image, recipe)
+    image
+}
+
+pub fn apply_recipe(image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+    apply_tone(apply_geometry(image, recipe), recipe)
 }
 
 pub fn apply_recipe_without_crop(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
@@ -39,7 +45,10 @@ pub fn estimated_output_dimensions(width: u32, height: u32, recipe: &EditRecipe)
     let crop = recipe.crop.normalized();
     width *= (crop.right - crop.left).max(0.01);
     height *= (crop.bottom - crop.top).max(0.01);
-    (width.round().max(1.0) as u32, height.round().max(1.0) as u32)
+    (
+        width.round().max(1.0) as u32,
+        height.round().max(1.0) as u32,
+    )
 }
 
 pub fn render_thumbnail(path: &str, rotation: i32, recipe: &EditRecipe) -> Result<RgbaImage> {
@@ -52,6 +61,16 @@ pub fn render_thumbnail(path: &str, rotation: i32, recipe: &EditRecipe) -> Resul
     ))
 }
 
+pub fn decode_base_for_viewer(
+    reference: &str,
+    rotation: i32,
+    width: u32,
+    height: u32,
+) -> Result<RgbaImage> {
+    let image = crate::thumbnail::decode_for_viewer(reference, width.max(1), height.max(1))?;
+    Ok(apply_library_rotation(image, rotation))
+}
+
 pub fn render_for_viewer(
     reference: &str,
     rotation: i32,
@@ -59,9 +78,8 @@ pub fn render_for_viewer(
     width: u32,
     height: u32,
 ) -> Result<RgbaImage> {
-    let image = crate::thumbnail::decode_for_viewer(reference, width.max(1), height.max(1))?;
     Ok(apply_recipe(
-        apply_library_rotation(image, rotation),
+        decode_base_for_viewer(reference, rotation, width, height)?,
         recipe,
     ))
 }
@@ -113,7 +131,11 @@ fn crop_normalized(image: &RgbaImage, crop: CropRect) -> RgbaImage {
     image::imageops::crop_imm(image, x, y, crop_width, crop_height).to_image()
 }
 
-fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+pub(super) fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+    if recipe.filter != filters::FilterPreset::None {
+        filters::apply_filter(&mut image, recipe.filter);
+    }
+
     if recipe.auto_color {
         apply_auto_color(&mut image);
     }
@@ -124,7 +146,7 @@ fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
     let exposure = 2.0_f32.powf(recipe.exposure);
     let temperature = recipe.temperature;
     let saturation = 1.0 + recipe.saturation;
-    for pixel in image.pixels_mut() {
+    image.as_mut().par_chunks_mut(4).for_each(|pixel| {
         let alpha = pixel[3];
         let mut r = pixel[0] as f32 / 255.0;
         let mut g = pixel[1] as f32 / 255.0;
@@ -153,42 +175,68 @@ fn apply_tone(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
         g = gray + (g - gray) * saturation;
         b = gray + (b - gray) * saturation;
 
+        if recipe.contrast.abs() > 0.0001 {
+            r = apply_contrast_curve(r, recipe.contrast);
+            g = apply_contrast_curve(g, recipe.contrast);
+            b = apply_contrast_curve(b, recipe.contrast);
+        }
+
         if recipe.black_white {
-            let y = (0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0);
+            let y = rgb_luma(r, g, b).clamp(0.0, 1.0);
             r = y;
             g = y;
             b = y;
         }
         if recipe.sepia {
-            let sr = (r * 0.393 + g * 0.769 + b * 0.189).clamp(0.0, 1.0);
-            let sg = (r * 0.349 + g * 0.686 + b * 0.168).clamp(0.0, 1.0);
-            let sb = (r * 0.272 + g * 0.534 + b * 0.131).clamp(0.0, 1.0);
-            r = sr;
-            g = sg;
-            b = sb;
+            // Photographic sepia is a toned monochrome print, not a full-strength
+            // RGB matrix. Preserve luminance, then add a restrained warm tint.
+            let y = rgb_luma(r, g, b).clamp(0.0, 1.0);
+            let strength = 0.75 * (1.0 - 0.20 * (2.0 * y - 1.0).abs());
+            r = y * (1.0 + 0.080 * strength);
+            g = y * (1.0 - 0.006 * strength);
+            b = y * (1.0 - 0.180 * strength);
         }
-        *pixel = Rgba([
+        pixel.copy_from_slice(&[
             (r.clamp(0.0, 1.0) * 255.0).round() as u8,
             (g.clamp(0.0, 1.0) * 255.0).round() as u8,
             (b.clamp(0.0, 1.0) * 255.0).round() as u8,
             alpha,
         ]);
-    }
+    });
 
     if recipe.sharpen > 0.001 && image.width() > 2 && image.height() > 2 {
         let blurred = image::imageops::blur(&image, 1.1);
         let amount = recipe.sharpen * 1.6;
-        for (pixel, blurred) in image.pixels_mut().zip(blurred.pixels()) {
-            for channel in 0..3 {
-                let original = pixel[channel] as f32;
-                let soft = blurred[channel] as f32;
-                pixel[channel] = (original + (original - soft) * amount)
-                    .clamp(0.0, 255.0)
-                    .round() as u8;
-            }
-        }
+        image
+            .as_mut()
+            .par_chunks_mut(4)
+            .zip(blurred.as_raw().par_chunks(4))
+            .for_each(|(pixel, blurred)| {
+                for channel in 0..3 {
+                    let original = pixel[channel] as f32;
+                    let soft = blurred[channel] as f32;
+                    pixel[channel] = (original + (original - soft) * amount)
+                        .clamp(0.0, 255.0)
+                        .round() as u8;
+                }
+            });
     }
     image
+}
+
+fn rgb_luma(r: f32, g: f32, b: f32) -> f32 {
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+fn apply_contrast_curve(value: f32, contrast: f32) -> f32 {
+    let x = value.clamp(0.0, 1.0);
+    // Keep the visible slider range expressive without letting +1.0 collapse
+    // ordinary near-black/near-white detail to pure clipping.
+    let amount = contrast.clamp(-1.0, 1.0) * 0.55;
+    // Smooth S-curve with fixed black, midpoint and white anchors. Positive
+    // values deepen shadows and lift highlights; negative values compress them.
+    let curve = 4.0 * (x - 0.5) * x * (1.0 - x);
+    (x + amount * curve).clamp(0.0, 1.0)
 }
 
 fn apply_auto_color(image: &mut RgbaImage) {
@@ -196,59 +244,131 @@ fn apply_auto_color(image: &mut RgbaImage) {
     let mut count = 0.0f64;
     let step = ((image.width() as u64 * image.height() as u64) / 200_000).max(1) as usize;
     for pixel in image.pixels().step_by(step) {
-        sums[0] += pixel[0] as f64;
-        sums[1] += pixel[1] as f64;
-        sums[2] += pixel[2] as f64;
+        if pixel[3] < 16 {
+            continue;
+        }
+        let r = pixel[0] as f64;
+        let g = pixel[1] as f64;
+        let b = pixel[2] as f64;
+        let luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
+        if !(0.06..=0.94).contains(&luma) {
+            continue;
+        }
+        sums[0] += r;
+        sums[1] += g;
+        sums[2] += b;
         count += 1.0;
     }
     if count <= 0.0 {
         return;
     }
+
     let means = [sums[0] / count, sums[1] / count, sums[2] / count];
     let gray = (means[0] + means[1] + means[2]) / 3.0;
-    let gains = [
-        (gray / means[0].max(1.0)).clamp(0.75, 1.25),
-        (gray / means[1].max(1.0)).clamp(0.75, 1.25),
-        (gray / means[2].max(1.0)).clamp(0.75, 1.25),
+    let raw_gains = [
+        (gray / means[0].max(1.0)).clamp(0.80, 1.20),
+        (gray / means[1].max(1.0)).clamp(0.80, 1.20),
+        (gray / means[2].max(1.0)).clamp(0.80, 1.20),
     ];
-    for pixel in image.pixels_mut() {
+    // Blend only part-way toward gray-world neutrality. This removes obvious
+    // casts without erasing deliberate warm/cool lighting.
+    let strength = 0.35;
+    let gains = [
+        1.0 + (raw_gains[0] - 1.0) * strength,
+        1.0 + (raw_gains[1] - 1.0) * strength,
+        1.0 + (raw_gains[2] - 1.0) * strength,
+    ];
+    image.as_mut().par_chunks_mut(4).for_each(|pixel| {
+        if pixel[3] < 16 {
+            return;
+        }
         for channel in 0..3 {
             pixel[channel] = (pixel[channel] as f64 * gains[channel])
                 .clamp(0.0, 255.0)
                 .round() as u8;
         }
-    }
+    });
 }
 
 fn apply_auto_contrast(image: &mut RgbaImage) {
-    let mut low = [255u8; 3];
-    let mut high = [0u8; 3];
+    let mut histogram = [0u64; 256];
     let step = ((image.width() as u64 * image.height() as u64) / 250_000).max(1) as usize;
+    let mut samples = 0u64;
     for pixel in image.pixels().step_by(step) {
-        for channel in 0..3 {
-            low[channel] = low[channel].min(pixel[channel]);
-            high[channel] = high[channel].max(pixel[channel]);
+        if pixel[3] < 16 {
+            continue;
+        }
+        let luma = rgb_luma(
+            pixel[0] as f32 / 255.0,
+            pixel[1] as f32 / 255.0,
+            pixel[2] as f32 / 255.0,
+        );
+        let bucket = (luma.clamp(0.0, 1.0) * 255.0).round() as usize;
+        histogram[bucket] += 1;
+        samples += 1;
+    }
+    if samples == 0 {
+        return;
+    }
+
+    // Ignore roughly the outer 1% of luminance samples so a single specular
+    // highlight or black pixel does not determine the entire correction.
+    let clip = if samples >= 100 {
+        ((samples as f64 * 0.01).round() as u64).max(1)
+    } else {
+        0
+    };
+    let mut cumulative = 0u64;
+    let mut low = 0usize;
+    for (index, count) in histogram.iter().enumerate() {
+        cumulative += *count;
+        if cumulative > clip {
+            low = index;
+            break;
         }
     }
-    for pixel in image.pixels_mut() {
-        for channel in 0..3 {
-            let range = high[channel].saturating_sub(low[channel]).max(1) as f32;
-            pixel[channel] = (((pixel[channel].saturating_sub(low[channel])) as f32 / range) * 255.0)
-                .clamp(0.0, 255.0)
-                .round() as u8;
+    cumulative = 0;
+    let mut high = 255usize;
+    for (index, count) in histogram.iter().enumerate().rev() {
+        cumulative += *count;
+        if cumulative > clip {
+            high = index;
+            break;
         }
     }
+    if high <= low + 6 {
+        return;
+    }
+
+    let low = low as f32 / 255.0;
+    let high = high as f32 / 255.0;
+    let range = high - low;
+    image.as_mut().par_chunks_mut(4).for_each(|pixel| {
+        if pixel[3] < 16 {
+            return;
+        }
+        let r = pixel[0] as f32 / 255.0;
+        let g = pixel[1] as f32 / 255.0;
+        let b = pixel[2] as f32 / 255.0;
+        let original_luma = rgb_luma(r, g, b);
+        // Preserve a small amount of headroom at both ends instead of forcing
+        // the selected percentile range to absolute black and white.
+        let normalized = ((original_luma - low) / range).clamp(0.0, 1.0);
+        let stretched = 0.02 + normalized * 0.96;
+        let target_luma = original_luma + (stretched - original_luma) * 0.80;
+        let delta = target_luma - original_luma;
+        pixel[0] = ((r + delta).clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[1] = ((g + delta).clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[2] = ((b + delta).clamp(0.0, 1.0) * 255.0).round() as u8;
+    });
 }
 
 fn rotate_autocrop(source: &RgbaImage, angle: f32) -> RgbaImage {
     if angle.abs() < 0.0001 || source.width() < 2 || source.height() < 2 {
         return source.clone();
     }
-    let (output_width, output_height) = largest_rotated_rect(
-        source.width() as f32,
-        source.height() as f32,
-        angle,
-    );
+    let (output_width, output_height) =
+        largest_rotated_rect(source.width() as f32, source.height() as f32, angle);
     let output_width = output_width.floor().max(1.0) as u32;
     let output_height = output_height.floor().max(1.0) as u32;
     let mut output = RgbaImage::new(output_width, output_height);
@@ -259,15 +379,23 @@ fn rotate_autocrop(source: &RgbaImage, angle: f32) -> RgbaImage {
     let dst_cx = (output_width as f32 - 1.0) * 0.5;
     let dst_cy = (output_height as f32 - 1.0) * 0.5;
 
-    for y in 0..output_height {
-        for x in 0..output_width {
-            let dx = x as f32 - dst_cx;
-            let dy = y as f32 - dst_cy;
-            let sx = cos * dx + sin * dy + src_cx;
-            let sy = -sin * dx + cos * dy + src_cy;
-            output.put_pixel(x, y, bilinear(source, sx, sy));
-        }
-    }
+    let row_bytes = output_width as usize * 4;
+    output
+        .as_mut()
+        .par_chunks_mut(row_bytes)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as u32;
+            for x in 0..output_width {
+                let dx = x as f32 - dst_cx;
+                let dy = y as f32 - dst_cy;
+                let sx = cos * dx + sin * dy + src_cx;
+                let sy = -sin * dx + cos * dy + src_cy;
+                let pixel = bilinear(source, sx, sy);
+                let offset = x as usize * 4;
+                row[offset..offset + 4].copy_from_slice(&pixel.0);
+            }
+        });
     output
 }
 
@@ -340,14 +468,70 @@ pub fn save_jpeg(image: &RgbaImage, destination: &std::path::Path, quality: u8) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edit::filters::FilterPreset;
 
     #[test]
     fn crop_reduces_dimensions() {
         let image = RgbaImage::new(100, 80);
         let mut recipe = EditRecipe::default();
-        recipe.crop = CropRect { left: 0.25, top: 0.25, right: 0.75, bottom: 0.75 };
+        recipe.crop = CropRect {
+            left: 0.25,
+            top: 0.25,
+            right: 0.75,
+            bottom: 0.75,
+        };
         let output = apply_recipe(image, &recipe);
         assert_eq!(output.dimensions(), (50, 40));
+    }
+
+    #[test]
+    fn named_filter_is_followed_by_manual_tone_adjustments() {
+        let image = RgbaImage::from_pixel(8, 8, Rgba([120, 130, 140, 255]));
+        let mut recipe = EditRecipe::default();
+        recipe.filter = FilterPreset::Clarendon;
+        recipe.exposure = 0.5;
+
+        let output = apply_recipe(image.clone(), &recipe);
+        let mut filter_only = image;
+        crate::edit::filters::apply_filter(&mut filter_only, FilterPreset::Clarendon);
+        let exposure = 2.0_f32.powf(0.5);
+        let mut expected = filter_only.clone();
+        for pixel in expected.pixels_mut() {
+            for channel in 0..3 {
+                pixel[channel] = (pixel[channel] as f32 * exposure).clamp(0.0, 255.0).round() as u8;
+            }
+        }
+
+        assert_ne!(output.as_raw(), filter_only.as_raw());
+        assert_eq!(output.as_raw(), expected.as_raw());
+    }
+
+    #[test]
+    fn cached_geometry_then_tone_matches_full_recipe() {
+        let mut source = RgbaImage::new(120, 90);
+        for (index, pixel) in source.pixels_mut().enumerate() {
+            let value = (index % 251) as u8;
+            *pixel = Rgba([value, 255 - value, value / 2, 255]);
+        }
+
+        let mut recipe = EditRecipe::default();
+        recipe.straighten = 3.0;
+        recipe.crop = CropRect {
+            left: 0.1,
+            top: 0.15,
+            right: 0.9,
+            bottom: 0.85,
+        };
+        recipe.exposure = 0.35;
+        recipe.contrast = 0.2;
+        recipe.saturation = 0.15;
+
+        let full = apply_recipe(source.clone(), &recipe);
+        let geometry = apply_geometry(source, &recipe);
+        let cached = apply_tone(geometry, &recipe);
+
+        assert_eq!(cached.dimensions(), full.dimensions());
+        assert_eq!(cached.as_raw(), full.as_raw());
     }
 
     #[test]
@@ -362,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn black_white_and_sepia_combine() {
+    fn sepia_is_warm_monochrome_and_bw_plus_sepia_is_equivalent() {
         let source = RgbaImage::from_pixel(2, 2, Rgba([200, 100, 50, 255]));
         let mut combined_recipe = EditRecipe::default();
         combined_recipe.black_white = true;
@@ -377,7 +561,59 @@ mod tests {
         sepia_recipe.sepia = true;
         let sepia = apply_recipe(source, &sepia_recipe);
 
-        assert_ne!(combined.as_raw(), black_white.as_raw());
-        assert_ne!(combined.as_raw(), sepia.as_raw());
+        assert_ne!(sepia.as_raw(), black_white.as_raw());
+        assert_eq!(combined.as_raw(), sepia.as_raw());
+        let pixel = sepia.get_pixel(0, 0);
+        assert!(pixel[0] > pixel[1] && pixel[1] > pixel[2]);
+    }
+
+    #[test]
+    fn positive_contrast_expands_midtones() {
+        let mut source = RgbaImage::new(2, 1);
+        source.put_pixel(0, 0, Rgba([96, 96, 96, 255]));
+        source.put_pixel(1, 0, Rgba([160, 160, 160, 255]));
+        let mut recipe = EditRecipe::default();
+        recipe.contrast = 0.75;
+        let output = apply_recipe(source, &recipe);
+        let delta = output.get_pixel(1, 0)[0] as i16 - output.get_pixel(0, 0)[0] as i16;
+        assert!(delta > 64);
+    }
+
+    #[test]
+    fn sepia_preserves_midtone_luminance() {
+        let source = RgbaImage::from_pixel(1, 1, Rgba([128, 128, 128, 255]));
+        let mut recipe = EditRecipe::default();
+        recipe.sepia = true;
+        let output = apply_recipe(source, &recipe);
+        let pixel = output.get_pixel(0, 0);
+        let luma = 0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32;
+        assert!((luma - 128.0).abs() < 12.0);
+    }
+
+    #[test]
+    fn auto_contrast_ignores_single_black_and_white_outliers() {
+        let mut source = RgbaImage::new(100, 1);
+        source.put_pixel(0, 0, Rgba([0, 0, 0, 255]));
+        source.put_pixel(99, 0, Rgba([255, 255, 255, 255]));
+        for x in 1..99 {
+            let value = if x % 2 == 0 { 100 } else { 120 };
+            source.put_pixel(x, 0, Rgba([value, value, value, 255]));
+        }
+        let mut recipe = EditRecipe::default();
+        recipe.auto_contrast = true;
+        let output = apply_recipe(source, &recipe);
+        let dark = output.get_pixel(2, 0)[0] as i16;
+        let light = output.get_pixel(1, 0)[0] as i16;
+        assert!(light - dark > 80);
+    }
+
+    #[test]
+    fn auto_color_keeps_intentional_warmth() {
+        let source = RgbaImage::from_pixel(20, 20, Rgba([160, 120, 90, 255]));
+        let mut recipe = EditRecipe::default();
+        recipe.auto_color = true;
+        let output = apply_recipe(source, &recipe);
+        let pixel = output.get_pixel(0, 0);
+        assert!(pixel[0] > pixel[1] && pixel[1] > pixel[2]);
     }
 }

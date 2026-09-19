@@ -3,6 +3,14 @@ use std::sync::mpsc::TryRecvError;
 static REFRESH_GENERATION: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// Invalidate any asynchronous grid result or delayed folder destination from
+/// an older navigation. Folder-to-folder reuse does not start a new database
+/// refresh, so it must still advance this generation to prevent an older
+/// Albums/Photos -> Folder timer from pulling the view back later.
+fn invalidate_pending_grid_navigation() {
+    REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn refresh_grid(
     connection: &Rc<RefCell<Connection>>,
     filter: sidebar::SidebarFilter,
@@ -12,7 +20,7 @@ fn refresh_grid(
 ) {
     let folder_target = if search.is_empty() {
         if let sidebar::SidebarFilter::Folder(folder_id) = filter {
-            db::folders(&connection.borrow())
+            db::folders_light(&connection.borrow())
                 .ok()
                 .and_then(|folders| folders.into_iter().find(|folder| folder.id == folder_id))
                 .map(|folder| (folder.id, folder.path))
@@ -44,6 +52,19 @@ fn refresh_grid_to_folder(
     );
 }
 
+/// Results delivered from the off-thread grid query.
+///
+/// Folder destinations send two payloads: an interim `Scoped` snapshot of the
+/// selected folder so the grid is populated the instant it lands, then the
+/// `Stream` spanning the whole continuous Folder stream which is built in the
+/// background and swapped in once ready. Every other destination sends only
+/// the `Stream`.
+enum GridPayload {
+    Scoped(Vec<db::Photo>),
+    Stream(Vec<db::Photo>),
+    Failed,
+}
+
 fn refresh_grid_inner(
     connection: &Rc<RefCell<Connection>>,
     filter: sidebar::SidebarFilter,
@@ -56,22 +77,63 @@ fn refresh_grid_inner(
     if filter == sidebar::SidebarFilter::Albums {
         return;
     }
-    let trace = std::env::var_os("PICASA_TRACE").is_some();
-    let started = trace.then(Instant::now);
-
     let generation = REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    let filter_label = format!("{filter:?}");
+    let op = crate::source::current_trace_op();
     let search = search.to_owned();
+    let folder_stream = search.is_empty()
+        && matches!(filter, sidebar::SidebarFilter::Folder(_));
     let (sender, receiver) = std::sync::mpsc::channel();
+    let scoped_target = folder_target.clone();
 
     std::thread::spawn(move || {
+        crate::source::net_trace(format!(
+            "grid_query_start op={op} filter={filter:?} folder_stream={folder_stream}"
+        ));
         let Ok(connection) = db::open_default() else {
-            let _ = sender.send(None);
+            crate::source::net_trace(format!("grid_failed op={op}"));
+            let _ = sender.send(GridPayload::Failed);
             return;
         };
 
-        let folder_stream = search.is_empty()
-            && matches!(filter, sidebar::SidebarFilter::Folder(_));
+        if folder_stream {
+            // Picasa-style Folder mode is a single continuous stream. The
+            // selected folder is a scroll destination, not a query boundary,
+            // so the whole library is used below. First present a scoped
+            // snapshot of only the destination folder: without it a Folder
+            // click after a model reset leaves an empty grid while the
+            // continuous stream is progressively constructed.
+            //
+            // Folder ordering for the stream sort uses the probe-free listing:
+            // availability is resolved separately and asynchronously by the
+            // availability refresher. An unmounted remote root would otherwise
+            // stall this worker for seconds before the scoped snapshot could
+            // be sent.
+            let stream_folders = db::folders_light(&connection).unwrap_or_default();
+            let display_mode = sidebar::FolderDisplayMode::from_setting(
+                db::setting(&connection, sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY)
+                    .ok()
+                    .flatten()
+                    .as_deref(),
+            );
+            if let Some((folder_id, _)) = scoped_target {
+                let mut scoped = db::photos(&connection, Some(folder_id), false, None)
+                    .unwrap_or_default();
+                retain_enabled_formats(&connection, &mut scoped);
+                // Reuse the stream ordering so the swap-in does not visibly
+                // reorder the folder the user is already looking at.
+                sort_folder_stream(&mut scoped, &stream_folders, sort, display_mode);
+                crate::source::net_trace(format!("grid_scoped op={op} count={}", scoped.len()));
+                let _ = sender.send(GridPayload::Scoped(scoped));
+            }
+
+            let mut stream = db::photos(&connection, None, false, None).unwrap_or_default();
+            retain_enabled_formats(&connection, &mut stream);
+            sort_folder_stream(&mut stream, &stream_folders, sort, display_mode);
+            crate::source::net_trace(format!("grid_stream op={op} count={}", stream.len()));
+            let _ = sender.send(GridPayload::Stream(stream));
+            return;
+        }
+
         let mut photos = if !search.is_empty() {
             // An active search is a library-wide view, regardless of the
             // destination that was selected before typing began.
@@ -84,9 +146,6 @@ fn refresh_grid_inner(
                     (None, false)
                 }
                 sidebar::SidebarFilter::Favorites => (None, true),
-                // Picasa-style Folder mode is a single continuous stream.
-                // The selected folder is a scroll destination, not a query
-                // boundary, so load every indexed folder exactly once.
                 sidebar::SidebarFilter::Folder(_) => (None, false),
                 sidebar::SidebarFilter::Albums => return,
                 sidebar::SidebarFilter::Album(_) => unreachable!(),
@@ -96,33 +155,47 @@ fn refresh_grid_inner(
 
         retain_enabled_formats(&connection, &mut photos);
         limit_recently_added(&connection, filter, &mut photos);
-        if folder_stream {
-            let folders = db::folders(&connection).unwrap_or_default();
-            let display_mode = sidebar::FolderDisplayMode::from_setting(
-                db::setting(&connection, sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY)
-                    .ok()
-                    .flatten()
-                    .as_deref(),
-            );
-            sort_folder_stream(&mut photos, &folders, sort, display_mode);
-        } else {
-            sort_photos(&mut photos, sort);
-        }
-        let _ = sender.send(Some(photos));
+        sort_photos(&mut photos, sort);
+        crate::source::net_trace(format!("grid_stream op={op} count={}", photos.len()));
+        let _ = sender.send(GridPayload::Stream(photos));
     });
 
     let gallery = gallery.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(25), move || {
         match receiver.try_recv() {
-            Ok(Some(photos)) => {
+            Ok(GridPayload::Scoped(photos)) => {
                 if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
-                    if let Some(started) = started {
-                        eprintln!("UI PERF refresh_grid filter={} photos={} ms={}", filter_label, photos.len(), started.elapsed().as_millis());
+                    crate::source::net_trace(format!(
+                        "grid_payload_scoped op={op} count={}",
+                        photos.len()
+                    ));
+                    // Show the destination folder immediately. Unlike replace(),
+                    // this never caches the snapshot as the full Folder stream.
+                    gallery.replace_scoped_folder(&photos);
+                }
+                crate::source::clear_trace_op_after(op);
+                glib::ControlFlow::Continue
+            }
+            Ok(GridPayload::Stream(photos)) => {
+                if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
+                    if folder_stream {
+                        crate::source::net_trace(format!(
+                            "gallery_prewarm op={op} count={}",
+                            photos.len()
+                        ));
+                        // Build the continuous stream without blanking the
+                        // scoped Folder snapshot the user is looking at.
+                        gallery.prewarm_folder_stream(photos);
+                    } else {
+                        crate::source::net_trace(format!(
+                            "gallery_replace op={op} count={}",
+                            photos.len()
+                        ));
+                        gallery.replace(&photos);
                     }
-                    gallery.replace(&photos);
                     if let Some((folder_id, folder_path)) = folder_target.clone() {
                         let gallery = gallery.clone();
-                        // replace() may schedule a progressive model build.
+                        // prewarm() may schedule a progressive model build.
                         // Start the scroll helper on the next main-loop turn so
                         // it never succeeds against the previous grid model.
                         glib::idle_add_local_once(move || {
@@ -130,13 +203,16 @@ fn refresh_grid_inner(
                                 gallery,
                                 folder_id,
                                 folder_path,
+                                generation,
                             );
                         });
                     }
                 }
                 glib::ControlFlow::Break
             }
-            Ok(None) | Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            Ok(GridPayload::Failed) | Err(TryRecvError::Disconnected) => {
+                glib::ControlFlow::Break
+            }
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
         }
     });
@@ -148,20 +224,47 @@ fn scroll_gallery_to_folder_when_ready(
     gallery: Rc<grid::Gallery>,
     folder_id: i64,
     folder_path: String,
+    generation: u64,
 ) {
-    let attempts = Rc::new(Cell::new(0u32));
-    let attempts_for_timer = attempts.clone();
+    let total_attempts = Rc::new(Cell::new(0u32));
+    // Counts only the attempts made after the progressive stream finished.
+    // While rows are still being built, the target folder may legitimately not
+    // exist yet, so those attempts must not count toward giving up.
+    let settled_attempts = Rc::new(Cell::new(0u32));
+    let total_for_timer = total_attempts.clone();
+    let settled_for_timer = settled_attempts.clone();
     glib::timeout_add_local(Duration::from_millis(25), move || {
-        attempts_for_timer.set(attempts_for_timer.get() + 1);
-        if gallery.scroll_to_folder(folder_id, &folder_path) {
-            glib::ControlFlow::Break
-        } else if attempts_for_timer.get() >= 240 {
-            // Six seconds is intentionally generous for a very large library
-            // using progressive ListStore replacement. A missing/empty folder
-            // simply leaves the current scroll position unchanged.
+        // A newer destination/refresh supersedes this timer. Without this
+        // guard, an old Albums/Photos -> Folder transition can fire later and
+        // pull the continuous Folder view back to the previous folder.
+        if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) != generation {
+            return glib::ControlFlow::Break;
+        }
+        total_for_timer.set(total_for_timer.get() + 1);
+        // scroll_to_folder scans the whole photo model. Calling it every 25 ms
+        // while the progressive Folder stream is still being built starves that
+        // very build, so wait for it to finish before scanning at all. The
+        // scoped snapshot shown while the stream prewarms must be skipped too:
+        // it is only a scroll-destination hint, not the final continuous stream.
+        if !gallery.folder_stream_ready() {
+            if total_for_timer.get() >= 1200 {
+                // Hard safety net (30 s) for a build that never completes.
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        } else if gallery.scroll_to_folder(folder_id, &folder_path) {
             glib::ControlFlow::Break
         } else {
-            glib::ControlFlow::Continue
+            let settled = settled_for_timer.get() + 1;
+            settled_for_timer.set(settled);
+            if settled >= 240 {
+                // Six seconds after the Folder stream is fully built is
+                // generous; a missing/empty folder leaves the position as-is.
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
         }
     });
 }
@@ -262,73 +365,16 @@ fn sort_folder_stream(
     });
 }
 
-/// Folder ids in the order their sections appear in the Folder stream for the
-/// given display mode. Exposed so the grid can reorder existing photos when the
-/// user only changes the sidebar tree mode (no database query or model rebuild).
+/// Folder ids in the canonical order used by the continuous Folder gallery.
+///
+/// Sidebar Flat/Tree is presentation-only. The gallery must keep one stable
+/// section order across that toggle; otherwise GtkListView has to splice and
+/// recycle the visible row set just because the sidebar changed shape.
 pub(super) fn folder_stream_order(
     folders: &[db::Folder],
-    display_mode: sidebar::FolderDisplayMode,
+    _display_mode: sidebar::FolderDisplayMode,
 ) -> Vec<i64> {
-    let order = folder_tree_order(folders);
-    let tree_rank = order
-        .iter()
-        .enumerate()
-        .map(|(index, folder_id)| (*folder_id, index))
-        .collect::<std::collections::HashMap<_, _>>();
-    if display_mode != sidebar::FolderDisplayMode::ImportedOnly {
-        return order;
-    }
-
-    let by_id = folders
-        .iter()
-        .map(|folder| (folder.id, folder))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut roots = folders
-        .iter()
-        .filter(|folder| folder.imported_root)
-        .collect::<Vec<_>>();
-    roots.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-            .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
-    });
-    let imported_rank = roots
-        .into_iter()
-        .enumerate()
-        .map(|(index, folder)| (folder.id, index))
-        .collect::<std::collections::HashMap<_, _>>();
-    let root_rank_by_folder = folders
-        .iter()
-        .map(|folder| {
-            let rank = nearest_imported_root(folder.id, &by_id)
-                .and_then(|root_id| imported_rank.get(&root_id).copied())
-                .unwrap_or(usize::MAX);
-            (folder.id, rank)
-        })
-        .collect::<std::collections::HashMap<_, _>>();
-
-    let mut ordered = order;
-    ordered.sort_by(|left, right| {
-        root_rank_by_folder
-            .get(left)
-            .copied()
-            .unwrap_or(usize::MAX)
-            .cmp(
-                &root_rank_by_folder
-                    .get(right)
-                    .copied()
-                    .unwrap_or(usize::MAX),
-            )
-            .then_with(|| {
-                tree_rank
-                    .get(left)
-                    .copied()
-                    .unwrap_or(usize::MAX)
-                    .cmp(&tree_rank.get(right).copied().unwrap_or(usize::MAX))
-            })
-    });
-    ordered
+    folder_tree_order(folders)
 }
 
 fn folder_tree_order(folders: &[db::Folder]) -> Vec<i64> {
@@ -388,25 +434,6 @@ fn folder_tree_order(folders: &[db::Folder]) -> Vec<i64> {
     order
 }
 
-fn nearest_imported_root<'a>(
-    folder_id: i64,
-    by_id: &std::collections::HashMap<i64, &'a db::Folder>,
-) -> Option<i64> {
-    let mut current = Some(folder_id);
-    let mut seen = std::collections::HashSet::new();
-    while let Some(id) = current {
-        if !seen.insert(id) {
-            break;
-        }
-        let folder = by_id.get(&id)?;
-        if folder.imported_root {
-            return Some(id);
-        }
-        current = folder.parent_id;
-    }
-    None
-}
-
 fn compare_optional<T: Ord>(
     left: Option<T>,
     right: Option<T>,
@@ -436,36 +463,11 @@ fn pixel_count(width: Option<i64>, height: Option<i64>) -> Option<i128> {
     }
 }
 
-fn confirm_action(
-    parent: &adw::ApplicationWindow,
-    title: &str,
-    message: &str,
-    action: impl Fn() + 'static,
-) {
-    let dialog = gtk::MessageDialog::builder()
-        .transient_for(parent)
-        .modal(true)
-        .message_type(gtk::MessageType::Warning)
-        .buttons(gtk::ButtonsType::Cancel)
-        .text(title)
-        .secondary_text(message)
-        .build();
-    dialog.add_button("Continue", gtk::ResponseType::Accept);
-
-    dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept {
-            action();
-        }
-        dialog.close();
-    });
-    dialog.present();
-}
-
 #[cfg(test)]
 mod photo_action_tests {
     use super::{
-        sort_folder_stream, sort_photos, valid_file_name, wallpaper_layout, PhotoSort,
-        SortDirection, SortField, WallpaperLayout,
+        folder_stream_order, sort_folder_stream, sort_photos, valid_file_name, wallpaper_layout,
+        PhotoSort, SortDirection, SortField, WallpaperLayout,
     };
     use crate::db::{Folder, Photo};
 
@@ -583,7 +585,7 @@ mod photo_action_tests {
     }
 
     #[test]
-    fn imported_only_stream_follows_imported_root_order() {
+    fn sidebar_display_mode_does_not_reorder_folder_gallery() {
         let folders = vec![
             folder(10, "/Pictures", "Pictures", None, true),
             folder(11, "/Pictures/Drone", "Drone", Some(10), false),
@@ -594,6 +596,11 @@ mod photo_action_tests {
             photo_in_folder("/Pictures/Drone/p.jpg", 11, "/Pictures/Drone"),
             photo_in_folder("/Data/Trips/d.jpg", 21, "/Data/Trips"),
         ];
+
+        let tree_order = folder_stream_order(&folders, crate::sidebar::FolderDisplayMode::Tree);
+        let flat_order =
+            folder_stream_order(&folders, crate::sidebar::FolderDisplayMode::ImportedOnly);
+        assert_eq!(tree_order, flat_order);
 
         sort_folder_stream(
             &mut photos,

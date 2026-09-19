@@ -6,7 +6,22 @@ use std::path::Path;
 
 use super::model::{Background, CollageProject};
 
-pub fn export(project: &CollageProject, destination: &Path) -> Result<()> {
+#[derive(Clone, Copy, Debug)]
+pub enum ExportFormat {
+    Jpeg,
+    Png,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ExportOptions {
+    /// Long-edge pixel cap; the collage aspect decides which side binds.
+    pub max_edge: u32,
+    pub format: ExportFormat,
+    /// JPEG-only quality (60-100), ignored for PNG.
+    pub jpeg_quality: u8,
+}
+
+pub fn export(project: &CollageProject, destination: &Path, options: &ExportOptions) -> Result<()> {
     let offline = project
         .items
         .iter()
@@ -24,15 +39,22 @@ pub fn export(project: &CollageProject, destination: &Path) -> Result<()> {
         ));
     }
 
-    let width = 3840u32;
-    let height = (width as f32 / project.effective_aspect_ratio()).round() as u32;
-    trace_export(&format!("destination={}", destination.display()));
-    trace_export(&format!(
-        "canvas={}x{} items={}",
-        width,
-        height,
-        project.items.len()
-    ));
+    // The long edge is capped by the requested preset; the collage aspect
+    // decides which dimension binds.
+    let ratio = project.effective_aspect_ratio();
+    let (width, height) = if ratio >= 1.0 {
+        (
+            options.max_edge,
+            (options.max_edge as f32 / ratio).round() as u32,
+        )
+    } else {
+        (
+            (options.max_edge as f32 * ratio).round() as u32,
+            options.max_edge,
+        )
+    };
+    let width = width.max(1);
+    let height = height.max(1);
     let background = match project.background {
         Background::White => image::Rgba([255, 255, 255, 255]),
         Background::Black => image::Rgba([0, 0, 0, 255]),
@@ -51,11 +73,6 @@ pub fn export(project: &CollageProject, destination: &Path) -> Result<()> {
         ) {
             Ok(decoded) => decoded,
             Err(error) => {
-                trace_export(&format!(
-                    "decode_failed id={} path={} error={error:#}",
-                    item.photo.id, item.photo.path
-                ));
-                trace_export(&format!("failed stage=decode error={error:#}"));
                 return Err(error).with_context(|| {
                     format!(
                         "could not decode original {} for collage export",
@@ -72,7 +89,10 @@ pub fn export(project: &CollageProject, destination: &Path) -> Result<()> {
             item.photo.library_rotation,
         );
         let recipe = crate::edit::EditRecipe::decode(&item.photo.edit_recipe);
-        let source = DynamicImage::ImageRgba8(crate::edit::render::apply_recipe(source.to_rgba8(), &recipe));
+        let source = DynamicImage::ImageRgba8(crate::edit::render::apply_recipe(
+            source.to_rgba8(),
+            &recipe,
+        ));
         let contain = matches!(
             project.layout,
             super::model::LayoutKind::Mosaic | super::model::LayoutKind::SmartMosaic
@@ -106,36 +126,45 @@ pub fn export(project: &CollageProject, destination: &Path) -> Result<()> {
         .unwrap_or_else(|| Path::new("."));
     if !parent.is_dir() {
         let error = anyhow::anyhow!("parent directory does not exist: {}", parent.display());
-        trace_export(&format!("failed stage=parent_directory error={error}"));
         return Err(error);
     }
 
     let file = match File::create(destination) {
         Ok(file) => file,
         Err(error) => {
-            trace_export(&format!("failed stage=file_create error={error}"));
             return Err(error).with_context(|| {
-                format!("could not create JPEG collage at {}", destination.display())
+                format!("could not create collage file at {}", destination.display())
             });
         }
     };
-    trace_export(&format!("encoding destination={}", destination.display()));
     let mut writer = BufWriter::new(file);
-    let rgb = DynamicImage::ImageRgba8(canvas).to_rgb8();
-    let encode_result = {
-        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90);
-        encoder.write_image(&rgb, width, height, image::ExtendedColorType::Rgb8)
+    let encode_result = match options.format {
+        ExportFormat::Jpeg => {
+            let rgb = DynamicImage::ImageRgba8(canvas).to_rgb8();
+            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                &mut writer,
+                options.jpeg_quality.clamp(60, 100),
+            );
+            encoder.write_image(&rgb, width, height, image::ExtendedColorType::Rgb8)
+        }
+        ExportFormat::Png => {
+            let rgba = DynamicImage::ImageRgba8(canvas).into_rgba8();
+            let encoder = image::codecs::png::PngEncoder::new(&mut writer);
+            encoder.write_image(
+                rgba.as_raw(),
+                width,
+                height,
+                image::ExtendedColorType::Rgba8,
+            )
+        }
     };
     if let Err(error) = encode_result {
-        trace_export(&format!("failed stage=jpeg_encode error={error}"));
-        return Err(error).context("could not encode JPEG collage");
+        return Err(error).context("could not encode collage");
     }
     if let Err(error) = writer.flush() {
-        trace_export(&format!("failed stage=flush error={error}"));
         return Err(error)
-            .with_context(|| format!("could not flush JPEG collage at {}", destination.display()));
+            .with_context(|| format!("could not flush collage at {}", destination.display()));
     }
-    trace_export(&format!("success destination={}", destination.display()));
     Ok(())
 }
 
@@ -166,12 +195,6 @@ fn round_corners(image: &mut RgbaImage, radius_ratio: f32) {
                 image.get_pixel_mut(x as u32, y as u32).0[3] = 0;
             }
         }
-    }
-}
-
-fn trace_export(message: &str) {
-    if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!("COLLAGE EXPORT {message}");
     }
 }
 

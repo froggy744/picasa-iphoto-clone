@@ -94,11 +94,22 @@ struct DisplayTextureCacheEntry {
     target_width: u32,
     target_height: u32,
     texture: gtk::gdk::MemoryTexture,
+    // Approximate RGBA footprint, used by the byte budget below.
+    bytes: usize,
 }
 
 type DisplayTextureCache = Rc<RefCell<VecDeque<DisplayTextureCacheEntry>>>;
 
-const DISPLAY_TEXTURE_CACHE_CAPACITY: usize = 8;
+// Full-size RAW/NEF viewer decodes can be expensive. Keep enough recently
+// viewed display textures in RAM that stepping back through a burst is served
+// from the cache instead of decoding again.
+const DISPLAY_TEXTURE_CACHE_CAPACITY: usize = 32;
+// Texture memory scales with the viewport, so a pure count is unsafe on large
+// displays: a 4K viewer texture is ~33 MB. Cap total cached pixels as well and
+// evict least-recently-used entries past either limit. At the default window
+// size a texture is ~3.5 MB, so the count limit binds first and the budget only
+// protects large/zoomed viewports.
+const DISPLAY_TEXTURE_CACHE_BYTE_BUDGET: usize = 256 * 1024 * 1024;
 
 struct ResultSlot<T> {
     value: Mutex<Option<T>>,

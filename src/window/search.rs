@@ -53,12 +53,7 @@ fn connect_type_to_search(
             search.set_text(&character.to_string());
             search.set_position(-1);
         }
-        if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!(
-                "SEARCH TRACE type_to_search started chars={}",
-                search.text().chars().count()
-            );
-        }
+        
         glib::Propagation::Stop
     });
     source.add_controller(keyboard);
@@ -127,13 +122,7 @@ fn folder_suggestion_popup(search: &gtk::SearchEntry) -> (gtk::Popover, gtk::Lis
                             .vadjustment()
                             .clamp_page(bounds.y() as f64, (bounds.y() + bounds.height()) as f64);
                     }
-                    if std::env::var_os("PICASA_TRACE").is_some() {
-                        eprintln!(
-                            "SEARCH TRACE suggestion_selected index={} scroll={}",
-                            index,
-                            scroll.vadjustment().value()
-                        );
-                    }
+                    
                 }
                 glib::Propagation::Stop
             }
@@ -178,21 +167,6 @@ fn folder_suggestion_popup(search: &gtk::SearchEntry) -> (gtk::Popover, gtk::Lis
     (popover, list)
 }
 
-fn trace_search_focus(event: &str, search: &gtk::SearchEntry, popup: &gtk::Popover) {
-    if std::env::var_os("PICASA_TRACE").is_none() {
-        return;
-    }
-    let focus = search.root().and_then(|root| root.focus());
-    eprintln!(
-        "SEARCH TRACE focus event={} widget={:?} in_entry={} cursor={} selection={:?} chars={} width={} popup_visible={} popup_mapped={} popup_modal={}",
-        event,
-        focus.as_ref().map(|widget| widget.type_().name()),
-        focus.as_ref().is_some_and(|widget| widget == search.upcast_ref::<gtk::Widget>() || widget.is_ancestor(search)),
-        search.position(), search.selection_bounds(), search.text().chars().count(),
-        search.width(), popup.is_visible(), popup.is_mapped(), popup.is_autohide(),
-    );
-}
-
 fn connect_search_popup_dismissal(
     window: &gtk::Window,
     search: &gtk::SearchEntry,
@@ -231,7 +205,6 @@ fn connect_search_popup_dismissal(
     let search_weak = search.downgrade();
     focus.connect_leave(move |_| {
         if let (Some(search), Some(popup)) = (search_weak.upgrade(), popup_weak.upgrade()) {
-            trace_search_focus("leave", &search, &popup);
             popup.popdown();
         }
     });
@@ -258,7 +231,7 @@ fn connect_search_popup_dismissal(
 fn update_folder_suggestions(
     popover: &gtk::Popover,
     list: &gtk::ListBox,
-    folders: &[db::Folder],
+    folders: &[db::FolderSearchResult],
     query: &str,
     on_folder: Rc<dyn Fn(i64)>,
 ) {
@@ -314,9 +287,7 @@ fn update_folder_suggestions(
         let on_folder = on_folder.clone();
         button.connect_clicked(move |_| {
             popover.popdown();
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("SEARCH TRACE suggestion_activated folder_id={folder_id}");
-            }
+            
             on_folder(folder_id);
         });
         list.append(&button);
