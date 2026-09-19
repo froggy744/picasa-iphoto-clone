@@ -540,9 +540,7 @@ pub fn discover_network_locations() -> std::sync::mpsc::Receiver<NetworkDiscover
                 if seen.insert(uri.clone()) {
                     count += 1;
                     fresh += 1;
-                    net_trace(format!(
-                        "discovery_result attempt={attempt} uri={uri}"
-                    ));
+                    net_trace(format!("discovery_result attempt={attempt} uri={uri}"));
                     send(NetworkDiscoveryEvent::Item(name, uri));
                 }
             }
@@ -793,12 +791,12 @@ mod normalize_nfs_uri_tests {
             normalize_nfs_uri("sftp://host:22/stuff"),
             "sftp://host:22/stuff"
         );
-        assert_eq!(
-            normalize_nfs_uri("dav://host:443/x"),
-            "dav://host:443/x"
-        );
+        assert_eq!(normalize_nfs_uri("dav://host:443/x"), "dav://host:443/x");
         assert_eq!(normalize_nfs_uri("/mnt/4TBP"), "/mnt/4TBP");
-        assert_eq!(normalize_nfs_uri("NFS://Host:2049/Export"), "nfs://Host/Export");
+        assert_eq!(
+            normalize_nfs_uri("NFS://Host:2049/Export"),
+            "nfs://Host/Export"
+        );
     }
 
     #[test]

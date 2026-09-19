@@ -145,7 +145,7 @@ pub fn show_add_network_share_dialog(
     dialog.set_modal(true);
     // Generous, resizable initial size: the discovered-locations list owns the
     // free vertical space (below) and expands as the window grows.
-    dialog.set_default_size(560, 680);
+    dialog.set_default_size(560, 600);
     dialog.set_resizable(true);
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
     let connect_button = dialog.add_button("Connect", gtk::ResponseType::Accept);
@@ -225,7 +225,7 @@ pub fn show_add_network_share_dialog(
     // The list owns the free vertical space: it expands with the window and
     // scrolls on its own instead of squeezing into a fixed 110px strip.
     discovered_scroll.set_vexpand(true);
-    discovered_scroll.set_min_content_height(240);
+    discovered_scroll.set_min_content_height(180);
     discovered_scroll.set_child(Some(&discovered_list));
     discovered_scroll.set_visible(false);
     let discovered_header = gtk::Label::new(Some("Discovered locations"));
@@ -314,17 +314,27 @@ pub fn show_add_network_share_dialog(
                         }
                         let row = gtk::ListBoxRow::new();
                         row.set_focusable(true);
-                        let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                        let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 8);
                         box_.set_margin_top(6);
                         box_.set_margin_bottom(6);
                         let icon = gtk::Image::from_icon_name("folder-remote-symbolic");
                         icon.set_pixel_size(18);
                         box_.append(&icon);
+                        // Name on one line, the gvfs URI underneath so the user
+                        // can tell SMB from NFS and see the exact host/path at
+                        // a glance instead of hovering for a tooltip.
+                        let text_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                        text_box.set_hexpand(true);
                         let label = gtk::Label::new(Some(&name));
                         label.set_xalign(0.0);
                         label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                        label.set_hexpand(true);
-                        box_.append(&label);
+                        text_box.append(&label);
+                        let uri_label = gtk::Label::new(Some(&uri));
+                        uri_label.set_xalign(0.0);
+                        uri_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+                        uri_label.add_css_class("dim-label");
+                        text_box.append(&uri_label);
+                        box_.append(&text_box);
                         row.set_child(Some(&box_));
                         row.set_tooltip_text(Some(&uri));
                         // Use the URI gvfs supplied (NFS already normalized by
@@ -473,10 +483,20 @@ pub fn show_add_network_share_dialog(
     let entries_for_response = (name_entry.clone(), server_entry.clone(), share_entry.clone(), protocol);
     let parent_for_response = parent.clone();
     dialog.connect_response(move |dialog, response| {
-        if response != gtk::ResponseType::Accept {
-            crate::source::net_trace("dialog_cancelled");
-            dialog.close();
-            return;
+        // Response fires for Cancel, the window X (DeleteEvent) and - after
+        // `dialog.close()` - again. Only a real Cancel is a user cancellation;
+        // DeleteEvent is the normal teardown following Accept/close.
+        match response {
+            gtk::ResponseType::Accept => {}
+            gtk::ResponseType::Cancel => {
+                crate::source::net_trace("dialog_cancelled");
+                dialog.close();
+                return;
+            }
+            _ => {
+                crate::source::net_trace("dialog_closed");
+                return;
+            }
         }
         let (name_entry, server_entry, _share_entry, protocol) = &entries_for_response;
         // A discovered location is used exactly as gvfs supplied it (gvfs
@@ -605,8 +625,11 @@ pub fn show_network_folder_browser(
     content.set_margin_start(10);
     content.set_margin_end(10);
 
-    // Location bar: Up button + current network URI.
+    // Location bar: Back + Up buttons + current network URI.
     let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let back_button = gtk::Button::from_icon_name("go-previous-symbolic");
+    back_button.set_tooltip_text(Some("Back"));
+    back_button.set_sensitive(false);
     let up_button = gtk::Button::from_icon_name("go-up-symbolic");
     up_button.set_tooltip_text(Some("Up one folder"));
     let path_label = gtk::Label::new(Some(&root_uri));
@@ -614,6 +637,7 @@ pub fn show_network_folder_browser(
     path_label.set_ellipsize(gtk::pango::EllipsizeMode::Start);
     path_label.set_hexpand(true);
     path_label.add_css_class("dim-label");
+    top.append(&back_button);
     top.append(&up_button);
     top.append(&path_label);
     content.append(&top);
@@ -649,6 +673,15 @@ pub fn show_network_folder_browser(
     // on a server root): selecting such a location would import nothing, so
     // the user must descend into a share first.
     let contains_mountables = Rc::new(Cell::new(false));
+    // The visited-URI stack for the Back button. The most recent entry is the
+    // location shown before the current one; Back pops it and loads it.
+    let history: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    // True while a Back-triggered load is running so load_uri does not re-push
+    // the URI it is navigating back to.
+    let back_active: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    // Set when the dialog is being dismissed (Cancel, X or DeleteEvent): stops
+    // in-flight mounts/polls from touching a closed dialog.
+    let browse_closed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
 
     // Load (list) one remote directory: enumerate on a worker thread, deliver
     // subdirectories to the main loop, show real GIO errors on failure.
@@ -663,9 +696,23 @@ pub fn show_network_folder_browser(
         let load_slot = load_slot.clone();
         let contains_mountables_for_load = contains_mountables.clone();
         let dialog_window_for_load = dialog.clone();
+        let history_for_load = history.clone();
+        let back_active_for_load = back_active.clone();
+        let back_button_for_load = back_button.clone();
+        let browse_closed_for_load = browse_closed.clone();
         Rc::new(move |uri: String| {
             generation_for_load.set(generation_for_load.get() + 1);
             let my_generation = generation_for_load.get();
+            // Record the location being left for the Back stack. A Back load
+            // already consumes the top entry, so it must not push again.
+            let from_back = back_active_for_load.replace(false);
+            if !from_back {
+                let previous = current_for_load.borrow().clone();
+                if previous != uri {
+                    history_for_load.borrow_mut().push(previous);
+                }
+            }
+            back_button_for_load.set_sensitive(!history_for_load.borrow().is_empty());
             *current_for_load.borrow_mut() = uri.clone();
             path_for_load.set_text(&uri);
             error_for_load.set_visible(false);
@@ -797,6 +844,7 @@ pub fn show_network_folder_browser(
             let load_slot = load_slot.clone();
             let dialog_window_for_rows = dialog_window_for_load.clone();
             let contains_mountables_for_poll = contains_mountables_for_load.clone();
+            let browse_closed_for_rows = browse_closed_for_load.clone();
             let uri_for_poll = uri.clone();
             let generation_for_poll = generation_for_load.clone();
             glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
@@ -840,6 +888,8 @@ pub fn show_network_folder_browser(
                             let dialog_window_for_activate = dialog_window_for_rows.clone();
                             let error_for_activate = error_for_poll.clone();
                             let uri_for_activate = child_uri.clone();
+                            let row_mountable = mountable;
+                            let row_closed = browse_closed_for_rows.clone();
 
                             // Mouse path. Capture phase + attached to the row's
                             // child box: in GTK4 the click inside a GtkListBoxRow
@@ -853,6 +903,10 @@ pub fn show_network_folder_browser(
                                 crate::source::net_trace(format!(
                                     "browse_enter uri={uri_for_activate}"
                                 ));
+                                if row_closed.get() {
+                                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                                    return;
+                                }
                                 let parent_window =
                                     dialog_window_for_activate.clone().upcast::<gtk::Window>();
                                 let error = error_for_activate.clone();
@@ -861,23 +915,47 @@ pub fn show_network_folder_browser(
                                 let uri_for_load = uri_for_activate.clone();
                                 let uri_for_error = uri_for_activate.clone();
                                 let load_slot_for_mount = load_for_mount.clone();
+                                let closed_for_mount = row_closed.clone();
+                                // An NFS export root is mountable (it is a
+                                // GVolume), but a subdirectory of an export is
+                                // not: mounting it fails with "Location is not
+                                // mountable". Such a folder is listed through
+                                // the already-mounted export, so enumerate it
+                                // directly instead of mounting first. SMB keeps
+                                // the existing mount-then-list path untouched.
+                                let nfs_subdirectory =
+                                    uri_for_mount.starts_with("nfs://") && !row_mountable;
+                                if nfs_subdirectory {
+                                    if let Some(load) =
+                                        load_slot_for_mount.borrow().as_ref()
+                                    {
+                                        load(uri_for_load.clone());
+                                    }
+                                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                                    return;
+                                }
                                 crate::source::mount_share_async(
                                     &uri_for_mount,
                                     Some(&parent_window),
-                                    move |result| match result {
-                                        Ok(()) => {
-                                            if let Some(load) =
-                                                load_slot_for_mount.borrow().as_ref()
-                                            {
-                                                load(uri_for_load.clone());
-                                            }
+                                    move |result| {
+                                        if closed_for_mount.get() {
+                                            return;
                                         }
-                                        Err(message) => {
-                                            crate::source::net_trace(format!(
-                                                "browse_failed uri={uri_for_error} error={message}"
-                                            ));
-                                            error.set_text(&message);
-                                            error.set_visible(true);
+                                        match result {
+                                            Ok(()) => {
+                                                if let Some(load) =
+                                                    load_slot_for_mount.borrow().as_ref()
+                                                {
+                                                    load(uri_for_load.clone());
+                                                }
+                                            }
+                                            Err(message) => {
+                                                crate::source::net_trace(format!(
+                                                    "browse_failed uri={uri_for_error} error={message}"
+                                                ));
+                                                error.set_text(&message);
+                                                error.set_visible(true);
+                                            }
                                         }
                                     },
                                 );
@@ -893,10 +971,15 @@ pub fn show_network_folder_browser(
                             let dialog_window_for_key = dialog_window_for_rows.clone();
                             let error_for_key = error_for_poll.clone();
                             let uri_for_key = child_uri.clone();
+                            let key_mountable = mountable;
+                            let key_closed = browse_closed_for_rows.clone();
                             row.connect_activate(move |_| {
                                 crate::source::net_trace(format!(
                                     "browse_enter_key uri={uri_for_key}"
                                 ));
+                                if key_closed.get() {
+                                    return;
+                                }
                                 let parent_window =
                                     dialog_window_for_key.clone().upcast::<gtk::Window>();
                                 let error = error_for_key.clone();
@@ -904,20 +987,39 @@ pub fn show_network_folder_browser(
                                 let uri_for_mount = uri_for_key.clone();
                                 let uri_for_load = uri_for_key.clone();
                                 let load_slot_for_mount = load_for_mount.clone();
+                                let closed_for_mount = key_closed.clone();
+                                // Same NFS rule as the mouse path: only export
+                                // roots are mountable; subdirectories enumerate
+                                // directly through the mounted export.
+                                let nfs_subdirectory =
+                                    uri_for_mount.starts_with("nfs://") && !key_mountable;
+                                if nfs_subdirectory {
+                                    if let Some(load) =
+                                        load_slot_for_mount.borrow().as_ref()
+                                    {
+                                        load(uri_for_load.clone());
+                                    }
+                                    return;
+                                }
                                 crate::source::mount_share_async(
                                     &uri_for_mount,
                                     Some(&parent_window),
-                                    move |result| match result {
-                                        Ok(()) => {
-                                            if let Some(load) =
-                                                load_slot_for_mount.borrow().as_ref()
-                                            {
-                                                load(uri_for_load.clone());
-                                            }
+                                    move |result| {
+                                        if closed_for_mount.get() {
+                                            return;
                                         }
-                                        Err(message) => {
-                                            error.set_text(&message);
-                                            error.set_visible(true);
+                                        match result {
+                                            Ok(()) => {
+                                                if let Some(load) =
+                                                    load_slot_for_mount.borrow().as_ref()
+                                                {
+                                                    load(uri_for_load.clone());
+                                                }
+                                            }
+                                            Err(message) => {
+                                                error.set_text(&message);
+                                                error.set_visible(true);
+                                            }
                                         }
                                     },
                                 );
@@ -960,6 +1062,22 @@ pub fn show_network_folder_browser(
     };
     *load_slot.borrow_mut() = Some(load_uri.clone());
 
+    // Back navigation: pop the most recent visited location.
+    {
+        let load = load_uri.clone();
+        let history = history.clone();
+        let back_active = back_active.clone();
+        let back_button = back_button.clone();
+        back_button.connect_clicked(move |_| {
+            let target = history.borrow_mut().pop();
+            if let Some(target) = target {
+                back_active.set(true);
+                crate::source::net_trace(format!("browse_back uri={target}"));
+                load(target);
+            }
+        });
+    }
+
     // Up navigation.
     {
         let load = load_uri.clone();
@@ -999,14 +1117,46 @@ pub fn show_network_folder_browser(
         });
     }
 
-    // Cancel pending enumeration when the dialog goes away.
+    // Cancel pending enumeration and invalidate in-flight polls when the dialog
+    // goes away. The X button, Cancel and a completed Select all end here; only
+    // a Cancel response is traced as a user cancellation. The generation bump
+    // makes any still-polling load_uri callback stop on its next tick.
     {
-        let cancellable = cancellable.clone();
+        let close_closed = browse_closed.clone();
+        let close_cancellable = cancellable.clone();
+        let close_generation = generation.clone();
         dialog.connect_close_request(move |_| {
-            if let Some(cancellable) = cancellable.borrow().as_ref() {
+            close_closed.set(true);
+            close_generation.set(close_generation.get() + 1);
+            if let Some(cancellable) = close_cancellable.borrow().as_ref() {
                 cancellable.cancel();
             }
             glib::Propagation::Proceed
+        });
+        let response_closed = browse_closed.clone();
+        let response_cancellable = cancellable.clone();
+        let response_generation = generation.clone();
+        dialog.connect_response(move |dialog, response| {
+            match response {
+                gtk::ResponseType::Cancel => {
+                    crate::source::net_trace("browse_cancelled");
+                    response_closed.set(true);
+                    response_generation.set(response_generation.get() + 1);
+                    if let Some(cancellable) = response_cancellable.borrow().as_ref() {
+                        cancellable.cancel();
+                    }
+                    dialog.close();
+                }
+                gtk::ResponseType::DeleteEvent => {
+                    crate::source::net_trace("browse_closed");
+                    response_closed.set(true);
+                    response_generation.set(response_generation.get() + 1);
+                    if let Some(cancellable) = response_cancellable.borrow().as_ref() {
+                        cancellable.cancel();
+                    }
+                }
+                _ => {}
+            }
         });
     }
 
