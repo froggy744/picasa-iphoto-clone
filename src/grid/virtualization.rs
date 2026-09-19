@@ -1301,6 +1301,20 @@ impl Gallery {
     /// measurements, and the Folder stream swap-in that follows is backgrounded.
     pub fn replace_scoped_folder(&self, photos: &[Photo]) {
         if self.group_mode.get() == GroupMode::Folder {
+            // Large scoped folders no longer splice every tile
+            // synchronously (a 2.4k-photo folder stalled the main thread
+            // for ~275ms): the first chunk installs in this click handler,
+            // the remainder appends in idle batches through the same
+            // machinery as the progressive library stream. The grid is
+            // never empty, unlike the plain progressive path this replaces.
+            const SCOPED_SYNC_CHUNK: usize = 600;
+            if photos.len() > SCOPED_SYNC_CHUNK {
+                let generation = self.replace_generation.get().wrapping_add(1);
+                self.replace_generation.set(generation);
+                self.stream_building.set(true);
+                self.replace_progressive(photos.to_vec(), generation, SCOPED_SYNC_CHUNK);
+                return;
+            }
             self.replace_inner(photos, false, false);
         } else {
             self.replace(photos);
@@ -1398,8 +1412,7 @@ impl Gallery {
         // batches for library-sized replacements.
         const PROGRESSIVE_REPLACE_THRESHOLD: usize = 1_000;
         if allow_progressive && photos.len() > PROGRESSIVE_REPLACE_THRESHOLD {
-
-            self.replace_progressive(photos.to_vec(), generation);
+            self.replace_progressive(photos.to_vec(), generation, 0);
             return;
         }
 
@@ -1450,6 +1463,7 @@ impl Gallery {
         &self,
         photos: Vec<Photo>,
         generation: u64,
+        sync_first_chunk: usize,
     ) {
         // Larger batches finish the model build in far fewer main-loop hops.
         // Each hop is scheduled at idle priority, so with 500-photo batches a
@@ -1458,8 +1472,25 @@ impl Gallery {
         const BATCH_SIZE: usize = 2_000;
 
         let photos = Rc::new(photos);
-        let offset = Rc::new(Cell::new(0usize));
-        let initialized = Rc::new(Cell::new(false));
+        let mut offset_value = 0usize;
+        // A synchronous first chunk populates the grid immediately: scoped
+        // folder views install their first tiles in the click handler itself
+        // and never show an empty grid while the idle batches catch up.
+        if sync_first_chunk > 0 && photos.len() > sync_first_chunk {
+            let objects: Vec<PhotoObject> = photos[..sync_first_chunk]
+                .iter()
+                .map(PhotoObject::from_photo)
+                .collect();
+            if !self.collage_selection_mode.get() {
+                (self.selected)(None);
+            }
+            self.current_photos.replace(objects.clone());
+            self.store.splice(0, self.store.n_items(), &objects);
+            offset_value = sync_first_chunk;
+        }
+        let photos = Rc::new(photos);
+        let offset = Rc::new(Cell::new(offset_value));
+        let initialized = Rc::new(Cell::new(offset_value > 0));
         let store = self.store.clone();
         let selected = self.selected.clone();
         let current_photos = self.current_photos.clone();

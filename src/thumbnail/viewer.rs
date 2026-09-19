@@ -253,7 +253,11 @@ where
             (image, target_width, target_height)
         }
     } else if is_jpeg(reference) {
-        let bytes = crate::source::read(reference)?;
+        // exif_orientation already materialized this file above; the second
+        // materialize is a local cache hit, so the original is fetched over
+        // the network exactly once per viewer decode.
+        let local = crate::source::materialize(reference)?;
+        let bytes = std::fs::read(&local)?;
         let (source_width, source_height) = jpeg_dimensions(&bytes)?;
         let (target_width, target_height) = viewer_target_dimensions(
             source_width,
@@ -275,7 +279,8 @@ where
             target_height,
         )
     } else if is_heif(reference) {
-        let bytes = crate::source::read(reference)?;
+        let local = crate::source::materialize(reference)?;
+        let bytes = std::fs::read(&local)?;
         check_viewer_cancelled(&cancelled, "before_heif_decode")?;
         let decoded = decode_heif(&bytes)?;
         check_viewer_cancelled(&cancelled, "after_heif_decode")?;
@@ -291,7 +296,8 @@ where
         );
         (image, target_width, target_height)
     } else {
-        let bytes = crate::source::read(reference)?;
+        let local = crate::source::materialize(reference)?;
+        let bytes = std::fs::read(&local)?;
         let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
         check_viewer_cancelled(&cancelled, "before_generic_decode")?;
         let image = reader.decode()?;
