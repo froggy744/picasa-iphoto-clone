@@ -555,7 +555,9 @@ pub fn build(
     share_scroll.set_hexpand(true);
     share_scroll.set_vexpand(true);
     share_scroll.set_child(Some(&share_list));
-    unsafe { outer.set_data(SHARE_SCROLL_KEY, share_scroll.clone()); }
+    unsafe {
+        outer.set_data(SHARE_SCROLL_KEY, share_scroll.clone());
+    }
     let share_section = gtk::Box::new(gtk::Orientation::Vertical, 0);
     share_section.set_hexpand(true);
     share_section.set_vexpand(true);
@@ -594,8 +596,11 @@ pub fn build(
         let animating = folder_animating.clone();
         folder_share_paned.connect_position_notify(move |paned| {
             let position = paned.position();
-            if state.borrow().folders_expanded && !animating.get()
-                && paned.start_child().is_some() && position > 0 {
+            if state.borrow().folders_expanded
+                && !animating.get()
+                && paned.start_child().is_some()
+                && position > 0
+            {
                 saved.set(position);
             }
         });
@@ -610,12 +615,18 @@ pub fn build(
         let animating = folder_animating.clone();
         let generation = folder_generation.clone();
         Rc::new(move |expanded| {
-            if state.borrow().folders_expanded == expanded { return; }
+            if state.borrow().folders_expanded == expanded {
+                return;
+            }
             if !expanded && !animating.get() && paned.position() > 0 {
                 saved.set(paned.position());
             }
             state.borrow_mut().folders_expanded = expanded;
-            indicator.set_icon_name(if expanded { "pan-down-symbolic" } else { "pan-end-symbolic" });
+            indicator.set_icon_name(if expanded {
+                "pan-down-symbolic"
+            } else {
+                "pan-end-symbolic"
+            });
             indicator.set_tooltip_text(Some(if expanded { "Collapse" } else { "Expand" }));
             let current = generation.get().wrapping_add(1);
             generation.set(current);
@@ -628,8 +639,15 @@ pub fn build(
                 }
                 let from = paned.position().max(0);
                 revealer.set_reveal_child(true);
-                animate_sidebar_pane_position(&paned, from, saved.get().max(0),
-                    generation.clone(), current, animating.clone(), None);
+                animate_sidebar_pane_position(
+                    &paned,
+                    from,
+                    saved.get().max(0),
+                    generation.clone(),
+                    current,
+                    animating.clone(),
+                    None,
+                );
             } else {
                 let from = paned.position().max(0);
                 revealer.set_reveal_child(false);
@@ -642,8 +660,15 @@ pub fn build(
                         revealer_finish.set_reveal_child(false);
                     }
                 });
-                animate_sidebar_pane_position(&paned, from, 0,
-                    generation.clone(), current, animating.clone(), Some(finish));
+                animate_sidebar_pane_position(
+                    &paned,
+                    from,
+                    0,
+                    generation.clone(),
+                    current,
+                    animating.clone(),
+                    Some(finish),
+                );
             }
         })
     };
@@ -686,9 +711,15 @@ pub fn build(
         let animating = share_animating.clone();
         let generation = share_generation.clone();
         Rc::new(move |expanded| {
-            if state.borrow().shares_expanded == expanded { return; }
+            if state.borrow().shares_expanded == expanded {
+                return;
+            }
             state.borrow_mut().shares_expanded = expanded;
-            indicator.set_icon_name(if expanded { "pan-down-symbolic" } else { "pan-end-symbolic" });
+            indicator.set_icon_name(if expanded {
+                "pan-down-symbolic"
+            } else {
+                "pan-end-symbolic"
+            });
             indicator.set_tooltip_text(Some(if expanded { "Collapse" } else { "Expand" }));
             let current = generation.get().wrapping_add(1);
             generation.set(current);
@@ -704,10 +735,19 @@ pub fn build(
                 let target = saved.get().max(0);
                 let folder_animating = folder_animating.clone();
                 let finish: Rc<dyn Fn()> = Rc::new(move || folder_animating.set(false));
-                animate_sidebar_pane_position(&paned, from, target,
-                    generation.clone(), current, animating.clone(), Some(finish));
+                animate_sidebar_pane_position(
+                    &paned,
+                    from,
+                    target,
+                    generation.clone(),
+                    current,
+                    animating.clone(),
+                    Some(finish),
+                );
             } else {
-                if state.borrow().folders_expanded && from > 0 { saved.set(from); }
+                if state.borrow().folders_expanded && from > 0 {
+                    saved.set(from);
+                }
                 revealer.set_reveal_child(false);
                 revealer.set_vexpand(false);
                 section.set_vexpand(false);
@@ -716,13 +756,22 @@ pub fn build(
                 let animating = animating.clone();
                 let folder_animating = folder_animating.clone();
                 glib::idle_add_local_once(move || {
-                    if generation.get() != current { return; }
+                    if generation.get() != current {
+                        return;
+                    }
                     // GTK has now measured the remaining visible heading.
                     let target = paned.max_position().max(from);
                     let folder_animating_finish = folder_animating.clone();
                     let finish: Rc<dyn Fn()> = Rc::new(move || folder_animating_finish.set(false));
-                    animate_sidebar_pane_position(&paned, from, target,
-                        generation, current, animating, Some(finish));
+                    animate_sidebar_pane_position(
+                        &paned,
+                        from,
+                        target,
+                        generation,
+                        current,
+                        animating,
+                        Some(finish),
+                    );
                 });
             }
         })
@@ -758,7 +807,9 @@ pub fn build(
         let saved = saved_folder_position.clone();
         let applied = Rc::new(Cell::new(false));
         folder_share_paned.connect_map(move |_| {
-            if applied.replace(true) { return; }
+            if applied.replace(true) {
+                return;
+            }
             let paned = paned.clone();
             let saved = saved.clone();
             glib::idle_add_local_once(move || {
@@ -1596,25 +1647,27 @@ pub fn scroll_to_network_share(scrolled: &gtk::ScrolledWindow, share_id: i64) {
         let Some(list) = stored_widget::<gtk::ListBox>(&sidebar, SHARE_LIST_KEY) else {
             return;
         };
-        let Some(share_scroll) = stored_widget::<gtk::ScrolledWindow>(&sidebar, SHARE_SCROLL_KEY) else {
+        let Some(share_scroll) = stored_widget::<gtk::ScrolledWindow>(&sidebar, SHARE_SCROLL_KEY)
+        else {
             return;
         };
         let mut child = list.first_child();
         while let Some(widget) = child {
             let next = widget.next_sibling();
             if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
-                let matches = unsafe { row.data::<SidebarFilter>("picasa-filter") }
-                    .is_some_and(|filter| unsafe { *filter.as_ref() == SidebarFilter::Folder(share_id) });
+                let matches = unsafe { row.data::<SidebarFilter>("picasa-filter") }.is_some_and(
+                    |filter| unsafe { *filter.as_ref() == SidebarFilter::Folder(share_id) },
+                );
                 if matches {
                     let scroll_widget = share_scroll.clone().upcast::<gtk::Widget>();
-                    if let Some(point) = row.compute_point(
-                        &scroll_widget, &gtk::graphene::Point::new(0.0, 0.0),
-                    ) {
+                    if let Some(point) =
+                        row.compute_point(&scroll_widget, &gtk::graphene::Point::new(0.0, 0.0))
+                    {
                         let adjustment = share_scroll.vadjustment();
                         let target = adjustment.value() + f64::from(point.y())
                             - adjustment.page_size() / 3.0;
-                        let maximum = (adjustment.upper() - adjustment.page_size())
-                            .max(adjustment.lower());
+                        let maximum =
+                            (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
                         adjustment.set_value(target.clamp(adjustment.lower(), maximum));
                     }
                     row.grab_focus();
