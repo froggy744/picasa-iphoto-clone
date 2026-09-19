@@ -828,10 +828,18 @@ pub fn materialize(reference: &str) -> Result<PathBuf> {
 }
 
 fn materialize_inner(reference: &str) -> Result<PathBuf> {
+    // Normalize BEFORE the local-passthrough check: legacy gvfs-FUSE paths
+    // (/run/user/.../gvfs/smb-share:...) contain no "://" and would be
+    // treated as local files. When the gvfs mount is stale, every std::fs
+    // operation on such a path blocks indefinitely (Fedora v19: lightbox
+    // decodes hung forever inside exif_orientation's materialize call). The
+    // normalized smb:// URI downloads through the transport into the local
+    // cache instead - std::fs never touches a FUSE path.
+    let reference = crate::smb_transport::normalize_smb_reference(reference);
     if !reference.contains("://") {
-        return Ok(PathBuf::from(reference));
+        return Ok(PathBuf::from(&reference));
     }
-    let extension = Path::new(reference)
+    let extension = Path::new(&reference)
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("raw");
@@ -845,7 +853,7 @@ fn materialize_inner(reference: &str) -> Result<PathBuf> {
     if !path.is_file() {
         let parent = path.parent().expect("cached source has a parent");
         fs::create_dir_all(parent)?;
-        fs::write(&path, read(reference)?)?;
+        fs::write(&path, read(&reference)?)?;
     }
     Ok(path)
 }
