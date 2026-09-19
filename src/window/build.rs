@@ -2785,31 +2785,40 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let on_connect: Rc<dyn Fn(String, String)> = Rc::new(move |name, browse_root| {
             let parent = parent_window.clone().upcast::<gtk::Widget>();
             crate::source::net_trace(format!("connect_requested uri={browse_root}"));
+            // Normalize the connection root BEFORE mounting: resolve network://
+            // discovery shortcuts, guarantee a trailing slash, and for NFS
+            // strip the advertised service port (nfs://host:2049/export is a
+            // service endpoint, not a mountable export - GIO mounts
+            // nfs://host/export).
+            let chooser_root = crate::source::network_browse_root(&browse_root);
+            if !chooser_root.contains("://") || !chooser_root.ends_with('/') {
+                let message = format!(
+                    "could not browse {browse_root}: not a valid network location"
+                );
+                crate::source::net_trace(format!(
+                    "browse_failed uri={browse_root} error={message}"
+                ));
+                show_error(&parent, "Could not open network share", &message);
+                sidebar_refresh();
+                return;
+            }
+            crate::source::net_trace(format!("connect_root normalized={chooser_root}"));
             let connection = connection.clone();
             let scan_job = scan_job.clone();
             let start_next_scan = start_next_scan.clone();
             let sidebar_refresh = sidebar_refresh.clone();
             let parent_window = parent_window.clone();
             let mount_parent = parent_window.clone().upcast::<gtk::Window>();
-            let browse_root_for_mount = browse_root.clone();
-            crate::source::mount_share_async(&browse_root_for_mount, Some(&mount_parent), move |result| {
+            let root_for_mount = chooser_root.clone();
+            let parent_for_mount_error = parent.clone();
+            let parent_widget = parent_window.clone().upcast::<gtk::Widget>();
+            let parent_for_register = parent.clone();
+            crate::source::mount_share_async(&root_for_mount, Some(&mount_parent), move |result| {
                 if let Err(message) = result {
-                    show_error(&parent, "Could not connect to network share", &message);
-                    sidebar_refresh();
-                    return;
-                }
-                // Normalize the browse root (network:// discovery shortcuts
-                // resolve to their concrete target URI; smb:// / nfs:// roots
-                // stay canonical with a trailing slash).
-                let chooser_root = crate::source::network_browse_root(&browse_root);
-                if !chooser_root.contains("://") || !chooser_root.ends_with('/') {
-                    let message = format!(
-                        "could not browse {browse_root}: not a valid network location"
-                    );
-                    crate::source::net_trace(format!(
-                        "browse_failed uri={browse_root} error={message}"
-                    ));
-                    show_error(&parent, "Could not open network share", &message);
+                    // The real GIO/GVfs error text is included in `message`, so
+                    // a failed NFS mount shows why instead of silently falling
+                    // through to an empty browser.
+                    show_error(&parent_for_mount_error, "Could not connect to network share", &message);
                     sidebar_refresh();
                     return;
                 }
@@ -2823,8 +2832,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 let scan_job = scan_job.clone();
                 let start_next_scan = start_next_scan.clone();
                 let sidebar_refresh = sidebar_refresh.clone();
-                let parent = parent.clone();
-                let parent_widget = parent_window.clone().upcast::<gtk::Widget>();
+                let parent = parent_for_register.clone();
                 show_network_folder_browser(
                     parent_widget,
                     chooser_root,

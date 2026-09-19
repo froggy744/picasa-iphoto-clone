@@ -117,10 +117,16 @@ fn install_close_confirmation(window: &adw::ApplicationWindow) {
 
 }
 
-/// Phase 1 "Add Network Share" dialog (SMB only): a display name, a server
-/// (host or host:port) and a share name are combined into `smb://server/share`
-/// and handed to `on_added`. Nothing here mounts, sudo's or touches fstab:
-/// enumeration and reads go through PIC's GIO source layer.
+/// Phase 1 "Add Network Share" dialog: a display name, a protocol, a server
+/// (host or host:port) and a share/export name are combined into a canonical
+/// `smb://server/share` or `nfs://server/export` URI and handed to `on_connect`.
+/// Nothing here mounts, sudo's or touches fstab: enumeration and reads go
+/// through PIC's GIO source layer.
+///
+/// Discovery runs asynchronously and must populate the list on the FIRST open.
+/// A visible spinner covers the scan, empty/error states explain a bare
+/// result, and a `closed` flag stops stale poll callbacks from touching a
+/// dialog that was dismissed.
 pub fn show_add_network_share_dialog(
     parent: gtk::Widget,
     on_connect: Rc<dyn Fn(String, String)>,
@@ -137,10 +143,25 @@ pub fn show_add_network_share_dialog(
         dialog.set_transient_for(Some(window));
     }
     dialog.set_modal(true);
-    dialog.set_default_width(440);
+    // Generous, resizable initial size: the discovered-locations list owns the
+    // free vertical space (below) and expands as the window grows.
+    dialog.set_default_size(560, 680);
+    dialog.set_resizable(true);
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
     let connect_button = dialog.add_button("Connect", gtk::ResponseType::Accept);
     dialog.set_default_response(gtk::ResponseType::Accept);
+
+    // Stops the discovery poll from mutating a closed/destroyed dialog: set on
+    // every close path (Cancel, window X, successful Connect).
+    let dialog_closed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    {
+        let closed = dialog_closed.clone();
+        dialog.connect_close_request(move |_| {
+            crate::source::net_trace("discovery_ui_closed_flag");
+            closed.set(true);
+            glib::Propagation::Proceed
+        });
+    }
 
     let content = dialog.content_area();
     content.set_spacing(10);
@@ -149,12 +170,9 @@ pub fn show_add_network_share_dialog(
     content.set_margin_start(14);
     content.set_margin_end(14);
 
-    let grid = gtk::Grid::new();
-    grid.set_row_spacing(8);
-    grid.set_column_spacing(10);
-
     // Protocol: SMB/CIFS and NFS share the same gvfs pipeline; CIFS is handled
-    // by the SMB backend, so there are exactly two choices here.
+    // by the SMB backend, so there are exactly two choices here. NFS differs
+    // only in how the path is read (an export path, not a share name).
     let protocol = gtk::DropDown::from_strings(&["SMB / CIFS", "NFS"]);
     protocol.set_selected(0);
 
@@ -168,6 +186,9 @@ pub fn show_add_network_share_dialog(
     let server_entry = make_entry("192.168.1.20 or nas.local");
     let share_entry = make_entry("Photos (leave empty to browse all shares)");
 
+    let grid = gtk::Grid::new();
+    grid.set_row_spacing(8);
+    grid.set_column_spacing(10);
     let key = gtk::Label::new(Some("Protocol"));
     key.set_xalign(0.0);
     key.add_css_class("dim-label");
@@ -185,8 +206,8 @@ pub fn show_add_network_share_dialog(
     content.append(&grid);
 
     // Discovered locations (network:// via gvfs). Best-effort: runs in the
-    // background with a ~3s timeout, fills the list as results arrive, and an
-    // empty result never blocks manual entry.
+    // background, fills the list as results arrive, and an empty result never
+    // blocks manual entry.
     // When the user picks a discovered location, its gvfs-supplied URI is
     // used as-is for Connect (gvfs resolves dnssd/wsdd names to the real
     // host). Manual typing clears it and falls back to building the URI from
@@ -201,8 +222,10 @@ pub fn show_add_network_share_dialog(
     discovered_list.add_css_class("navigation-sidebar");
     let discovered_scroll = gtk::ScrolledWindow::new();
     discovered_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    discovered_scroll.set_max_content_height(110);
-    discovered_scroll.set_propagate_natural_height(true);
+    // The list owns the free vertical space: it expands with the window and
+    // scrolls on its own instead of squeezing into a fixed 110px strip.
+    discovered_scroll.set_vexpand(true);
+    discovered_scroll.set_min_content_height(240);
     discovered_scroll.set_child(Some(&discovered_list));
     discovered_scroll.set_visible(false);
     let discovered_header = gtk::Label::new(Some("Discovered locations"));
@@ -212,11 +235,49 @@ pub fn show_add_network_share_dialog(
     content.append(&discovered_header);
     content.append(&discovered_scroll);
 
+    // Loading indicator while discovery runs, then empty/error notes.
+    let discovery_status_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    discovery_status_box.set_hexpand(true);
+    let discovery_spinner = gtk::Spinner::new();
+    discovery_spinner.set_hexpand(false);
+    discovery_spinner.start();
+    let discovery_status = gtk::Label::new(Some("Discovering network locations…"));
+    discovery_status.set_xalign(0.0);
+    discovery_status.set_hexpand(true);
+    discovery_status.add_css_class("dim-label");
+    discovery_status_box.append(&discovery_spinner);
+    discovery_status_box.append(&discovery_status);
+    content.append(&discovery_status_box);
+
+    let discovery_note = gtk::Label::new(None);
+    discovery_note.set_xalign(0.0);
+    discovery_note.set_wrap(true);
+    discovery_note.add_css_class("dim-label");
+    discovery_note.set_visible(false);
+    content.append(&discovery_note);
+
+    let hint = gtk::Label::new(Some(
+        "Connects through the system's network services (guest or saved credentials). Enter a Share to jump straight into it, or leave it empty to browse all shares - then pick the folder with your photos. For NFS, enter the export path (for example mnt or export/photos).",
+    ));
+    hint.set_xalign(0.0);
+    hint.set_wrap(true);
+    hint.add_css_class("dim-label");
+    content.append(&hint);
+
+    // Discovery poll: drains the worker channel on the GTK main thread, then
+    // stops. A closed dialog halts the poll on its next tick, the spinner is
+    // replaced by the list or an explicit empty/error state.
+    crate::source::net_trace("discovery_ui_started");
     {
         let receiver = crate::source::discover_network_locations();
         let list = discovered_list.clone();
         let header = discovered_header.clone();
         let scroll = discovered_scroll.clone();
+        let status_box = discovery_status_box.clone();
+        let spinner = discovery_spinner.clone();
+        let status = discovery_status.clone();
+        let note = discovery_note.clone();
+        let closed = dialog_closed.clone();
         let server_for_rows = server_entry.clone();
         let share_for_rows = share_entry.clone();
         let protocol_for_rows = protocol.clone();
@@ -226,114 +287,168 @@ pub fn show_add_network_share_dialog(
         let first_smb_target = first_smb_target.clone();
         let name_for_rows = name_entry.clone();
         let on_connect_for_rows = on_connect.clone();
+        let mut items_added = 0u32;
         glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-            match receiver.try_recv() {
-                Ok(crate::source::NetworkDiscoveryEvent::Item(name, uri)) => {
-                    // Remember the first SMB target: pressing Connect without
-                    // typing connects to it (discovery convenience).
-                    if first_smb_target.borrow().is_none() && uri.starts_with("smb://") {
-                        *first_smb_target.borrow_mut() = Some(uri.clone());
-                    }
-                    if !header.is_visible() {
-                        header.set_visible(true);
-                        scroll.set_visible(true);
-                    }
-                    let row = gtk::ListBoxRow::new();
-                    row.set_focusable(true);
-                    let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                    box_.set_margin_top(2);
-                    box_.set_margin_bottom(2);
-                    let icon = gtk::Image::from_icon_name("folder-remote-symbolic");
-                    icon.set_pixel_size(14);
-                    box_.append(&icon);
-                    let label = gtk::Label::new(Some(&name));
-                    label.set_xalign(0.0);
-                    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                    label.set_hexpand(true);
-                    box_.append(&label);
-                    row.set_child(Some(&box_));
-                    row.set_tooltip_text(Some(&uri));
-                    // Use the URI gvfs supplied. Discovered entries look like
-                    // network:///dnssd-server-DIETPI._smb._tcp - extract the
-                    // server name and service type so the entries get clean
-                    // values (server = name, protocol = service type).
-                    let server_for_row = server_for_rows.clone();
-                    let protocol_for_row = protocol_for_rows.clone();
-                    let share_for_row = share_for_rows.clone();
-                    let discovered_for_row = discovered_for_rows.clone();
-                    let updating = updating_for_rows.clone();
-                    let decoded = glib::uri_unescape_string(uri.as_str(), None::<&str>)
-                        .unwrap_or_else(|| uri.clone().into());
-                    let click = gtk::GestureClick::new();
-                    crate::source::net_trace(format!(
-                        "discovery_row_clicked name={name} uri={uri}"
-                    ));
-                    click.connect_pressed(move |gesture, _, _, _| {
-                        // Remember the gvfs URI; Connect will use it verbatim.
-                        *discovered_for_row.borrow_mut() = Some(decoded.to_string());
-                        updating.set(true);
-                        // Protocol from the service type: NFS announcements get
-                        // the nfs scheme; everything else rides SMB.
-                        if decoded.contains("._nfs.") || decoded.starts_with("nfs://") {
-                            protocol_for_row.set_selected(1);
-                        } else {
-                            protocol_for_row.set_selected(0);
-                        }
-                        // Fill the fields with the PARSED target (host + first
-                        // path segment) so they stay clean and resolvable even
-                        // if the stored URI is later cleared.
-                        let host = crate::source::network_uri_host(&uri);
-                        server_for_row.set_text(&host);
-                        let path = uri.split("://").nth(1).and_then(|rest| rest.split_once('/').map(|(_, p)| p));
-                        if let Some(share) = path {
-                            let first = share.split('/').next().unwrap_or("");
-                            if !first.is_empty() {
-                                share_for_row.set_text(first);
-                            }
-                        }
-                        updating.set(false);
-                        gesture.set_state(gtk::EventSequenceState::Claimed);
-                    });
-                    row.add_controller(click);
-                    row.set_focusable(true);
-                    // Keyboard users: Enter on a focused row connects directly.
-                    let name_for_activate = name_for_rows.clone();
-                    let on_connect_for_row = on_connect_for_rows.clone();
-                    row.connect_activate(move |row| {
-                        let uri = row
-                            .tooltip_text()
-                            .map(|tooltip| tooltip.to_string())
-                            .unwrap_or_default();
-                        crate::source::net_trace(format!(
-                            "discovery_row_activated uri={uri}"
-                        ));
-                        let name = name_for_activate.text().trim().to_string();
-                        on_connect_for_row(name, uri);
-                    });
-                    list.append(&row);
-                    // Give the list keyboard focus as soon as the first result
-                    // arrives, so arrows + Enter drive discovery.
-                    if !list_focus_set.get() {
-                        list_focus_set.set(true);
-                        list.select_row(Some(&row));
-                        list.grab_focus();
-                    }
-                    glib::ControlFlow::Continue
-                }
-                Ok(crate::source::NetworkDiscoveryEvent::Done(_)) => glib::ControlFlow::Break,
-                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            if closed.get() {
+                crate::source::net_trace("discovery_ui_stopped_closed");
+                return glib::ControlFlow::Break;
             }
+            for _ in 0..25 {
+                match receiver.try_recv() {
+                    Ok(crate::source::NetworkDiscoveryEvent::Item(name, uri)) => {
+                        items_added += 1;
+                        crate::source::net_trace(format!(
+                            "discovery_ui_item n={items_added} uri={uri}"
+                        ));
+                        // Remember the first SMB target: pressing Connect without
+                        // typing connects to it (discovery convenience).
+                        if first_smb_target.borrow().is_none() && uri.starts_with("smb://") {
+                            *first_smb_target.borrow_mut() = Some(uri.clone());
+                        }
+                        // First result: switch from the spinner to the list.
+                        if !header.is_visible() {
+                            header.set_visible(true);
+                            scroll.set_visible(true);
+                            status_box.set_visible(false);
+                            spinner.stop();
+                        }
+                        let row = gtk::ListBoxRow::new();
+                        row.set_focusable(true);
+                        let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                        box_.set_margin_top(6);
+                        box_.set_margin_bottom(6);
+                        let icon = gtk::Image::from_icon_name("folder-remote-symbolic");
+                        icon.set_pixel_size(18);
+                        box_.append(&icon);
+                        let label = gtk::Label::new(Some(&name));
+                        label.set_xalign(0.0);
+                        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                        label.set_hexpand(true);
+                        box_.append(&label);
+                        row.set_child(Some(&box_));
+                        row.set_tooltip_text(Some(&uri));
+                        // Use the URI gvfs supplied (NFS already normalized by
+                        // the discovery worker, so no :2049 service port gets
+                        // stored). Discovered entries look like
+                        // network:///dnssd-server-DIETPI._smb._tcp - extract
+                        // the server name and service type so the entries get
+                        // clean values (server = name, protocol = service type).
+                        let server_for_row = server_for_rows.clone();
+                        let protocol_for_row = protocol_for_rows.clone();
+                        let share_for_row = share_for_rows.clone();
+                        let discovered_for_row = discovered_for_rows.clone();
+                        let updating = updating_for_rows.clone();
+                        let decoded = glib::uri_unescape_string(uri.as_str(), None::<&str>)
+                            .unwrap_or_else(|| uri.clone().into());
+                        let click = gtk::GestureClick::new();
+                        crate::source::net_trace(format!(
+                            "discovery_row_clicked name={name} uri={uri}"
+                        ));
+                        click.connect_pressed(move |gesture, _, _, _| {
+                            // NFS topics are service endpoints
+                            // (nfs://host:2049/export); Connect must mount the
+                            // export root nfs://host/export, never the RPC port.
+                            let is_nfs = decoded.starts_with("nfs://")
+                                || decoded.contains("._nfs.");
+                            let effective = if is_nfs {
+                                crate::source::normalize_nfs_uri(&decoded)
+                            } else {
+                                decoded.to_string()
+                            };
+                            // Remember the gvfs URI; Connect will use it verbatim.
+                            *discovered_for_row.borrow_mut() = Some(effective.clone());
+                            updating.set(true);
+                            // Protocol from the service type: NFS announcements
+                            // get the nfs scheme; everything else rides SMB.
+                            if is_nfs {
+                                protocol_for_row.set_selected(1);
+                            } else {
+                                protocol_for_row.set_selected(0);
+                            }
+                            // Fill the fields with the PARSED target (host + path)
+                            // so they stay clean and resolvable even if the
+                            // stored URI is later cleared. NFS keeps the WHOLE
+                            // URI path as the export path; SMB keeps only the
+                            // first share segment.
+                            let host = crate::source::network_uri_host(&effective);
+                            server_for_row.set_text(&host);
+                            let path = effective
+                                .split("://")
+                                .nth(1)
+                                .and_then(|rest| rest.split_once('/').map(|(_, p)| p));
+                            if let Some(path) = path {
+                                let path = path.trim_end_matches('/');
+                                if is_nfs {
+                                    if !path.is_empty() {
+                                        share_for_row.set_text(path);
+                                    }
+                                } else {
+                                    let first = path.split('/').next().unwrap_or("");
+                                    if !first.is_empty() {
+                                        share_for_row.set_text(first);
+                                    }
+                                }
+                            }
+                            updating.set(false);
+                            gesture.set_state(gtk::EventSequenceState::Claimed);
+                        });
+                        row.add_controller(click);
+                        // Keyboard users: Enter on a focused row connects directly.
+                        let name_for_activate = name_for_rows.clone();
+                        let on_connect_for_row = on_connect_for_rows.clone();
+                        row.connect_activate(move |row| {
+                            let uri = row
+                                .tooltip_text()
+                                .map(|tooltip| tooltip.to_string())
+                                .unwrap_or_default();
+                            crate::source::net_trace(format!(
+                                "discovery_row_activated uri={uri}"
+                            ));
+                            let name = name_for_activate.text().trim().to_string();
+                            on_connect_for_row(name, uri);
+                        });
+                        list.append(&row);
+                        // Give the list keyboard focus as soon as the first result
+                        // arrives, so arrows + Enter drive discovery.
+                        if !list_focus_set.get() {
+                            list_focus_set.set(true);
+                            list.select_row(Some(&row));
+                            list.grab_focus();
+                        }
+                    }
+                    Ok(crate::source::NetworkDiscoveryEvent::Done(count)) => {
+                        crate::source::net_trace(format!(
+                            "discovery_ui_done count={count} shown={items_added}"
+                        ));
+                        if items_added == 0 {
+                            // Stop the spinner and leave an explicit,
+                            // actionable empty state instead of a blank dialog.
+                            spinner.stop();
+                            status.set_text("No network locations discovered.");
+                            note.set_text(
+                                "Enter the server address manually below, or check that the NAS \
+                                 is online and reachable on this network.",
+                            );
+                            note.set_visible(true);
+                        } else {
+                            status_box.set_visible(false);
+                        }
+                        return glib::ControlFlow::Break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        crate::source::net_trace("discovery_ui_disconnected");
+                        spinner.stop();
+                        status.set_text("Discovery could not start.");
+                        note.set_text("Enter the server address manually below.");
+                        note.set_visible(true);
+                        return glib::ControlFlow::Break;
+                    }
+                }
+            }
+            glib::ControlFlow::Continue
         });
     }
-
-    let hint = gtk::Label::new(Some(
-        "Connects through the system's network services (guest or saved credentials). Enter a Share to jump straight into it, or leave it empty to browse all shares - then pick the folder with your photos.",
-    ));
-    hint.set_xalign(0.0);
-    hint.set_wrap(true);
-    hint.add_css_class("dim-label");
-    content.append(&hint);
 
     let discovered_for_changed = discovered_uri.clone();
     let updating_for_changed = updating_fields.clone();
@@ -391,7 +506,8 @@ pub fn show_add_network_share_dialog(
             let discovered = discovered_uri.borrow().clone();
             if let Some(uri) = discovered {
                 // Discovered URIs are used verbatim: they already carry the
-                // correct scheme, host, port, and path that gvfs resolved.
+                // correct scheme, host and path that gvfs resolved, and NFS
+                // entries were normalized (no service port) at row-click time.
                 uri
             } else {
                 let scheme = if protocol.selected() == 1 { "nfs" } else { "smb" };
@@ -472,7 +588,9 @@ pub fn show_network_folder_browser(
         dialog.set_transient_for(Some(window));
     }
     dialog.set_modal(true);
-    dialog.set_default_size(640, 500);
+    // Large, resizable: the folder list below expands with the window.
+    dialog.set_default_size(700, 580);
+    dialog.set_resizable(true);
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
     let select_button = dialog
         .add_button("Select This Folder", gtk::ResponseType::Accept)
@@ -518,7 +636,7 @@ pub fn show_network_folder_browser(
     scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroll.set_hexpand(true);
     scroll.set_vexpand(true);
-    scroll.set_min_content_height(320);
+    scroll.set_min_content_height(380);
     scroll.set_child(Some(&list));
     content.append(&scroll);
 
@@ -697,8 +815,8 @@ pub fn show_network_folder_browser(
                             let row = gtk::ListBoxRow::new();
                             row.set_focusable(true);
                             let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                            box_.set_margin_top(2);
-                            box_.set_margin_bottom(2);
+                            box_.set_margin_top(6);
+                            box_.set_margin_bottom(6);
                             // Shares at a server root are mountable entries;
                             // give them the network icon so they are visually
                             // distinct from ordinary subfolders.
@@ -708,7 +826,7 @@ pub fn show_network_folder_browser(
                                 "folder-symbolic"
                             };
                             let icon = gtk::Image::from_icon_name(icon_name);
-                            icon.set_pixel_size(16);
+                            icon.set_pixel_size(18);
                             box_.append(&icon);
                             let label = gtk::Label::new(Some(&name));
                             label.set_xalign(0.0);
@@ -894,9 +1012,4 @@ pub fn show_network_folder_browser(
 
     load_uri(root_uri);
     dialog.present();
-}
-
-fn status_label_set(label: &gtk::Label, text: &str) {
-    label.set_text(text);
-    label.set_visible(true);
 }

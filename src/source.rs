@@ -41,7 +41,7 @@ fn query_exists(reference: &str, directory: bool) -> bool {
             Path::new(reference).is_file()
         };
     }
-    uri_query_exists(&file(reference))
+    uri_query_exists(&file(&normalize_nfs_uri(reference)))
 }
 
 /// Longest a remote existence probe may block. gvfs SMB/NFS lookups can stall
@@ -280,6 +280,11 @@ pub fn mount_share_async(
     parent: Option<&gtk::Window>,
     on_result: impl FnOnce(Result<(), String>) + 'static,
 ) {
+    // NFS discovery entries are service endpoints (`nfs://host:2049/export`);
+    // the GIO NFS backend mounts the plain `nfs://host/export` URI. Normalize
+    // before any mount/enclosing-mount check so a discovered NFS row and a
+    // stored ported URI mount successfully.
+    let reference = &normalize_nfs_uri(reference);
     let file = file(reference);
     net_trace(format!("mount_started uri={reference}"));
     let mount_operation = gtk::MountOperation::new(parent);
@@ -332,17 +337,21 @@ pub fn mount_share_async(
 
 fn describe_mount_error(reference: &str, error: &glib::Error) -> String {
     use gio::IOErrorEnum;
+    // Always carry the underlying GIO/GVfs error text: the friendly framing
+    // alone hides e.g. "The specified location is not supported" when a scheme
+    // backend is missing or a discovered NFS endpoint is malformed.
+    let detail = error.to_string();
     match error.kind() {
         Some(IOErrorEnum::NotFound) | Some(IOErrorEnum::NotMounted) => format!(
-            "server or share not found: {reference}. Check the server address and the share name."
+            "server or share not found: {reference}. Check the server address and the share name. ({detail})"
         ),
-        Some(IOErrorEnum::PermissionDenied) => {
-            format!("access denied for {reference}. Check the credentials for the share.")
-        }
-        Some(IOErrorEnum::TimedOut) => {
-            format!("the server did not respond in time: {reference}. Is the NAS online?")
-        }
-        _ => format!("{reference}: {error}"),
+        Some(IOErrorEnum::PermissionDenied) => format!(
+            "access denied for {reference}. Check the credentials for the share. ({detail})"
+        ),
+        Some(IOErrorEnum::TimedOut) => format!(
+            "the server did not respond in time: {reference}. Is the NAS online? ({detail})"
+        ),
+        _ => format!("{reference}: {detail}"),
     }
 }
 
@@ -359,6 +368,43 @@ pub fn network_uri_host(uri: &str) -> String {
         .next()
         .unwrap_or_default()
         .to_string()
+}
+
+/// NFS discovery entries are service endpoints, not mountable exports. The
+/// `network://` DNS-SD backend advertises the NFS RPC port in the URI
+/// (`nfs://DietPi.local:2049/mnt`), but the GIO NFS backend mounts and browses
+/// the canonical `nfs://host/export` form and does not treat a `host:port`
+/// authority as `host` + a share the way SMB does. Strip a numeric service
+/// port from the authority; every non-NFS reference passes through unchanged.
+pub fn normalize_nfs_uri(reference: &str) -> String {
+    let Some((scheme, rest)) = reference.split_once("://") else {
+        return reference.to_string();
+    };
+    if !scheme.eq_ignore_ascii_case("nfs") {
+        return reference.to_string();
+    }
+    let (authority, path) = match rest.split_once('/') {
+        Some((authority, path)) => (authority, Some(path)),
+        None => (rest, None),
+    };
+    // Only strip a numeric :port, and never inside an IPv6 bracket literal
+    // (`[::1]:2049` and `[::1]` both pass through untouched).
+    let authority = if authority.starts_with('[') {
+        authority
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port))
+                if !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                host
+            }
+            _ => authority,
+        }
+    };
+    match path {
+        Some(path) if !path.is_empty() => format!("nfs://{authority}/{path}"),
+        _ => format!("nfs://{authority}"),
+    }
 }
 
 pub fn build_network_uri(scheme: &str, server: &str, path: &str) -> String {
@@ -407,48 +453,106 @@ pub enum NetworkDiscoveryEvent {
 }
 
 /// Discover servers/locations the GVfs network backends expose (network://).
-/// Best-effort convenience only: runs on a worker thread, is cancelled after
-/// ~3 seconds, and delivers each found location to the main loop as it
+/// Best-effort convenience only: runs on a worker thread, is cancelled after a
+/// short deadline, and delivers each found location to the main loop as it
 /// arrives. An empty result never blocks manual server entry.
+///
+/// The `network://` backend can need a moment to warm up on first use (gvfs
+/// daemon + DNS-SD backends); a single cold pass commonly errors or returns
+/// nothing, which previously surfaced as an empty list on the FIRST dialog
+/// open that only worked after Cancel + reopen. The worker therefore retries
+/// an errored pass up to the deadline, delivering each distinct location once.
+/// NFS entries are normalized here too, so the UI only ever sees mountable
+/// `nfs://host/export` URIs rather than the advertised `nfs://host:2049/export`
+/// service endpoint.
 pub fn discover_network_locations() -> std::sync::mpsc::Receiver<NetworkDiscoveryEvent> {
+    const DISCOVERY_PASS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+    const DISCOVERY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
+    const MAX_ATTEMPTS: u32 = 3;
     net_trace("discovery_started");
     let (sender, receiver) = std::sync::mpsc::channel::<NetworkDiscoveryEvent>();
     std::thread::spawn(move || {
         let send = |event: NetworkDiscoveryEvent| {
             let _ = sender.send(event);
         };
-        let cancellable = gio::Cancellable::new();
-        let timer = cancellable.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            timer.cancel();
-        });
+        let deadline = std::time::Instant::now() + DISCOVERY_DEADLINE;
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut count = 0usize;
-        let root = gio::File::for_uri("network://");
-        if let Ok(enumerator) = root.enumerate_children(
-            "standard::name,standard::display-name,standard::target-uri",
-            gio::FileQueryInfoFlags::NONE,
-            Some(&cancellable),
-        ) {
-            loop {
-                match enumerator.next_file(Some(&cancellable)) {
-                    Ok(Some(info)) => {
-                        // network:// entries are shortcuts: the target-uri is
-                        // the real location (smb://DietPi.local:445/ etc).
-                        let target = info
-                            .attribute_as_string("standard::target-uri")
-                            .map(|value| value.to_string());
-                        let child = enumerator.child(&info);
-                        let uri = target.unwrap_or_else(|| child.uri().to_string());
-                        let name = info.display_name().to_string();
-                        count += 1;
-                        net_trace(format!("discovery_result uri={uri}"));
-                        send(NetworkDiscoveryEvent::Item(name, uri));
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            net_trace(format!("discovery_attempt attempt={attempt}"));
+            let cancellable = gio::Cancellable::new();
+            let timer = cancellable.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(DISCOVERY_PASS_TIMEOUT);
+                timer.cancel();
+            });
+            let root = gio::File::for_uri("network://");
+            let mut pass_items: Vec<(String, String)> = Vec::new();
+            let mut errored = false;
+            if let Ok(enumerator) = root.enumerate_children(
+                "standard::name,standard::display-name,standard::target-uri",
+                gio::FileQueryInfoFlags::NONE,
+                Some(&cancellable),
+            ) {
+                loop {
+                    match enumerator.next_file(Some(&cancellable)) {
+                        Ok(Some(info)) => {
+                            // network:// entries are shortcuts: the target-uri is
+                            // the real location (smb://DietPi.local:445/ etc).
+                            let target = info
+                                .attribute_as_string("standard::target-uri")
+                                .map(|value| value.to_string());
+                            let child = enumerator.child(&info);
+                            let uri = target.unwrap_or_else(|| child.uri().to_string());
+                            let name = info.display_name().to_string();
+                            pass_items.push((name, normalize_nfs_uri(&uri)));
+                        }
+                        Ok(None) => break,
+                        Err(error) => {
+                            // Any interruption (including the pass timeout,
+                            // i.e. Cancelled) means this pass is incomplete:
+                            // cold gvfs backends commonly stall, so a retry
+                            // pass collects the rest (deduped by URI).
+                            errored = true;
+                            if error.kind() != Some(gio::IOErrorEnum::Cancelled) {
+                                net_trace(format!(
+                                    "discovery_error attempt={attempt} error={error}"
+                                ));
+                            } else {
+                                net_trace(format!(
+                                    "discovery_error attempt={attempt} error=pass timed out"
+                                ));
+                            }
+                            break;
+                        }
                     }
-                    Ok(None) => break,
-                    Err(_) => break,
+                }
+            } else {
+                errored = true;
+                net_trace(format!(
+                    "discovery_error attempt={attempt} error=network:// enumeration failed"
+                ));
+            }
+            let mut fresh = 0usize;
+            for (name, uri) in pass_items {
+                if seen.insert(uri.clone()) {
+                    count += 1;
+                    fresh += 1;
+                    net_trace(format!(
+                        "discovery_result attempt={attempt} uri={uri}"
+                    ));
+                    send(NetworkDiscoveryEvent::Item(name, uri));
                 }
             }
+            net_trace(format!(
+                "discovery_pass_done attempt={attempt} found={fresh} total={count} errored={errored}"
+            ));
+            if !errored || attempt >= MAX_ATTEMPTS || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(400));
         }
         net_trace(format!("discovery_complete count={count}"));
         send(NetworkDiscoveryEvent::Done(count));
@@ -574,6 +678,8 @@ pub fn read(reference: &str) -> Result<Vec<u8>> {
 /// - `network://` discovery shortcuts resolve to their concrete target URI
 ///   (e.g. `network:///dnssd-server-DIETPI._smb._tcp` -> `smb://DietPi.local:445/`)
 /// - `smb://host/share/` stays an SMB URI, `nfs://host/export/` stays NFS
+/// - a discovered NFS service endpoint (`nfs://host:2049/export`) becomes the
+///   mountable export root `nfs://host/export/` (port stripped)
 /// - a trailing slash is guaranteed so the location is browsable
 /// - a remote URI is NEVER converted to a local `$HOME`/gvfs path
 pub fn network_browse_root(reference: &str) -> String {
@@ -589,7 +695,9 @@ fn network_browse_root_inner(reference: &str) -> String {
             return network_browse_root_inner(&resolved);
         }
     }
-    let mut uri = reference.to_string();
+    // NFS discovery entries carry the advertised RPC port
+    // (`nfs://host:2049/export`); the browsable export root drops it.
+    let mut uri = normalize_nfs_uri(reference);
     if !uri.contains("://") {
         // Local path: out of scope for the network browser - return unchanged
         // rather than ever guessing a home directory.
@@ -642,6 +750,81 @@ mod network_uri_tests {
                 || root.starts_with("smb://")
                 || root.starts_with("nfs://"),
             "must remain a remote URI: {root}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod normalize_nfs_uri_tests {
+    use super::normalize_nfs_uri;
+
+    #[test]
+    fn discovered_service_endpoint_becomes_a_mountable_export() {
+        // network:// DNS-SD advertises the RPC port; GIO NFS mounts the export
+        // path without it.
+        assert_eq!(
+            normalize_nfs_uri("nfs://DietPi.local:2049/mnt"),
+            "nfs://DietPi.local/mnt"
+        );
+        assert_eq!(
+            normalize_nfs_uri("nfs://nas:2049/export/photos"),
+            "nfs://nas/export/photos"
+        );
+        assert_eq!(normalize_nfs_uri("nfs://nas:2049"), "nfs://nas");
+    }
+
+    #[test]
+    fn canonical_nfs_uris_pass_through_unchanged() {
+        assert_eq!(normalize_nfs_uri("nfs://nas/mnt"), "nfs://nas/mnt");
+        assert_eq!(
+            normalize_nfs_uri("nfs://DietPi.local/mnt/"),
+            "nfs://DietPi.local/mnt/"
+        );
+        assert_eq!(normalize_nfs_uri("nfs://nas"), "nfs://nas");
+    }
+
+    #[test]
+    fn non_nfs_schemes_and_local_paths_are_left_alone() {
+        assert_eq!(
+            normalize_nfs_uri("smb://DietPi.local:445/"),
+            "smb://DietPi.local:445/"
+        );
+        assert_eq!(
+            normalize_nfs_uri("sftp://host:22/stuff"),
+            "sftp://host:22/stuff"
+        );
+        assert_eq!(
+            normalize_nfs_uri("dav://host:443/x"),
+            "dav://host:443/x"
+        );
+        assert_eq!(normalize_nfs_uri("/mnt/4TBP"), "/mnt/4TBP");
+        assert_eq!(normalize_nfs_uri("NFS://Host:2049/Export"), "nfs://Host/Export");
+    }
+
+    #[test]
+    fn ipv6_bracketed_authorities_keep_their_port() {
+        assert_eq!(
+            normalize_nfs_uri("nfs://[::1]:2049/mnt"),
+            "nfs://[::1]:2049/mnt"
+        );
+        assert_eq!(normalize_nfs_uri("nfs://[::1]/mnt"), "nfs://[::1]/mnt");
+    }
+}
+
+#[cfg(test)]
+mod nfs_browse_root_tests {
+    use super::network_browse_root;
+
+    #[test]
+    fn browse_root_strips_discovered_nfs_service_ports() {
+        assert_eq!(
+            network_browse_root("nfs://DietPi.local:2049/mnt"),
+            "nfs://DietPi.local/mnt/"
+        );
+        assert_eq!(network_browse_root("nfs://nas:2049"), "nfs://nas/");
+        assert_eq!(
+            network_browse_root("nfs://nas:2049/export/photos"),
+            "nfs://nas/export/photos/"
         );
     }
 }
