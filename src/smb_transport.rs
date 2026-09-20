@@ -1071,6 +1071,30 @@ pub fn list_dir(uri: &str) -> Result<Vec<SmbEntry>, SmbTransportError> {
     )
 }
 
+/// List the shares a server exposes (`smb://host/`). Guest first, then the
+/// stored Secret Service entry - the same ladder as every other operation.
+pub fn list_shares(uri: &str) -> Result<Vec<String>, SmbTransportError> {
+    let target = parse_smb_uri(uri).ok_or(SmbTransportError::NotSmb)?;
+    let url = format!("smb://{}/", target.host);
+    crate::source::net_trace(format!("smb_list_shares url={url}"));
+    run_with_ladder(
+        SmbLane::User,
+        "list_shares",
+        &target,
+        SMB_OP_TIMEOUT,
+        None,
+        move |client, cancel| {
+            client.opendir(&url, cancel).map(|entries| {
+                entries
+                    .into_iter()
+                    .filter(|entry| entry.is_dir)
+                    .map(|entry| entry.name)
+                    .collect()
+            })
+        },
+    )
+}
+
 /// Stat a path inside an SMB share on the BACKGROUND lane (availability
 /// probes). Scanner and user-driven callers use [`stat_in_lane`].
 pub fn stat(uri: &str) -> Result<SmbFileMeta, SmbTransportError> {

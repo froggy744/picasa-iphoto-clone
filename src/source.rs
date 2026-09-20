@@ -53,7 +53,390 @@ fn query_exists(reference: &str, directory: bool, lane: crate::smb_transport::Sm
         }
         return uri_query_exists(&file(&normalize_nfs_uri(&reference)));
     }
+    if reference.starts_with("nfs://") {
+        // NFS availability is a plain TCP probe of the server's NFS port.
+        // A gvfs existence probe would answer "no" for an unmounted export,
+        // and forcing the mount just to answer a probe would put the share
+        // in Nautilus; PIC never mounts NFS for probing.
+        return nfs_online(&reference);
+    }
     uri_query_exists(&file(&normalize_nfs_uri(&reference)))
+}
+
+// --- NFS gvfs mounts: on demand only, never persistent ---------------------
+// NFS has no direct transport, so photo reads ride gvfs and need an explicit
+// mount. A gvfs mount is session-wide and would otherwise sit in Nautilus
+// forever, so PIC mounts an export on demand when a read needs it, and
+// unmounts it again once no NFS read happened for a few minutes. Shares show
+// as online through a plain TCP probe (nfs_online) without any mount.
+
+/// How long an NFS export stays mounted after its last use.
+const NFS_IDLE_UNMOUNT_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+
+static NFS_LAST_ACTIVITY: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+static NFS_UNMOUNT_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn nfs_last_activity() -> &'static Mutex<Option<Instant>> {
+    NFS_LAST_ACTIVITY.get_or_init(|| Mutex::new(None))
+}
+
+/// Record that an NFS location was just used, so the idle unmount leaves
+/// freshly used shares alone.
+pub fn nfs_note_activity() {
+    if let Ok(mut last) = nfs_last_activity().lock() {
+        *last = Some(Instant::now());
+    }
+}
+
+/// NFS gvfs mounts PIC itself created (Add-share connect, Retry Connection,
+/// on-demand reads). These are reclaimed by the idle unmount even when the
+/// location was never registered. The explicit "Open in file manager" flow
+/// deliberately stays outside this set: its mount exists FOR Nautilus.
+static NFS_PIC_MOUNTS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+
+fn nfs_pic_mounts() -> &'static Mutex<std::collections::HashSet<String>> {
+    NFS_PIC_MOUNTS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+fn nfs_note_pic_mount(reference: &str) {
+    if !reference.starts_with("nfs://") {
+        return;
+    }
+    nfs_note_activity();
+    if let Ok(mut mounts) = nfs_pic_mounts().lock() {
+        mounts.insert(normalize_nfs_uri(reference));
+    }
+}
+
+fn nfs_forget_pic_mount(uri: &str) {
+    if let Ok(mut mounts) = nfs_pic_mounts().lock() {
+        mounts.remove(uri.trim_end_matches('/'));
+    }
+}
+
+fn nfs_note_pic_mount_if_tracked(track: bool, reference: &str) {
+    if track {
+        nfs_note_pic_mount(reference);
+    }
+}
+
+/// Cheap poll hook (UI thread): reclaim gvfs mounts PIC no longer needs
+/// (PIC-mounted NFS exports, registered NFS exports, and SMB leftovers on
+/// registered roots) once nothing used them for a while. The check itself is
+/// a single flag comparison; the DBus and disk work happens on a worker.
+pub fn nfs_idle_unmount_tick() {
+    let idle = match nfs_last_activity().lock() {
+        // Never used this session (or nothing to protect): unmount candidates
+        // are stale mounts from earlier sessions or manual mounts.
+        Ok(last) => match *last {
+            Some(last) => last.elapsed() > NFS_IDLE_UNMOUNT_AFTER,
+            None => true,
+        },
+        Err(_) => false,
+    };
+    if !idle {
+        return;
+    }
+    if NFS_UNMOUNT_IN_FLIGHT
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        return;
+    }
+    std::thread::spawn(|| {
+        let result = nfs_idle_unmount_pass();
+        NFS_UNMOUNT_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
+        if let Err(error) = result {
+            net_trace(format!("nfs_idle_unmount failed error={error:#}"));
+        }
+    });
+}
+
+/// Reclaim gvfs mounts PIC no longer needs: NFS exports PIC mounted or has
+/// registered, and SMB shares on registered roots while the direct transport
+/// is available (which makes gvfs SMB mounts pure leftovers). Runs only when
+/// the whole share has been idle, so active imports or reads never lose
+/// their mount mid-use.
+fn nfs_idle_unmount_pass() -> Result<()> {
+    let connection = crate::db::open_default().context("could not open the library")?;
+    let mut reclaim = crate::db::network_shares(&connection)?
+        .into_iter()
+        .map(|folder| folder.path)
+        .filter(|path| path.starts_with("nfs://"))
+        .collect::<Vec<_>>();
+    match nfs_pic_mounts().lock() {
+        Ok(mounts) => reclaim.extend(mounts.iter().cloned()),
+        Err(_) => {}
+    }
+    // Native builds read SMB exclusively through libsmbclient, so any gvfs
+    // SMB mount on a registered root is a leftover (older versions mounted
+    // for browsing) and only serves to confuse file-manager users.
+    let smb_reclaimable = crate::smb_transport::direct_available();
+    if smb_reclaimable {
+        reclaim.extend(
+            crate::db::network_shares(&connection)?
+                .into_iter()
+                .map(|folder| folder.path)
+                .filter(|path| path.starts_with("smb://")),
+        );
+    }
+    if reclaim.is_empty() {
+        return Ok(());
+    }
+    let monitor = gio::VolumeMonitor::get();
+    for mount in monitor.mounts() {
+        let uri = mount.root().uri();
+        let is_nfs = uri.starts_with("nfs://");
+        let is_smb = uri.starts_with("smb://");
+        if !is_nfs && !(is_smb && smb_reclaimable) {
+            continue;
+        }
+        if !reclaim
+            .iter()
+            .any(|reclaim| nfs_same_location(reclaim, &uri))
+        {
+            continue;
+        }
+        net_trace(format!("gvfs_idle_unmount_start uri={uri}"));
+        if let Err(error) = unmount_blocking(&mount) {
+            net_trace(format!("gvfs_idle_unmount_failed uri={uri} error={error}"));
+        } else {
+            nfs_forget_pic_mount(&uri);
+            net_trace(format!("gvfs_idle_unmount_done uri={uri}"));
+        }
+    }
+    Ok(())
+}
+
+/// Whether two NFS URIs address the same export area (hosts equal, either
+/// path a prefix of the other). GVfs mounts exports at their root, while a
+/// registered share can be a subfolder of an export.
+fn nfs_same_location(left: &str, right: &str) -> bool {
+    let (left, right) = (
+        left.trim_end_matches('/'),
+        right.trim_end_matches('/'),
+    );
+    let left_file = file(&normalize_nfs_uri(left));
+    let right_file = file(&normalize_nfs_uri(right));
+    let (left_host, right_host) = match (left_file.uri(), right_file.uri()) {
+        (left, right) => match (glib::Uri::parse(&left, glib::UriFlags::NONE), glib::Uri::parse(&right, glib::UriFlags::NONE)) {
+            (Ok(left), Ok(right)) => (
+                left.host().unwrap_or_default().to_lowercase(),
+                right.host().unwrap_or_default().to_lowercase(),
+            ),
+            _ => return false,
+        },
+    };
+    if left_host != right_host {
+        return false;
+    }
+    let (left_path, right_path) = (
+        left_file.path().unwrap_or_default(),
+        right_file.path().unwrap_or_default(),
+    );
+    left_path == right_path
+        || left_path.starts_with(&right_path)
+        || right_path.starts_with(&left_path)
+}
+
+/// Silent unmount through a private main context, for worker threads.
+fn unmount_blocking(mount: &gio::Mount) -> Result<(), String> {
+    let outcome: std::rc::Rc<std::cell::RefCell<Option<Result<(), String>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let context = glib::MainContext::new();
+    let loop_ = glib::MainLoop::new(Some(&context), false);
+    let loop_for_callback = loop_.clone();
+    let outcome_for_callback = outcome.clone();
+    let _ = context.with_thread_default(|| {
+        let loop_for_timeout = loop_.clone();
+        glib::timeout_add_local(std::time::Duration::from_secs(20), move || {
+            loop_for_timeout.quit();
+            glib::ControlFlow::Break
+        });
+        mount.unmount_with_operation(
+            gio::MountUnmountFlags::NONE,
+            Some(&gio::MountOperation::new()),
+            gio::Cancellable::NONE,
+            move |result| {
+                *outcome_for_callback.borrow_mut() =
+                    Some(result.map_err(|error| error.to_string()));
+                loop_for_callback.quit();
+            },
+        );
+        loop_.run();
+    });
+    let outcome = outcome.borrow_mut().take();
+    outcome.unwrap_or_else(|| Err(String::from("unmount timed out")))
+}
+
+/// Mount an NFS export (or confirm it already is) without any dialog, on a
+/// worker thread. gvfs only mounts on explicit request, so a photo read on an
+/// unmounted export fails with NotMounted; callers mount, then retry.
+pub fn ensure_nfs_mounted_blocking(reference: &str) -> Result<(), String> {
+    let reference = normalize_nfs_uri(reference);
+    let file = file(&reference);
+    if file.find_enclosing_mount(gio::Cancellable::NONE).is_ok() {
+        nfs_note_activity();
+        return Ok(());
+    }
+    net_trace(format!("nfs_mount_start uri={reference}"));
+    let outcome: std::rc::Rc<std::cell::RefCell<Option<Result<(), String>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let context = glib::MainContext::new();
+    let loop_ = glib::MainLoop::new(Some(&context), false);
+    let loop_for_callback = loop_.clone();
+    let outcome_for_callback = outcome.clone();
+    let reference_for_callback = reference.clone();
+    let _ = context.with_thread_default(|| {
+        let loop_for_timeout = loop_.clone();
+        glib::timeout_add_local(std::time::Duration::from_secs(20), move || {
+            loop_for_timeout.quit();
+            glib::ControlFlow::Break
+        });
+        file.mount_enclosing_volume(
+            gio::MountMountFlags::NONE,
+            Some(&gio::MountOperation::new()),
+            gio::Cancellable::NONE,
+            move |result| {
+                *outcome_for_callback.borrow_mut() = Some(match result {
+                    Ok(()) => Ok(()),
+                    Err(ref error)
+                        if error.kind() == Some(gio::IOErrorEnum::AlreadyMounted) =>
+                    {
+                        Ok(())
+                    }
+                    Err(error) => Err(describe_mount_error(&reference_for_callback, &error)),
+                });
+                loop_for_callback.quit();
+            },
+        );
+        loop_.run();
+    });
+    let outcome = outcome
+        .borrow_mut()
+        .take()
+        .unwrap_or_else(|| Err(String::from("mount timed out")));
+    net_trace(format!(
+        "nfs_mount_done uri={reference} ok={}",
+        outcome.is_ok()
+    ));
+    nfs_note_activity();
+    if outcome.is_ok() {
+        nfs_note_pic_mount(&reference);
+    }
+    outcome
+}
+
+/// Cheap NFS availability probe: a bounded TCP connect to the server's NFS
+/// port. Never mounts anything. BLOCKING, worker threads only.
+fn nfs_online(reference: &str) -> bool {
+    let uri = file(&normalize_nfs_uri(reference)).uri();
+    let parsed = match glib::Uri::parse(&uri, glib::UriFlags::NONE) {
+        Ok(parsed) => parsed,
+        Err(_) => return false,
+    };
+    let host = parsed.host().unwrap_or_default();
+    if host.is_empty() {
+        return false;
+    }
+    let port = if parsed.port() > 0 { parsed.port() as u16 } else { 2049 };
+    let started = Instant::now();
+    // IPv6 hosts need the bracket form; anything unparseable reads as offline.
+    let address = format!("{host}:{port}")
+        .parse()
+        .or_else(|_| format!("[{host}]:{port}").parse());
+    let online = match address {
+        Ok(address) => std::net::TcpStream::connect_timeout(&address, URI_PROBE_TIMEOUT).is_ok(),
+        Err(_) => false,
+    };
+    net_trace(format!(
+        "nfs_online uri={reference} online={online} ms={:.1}",
+        started.elapsed().as_secs_f64() * 1000.0
+    ));
+    online
+}
+
+/// Rewrite an imported reference to its stable form. gvfs FUSE paths
+/// (`/run/user/N/gvfs/smb-share:...`, `/run/user/N/gvfs/nfs:host=...`) become
+/// the canonical smb:// or nfs:// URI; everything else passes through.
+/// Registering a FUSE path would create a library PIC displays nowhere: the
+/// Folders tree excludes gvfs paths and Network Shares only lists scheme
+/// paths.
+pub fn normalize_import_reference(reference: &str) -> String {
+    let smb = crate::smb_transport::normalize_smb_reference(reference);
+    if smb != reference {
+        return smb;
+    }
+    if reference.contains("://") {
+        return reference.to_string();
+    }
+    nfs_fuse_reference(reference).unwrap_or_else(|| reference.to_string())
+}
+
+/// `/run/user/1000/gvfs/nfs:host=DietPi.local,prefix=%2Fmnt%2F4TBS/a/b`
+/// -> `nfs://dietpi.local/mnt/4TBS/a/b`. Returns None for anything else.
+fn nfs_fuse_reference(reference: &str) -> Option<String> {
+    let marker = "/gvfs/nfs:";
+    let start = reference.find(marker)? + marker.len();
+    // The fuse root itself has no path beyond the options segment; anything
+    // deeper is `<options>/<rest>`.
+    let (options, rest) = match reference[start..].split_once('/') {
+        Some((options, rest)) => (options, rest),
+        None => (reference[start..].as_ref(), ""),
+    };
+    let mut host = None;
+    let mut export = String::new();
+    for option in options.split(',') {
+        if let Some(value) = option.strip_prefix("host=") {
+            host = Some(value.to_string());
+        }
+        if let Some(value) = option.strip_prefix("prefix=") {
+            export = percent_decode(value);
+        }
+    }
+    let host = host.filter(|host| !host.is_empty())?;
+    let tail = if rest.is_empty() {
+        String::new()
+    } else {
+        rest.split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(percent_encode_segment)
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    let mut uri = format!("nfs://{host}/{}", export.trim_matches('/'));
+    if !tail.is_empty() {
+        uri.push('/');
+        uri.push_str(&tail);
+    }
+    Some(uri)
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(&value[index + 1..index + 3], 16) {
+                decoded.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn percent_encode_segment(segment: &str) -> String {
+    crate::smb_transport::percent_encode_segment(segment)
 }
 
 /// Longest a remote existence probe may block. gvfs SMB/NFS lookups can stall
@@ -299,6 +682,26 @@ pub fn mount_share_async(
     parent: Option<&gtk::Window>,
     on_result: impl FnOnce(Result<(), String>) + 'static,
 ) {
+    mount_share_async_inner(reference, parent, true, on_result);
+}
+
+/// Like [`mount_share_async`], but the mount stays PIC-untracked. Used by the
+/// explicit "Open in file manager" action, whose mount exists FOR the desktop
+/// browser and therefore must not be reclaimed by the idle unmount.
+pub fn mount_share_async_visible(
+    reference: &str,
+    parent: Option<&gtk::Window>,
+    on_result: impl FnOnce(Result<(), String>) + 'static,
+) {
+    mount_share_async_inner(reference, parent, false, on_result);
+}
+
+fn mount_share_async_inner(
+    reference: &str,
+    parent: Option<&gtk::Window>,
+    track_nfs: bool,
+    on_result: impl FnOnce(Result<(), String>) + 'static,
+) {
     // NFS discovery entries are service endpoints (`nfs://host:2049/export`);
     // the GIO NFS backend mounts the plain `nfs://host/export` URI. Normalize
     // before any mount/enclosing-mount check so a discovered NFS row and a
@@ -312,6 +715,7 @@ pub fn mount_share_async(
         reference.to_string(),
         file,
         mount_operation,
+        track_nfs,
         move |outcome, _| on_result(outcome),
     );
 }
@@ -345,6 +749,7 @@ pub fn mount_share_async_silent(
         reference.to_string(),
         file,
         mount_operation,
+        true,
         move |outcome, auth_required| {
             on_result(outcome.map_err(|message| SilentMountFailure {
                 message,
@@ -374,10 +779,13 @@ fn is_auth_error(error: &glib::Error) -> bool {
 /// `mount_enclosing_volume`, reachability check and error mapping. The
 /// second `on_result` argument reports whether a failure looks like missing
 /// credentials (see `is_auth_error`); interactive callers ignore it.
+/// `track_nfs` records NFS successes as PIC-owned so the idle unmount can
+/// reclaim them (see `nfs_idle_unmount_tick`).
 fn mount_share_run(
     reference: String,
     file: gio::File,
     mount_operation: impl IsA<gio::MountOperation> + 'static,
+    track_nfs: bool,
     on_result: impl FnOnce(Result<(), String>, bool) + 'static,
 ) {
     let reference_for_callback = reference;
@@ -393,6 +801,7 @@ fn mount_share_run(
         net_trace(format!(
             "mount_success uri={reference_for_callback} (already mounted)"
         ));
+        nfs_note_pic_mount_if_tracked(track_nfs, &reference_for_callback);
         on_result(Ok(()), false);
         return;
     }
@@ -413,16 +822,24 @@ fn mount_share_run(
                     net_trace(format!("mount_success uri={}", reference_for_callback));
                     Ok(())
                 }
-                Ok(()) => Err(format!(
-                    "mounted, but the location is not reachable: {}",
-                    reference_for_callback
-                )),
+                Ok(()) => {
+                    // Mounted but the reachability probe says no; for NFS the
+                    // probe is a plain TCP check that can lag a fresh mount.
+                    // Treat a completed mount as success rather than fail a
+                    // share that is provably mounted.
+                    net_trace(format!(
+                        "mount_success uri={} (probe inconclusive)",
+                        reference_for_callback
+                    ));
+                    Ok(())
+                }
                 Err(error) => {
                     if error.kind() == Some(gio::IOErrorEnum::AlreadyMounted) {
                         net_trace(format!(
                             "mount_success uri={} (already mounted)",
                             reference_for_callback
                         ));
+                        nfs_note_pic_mount_if_tracked(track_nfs, &reference_for_callback);
                         on_result(Ok(()), false);
                         return;
                     }
@@ -441,6 +858,9 @@ fn mount_share_run(
                     Err(describe_mount_error(&reference_for_callback, &error))
                 }
             };
+            if outcome.is_ok() {
+                nfs_note_pic_mount_if_tracked(track_nfs, &reference_for_callback);
+            }
             on_result(outcome, auth_required);
         },
     );
@@ -897,11 +1317,29 @@ pub fn read(reference: &str) -> Result<Vec<u8>> {
     let loaded = if reads_smb_direct {
         crate::smb_transport::read_file(&reference).map_err(anyhow::Error::msg)
     } else {
-        file(&reference)
-            .load_contents(gio::Cancellable::NONE)
-            .map(|(contents, _)| contents.as_ref().to_vec())
-            .with_context(|| format!("could not read {reference}"))
+        let attempt = || {
+            file(&reference)
+                .load_contents(gio::Cancellable::NONE)
+                .map(|(contents, _)| contents.as_ref().to_vec())
+        };
+        let first = attempt();
+        match first {
+            // An unmounted NFS export reads as NotMounted: mount it on demand
+            // (never persists - the idle unmount reclaims it), then retry.
+            Err(ref error)
+                if reference.starts_with("nfs://")
+                    && error.kind() == Some(gio::IOErrorEnum::NotMounted) =>
+            {
+                net_trace(format!("nfs_mount_on_demand uri={reference}"));
+                ensure_nfs_mounted_blocking(&reference).map_err(anyhow::Error::msg)?;
+                attempt().with_context(|| format!("could not read {reference}"))
+            }
+            other => other.with_context(|| format!("could not read {reference}")),
+        }
     };
+    if loaded.is_ok() && reference.starts_with("nfs://") {
+        nfs_note_activity();
+    }
     let result = loaded;
     match &result {
         Ok(bytes) => net_trace(format!(
@@ -1068,6 +1506,50 @@ mod nfs_browse_root_tests {
         assert_eq!(
             network_browse_root("nfs://nas:2049/export/photos"),
             "nfs://nas/export/photos/"
+        );
+    }
+}
+
+#[cfg(test)]
+mod import_reference_tests {
+    use super::normalize_import_reference;
+
+    #[test]
+    fn gvfs_fuse_paths_rewrite_to_stable_uris() {
+        // SMB fuse path (the accidental-import shape).
+        assert_eq!(
+            normalize_import_reference(
+                "/run/user/1000/gvfs/smb-share:server=dietpi.local,share=4tbs/pics-sport/local choice"
+            ),
+            "smb://dietpi.local/4tbs/pics-sport/local%20choice"
+        );
+        // NFS fuse path with a percent-encoded export prefix.
+        assert_eq!(
+            normalize_import_reference(
+                "/run/user/1000/gvfs/nfs:host=DietPi.local,prefix=%2Fmnt%2F4TBS/mypics-2026"
+            ),
+            "nfs://DietPi.local/mnt/4TBS/mypics-2026"
+        );
+        // NFS fuse root itself.
+        assert_eq!(
+            normalize_import_reference("/run/user/1000/gvfs/nfs:host=nas.local,prefix=%2Fexport"),
+            "nfs://nas.local/export"
+        );
+    }
+
+    #[test]
+    fn stable_references_pass_through_unchanged() {
+        assert_eq!(
+            normalize_import_reference("smb://dietpi.local/4tbs/pics-sport"),
+            "smb://dietpi.local/4tbs/pics-sport"
+        );
+        assert_eq!(
+            normalize_import_reference("nfs://dietpi.local/mnt/4TBP"),
+            "nfs://dietpi.local/mnt/4TBP"
+        );
+        assert_eq!(
+            normalize_import_reference("/home/peet/Pictures"),
+            "/home/peet/Pictures"
         );
     }
 }

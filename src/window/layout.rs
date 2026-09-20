@@ -415,6 +415,8 @@
                 // via the URI's default handler. The share is mounted first
                 // (gvfs auto-mount; auth dialog if needed) - an unmounted
                 // location would launch the browser into a fallback view.
+                // This mount exists FOR the file browser, so it is the one
+                // PIC-created mount that stays visible (and stays mounted).
                 let mut uri = folder.path.clone();
                 if !uri.ends_with('/') {
                     uri.push('/');
@@ -423,7 +425,7 @@
                 let parent_for_error = parent.clone();
                 let parent_for_mount = parent_window.clone();
                 let uri_for_launch = uri.clone();
-                crate::source::mount_share_async(&uri, Some(&parent_for_mount), move |result| {
+                crate::source::mount_share_async_visible(&uri, Some(&parent_for_mount), move |result| {
                     if let Err(message) = result {
                         show_error(
                             &parent_for_error,

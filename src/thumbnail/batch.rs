@@ -116,6 +116,41 @@ pub fn clear_cache() -> Result<()> {
     Ok(())
 }
 
+/// Move a photo's thumbnail (and decode-failure marker) from the cache key
+/// of the old source path to the one of the new path. Used by the gvfs-path
+/// migration so an unmounted-share import keeps its thumbnails instead of
+/// regenerating them. Best-effort: a miss only regenerates lazily.
+pub fn migrate_cache_entry(
+    old_reference: &str,
+    new_reference: &str,
+    mtime: Option<i64>,
+    size_bytes: Option<i64>,
+) {
+    let old_name = cache_file_name(old_reference, mtime, size_bytes);
+    let new_name = cache_file_name(new_reference, mtime, size_bytes);
+    if old_name == new_name {
+        return;
+    }
+    let Some(old_path) = existing_cache_path(old_reference, mtime, size_bytes)
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    let Ok(new_path) = resolve_cache_path(new_reference, mtime, size_bytes) else {
+        return;
+    };
+    if let Some(parent) = new_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if fs::rename(&old_path, &new_path).is_ok() {
+        let _ = fs::rename(
+            old_path.with_extension("failed"),
+            new_path.with_extension("failed"),
+        );
+    }
+}
+
 /// Wipe the whole application cache root - `thumbs/`, `source/`
 /// (materialized remote RAWs), `wallpaper/`, and anything else under it.
 /// Used by "Clear all": the database is emptied too, so no cached file can

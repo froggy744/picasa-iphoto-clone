@@ -2850,6 +2850,28 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let parent_for_mount_error = parent.clone();
             let parent_widget = parent_window.clone().upcast::<gtk::Widget>();
             let parent_for_register = parent.clone();
+            if chooser_root.starts_with("smb://") && crate::smb_transport::direct_available() {
+                // Direct SMB browse: listing runs through libsmbclient, so no
+                // gvfs mount is created (every gvfs mount PIC creates shows
+                // up in Nautilus).
+                crate::source::net_trace(format!(
+                    "connect_direct uri={chooser_root}"
+                ));
+                show_network_folder_browser(parent_widget, chooser_root, Rc::new(
+                    move |selected_uri: String| {
+                        register_selected_network_share(
+                            &connection,
+                            &parent,
+                            &scan_job,
+                            &start_next_scan,
+                            &sidebar_refresh,
+                            selected_uri,
+                            name.clone(),
+                        );
+                    },
+                ));
+                return;
+            }
             crate::source::mount_share_async(&root_for_mount, Some(&mount_parent), move |result| {
                 if let Err(message) = result {
                     // The real GIO/GVfs error text is included in `message`, so
@@ -2874,33 +2896,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     parent_widget,
                     chooser_root,
                     Rc::new(move |selected_uri: String| {
-                        let display_name = if name.is_empty() {
-                            crate::source::filename(&selected_uri)
-                        } else {
-                            name.clone()
-                        };
-                        crate::source::net_trace(format!(
-                            "register_start uri={selected_uri} name={display_name}"
-                        ));
-                        if let Err(error) = db::insert_network_share(
-                            &connection.borrow(),
-                            &selected_uri,
-                            &display_name,
-                        ) {
-                            show_error(&parent, "Could not add network share", &error.to_string());
-                            return;
-                        }
-                        crate::source::net_trace(format!("registered uri={selected_uri}"));
-                        sidebar_refresh();
-                        // The share is mounted and the folder was verified by
-                        // browsing into it, so the scan goes straight out.
-                        if let Ok(mut job) = scan_job.try_borrow_mut() {
-                            job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
-                                .expect("import is an authorized scan reason");
-                            job.pending.push_back(selected_uri.clone());
-                        }
-                        start_next_scan();
-                        crate::source::net_trace(format!("scan_queued uri={selected_uri}"));
+                        register_selected_network_share(
+                            &connection,
+                            &parent,
+                            &scan_job,
+                            &start_next_scan,
+                            &sidebar_refresh,
+                            selected_uri,
+                            name.clone(),
+                        );
                     }),
                 );
             });
@@ -2919,6 +2923,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let start_next_scan = start_next_scan_for_import.clone();
         let connection = connection_for_import.clone();
         let sidebar_refresh = sidebar_refresh_for_import.clone();
+        let parent = parent.clone();
 
         let dialog = gtk::FileChooserNative::new(
             Some("Import Folder"),
@@ -2931,8 +2936,26 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         dialog.connect_response(move |dialog, response| {
             if response == gtk::ResponseType::Accept {
                 if let Some(file) = dialog.file() {
-                    let root = crate::source::reference(&file);
-                    
+                    // A folder chosen over a gvfs mount arrives as a FUSE
+                    // path; registering that would index photos into a
+                    // library that displays the folder nowhere. Rewrite it
+                    // to the stable smb:// / nfs:// URI first, and refuse
+                    // anything that still is not a plain path or a URI.
+                    let raw = crate::source::reference(&file);
+                    let root = crate::source::normalize_import_reference(&raw);
+                    if root.starts_with("/run/user/") && root.contains("/gvfs/") {
+                        crate::source::net_trace(format!(
+                            "import_root_rejected uri={raw}"
+                        ));
+                        show_error(
+                            parent.upcast_ref(),
+                            "Could not import this folder",
+                            "Network folders are added through Network Shares, not the folder import.",
+                        );
+                        dialog.destroy();
+                        return;
+                    }
+                    crate::source::net_trace(format!("import_root_registered uri={root}"));
                     if let Err(error) = db::mark_import_root(&connection.borrow(), &root) {
                         eprintln!("Could not register imported folder {root}: {error}");
                         return;
@@ -3043,6 +3066,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let mut last_progress_update = Instant::now();
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
+        // Reclaim NFS gvfs mounts once nothing used them for a while; the
+        // check itself is a single Instant comparison.
+        crate::source::nfs_idle_unmount_tick();
         // Drain event-triggered recovery requests once the current scan ends.
         // With no request, this checks only a flag and performs no disk probes.
         start_thumbnail_recovery();
@@ -3681,6 +3707,42 @@ impl CoalescedAvailabilityRefresh {
             refresh();
         });
     }
+}
+
+/// Register the folder the user picked in the network browser as a share,
+/// then scan it. Shared by the direct-SMB path (no mount happened) and the
+/// gvfs path (the location is mounted and verified by browsing into it).
+fn register_selected_network_share(
+    connection: &Rc<RefCell<Connection>>,
+    parent: &gtk::Widget,
+    scan_job: &Rc<RefCell<ScanJobState>>,
+    start_next_scan: &Rc<dyn Fn()>,
+    sidebar_refresh: &Rc<dyn Fn()>,
+    selected_uri: String,
+    name: String,
+) {
+    let display_name = if name.is_empty() {
+        crate::source::filename(&selected_uri)
+    } else {
+        name
+    };
+    crate::source::net_trace(format!(
+        "register_start uri={selected_uri} name={display_name}"
+    ));
+    if let Err(error) = db::insert_network_share(&connection.borrow(), &selected_uri, &display_name)
+    {
+        show_error(parent, "Could not add network share", &error.to_string());
+        return;
+    }
+    crate::source::net_trace(format!("registered uri={selected_uri}"));
+    sidebar_refresh();
+    if let Ok(mut job) = scan_job.try_borrow_mut() {
+        job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
+            .expect("import is an authorized scan reason");
+        job.pending.push_back(selected_uri.clone());
+    }
+    start_next_scan();
+    crate::source::net_trace(format!("scan_queued uri={selected_uri}"));
 }
 
 /// Probe one SMB root through the direct transport, off the GTK thread, and

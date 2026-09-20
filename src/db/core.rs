@@ -25,6 +25,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     migrate_photo_schema(&connection)?;
     migrate_folder_schema(&connection)?;
     migrate_album_schema(&connection)?;
+    migrate_gvfs_paths(&connection)?;
     Ok(connection)
 }
 

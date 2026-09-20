@@ -127,4 +127,5 @@ include!("db/core.rs");
 include!("db/albums.rs");
 include!("db/photos.rs");
 include!("db/settings.rs");
+include!("db/migration.rs");
 include!("db/tests.rs");

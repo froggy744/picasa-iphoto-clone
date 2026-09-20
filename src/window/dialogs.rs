@@ -721,6 +721,24 @@ pub enum NetworkBrowseMessage {
 /// reliably display remote `smb://`/`nfs://` initial folders (it falls back to
 /// $HOME), so browsing happens here through `enumerate_children` - the stored
 /// result stays a canonical `smb://`/`nfs://` URI, never a gvfs mount path.
+/// List `uri` for the folder browser through the direct SMB transport.
+/// A server root (no share) lists the shares; anything else lists folders.
+fn list_smb_for_browse(
+    uri: &str,
+) -> Result<Vec<String>, crate::smb_transport::SmbTransportError> {
+    match crate::smb_transport::list_dir(uri) {
+        Ok(entries) => Ok(entries
+            .into_iter()
+            .filter(|entry| entry.is_dir)
+            .map(|entry| entry.name)
+            .collect()),
+        Err(crate::smb_transport::SmbTransportError::NoShare) => {
+            crate::smb_transport::list_shares(uri)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub fn show_network_folder_browser(
     parent: gtk::Widget,
     root_uri: String,
@@ -862,12 +880,38 @@ pub fn show_network_folder_browser(
 
             let (sender, receiver) = std::sync::mpsc::channel::<NetworkBrowseMessage>();
             let uri_for_worker = uri.clone();
+            // SMB lists through the direct libsmbclient transport when it is
+            // available: gvfs would need the share mounted, and every gvfs
+            // mount PIC creates shows up in Nautilus. NFS keeps riding gvfs
+            // (no direct NFS transport exists).
+            let direct_smb =
+                uri_for_worker.starts_with("smb://") && crate::smb_transport::direct_available();
             std::thread::spawn(move || {
                 let enumerate_started = std::time::Instant::now();
-                let file = gio::File::for_uri(&uri_for_worker);
                 let mut directories: Vec<(String, String, bool)> = Vec::new();
                 let mut failure: Option<String> = None;
-                if let Ok(enumerator) = file.enumerate_children(
+                if direct_smb {
+                    // Server roots list shares, paths inside a share list
+                    // folders; both are plain directory listings for the
+                    // browser, so nothing is flagged mountable.
+                    match list_smb_for_browse(&uri_for_worker) {
+                        Ok(entries) => {
+                            for name in entries {
+                                let trimmed = name.trim();
+                                if trimmed.is_empty() || trimmed.starts_with('.') {
+                                    continue;
+                                }
+                                let child_uri = format!(
+                                    "{}/{}",
+                                    uri_for_worker.trim_end_matches('/'),
+                                    percent_encode(trimmed)
+                                );
+                                directories.push((name, child_uri, false));
+                            }
+                        }
+                        Err(error) => failure = Some(error.to_string()),
+                    }
+                } else if let Ok(enumerator) = gio::File::for_uri(&uri_for_worker).enumerate_children(
                     "standard::name,standard::type,standard::is-hidden",
                     gio::FileQueryInfoFlags::NONE,
                     Some(&fresh_cancellable),
@@ -1053,11 +1097,16 @@ pub fn show_network_folder_browser(
                                 // not: mounting it fails with "Location is not
                                 // mountable". Such a folder is listed through
                                 // the already-mounted export, so enumerate it
-                                // directly instead of mounting first. SMB keeps
-                                // the existing mount-then-list path untouched.
+                                // directly instead of mounting first. SMB with
+                                // the direct transport lists directly too:
+                                // mounting would create a gvfs mount, and
+                                // every gvfs mount PIC creates shows up in
+                                // Nautilus.
                                 let nfs_subdirectory =
                                     uri_for_mount.starts_with("nfs://") && !row_mountable;
-                                if nfs_subdirectory {
+                                let smb_direct = uri_for_mount.starts_with("smb://")
+                                    && crate::smb_transport::direct_available();
+                                if nfs_subdirectory || smb_direct {
                                     if let Some(load) =
                                         load_slot_for_mount.borrow().as_ref()
                                     {
@@ -1120,12 +1169,15 @@ pub fn show_network_folder_browser(
                                 let uri_for_load = uri_for_key.clone();
                                 let load_slot_for_mount = load_for_mount.clone();
                                 let closed_for_mount = key_closed.clone();
-                                // Same NFS rule as the mouse path: only export
-                                // roots are mountable; subdirectories enumerate
-                                // directly through the mounted export.
+                                // Same rule as the mouse path: NFS export
+                                // subdirectories and direct-transport SMB
+                                // list directly; only genuinely mountable
+                                // gvfs locations mount first.
                                 let nfs_subdirectory =
                                     uri_for_mount.starts_with("nfs://") && !key_mountable;
-                                if nfs_subdirectory {
+                                let smb_direct = uri_for_mount.starts_with("smb://")
+                                    && crate::smb_transport::direct_available();
+                                if nfs_subdirectory || smb_direct {
                                     if let Some(load) =
                                         load_slot_for_mount.borrow().as_ref()
                                     {
