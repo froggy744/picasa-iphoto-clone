@@ -907,21 +907,38 @@ pub fn show_network_folder_browser(
                         Err(error) => failure = Some(error.to_string()),
                     }
                 } else if direct_nfs {
-                    match crate::nfs_transport::list_dir(&uri_for_worker) {
-                        Ok(entries) => {
-                            for entry in entries {
-                                if entry.name.starts_with('.') {
-                                    continue;
-                                }
-                                let child_uri = format!(
-                                    "{}/{}",
-                                    uri_for_worker.trim_end_matches('/'),
-                                    percent_encode(&entry.name)
-                                );
-                                directories.push((entry.name, child_uri, false));
+                    let rest = uri_for_worker
+                        .strip_prefix("nfs://")
+                        .unwrap_or_default()
+                        .trim_matches('/');
+                    if !rest.contains('/') {
+                        let host = rest.split(':').next().unwrap_or(rest);
+                        for export in crate::source::query_nfs_exports(host) {
+                            let name = export.trim_matches('/').to_string();
+                            if name.is_empty() {
+                                continue;
                             }
+                            let child_uri = format!(
+                                "nfs://{}/{}",
+                                host,
+                                export.trim_matches('/')
+                            );
+                            directories.push((name, child_uri, false));
                         }
-                        Err(error) => failure = Some(error),
+                    } else if let Err(error) = crate::nfs_transport::list_dir(&uri_for_worker).map(|entries| {
+                        for entry in entries {
+                            if entry.name.starts_with('.') {
+                                continue;
+                            }
+                            let child_uri = format!(
+                                "{}/{}",
+                                uri_for_worker.trim_end_matches('/'),
+                                percent_encode(&entry.name)
+                            );
+                            directories.push((entry.name, child_uri, false));
+                        }
+                    }) {
+                        failure = Some(error);
                     }
                 } else {
                     failure = Some("No private transport for this network location".to_string());

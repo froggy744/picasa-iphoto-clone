@@ -2880,6 +2880,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     ));
                     show_error(&failure_parent, "Could not connect to NFS share", &error);
                 });
+                if chooser_root
+                    .strip_prefix("nfs://")
+                    .is_some_and(|rest| rest.trim_matches('/').split('/').count() < 2)
+                {
+                    open_browser();
+                    return;
+                }
                 connect_nfs_direct(
                     chooser_root,
                     parent_window.clone().upcast::<gtk::Window>(),

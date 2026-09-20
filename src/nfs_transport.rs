@@ -235,15 +235,32 @@ fn target(uri: &str) -> Result<Target, String> {
     })
 }
 
-fn error(api: &Api, context: *mut NfsContext, fallback: &str) -> String {
+fn error(api: &Api, context: *mut NfsContext, operation: &str, rc: i32) -> String {
     let ptr = unsafe { (api.get_error)(context) };
-    if ptr.is_null() {
-        fallback.to_string()
+    let detail = if ptr.is_null() {
+        String::new()
     } else {
         unsafe { CStr::from_ptr(ptr) }
             .to_string_lossy()
             .into_owned()
     }
+    .trim()
+    .to_string();
+    let errno = std::io::Error::last_os_error();
+    let message = if detail.is_empty() {
+        format!("{operation} failed (return_code={rc}, errno={errno})")
+    } else {
+        format!("{operation} failed (return_code={rc}, errno={errno}): {detail}")
+    };
+    crate::source::net_trace(format!(
+        "nfs_ffi_error operation={operation} return_code={rc} errno={errno} libnfs_error={}",
+        if detail.is_empty() {
+            "<empty>"
+        } else {
+            &detail
+        }
+    ));
+    message
 }
 
 fn run<T: Send + 'static>(
@@ -280,9 +297,16 @@ fn with_context<T>(
         };
         let export = CString::new(export).map_err(|_| "invalid NFS export".to_string())?;
         let path = CString::new(path).map_err(|_| "invalid NFS path".to_string())?;
+        crate::source::net_trace(format!(
+            "nfs_mount_attempt host={} export={} relative={}",
+            host.to_string_lossy(),
+            export.to_string_lossy(),
+            path.to_string_lossy()
+        ));
         let context = unsafe { (api.init)() };
         if context.is_null() {
-            return Err("nfs_init_context failed".into());
+            let errno = std::io::Error::last_os_error();
+            return Err(format!("nfs_init_context failed (errno={errno})"));
         }
         unsafe {
             (api.set_autoreconnect)(context, 2);
@@ -290,8 +314,13 @@ fn with_context<T>(
             let _ = (api.set_version)(context, 3);
         }
         let mounted = unsafe { (api.mount)(context, host.as_ptr(), export.as_ptr()) };
+        crate::source::net_trace(format!(
+            "nfs_mount_result host={} export={} return_code={mounted}",
+            host.to_string_lossy(),
+            export.to_string_lossy()
+        ));
         if mounted < 0 {
-            last_error = error(api, context, "NFS mount failed");
+            last_error = error(api, context, "nfs_mount", mounted);
             unsafe { (api.destroy)(context) };
             continue;
         }
@@ -311,8 +340,12 @@ pub fn stat(uri: &str) -> Result<Metadata, String> {
             let path = CString::new(path).unwrap();
             let mut stat = NfsStat64::default();
             let result = unsafe { (api.stat)(context, path.as_ptr(), &mut stat) };
+            crate::source::net_trace(format!(
+                "nfs_stat_result path={} return_code={result}",
+                path.to_string_lossy()
+            ));
             if result < 0 {
-                return Err(error(api, context, "NFS stat failed"));
+                return Err(error(api, context, "nfs_stat64", result));
             }
             Ok(Metadata {
                 is_dir: stat.mode & 0o170000 == 0o040000,
@@ -335,8 +368,13 @@ pub fn list_dir(uri: &str) -> Result<Vec<Entry>, String> {
         with_context(target, |api, context, path| {
             let path = CString::new(path).unwrap();
             let mut directory = std::ptr::null_mut();
-            if unsafe { (api.opendir)(context, path.as_ptr(), &mut directory) } < 0 {
-                return Err(error(api, context, "NFS directory listing failed"));
+            let result = unsafe { (api.opendir)(context, path.as_ptr(), &mut directory) };
+            crate::source::net_trace(format!(
+                "nfs_opendir_result path={} return_code={result}",
+                path.to_string_lossy()
+            ));
+            if result < 0 {
+                return Err(error(api, context, "nfs_opendir", result));
             }
             let mut entries = Vec::new();
             loop {
@@ -379,8 +417,13 @@ pub fn read_file(uri: &str) -> Result<Vec<u8>, String> {
         with_context(target, |api, context, path| {
             let path = CString::new(path).unwrap();
             let mut handle = std::ptr::null_mut();
-            if unsafe { (api.open)(context, path.as_ptr(), libc::O_RDONLY, &mut handle) } < 0 {
-                return Err(error(api, context, "NFS open failed"));
+            let result = unsafe { (api.open)(context, path.as_ptr(), libc::O_RDONLY, &mut handle) };
+            crate::source::net_trace(format!(
+                "nfs_open_result path={} return_code={result}",
+                path.to_string_lossy()
+            ));
+            if result < 0 {
+                return Err(error(api, context, "nfs_open", result));
             }
             let mut bytes = Vec::new();
             let mut buffer = vec![0u8; 1024 * 1024];
@@ -389,7 +432,7 @@ pub fn read_file(uri: &str) -> Result<Vec<u8>, String> {
                     (api.read)(context, handle, buffer.as_mut_ptr().cast(), buffer.len())
                 };
                 if count < 0 {
-                    break Err(error(api, context, "NFS read failed"));
+                    break Err(error(api, context, "nfs_read", count));
                 }
                 if count == 0 {
                     break Ok(());
