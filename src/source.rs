@@ -32,13 +32,18 @@ pub fn folder_available(folder_id: Option<i64>) -> bool {
         .unwrap_or(true)
 }
 
-/// NFS remains offline until a validated private client is integrated.
-pub const NFS_UNAVAILABLE: &str = "NFS is unavailable in PIC: private NFS transport is not implemented. The share and cached photos are retained; no desktop mount will be created.";
+pub const NFS_UNAVAILABLE: &str =
+    "NFS private transport is unavailable; no desktop mount will be created.";
 
 fn query_exists(reference: &str, directory: bool, lane: crate::smb_transport::SmbLane) -> bool {
     let reference = normalize_import_reference(reference);
     if reference.starts_with("smb://") {
         return crate::smb_transport::stat_in_lane(&reference, lane)
+            .map(|meta| meta.is_dir == directory)
+            .unwrap_or(false);
+    }
+    if reference.starts_with("nfs://") {
+        return crate::nfs_transport::stat(&reference)
             .map(|meta| meta.is_dir == directory)
             .unwrap_or(false);
     }
@@ -156,9 +161,10 @@ pub fn file_available(reference: &str) -> bool {
 /// the GTK thread never blocks on gvfs.
 pub fn cached_source_available(reference: &str) -> bool {
     let normalized = normalize_import_reference(reference);
-    if normalized.starts_with("nfs://")
-        || (normalized.starts_with("smb://") && !crate::smb_transport::direct_available())
-    {
+    if normalized.starts_with("nfs://") && !crate::nfs_transport::direct_available() {
+        return false;
+    }
+    if normalized.starts_with("smb://") && !crate::smb_transport::direct_available() {
         return false;
     }
     if !is_network_location(reference) {
@@ -181,9 +187,10 @@ pub fn cached_source_available(reference: &str) -> bool {
 /// the per-folder cache, which a photo inherits from its imported source root.
 pub fn cached_file_available(reference: &str) -> bool {
     let normalized = normalize_import_reference(reference);
-    if normalized.starts_with("nfs://")
-        || (normalized.starts_with("smb://") && !crate::smb_transport::direct_available())
-    {
+    if normalized.starts_with("nfs://") && !crate::nfs_transport::direct_available() {
+        return false;
+    }
+    if normalized.starts_with("smb://") && !crate::smb_transport::direct_available() {
         return false;
     }
     // Local paths are cheap to check and can change when a removable drive is
@@ -768,7 +775,7 @@ pub fn read(reference: &str) -> Result<Vec<u8>> {
     let loaded = if reference.starts_with("smb://") {
         crate::smb_transport::read_file(&reference).map_err(anyhow::Error::msg)
     } else if reference.starts_with("nfs://") {
-        Err(anyhow::anyhow!(NFS_UNAVAILABLE))
+        crate::nfs_transport::read_file(&reference).map_err(anyhow::Error::msg)
     } else if is_network_location(&reference) {
         Err(anyhow::anyhow!(
             "No private transport for this network location"
@@ -913,7 +920,7 @@ pub(crate) mod private_transport_tests {
             "NFS://localhost:2049/photos/a.jpg",
             "/run/user/1000/gvfs/nfs:host=localhost,prefix=%2Fphotos/a.jpg",
         ] {
-            assert_eq!(read(reference).unwrap_err().to_string(), NFS_UNAVAILABLE);
+            assert!(!read(reference).unwrap_err().to_string().is_empty());
             assert!(!probe_source_available(reference));
             assert!(!probe_file_available(reference));
             assert!(!cached_source_available(reference));

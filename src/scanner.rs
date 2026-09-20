@@ -87,9 +87,6 @@ fn scan_with_control(
 ) -> Result<usize> {
     let normalized_root = crate::source::normalize_import_reference(root);
     let root = normalized_root.as_str();
-    if root.starts_with("nfs://") {
-        anyhow::bail!(crate::source::NFS_UNAVAILABLE);
-    }
     if !root_is_available(root) {
         anyhow::bail!("scan root is unavailable: {root}");
     }
@@ -105,6 +102,8 @@ fn scan_with_control(
     let root_file = crate::source::file(root);
     let (files, discovered_folders) = if root.starts_with("smb://") {
         collect_smb_files(root, control)?
+    } else if root.starts_with("nfs://") {
+        collect_nfs_files(root, control)?
     } else {
         collect_files(&root_file, control)?
     };
@@ -369,6 +368,63 @@ fn collect_smb_files(
                 if let Ok(date_time) = glib::DateTime::from_unix_utc(mtime) {
                     info.set_modification_date_time(&date_time);
                 }
+            }
+            files.push((gio::File::for_uri(&child_uri), info, dir_uri.clone()));
+        }
+    }
+    Ok((files, folders))
+}
+
+fn collect_nfs_files(
+    root_path: &str,
+    control: &ScanControl,
+) -> Result<(
+    Vec<(gio::File, gio::FileInfo, String)>,
+    Vec<(String, Option<String>)>,
+)> {
+    let mut pending = vec![(root_path.trim_end_matches('/').to_string(), None)];
+    let mut files = Vec::new();
+    let mut folders = Vec::new();
+    let mut visited = 0usize;
+    while let Some((directory, parent_path)) = pending.pop() {
+        if control.is_cancelled() {
+            break;
+        }
+        visited += 1;
+        if visited > 20_000 {
+            anyhow::bail!("NFS scan runaway: more than 20000 directories under {root_path}");
+        }
+        let dir_uri = format!("{directory}/");
+        folders.push((dir_uri.clone(), parent_path));
+        let entries = crate::nfs_transport::list_dir(&dir_uri)
+            .map_err(|error| anyhow::anyhow!("could not list {dir_uri}: {error}"))?;
+        for entry in entries {
+            if control.is_cancelled() {
+                break;
+            }
+            let child_uri = format!(
+                "{dir_uri}{}",
+                crate::smb_transport::percent_encode_segment(&entry.name)
+            );
+            if entry.is_dir {
+                let name = entry.name.to_ascii_lowercase();
+                if !name.ends_with(".lrdata") && name != "previews" && name != "cache" {
+                    pending.push((child_uri, Some(dir_uri.clone())));
+                }
+                continue;
+            }
+            if !supported(Path::new(&entry.name)) {
+                continue;
+            }
+            let meta = crate::nfs_transport::stat(&child_uri)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("could not stat {child_uri}; scan is incomplete"))?;
+            let info = gio::FileInfo::new();
+            info.set_name(&entry.name);
+            info.set_file_type(gio::FileType::Regular);
+            info.set_size(meta.size as i64);
+            if let Ok(date_time) = glib::DateTime::from_unix_utc(meta.mtime) {
+                info.set_modification_date_time(&date_time);
             }
             files.push((gio::File::for_uri(&child_uri), info, dir_uri.clone()));
         }

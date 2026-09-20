@@ -8,6 +8,8 @@ mod grid;
 mod image_format;
 mod infobar;
 mod lightbox;
+#[cfg(target_os = "linux")]
+mod nfs_transport;
 mod photo_object;
 mod photo_texture;
 mod platform;

@@ -2847,13 +2847,45 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let sidebar_refresh = sidebar_refresh.clone();
             let parent_window = parent_window.clone();
             if chooser_root.starts_with("nfs://") {
-                let display_name = if name.is_empty() { crate::source::filename(&chooser_root) } else { name };
-                if let Err(error) = db::insert_network_share(&connection.borrow(), &chooser_root, &display_name) {
-                    show_error(&parent, "Could not add network share", &error.to_string());
-                    return;
-                }
-                sidebar_refresh();
-                show_error(&parent, "NFS unavailable", crate::source::NFS_UNAVAILABLE);
+                let root = chooser_root.clone();
+                let open_browser: Rc<dyn Fn()> = Rc::new({
+                    let connection = connection.clone();
+                    let parent = parent.clone();
+                    let scan_job = scan_job.clone();
+                    let start_next_scan = start_next_scan.clone();
+                    let sidebar_refresh = sidebar_refresh.clone();
+                    let name = name.clone();
+                    let root = root.clone();
+                    move || {
+                        show_network_folder_browser(parent.clone(), root.clone(), Rc::new({
+                            let connection = connection.clone();
+                            let parent = parent.clone();
+                            let scan_job = scan_job.clone();
+                            let start_next_scan = start_next_scan.clone();
+                            let sidebar_refresh = sidebar_refresh.clone();
+                            let name = name.clone();
+                            move |selected_uri| {
+                                register_selected_network_share(
+                                    &connection, &parent, &scan_job, &start_next_scan,
+                                    &sidebar_refresh, selected_uri, name.clone(),
+                                );
+                            }
+                        }));
+                    }
+                });
+                let failure_parent = parent.clone();
+                let failure: Rc<dyn Fn(String)> = Rc::new(move |error| {
+                    crate::source::net_trace(format!(
+                        "nfs_ui_error uri={root} message={error}"
+                    ));
+                    show_error(&failure_parent, "Could not connect to NFS share", &error);
+                });
+                connect_nfs_direct(
+                    chooser_root,
+                    parent_window.clone().upcast::<gtk::Window>(),
+                    failure,
+                    open_browser,
+                );
                 return;
             }
             if !chooser_root.starts_with("smb://") {
@@ -3555,9 +3587,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let coalesced_refresh = CoalescedAvailabilityRefresh::new(availability_refresh.clone());
         for (index, root) in roots.into_iter().enumerate() {
             if root.starts_with("nfs://") {
-                crate::source::net_trace(format!(
-                    "startup_nfs_unavailable uri={root} (private transport not implemented)"
-                ));
+                schedule_startup_nfs_probe(root, startup_remount_delay(0, index), coalesced_refresh.clone());
                 continue;
             }
             if !root.starts_with("smb://") {
@@ -3624,6 +3654,40 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     startup_phase("build_done_pre_present", &widgets_started);
 
     window
+}
+
+fn schedule_startup_nfs_probe(
+    root: String,
+    delay_ms: u64,
+    availability_refresh: CoalescedAvailabilityRefresh,
+) {
+    crate::source::net_trace(format!("startup_nfs_probe uri={root} delay_ms={delay_ms}"));
+    glib::timeout_add_local_once(std::time::Duration::from_millis(delay_ms), move || {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker_root = root.clone();
+        std::thread::spawn(move || {
+            let result = crate::nfs_transport::stat(&worker_root);
+            let _ = sender.send(result.map(|_| ()).map_err(|error| error.to_string()));
+        });
+        glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+            match receiver.try_recv() {
+                Ok(Ok(())) => {
+                    crate::source::net_trace(format!("startup_nfs_probe_done uri={root} ok=true"));
+                    availability_refresh.schedule();
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(error)) => {
+                    crate::source::net_trace(format!(
+                        "startup_nfs_probe_done uri={root} ok=false reason={error}"
+                    ));
+                    availability_refresh.schedule();
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            }
+        });
+    });
 }
 
 /// Throttled availability refresh: many SMB probe completions collapse into

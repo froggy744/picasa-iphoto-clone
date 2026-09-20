@@ -880,6 +880,7 @@ pub fn show_network_folder_browser(
             let (sender, receiver) = std::sync::mpsc::channel::<NetworkBrowseMessage>();
             let uri_for_worker = uri.clone();
             let direct_smb = uri_for_worker.starts_with("smb://");
+            let direct_nfs = uri_for_worker.starts_with("nfs://");
             std::thread::spawn(move || {
                 let enumerate_started = std::time::Instant::now();
                 let mut directories: Vec<(String, String, bool)> = Vec::new();
@@ -905,8 +906,25 @@ pub fn show_network_folder_browser(
                         }
                         Err(error) => failure = Some(error.to_string()),
                     }
+                } else if direct_nfs {
+                    match crate::nfs_transport::list_dir(&uri_for_worker) {
+                        Ok(entries) => {
+                            for entry in entries {
+                                if entry.name.starts_with('.') {
+                                    continue;
+                                }
+                                let child_uri = format!(
+                                    "{}/{}",
+                                    uri_for_worker.trim_end_matches('/'),
+                                    percent_encode(&entry.name)
+                                );
+                                directories.push((entry.name, child_uri, false));
+                            }
+                        }
+                        Err(error) => failure = Some(error),
+                    }
                 } else {
-                    failure = Some(crate::source::NFS_UNAVAILABLE.to_string());
+                    failure = Some("No private transport for this network location".to_string());
                 }
                 match failure {
                     Some(message) => {
@@ -1388,6 +1406,42 @@ fn connect_smb_direct(
                 );
                 crate::source::refresh_availability();
                 on_unavailable();
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+}
+
+pub(crate) fn connect_nfs_direct(
+    path: String,
+    parent: gtk::Window,
+    on_failure: Rc<dyn Fn(String)>,
+    on_success: Rc<dyn Fn()>,
+) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker_path = crate::source::normalize_import_reference(&path);
+    std::thread::spawn(move || {
+        let result = crate::nfs_transport::stat(&worker_path).map(|_| ());
+        let _ = sender.send(result);
+    });
+    let path_for_log = path.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                crate::source::net_trace(format!("connect_nfs_ok uri={path_for_log}"));
+                crate::source::refresh_availability();
+                on_success();
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                crate::source::net_trace(format!(
+                    "nfs_ui_error uri={path_for_log} message={error}"
+                ));
+                let parent_widget = parent.clone().upcast::<gtk::Widget>();
+                on_failure(error);
+                drop(parent_widget);
                 glib::ControlFlow::Break
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
