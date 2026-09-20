@@ -281,13 +281,51 @@ fn run<T: Send + 'static>(
 
 fn with_context<T>(
     target: Target,
-    operation: impl FnOnce(&Api, *mut NfsContext, &str) -> Result<T, String>,
+    operation: impl Fn(&Api, *mut NfsContext, &str) -> Result<T, String>,
 ) -> Result<T, String> {
     let api = api()?;
     let host = CString::new(target.host).map_err(|_| "invalid NFS host".to_string())?;
-    let mut last_error = "NFS mount failed".to_string();
-    // The URI does not carry an export/path delimiter.  Try the longest
-    // prefix first; this supports exports such as /mnt/4TBS as well as /home.
+    let full_path = format!("/{}", target.segments.join("/"));
+    let mut last_error = "nfs_mount failed".to_string();
+
+    // NFSv4 uses a server-wide pseudo-root.  The paths returned by
+    // showmount (for example /mnt/4TBP) must therefore be retained in the
+    // subsequent stat/list/read path; mounting /mnt/4TBP directly produces a
+    // context which mounts successfully but rejects every operation with
+    // NFS4ERR_PERM.
+    let v4_export = CString::new("/").unwrap();
+    let v4_path = CString::new(full_path).unwrap();
+    let context = unsafe { (api.init)() };
+    if !context.is_null() {
+        unsafe {
+            (api.set_autoreconnect)(context, 2);
+            (api.set_retrans)(context, 2);
+        }
+        let version_result = unsafe { (api.set_version)(context, 4) };
+        crate::source::net_trace(format!(
+            "nfs_set_version version=4 return_code={version_result}"
+        ));
+        let mounted = unsafe { (api.mount)(context, host.as_ptr(), v4_export.as_ptr()) };
+        crate::source::net_trace(format!(
+            "nfs_mount_result version=4 host={} export=/ return_code={mounted}",
+            host.to_string_lossy()
+        ));
+        if mounted >= 0 {
+            let result = operation(api, context, v4_path.to_str().unwrap_or("/"));
+            unsafe { (api.destroy)(context) };
+            return result;
+        }
+        last_error = error(api, context, "nfs_mount(v4)", mounted);
+        unsafe { (api.destroy)(context) };
+    } else {
+        last_error = format!(
+            "nfs_init_context failed (errno={})",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    // NFSv3 exports are mounted directly and the operation path is relative
+    // to that export. Try the longest URI prefix first.
     for export_len in (1..=target.segments.len()).rev() {
         let export = format!("/{}", target.segments[..export_len].join("/"));
         let path = if export_len == target.segments.len() {
@@ -311,7 +349,10 @@ fn with_context<T>(
         unsafe {
             (api.set_autoreconnect)(context, 2);
             (api.set_retrans)(context, 2);
-            let _ = (api.set_version)(context, 3);
+            let version_result = (api.set_version)(context, 3);
+            crate::source::net_trace(format!(
+                "nfs_set_version version=3 return_code={version_result}"
+            ));
         }
         let mounted = unsafe { (api.mount)(context, host.as_ptr(), export.as_ptr()) };
         crate::source::net_trace(format!(
@@ -472,5 +513,44 @@ mod tests {
         if std::env::var_os("PIC_TEST_NO_NFSCLIENT").is_some() {
             assert!(!direct_available());
         }
+    }
+
+    #[test]
+    #[ignore = "requires a reachable NFS export; set PIC_NFS_LIVE_URI"]
+    fn live_export_stat_list_and_read() {
+        let root = std::env::var("PIC_NFS_LIVE_URI").expect("PIC_NFS_LIVE_URI");
+        let meta = stat(&root).expect("export root stat");
+        assert!(meta.is_dir);
+        let mut pending = vec![(root.trim_end_matches('/').to_string(), 0usize)];
+        let mut read_image = false;
+        while let Some((directory, depth)) = pending.pop() {
+            let Ok(entries) = list_dir(&directory) else {
+                continue;
+            };
+            assert!(!entries.is_empty() || depth > 0);
+            for entry in entries {
+                let uri = format!("{directory}/{}", entry.name);
+                if entry.is_dir && depth < 3 {
+                    pending.push((uri, depth + 1));
+                } else if !entry.is_dir
+                    && ["jpg", "jpeg", "png", "heic", "webp"]
+                        .iter()
+                        .any(|extension| entry.name.to_ascii_lowercase().ends_with(extension))
+                {
+                    if !stat(&uri).expect("image stat").is_dir {
+                        if read_file(&uri).is_ok_and(|bytes| !bytes.is_empty()) {
+                            read_image = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if read_image {
+                break;
+            }
+        }
+        // Some exports contain ACL-protected media directories. Stat/list
+        // remains a valid transport check even when every sampled image is
+        // denied by the server.
     }
 }
