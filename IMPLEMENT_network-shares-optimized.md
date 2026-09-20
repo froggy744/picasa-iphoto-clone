@@ -343,3 +343,34 @@ Then run the existing tests.
 
 Do not add extra features beyond this task.
 
+
+---
+
+## Mounted-visibility policy (post-audit)
+
+Requirement: PIC must never put a network share into Nautilus merely by
+starting, browsing, importing, or recovering photos.
+
+How this is met:
+
+- SMB: listed and read exclusively through the direct libsmbclient
+  transport. PIC creates no gvfs SMB mount at all.
+- gvfs mounts PIC itself creates (NFS only) are recorded as PIC-owned and
+  unmounted again after 5 minutes of no NFS activity.
+- PIC only ever unmounts a mount it performed itself this session. An
+  "already mounted" location may be a user mount from Nautilus and is
+  never recorded, never unmounted.
+- The explicit "Open in file manager" action keeps its visible mount by
+  design: the mount exists FOR the file browser.
+
+### Remaining limitation: NFS
+
+NFS has no direct transport (gvfs is the only reader), so during active
+use - folder browsing in the Add dialog, an import scan, or photo reads
+(lightbox / thumbnail recovery) - PIC mounts the export through gvfs, and
+that mount is session-wide and therefore Nautilus-visible while it lasts.
+The idle unmount removes it 5 minutes after the last NFS activity, but in
+the window between an NFS operation and that unmount the share CAN appear
+in Nautilus. This does not fully meet the no-visible-mount requirement
+and is accepted as a known limitation; a full fix would require an NFS
+client library (e.g. libnfs) so gvfs is never needed.
