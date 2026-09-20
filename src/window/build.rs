@@ -2811,7 +2811,29 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let connection_for_share = connection.clone();
     let scan_job_for_share = scan_job.clone();
     let start_next_scan_for_share = start_next_scan.clone();
-    let sidebar_refresh_for_share = availability_refresh.clone();
+    // Registration changes the *set of sidebar rows*, not necessarily any
+    // availability state. Refresh Network Shares immediately from the database;
+    // availability refresh alone may report `no_updates` and skip the new row.
+    let sidebar_refresh_for_share: Rc<dyn Fn()> = {
+        let availability_refresh = availability_refresh.clone();
+        let sidebar = sidebar_for_unavailable.clone();
+        let connection = connection.clone();
+        Rc::new(move || {
+            if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
+                match db::folders_cached(&connection.borrow()) {
+                    Ok(folders) => sidebar::refresh_folder_rows(
+                        &sidebar,
+                        &folders,
+                        &availability_refresh,
+                    ),
+                    Err(error) => crate::source::net_trace(format!(
+                        "network_share_sidebar_refresh_failed error={error}"
+                    )),
+                }
+            }
+            availability_refresh();
+        })
+    };
     let window_for_share = window.clone();
     add_network_share_slot.replace(Some(Rc::new(move || {
         let connection = connection_for_share.clone();
@@ -2829,6 +2851,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             // service endpoint, not a mountable export - GIO mounts
             // nfs://host/export).
             let chooser_root = crate::source::network_browse_root(&browse_root);
+            // DNS-SD advertises nfs://host/mnt as a *service*, not an export.
+            // Show the server's actual showmount exports instead of trying to
+            // stat /mnt through the restricted helper.
+            let chooser_root = if chooser_root.starts_with("nfs://")
+                && chooser_root.ends_with("/mnt/")
+                && chooser_root.trim_end_matches('/').matches('/').count() == 3
+            {
+                chooser_root.trim_end_matches("mnt/").to_string()
+            } else {
+                chooser_root
+            };
             if !chooser_root.contains("://") || !chooser_root.ends_with('/') {
                 let message = format!(
                     "could not browse {browse_root}: not a valid network location"

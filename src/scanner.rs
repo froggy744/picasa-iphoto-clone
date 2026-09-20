@@ -261,6 +261,14 @@ fn scan_with_control(
         return Ok(imported);
     }
     send(events, ScanEvent::IndexingFinished { imported });
+    // Prioritize quick previews over large RAW downloads on NFS.
+    // Preserve this order for the result zip below.
+    if root.starts_with("nfs://") {
+        thumbnails.sort_by_key(|(path, _, size)| {
+            let raw = is_raw(path);
+            (raw, size.unwrap_or(i64::MAX))
+        });
+    }
     send(
         events,
         ScanEvent::ThumbnailsStarted {
@@ -335,8 +343,12 @@ fn collect_smb_files(
         if visited > 20_000 {
             anyhow::bail!("SMB scan runaway: more than 20000 directories under {root_path}");
         }
+        // A trailing slash is needed for the transport request, but is NOT
+        // part of the database folder key. The registered share has no final
+        // slash; inserting a second row for "share/" strands its photos outside
+        // that share's folder-ID subtree after parent-link repair.
         let dir_uri = format!("{directory}/");
-        folders.push((dir_uri.clone(), parent_path));
+        folders.push((directory.clone(), parent_path));
         let entries = crate::smb_transport::list_dir(&dir_uri)
             .map_err(|error| anyhow::anyhow!("could not list {dir_uri}: {error}"))?;
         for entry in entries {
@@ -351,7 +363,7 @@ fn collect_smb_files(
                 // Same Lightroom-artifact skip as the gvfs walk.
                 let name = entry.name.to_ascii_lowercase();
                 if !name.ends_with(".lrdata") && name != "previews" && name != "cache" {
-                    pending.push((child_uri, Some(dir_uri.clone())));
+                    pending.push((child_uri, Some(directory.clone())));
                 }
                 continue;
             }
@@ -372,7 +384,7 @@ fn collect_smb_files(
                     info.set_modification_date_time(&date_time);
                 }
             }
-            files.push((gio::File::for_uri(&child_uri), info, dir_uri.clone()));
+            files.push((gio::File::for_uri(&child_uri), info, directory.clone()));
         }
     }
     Ok((files, folders))
@@ -397,8 +409,12 @@ fn collect_nfs_files(
         if visited > 20_000 {
             anyhow::bail!("NFS scan runaway: more than 20000 directories under {root_path}");
         }
+        // A trailing slash is needed for the transport request, but is NOT
+        // part of the database folder key. The registered share has no final
+        // slash; inserting a second row for "share/" strands its photos outside
+        // that share's folder-ID subtree after parent-link repair.
         let dir_uri = format!("{directory}/");
-        folders.push((dir_uri.clone(), parent_path));
+        folders.push((directory.clone(), parent_path));
         let entries = crate::nfs_transport::list_dir(&dir_uri)
             .map_err(|error| anyhow::anyhow!("could not list {dir_uri}: {error}"))?;
         for entry in entries {
@@ -412,7 +428,7 @@ fn collect_nfs_files(
             if entry.is_dir {
                 let name = entry.name.to_ascii_lowercase();
                 if !name.ends_with(".lrdata") && name != "previews" && name != "cache" {
-                    pending.push((child_uri, Some(dir_uri.clone())));
+                    pending.push((child_uri, Some(directory.clone())));
                 }
                 continue;
             }
@@ -429,7 +445,7 @@ fn collect_nfs_files(
             if let Ok(date_time) = glib::DateTime::from_unix_utc(meta.mtime) {
                 info.set_modification_date_time(&date_time);
             }
-            files.push((gio::File::for_uri(&child_uri), info, dir_uri.clone()));
+            files.push((gio::File::for_uri(&child_uri), info, directory.clone()));
         }
     }
     Ok((files, folders))

@@ -12,6 +12,19 @@ pub fn open_default() -> Result<Connection> {
     open(&path)
 }
 
+/// Open the initialized database without running migrations on grid refresh.
+/// A short busy timeout also allows WAL readers to wait out brief contention.
+pub fn open_default_read_only() -> Result<Connection> {
+    let path = database_path()?;
+    let connection = Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .with_context(|| format!("could not open read-only database {}", path.display()))?;
+    connection.busy_timeout(std::time::Duration::from_secs(3))?;
+    Ok(connection)
+}
+
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)

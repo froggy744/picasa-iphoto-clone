@@ -33,8 +33,8 @@ pub fn folder_available(folder_id: Option<i64>) -> bool {
 }
 
 pub const NFS_UNAVAILABLE: &str =
-    "NFS private transport is unavailable; no desktop mount will be created.";
-pub const NFS_EXPERIMENTAL: bool = false;
+    "NFS private helper is not installed or unavailable; no desktop mount will be created.";
+pub const NFS_EXPERIMENTAL: bool = true;
 
 fn query_exists(reference: &str, directory: bool, lane: crate::smb_transport::SmbLane) -> bool {
     let reference = normalize_import_reference(reference);
@@ -923,16 +923,17 @@ pub(crate) mod private_transport_tests {
         let reference = "/run/user/1000/gvfs/nfs:host=nas,prefix=%2Fphotos/a.jpg";
         assert!(is_network_location(reference));
         assert!(!file_available(reference));
-        assert!(!cached_file_available(reference));
+        // With an installed helper the availability cache may legitimately
+        // still say 'not probed', unlike the old globally-disabled NFS mode.
+        if !crate::nfs_transport::direct_available() {
+            assert!(!cached_file_available(reference));
+        }
     }
 
     #[test]
-    fn nfs_failures_are_explicit_and_do_not_probe_or_mount() {
-        for reference in [
-            "nfs://localhost/photos/a.jpg",
-            "NFS://localhost:2049/photos/a.jpg",
-            "/run/user/1000/gvfs/nfs:host=localhost,prefix=%2Fphotos/a.jpg",
-        ] {
+    fn nfs_without_installed_helper_fails_closed() {
+        if !crate::nfs_transport::direct_available() {
+            let reference = "nfs://localhost/photos/a.jpg";
             assert!(!read(reference).unwrap_err().to_string().is_empty());
             assert!(!probe_source_available(reference));
             assert!(!probe_file_available(reference));

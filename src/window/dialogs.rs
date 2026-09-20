@@ -930,7 +930,9 @@ pub fn show_network_folder_browser(
                         }
                     } else if let Err(error) = crate::nfs_transport::list_dir(&uri_for_worker).map(|entries| {
                         for entry in entries {
-                            if entry.name.starts_with('.') {
+                            // This is a folder picker, not a file browser. Keep
+                            // files in the transport results for the photo scanner.
+                            if !entry.is_dir || entry.name.starts_with('.') {
                                 continue;
                             }
                             let child_uri = format!(

@@ -163,10 +163,13 @@ fn refresh_grid_inner(
         crate::source::net_trace(format!(
             "grid_query_start op={op} filter={filter:?} folder_stream={folder_stream}"
         ));
-        let Ok(connection) = db::open_default() else {
-            crate::source::net_trace(format!("grid_failed op={op}"));
-            let _ = sender.send(GridPayload::Failed);
-            return;
+        let connection = match db::open_default_read_only() {
+            Ok(connection) => connection,
+            Err(error) => {
+                crate::source::net_trace(format!("grid_failed op={op} error={error:#}"));
+                let _ = sender.send(GridPayload::Failed);
+                return;
+            }
         };
 
         if let Some((share_id, share_path)) = share_target {
