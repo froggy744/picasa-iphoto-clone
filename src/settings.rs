@@ -410,7 +410,7 @@ fn library_page(
     append_row(
         &list,
         "Clear all",
-        Some("Indexed photos, albums, registered folders, and cached thumbnails are all deleted."),
+        Some("Indexed photos, albums, registered folders, and every cached file (thumbnails, materialized sources, wallpapers) are all deleted."),
         Some(clear_all_button.upcast_ref()),
     );
     content.append(&list);

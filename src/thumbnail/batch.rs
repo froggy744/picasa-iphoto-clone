@@ -116,6 +116,20 @@ pub fn clear_cache() -> Result<()> {
     Ok(())
 }
 
+/// Wipe the whole application cache root - `thumbs/`, `source/`
+/// (materialized remote RAWs), `wallpaper/`, and anything else under it.
+/// Used by "Clear all": the database is emptied too, so no cached file can
+/// still be referenced. `cache_dir()` re-creates `thumbs/` on demand, and
+/// `create_dir_all` on each write re-creates shard folders, so nothing needs
+/// to be restored here.
+pub fn clear_all_cache() -> Result<()> {
+    let directory = cache_dir()?;
+    if directory.exists() {
+        fs::remove_dir_all(&directory)?;
+    }
+    Ok(())
+}
+
 fn resize(source: image::RgbImage) -> Result<image::RgbImage> {
     let (width, height) = source.dimensions();
     let scale = THUMBNAIL_SIZE as f64 / width.max(height) as f64;

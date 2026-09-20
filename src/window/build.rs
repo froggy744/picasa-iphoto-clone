@@ -591,8 +591,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 if let Err(error) = db::clear_all(&connection.borrow()) {
                     eprintln!("Could not clear database: {error}");
                 }
-                if let Err(error) = crate::thumbnail::clear_cache() {
-                    eprintln!("Could not clear thumbnails: {error}");
+                if let Err(error) = crate::thumbnail::clear_all_cache() {
+                    eprintln!("Could not clear the cache: {error}");
                 }
                 refresh_grid(
                     &connection,
