@@ -2966,21 +2966,6 @@ fn add_share_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &F
         }
         menu.append(&open_item);
 
-        // This opens the registered share in the system file manager without
-        // moving it into PIC's local Folders section.
-        let open_network_folder = gtk::Button::with_label("Open Network Folder in Files");
-        open_network_folder.add_css_class("flat");
-        {
-            let path = folder_for_menu.path.clone();
-            let popover_for_folder = popover.clone();
-            open_network_folder.connect_clicked(move |_| {
-                popover_for_folder.popdown();
-                let uri = crate::source::file(&path).uri();
-                let _ = gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>);
-            });
-        }
-        menu.append(&open_network_folder);
-
         let retry_item = gtk::Button::with_label("Retry Connection");
         retry_item.add_css_class("flat");
         {

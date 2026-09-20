@@ -569,6 +569,14 @@ fn show_photo_context_menu(
     });
 
     let file = crate::source::file(&photo.path());
+    if crate::source::is_network_location(&photo.path()) {
+        open_with.set_sensitive(false);
+        open_with.set_tooltip_text(Some("Export a local copy to open this photo in another application."));
+        file_manager.set_sensitive(false);
+        file_manager.set_tooltip_text(Some("This network location is private to PIC."));
+        rename.set_sensitive(false);
+        rename.set_tooltip_text(Some("Renaming network originals is not supported by the private transport."));
+    }
     let open_with_file = file.clone();
     let open_with_window = context.window.clone();
     let dismiss_menu_for_open_with = dismiss_menu.clone();
@@ -971,6 +979,10 @@ fn apply_wallpaper(path: &std::path::Path) -> anyhow::Result<()> {
 }
 
 fn show_open_with_dialog(parent: &gtk::Widget, file: &gio::File) {
+    if crate::source::is_network_location(&crate::source::reference(file)) {
+        show_error(parent, "Private network photo", "Export a local copy to open this photo in another application.");
+        return;
+    }
     let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
     content.set_margin_top(6);
     content.set_margin_bottom(6);
@@ -1069,6 +1081,10 @@ fn show_rename_dialog(
             .flatten()
             .map(|record| (record.mtime, record.size_bytes));
         let source = crate::source::file(&photo.path());
+        if crate::source::is_network_location(&photo.path()) {
+            show_error(&parent_for_response, "Could not rename photo", "Renaming network originals is not supported by the private transport.");
+            return;
+        }
         let renamed = match source.set_display_name(&new_name, gio::Cancellable::NONE) {
             Ok(file) => file,
             Err(error) => {
@@ -1170,6 +1186,10 @@ fn show_delete_confirmation(
                 }
             };
 
+            if crate::source::is_network_location(&path) {
+                show_error(&parent_for_response, "Could not delete photo", "Trashing network originals is not supported by the private transport. You can remove photos from the PIC library instead.");
+                return;
+            }
             if let Err(error) = db::set_trashed(&context.connection.borrow(), *id, true) {
                 show_error(
                     &parent_for_response,

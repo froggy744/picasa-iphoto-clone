@@ -214,6 +214,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     
                     continue;
                 };
+                if crate::source::is_network_location(&folder.path) { continue; }
                 let watched_path = folder.path.clone();
                 let file = crate::source::file(&watched_path);
                 let monitor = match file.monitor_directory(
@@ -2845,113 +2846,37 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let start_next_scan = start_next_scan.clone();
             let sidebar_refresh = sidebar_refresh.clone();
             let parent_window = parent_window.clone();
-            let mount_parent = parent_window.clone().upcast::<gtk::Window>();
-            let root_for_mount = chooser_root.clone();
-            let parent_for_mount_error = parent.clone();
-            let parent_widget = parent_window.clone().upcast::<gtk::Widget>();
-            let parent_for_register = parent.clone();
-            if chooser_root.starts_with("smb://") && crate::smb_transport::direct_available() {
-                // Direct SMB browse: listing runs through libsmbclient, so no
-                // gvfs mount is created (every gvfs mount PIC creates shows
-                // up in Nautilus). Pre-flight the share listing first: some
-                // Samba servers hide their share list from anonymous
-                // sessions (the listing succeeds but is empty, observed on
-                // DietPi) while the shares themselves are readable. An empty
-                // listing falls back to the gvfs path, whose mount dialog
-                // collects credentials gvfs can enumerate with.
-                crate::source::net_trace(format!("connect_direct uri={chooser_root}"));
-                let (probe_sender, probe_receiver) = std::sync::mpsc::channel::<usize>();
-                let root_for_probe = chooser_root.clone();
-                std::thread::spawn(move || {
-                    let _ = probe_sender.send(
-                        crate::smb_transport::list_shares(&root_for_probe)
-                            .map(|shares| shares.len())
-                            .unwrap_or(0),
-                    );
-                });
-                // Clone set for the direct browser.
-                let connection_a = connection.clone();
-                let scan_job_a = scan_job.clone();
-                let start_next_scan_a = start_next_scan.clone();
-                let sidebar_refresh_a = sidebar_refresh.clone();
-                let parent_a = parent.clone();
-                let chooser_root_a = chooser_root.clone();
-                let name_a = name.clone();
-                let parent_widget_a = parent_window.clone().upcast::<gtk::Widget>();
-                // Clone set for the gvfs fallback.
-                let connection_b = connection.clone();
-                let scan_job_b = scan_job.clone();
-                let start_next_scan_b = start_next_scan.clone();
-                let sidebar_refresh_b = sidebar_refresh.clone();
-                let parent_b = parent.clone();
-                let parent_window_b = parent_window.clone();
-                let chooser_root_b = chooser_root.clone();
-                let name_b = name.clone();
-                glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-                    match probe_receiver.try_recv() {
-                        Ok(share_count) => {
-                            if share_count > 0 {
-                                crate::source::net_trace(format!(
-                                    "connect_direct_shares uri={chooser_root_a} count={share_count}"
-                                ));
-                                show_network_folder_browser(
-                                    parent_widget_a.clone(),
-                                    chooser_root_a.clone(),
-                                    Rc::new({
-                                        let connection_a = connection_a.clone();
-                                        let parent_a = parent_a.clone();
-                                        let scan_job_a = scan_job_a.clone();
-                                        let start_next_scan_a = start_next_scan_a.clone();
-                                        let sidebar_refresh_a = sidebar_refresh_a.clone();
-                                        let name_a = name_a.clone();
-                                        move |selected_uri: String| {
-                                            register_selected_network_share(
-                                                &connection_a,
-                                                &parent_a,
-                                                &scan_job_a,
-                                                &start_next_scan_a,
-                                                &sidebar_refresh_a,
-                                                selected_uri,
-                                                name_a.clone(),
-                                            );
-                                        }
-                                    }),
-                                );
-                            } else {
-                                crate::source::net_trace(
-                                    "connect_direct_no_shares - gvfs fallback (anonymous share listing is restricted on this server)",
-                                );
-                                open_gvfs_browser_for_connect(
-                                    chooser_root_b.clone(),
-                                    name_b.clone(),
-                                    connection_b.clone(),
-                                    scan_job_b.clone(),
-                                    start_next_scan_b.clone(),
-                                    sidebar_refresh_b.clone(),
-                                    parent_window_b.clone().upcast::<gtk::Window>(),
-                                    parent_b.clone(),
-                                );
-                            }
-                            glib::ControlFlow::Break
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            glib::ControlFlow::Break
-                        }
-                    }
-                });
+            if chooser_root.starts_with("nfs://") {
+                let display_name = if name.is_empty() { crate::source::filename(&chooser_root) } else { name };
+                if let Err(error) = db::insert_network_share(&connection.borrow(), &chooser_root, &display_name) {
+                    show_error(&parent, "Could not add network share", &error.to_string());
+                    return;
+                }
+                sidebar_refresh();
+                show_error(&parent, "NFS unavailable", crate::source::NFS_UNAVAILABLE);
                 return;
             }
-            open_gvfs_browser_for_connect(
-                chooser_root,
-                name,
-                connection,
-                scan_job,
-                start_next_scan,
-                sidebar_refresh,
-                parent_window.upcast::<gtk::Window>(),
-                parent,
-            );
+            if !chooser_root.starts_with("smb://") {
+                show_error(&parent, "Could not connect", "No private transport for this network location.");
+                return;
+            }
+            let parent_widget = parent_window.clone().upcast::<gtk::Widget>();
+            let open_browser: Rc<dyn Fn()> = Rc::new({
+                let root = chooser_root.clone();
+                move || {
+                    let connection = connection.clone();
+                    let parent = parent.clone();
+                    let scan_job = scan_job.clone();
+                    let start_next_scan = start_next_scan.clone();
+                    let sidebar_refresh = sidebar_refresh.clone();
+                    let name = name.clone();
+                    show_network_folder_browser(parent_widget.clone(), root.clone(), Rc::new(move |selected_uri| {
+                        register_selected_network_share(&connection, &parent, &scan_job,
+                            &start_next_scan, &sidebar_refresh, selected_uri, name.clone());
+                    }));
+                }
+            });
+            connect_smb_direct(chooser_root, parent_window.upcast::<gtk::Window>(), Rc::new(|| {}), None, Some(open_browser));
         });
         show_add_network_share_dialog(parent_for_dialog.upcast::<gtk::Widget>(), on_connect);
     })));
@@ -3110,9 +3035,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let mut last_progress_update = Instant::now();
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
-        // Reclaim NFS gvfs mounts once nothing used them for a while; the
-        // check itself is a single Instant comparison.
-        crate::source::nfs_idle_unmount_tick();
         // Drain event-triggered recovery requests once the current scan ends.
         // With no request, this checks only a flag and performs no disk probes.
         start_thumbnail_recovery();
@@ -3618,8 +3540,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // - SMB shares are probed DIRECTLY through libsmbclient: no gvfs mount,
     //   nothing appears in Nautilus, guest or Secret Service credentials are
     //   used silently, and a failed login never prompts at startup.
-    // - NFS exports are manual-only: they stay registered and offline until
-    //   the user runs Retry Connection (interactive gvfs), by design.
+    // - NFS exports stay registered and offline until a private NFS client
+    //   is available. Retry never creates a desktop mount.
     // Registered folders and cached thumbnails stay visible either way.
     {
         let shares = db::network_shares(&connection.borrow()).unwrap_or_default();
@@ -3634,7 +3556,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         for (index, root) in roots.into_iter().enumerate() {
             if root.starts_with("nfs://") {
                 crate::source::net_trace(format!(
-                    "startup_nfs_manual uri={root} (no automatic NFS mounts)"
+                    "startup_nfs_unavailable uri={root} (private transport not implemented)"
                 ));
                 continue;
             }
@@ -3753,59 +3675,9 @@ impl CoalescedAvailabilityRefresh {
     }
 }
 
-/// Open the folder browser behind a gvfs mount (auth dialog if the server
-/// demands credentials). Fallback for servers whose share listing is
-/// hidden from anonymous sessions: gvfs keeps its own credential context,
-/// so its enumeration still sees the shares the direct transport cannot.
-fn open_gvfs_browser_for_connect(
-    chooser_root: String,
-    name: String,
-    connection: Rc<RefCell<Connection>>,
-    scan_job: Rc<RefCell<ScanJobState>>,
-    start_next_scan: Rc<dyn Fn()>,
-    sidebar_refresh: Rc<dyn Fn()>,
-    parent_window: gtk::Window,
-    parent: gtk::Widget,
-) {
-    let mount_parent = parent_window.clone().upcast::<gtk::Window>();
-    let parent_for_mount_error = parent.clone();
-    let parent_widget = parent_window.clone().upcast::<gtk::Widget>();
-    let chooser_root_for_callback = chooser_root.clone();
-    crate::source::mount_share_async(&chooser_root, Some(&mount_parent), move |result| {
-        if let Err(message) = result {
-            // The real GIO/GVfs error text is included in `message`, so a
-            // failed NFS mount shows why instead of silently falling through
-            // to an empty browser.
-            show_error(
-                &parent_for_mount_error,
-                "Could not connect to network share",
-                &message,
-            );
-            sidebar_refresh();
-            return;
-        }
-        crate::source::net_trace(format!("browse_opened root={chooser_root_for_callback}"));
-        show_network_folder_browser(
-            parent_widget,
-            chooser_root_for_callback,
-            Rc::new(move |selected_uri: String| {
-                register_selected_network_share(
-                    &connection,
-                    &parent,
-                    &scan_job,
-                    &start_next_scan,
-                    &sidebar_refresh,
-                    selected_uri,
-                    name.clone(),
-                );
-            }),
-        );
-    });
-}
 
 /// Register the folder the user picked in the network browser as a share,
-/// then scan it. Shared by the direct-SMB path (no mount happened) and the
-/// gvfs path (the location is mounted and verified by browsing into it).
+/// then scan it through the private SMB transport.
 fn register_selected_network_share(
     connection: &Rc<RefCell<Connection>>,
     parent: &gtk::Widget,
@@ -3858,29 +3730,10 @@ fn schedule_startup_smb_probe(
             let (sender, receiver) = std::sync::mpsc::channel::<(bool, String)>();
             let root_for_worker = root.clone();
             std::thread::spawn(move || {
-                // Direct libsmbclient stat probes (native). Sandboxed flatpak
-                // builds fall back to a gvfs probe so SMB shares still come
-                // online without libsmbclient.
-                let (ok, reason) = if crate::smb_transport::direct_available() {
-                    let outcome = crate::smb_transport::stat_in_lane(
-                        &root_for_worker,
-                        crate::smb_transport::SmbLane::Background,
-                    );
-                    let ok = outcome.is_ok();
-                    let reason = outcome
-                        .err()
-                        .map(|error| error.to_string())
-                        .unwrap_or_else(|| String::from("ok"));
-                    (ok, reason)
-                } else {
-                    let ok = crate::source::probe_source_available(&root_for_worker);
-                    let reason = if ok {
-                        String::from("ok")
-                    } else {
-                        String::from("location could not be reached through gvfs")
-                    };
-                    (ok, reason)
-                };
+                let outcome = crate::smb_transport::stat_in_lane(
+                    &root_for_worker, crate::smb_transport::SmbLane::Background);
+                let ok = outcome.is_ok();
+                let reason = outcome.err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into());
                 let _ = sender.send((ok, reason));
             });
             let reprobe_state = std::cell::RefCell::new(if allow_reprobe {
@@ -3952,4 +3805,3 @@ mod startup_remount_tests {
         assert_eq!(startup_remount_delay(9, 0), 600_000);
     }
 }
-

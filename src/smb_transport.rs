@@ -2,8 +2,8 @@
 //!
 //! This is the foundation of the "REDESIGN SHARES MOUNT" transport: PIC reads
 //! SMB servers directly, so the automatic reconnect path never registers a
-//! gvfs mount and nothing appears in Nautilus. NFS stays on gvfs (manual-only
-//! reconnect); existing gvfs/Nautilus mounts are never touched.
+//! gvfs mount and nothing appears in Nautilus. Existing desktop mounts are
+//! never used or modified by this transport.
 //!
 //! Design notes:
 //! - The library is loaded from `libsmbclient.so.0` (runtime Samba library);
@@ -19,9 +19,9 @@
 //!   overlap a new one: a timeout is never merely hidden, the worker must
 //!   actually finish (bounded by the Samba context timeout) before further
 //!   SMB work is allowed.
-//! - Milestone 1 uses guest credentials only; the Secret Service credential
-//!   store is a later milestone.
+//! - Credentials stay in process memory and Secret Service, never in SQLite.
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uint, CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -58,7 +58,7 @@ impl SmbFileMeta {
 
 #[derive(Debug)]
 pub enum SmbTransportError {
-    /// The URI is not an SMB URI (NFS and other schemes stay on gvfs).
+    /// The URI is not an SMB URI.
     NotSmb,
     /// The URI has no share component; a server root is not readable over SMB.
     NoShare,
@@ -173,7 +173,7 @@ pub fn percent_encode_segment(segment: &str) -> String {
 /// lightbox read failures, every one on a legacy FUSE path). Normalizing at
 /// the read/probe boundary restores access without touching library
 /// records. Non-FUSE references (smb://, nfs://, local paths) pass through
-/// unchanged; NFS FUSE paths stay on gvfs by design.
+/// unchanged; source::normalize_import_reference handles NFS FUSE paths.
 pub fn normalize_smb_reference(reference: &str) -> String {
     if reference.starts_with("smb://") {
         return reference.to_string();
@@ -265,6 +265,7 @@ struct SmbDirent {
     name: [c_char; 1024],
 }
 
+const SMBC_TYPE_FILE_SHARE: c_uint = 3;
 const SMBC_TYPE_DIR: c_uint = 7;
 const SMBC_TYPE_FILE: c_uint = 8;
 
@@ -392,6 +393,12 @@ unsafe fn fill_buffer(value: &str, buffer: *mut c_char, capacity: c_int) {
 static API: OnceLock<Result<SmbApi, String>> = OnceLock::new();
 
 fn api() -> Result<&'static SmbApi, SmbTransportError> {
+    #[cfg(test)]
+    if std::env::var_os("PIC_TEST_NO_SMBCLIENT").is_some() {
+        return Err(SmbTransportError::Unavailable(
+            "disabled in isolated test process".into(),
+        ));
+    }
     let loaded = API.get_or_init(|| unsafe { load_smbclient() });
     loaded
         .as_ref()
@@ -533,40 +540,55 @@ impl SmbClient {
             if dir.is_null() {
                 return Err(SmbOpError::of(format!("cannot open smb directory: {url}")));
             }
-            let mut entries: Vec<SmbEntry> = Vec::new();
-            let mut iterations: usize = 0;
-            loop {
-                iterations += 1;
-                if iterations > 10_000 {
-                    return Err(SmbOpError::of(format!("smb readdir runaway: {url}")));
+            // Always close the handle, including cancellation and read errors.
+            let result = (|| {
+                let mut entries: Vec<SmbEntry> = Vec::new();
+                let mut iterations: usize = 0;
+                loop {
+                    iterations += 1;
+                    if iterations > 10_000 {
+                        return Err(SmbOpError::of(format!("smb readdir runaway: {url}")));
+                    }
+                    if cancel.load(Ordering::SeqCst) {
+                        return Err(SmbOpError::cancelled());
+                    }
+                    // NULL means either EOF or failure. Only EOF is a complete
+                    // listing that the scanner may use to reconcile deletions.
+                    *libc::__errno_location() = 0;
+                    let entry = (self.readdir)(self.ctx, dir);
+                    if entry.is_null() {
+                        if *libc::__errno_location() != 0 {
+                            return Err(SmbOpError::of(format!(
+                                "cannot read smb directory: {url}"
+                            )));
+                        }
+                        break;
+                    }
+                    let entry = &*entry;
+                    if !matches!(
+                        entry.smbc_type,
+                        SMBC_TYPE_FILE_SHARE | SMBC_TYPE_DIR | SMBC_TYPE_FILE
+                    ) {
+                        continue;
+                    }
+                    let name = CStr::from_ptr(entry.name.as_ptr())
+                        .to_string_lossy()
+                        .into_owned();
+                    if name.is_empty() || name == "." || name == ".." {
+                        continue;
+                    }
+                    entries.push(SmbEntry {
+                        name,
+                        is_dir: matches!(entry.smbc_type, SMBC_TYPE_FILE_SHARE | SMBC_TYPE_DIR),
+                        // Directory listings do not carry sizes in Samba 4.x;
+                        // sizes come from `stat`.
+                        size: 0,
+                    });
                 }
-                if cancel.load(Ordering::SeqCst) {
-                    return Err(SmbOpError::cancelled());
-                }
-                let entry = (self.readdir)(self.ctx, dir);
-                if entry.is_null() {
-                    break;
-                }
-                let entry = &*entry;
-                if entry.smbc_type != SMBC_TYPE_DIR && entry.smbc_type != SMBC_TYPE_FILE {
-                    continue;
-                }
-                let name = CStr::from_ptr(entry.name.as_ptr())
-                    .to_string_lossy()
-                    .into_owned();
-                if name.is_empty() || name == "." || name == ".." {
-                    continue;
-                }
-                entries.push(SmbEntry {
-                    name,
-                    is_dir: entry.smbc_type == SMBC_TYPE_DIR,
-                    // Directory listings do not carry sizes in Samba 4.x;
-                    // sizes come from `stat`.
-                    size: 0,
-                });
-            }
+                Ok(entries)
+            })();
             (self.closedir)(self.ctx, dir);
-            Ok(entries)
+            result
         }
     }
 
@@ -770,7 +792,7 @@ fn last_call_was_auth_failure() -> bool {
     matches!(error.raw_os_error(), Some(libc::EACCES) | Some(libc::EPERM))
 }
 
-/// A single mount attempt's failure, split by cause: `auth` failures are
+/// A single connection attempt's failure, split by cause: `auth` failures are
 /// worth retrying with other credentials; everything else (offline, missing
 /// share) is not.
 #[derive(Debug)]
@@ -787,7 +809,7 @@ impl From<SmbTransportError> for SmbAttemptError {
 }
 
 /// Credential ladder: an explicit override (freshly typed credentials) is
-/// used alone; otherwise guest first, then the Secret Service entry for this
+/// used alone; otherwise saved credentials first, then guest access for this
 /// exact server+share. A failed login never touches the stored entry.
 fn credential_ladder(
     target: &SmbTarget,
@@ -796,10 +818,11 @@ fn credential_ladder(
     if let Some(credentials) = override_creds {
         return vec![credentials.clone()];
     }
-    let mut candidates = vec![guest_credentials()];
+    let mut candidates = Vec::new();
     if let Some(stored) = stored_smb_credentials(target) {
         candidates.push(stored);
     }
+    candidates.push(guest_credentials());
     candidates
 }
 
@@ -916,6 +939,8 @@ where
     T: Send + 'static,
     Operation: Fn(&SmbClient, &AtomicBool) -> Result<T, SmbOpError> + Clone + Send + Sync + 'static,
 {
+    // Fail closed before accessing credentials when the private library is absent.
+    api()?;
     let candidates = credential_ladder(target, override_creds);
     let mut last: Option<SmbAttemptError> = None;
     for credentials in candidates {
@@ -988,7 +1013,27 @@ struct StoredSecret {
 /// None when nothing is stored (or no keyring service is reachable - e.g.
 /// tests without a session bus), never on a wrong password.
 fn stored_smb_credentials(target: &SmbTarget) -> Option<SmbCredentials> {
+    read_smb_credentials(target).or_else(|| {
+        if target.share.is_empty() {
+            return None;
+        }
+        let server = parse_smb_uri(&format!("smb://{}/", target.host))?;
+        read_smb_credentials(&server)
+    })
+}
+
+static SESSION_CREDENTIALS: OnceLock<Mutex<HashMap<String, SmbCredentials>>> = OnceLock::new();
+
+fn read_smb_credentials(target: &SmbTarget) -> Option<SmbCredentials> {
     let key = credential_key(target);
+    if let Some(credentials) = SESSION_CREDENTIALS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(&key)
+    {
+        return Some(credentials.clone());
+    }
     let entry = keyring::Entry::new(KEYRING_SERVICE, &key).ok()?;
     let secret = entry.get_password().ok()?;
     let parsed: StoredSecret = serde_json::from_str(&secret).ok()?;
@@ -1007,6 +1052,17 @@ fn stored_smb_credentials(target: &SmbTarget) -> Option<SmbCredentials> {
 pub fn store_smb_credentials(uri: &str, username: &str, password: &str) -> Result<(), String> {
     let target = parse_smb_uri(uri).ok_or_else(|| String::from("not an smb:// URI"))?;
     let key = credential_key(&target);
+    SESSION_CREDENTIALS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(
+            key.clone(),
+            SmbCredentials {
+                user: username.to_string(),
+                password: password.to_string(),
+            },
+        );
     let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
         .map_err(|error| format!("keyring unavailable: {error}"))?;
     let secret = serde_json::to_string(&StoredSecret {
@@ -1025,6 +1081,11 @@ pub fn store_smb_credentials(uri: &str, username: &str, password: &str) -> Resul
 pub fn delete_smb_credentials(uri: &str) -> Result<(), String> {
     let target = parse_smb_uri(uri).ok_or_else(|| String::from("not an smb:// URI"))?;
     let key = credential_key(&target);
+    SESSION_CREDENTIALS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .remove(&key);
     let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
         .map_err(|error| format!("keyring unavailable: {error}"))?;
     match entry.delete_credential() {
@@ -1038,14 +1099,12 @@ pub fn delete_smb_credentials(uri: &str) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Public transport operations (credential ladder: guest, then Secret
-// Service; auth failures advance the ladder, everything else stops it).
+// Public transport operations (saved credentials, then guest access;
+// auth failures advance the ladder, everything else stops it).
 // ---------------------------------------------------------------------------
 
 /// True when the direct libsmbclient transport is usable in this environment.
-/// The Sandboxed flatpak has no libsmbclient.so.0, so callers fall back to
-/// gvfs (see source::read / query_exists); native builds keep the direct
-/// transport unconditionally.
+/// Missing libraries mean offline; callers must never select a desktop backend.
 pub fn direct_available() -> bool {
     api().is_ok()
 }
@@ -1068,8 +1127,8 @@ pub fn list_dir(uri: &str) -> Result<Vec<SmbEntry>, SmbTransportError> {
     )
 }
 
-/// List the shares a server exposes (`smb://host/`). Guest first, then the
-/// stored Secret Service entry - the same ladder as every other operation.
+/// List the shares a server exposes (`smb://host/`) with the same private
+/// credential ladder as every other operation.
 pub fn list_shares(uri: &str) -> Result<Vec<String>, SmbTransportError> {
     let target = parse_smb_uri(uri).ok_or(SmbTransportError::NotSmb)?;
     let url = format!("smb://{}/", target.host);
@@ -1195,10 +1254,12 @@ pub fn check_available_with(
     password: &str,
 ) -> Result<SmbFileMeta, SmbTransportError> {
     let target = parse_smb_uri(uri).ok_or(SmbTransportError::NotSmb)?;
-    if target.share.is_empty() {
-        return Err(SmbTransportError::NoShare);
-    }
-    let url = target.smbc_url();
+    let server_root = target.share.is_empty();
+    let url = if server_root {
+        format!("smb://{}/", target.host)
+    } else {
+        target.smbc_url()
+    };
     let override_creds = SmbCredentials {
         user: username.to_string(),
         password: password.to_string(),
@@ -1217,7 +1278,22 @@ pub fn check_available_with(
         &target,
         SMB_OP_TIMEOUT,
         Some(&override_creds),
-        move |client, cancel| client.stat(&url, cancel),
+        move |client, cancel| {
+            if server_root {
+                client.opendir(&url, cancel).map(|entries| SmbFileMeta {
+                    size: 0,
+                    is_dir: true,
+                    mtime: None,
+                    shares: entries
+                        .into_iter()
+                        .filter(|entry| entry.is_dir)
+                        .map(|entry| entry.name)
+                        .collect(),
+                })
+            } else {
+                client.stat(&url, cancel)
+            }
+        },
     )
 }
 
@@ -1228,6 +1304,40 @@ pub fn check_available_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_credentials_precede_guest_and_explicit_credentials_are_exclusive() {
+        let target = parse_smb_uri("smb://pic-credential-test.invalid/photos").unwrap();
+        let key = credential_key(&target);
+        SESSION_CREDENTIALS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert(
+                key.clone(),
+                SmbCredentials {
+                    user: "saved-user".into(),
+                    password: "test-only".into(),
+                },
+            );
+        let candidates = credential_ladder(&target, None);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].user, "saved-user");
+        assert!(candidates[1].user.is_empty());
+        let typed = SmbCredentials {
+            user: "typed-user".into(),
+            password: "test-only".into(),
+        };
+        let candidates = credential_ladder(&target, Some(&typed));
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].user, "typed-user");
+        SESSION_CREDENTIALS
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .remove(&key);
+    }
 
     #[test]
     fn parses_stored_library_uris() {
@@ -1337,6 +1447,96 @@ mod tests {
     // Run with: cargo test smb_live -- --ignored --test-threads=1
 
     const LIVE_SHARE_URI: &str = "smb://dietpi.local/4tbs/";
+
+    #[test]
+    #[ignore = "requires the LAN SMB server and a GNOME session; use isolated XDG_CACHE_HOME"]
+    fn private_network_mount_list_smoke() {
+        fn mounts() -> Vec<String> {
+            let output = std::process::Command::new("gio")
+                .args(["mount", "-l"])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert!(
+                output.stderr.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let mut mounts: Vec<_> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.split_once(" -> ").map(|(_, uri)| uri.to_string()))
+                .collect();
+            mounts.sort();
+            mounts
+        }
+        let baseline = mounts();
+        let unchanged =
+            |step: &str| assert_eq!(mounts(), baseline, "desktop mounts changed after {step}");
+        for _ in crate::source::discover_network_locations() {}
+        unchanged("startup server discovery");
+        let server = "smb://dietpi.local/";
+        let shares = list_shares(server).expect("direct anonymous enumeration");
+        assert!(
+            shares
+                .iter()
+                .any(|share| share.eq_ignore_ascii_case("4tbs")),
+            "the known accessible share must survive entry decoding: {shares:?}"
+        );
+        unchanged("anonymous share enumeration");
+        check_available_with(server, "", "").expect("direct server authentication");
+        unchanged("server authentication");
+        assert!(crate::source::probe_source_available(LIVE_SHARE_URI));
+        unchanged("startup availability");
+        let mut pending = std::collections::VecDeque::from([(LIVE_SHARE_URI.to_string(), 0)]);
+        let mut photo = None;
+        for _ in 0..64 {
+            let Some((directory, depth)) = pending.pop_front() else {
+                break;
+            };
+            for entry in list_dir(&directory).expect("private folder browsing") {
+                let uri = format!(
+                    "{}/{}",
+                    directory.trim_end_matches('/'),
+                    percent_encode_segment(&entry.name)
+                );
+                if entry.is_dir && depth < 4 {
+                    pending.push_back((uri, depth + 1));
+                } else if !entry.is_dir && entry.name.to_ascii_lowercase().ends_with(".jpg") {
+                    let meta = stat(&uri).unwrap();
+                    if meta.size > 0 && meta.size < 16 * 1024 * 1024 {
+                        photo = Some((uri, meta));
+                        break;
+                    }
+                }
+            }
+            if photo.is_some() {
+                break;
+            }
+        }
+        unchanged("folder browsing");
+        let (uri, meta) = photo.expect("a small JPEG on the live share");
+        assert!(!crate::source::read(&uri).unwrap().is_empty());
+        unchanged("photo read");
+        let thumbnail = crate::thumbnail::create(&uri, meta.mtime, Some(meta.size as i64)).unwrap();
+        assert!(thumbnail.is_file());
+        unchanged("thumbnail generation");
+        let image = crate::thumbnail::decode_for_viewer(&uri, 1920, 1080).unwrap();
+        assert!(image.width() > 0 && image.height() > 0);
+        unchanged("viewer decode and materialization");
+        assert!(!crate::source::probe_source_available(
+            "smb://127.0.0.1/PIC-nonexistent-share/"
+        ));
+        unchanged("unavailable share probe");
+        assert!(crate::source::probe_source_available(LIVE_SHARE_URI));
+        unchanged("retry live share");
+        assert!(crate::source::read("nfs://localhost/photos/a.jpg")
+            .unwrap_err()
+            .to_string()
+            .contains("NFS is unavailable"));
+        unchanged("NFS failure");
+        crate::source::private_transport_tests::missing_smb_library_fails_closed_across_restarts();
+        unchanged("missing SMB library and process restarts");
+    }
 
     #[test]
     #[ignore = "requires the DietPi SMB server on the LAN"]

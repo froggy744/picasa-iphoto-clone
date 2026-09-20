@@ -170,8 +170,8 @@ pub fn show_add_network_share_dialog(
     content.set_margin_start(14);
     content.set_margin_end(14);
 
-    // Protocol: SMB/CIFS and NFS share the same gvfs pipeline; CIFS is handled
-    // by the SMB backend, so there are exactly two choices here. NFS differs
+    // Protocol: CIFS uses direct SMB; NFS currently registers offline only.
+    // There are exactly two choices here. NFS differs
     // only in how the path is read (an export path, not a share name).
     let protocol = gtk::DropDown::from_strings(&["SMB / CIFS", "NFS"]);
     protocol.set_selected(0);
@@ -257,7 +257,7 @@ pub fn show_add_network_share_dialog(
     content.append(&discovery_note);
 
     let hint = gtk::Label::new(Some(
-        "Connects through the system's network services (guest or saved credentials). Enter a Share to jump straight into it, or leave it empty to browse all shares - then pick the folder with your photos. For NFS, enter the export path (for example exports/Work or mnt/4TBP) - the server's real exports appear in the list once a server is set.",
+        "SMB connections stay private to PIC. Enter a Share to open it directly, or leave it empty to list shares. If the server hides its share list, enter the share name. NFS can be registered for offline browsing, but connecting is unavailable in this build.",
     ));
     hint.set_xalign(0.0);
     hint.set_wrap(true);
@@ -845,7 +845,6 @@ pub fn show_network_folder_browser(
         let cancellable_for_load = cancellable.clone();
         let load_slot = load_slot.clone();
         let contains_mountables_for_load = contains_mountables.clone();
-        let dialog_window_for_load = dialog.clone();
         let history_for_load = history.clone();
         let back_active_for_load = back_active.clone();
         let back_button_for_load = back_button.clone();
@@ -880,12 +879,7 @@ pub fn show_network_folder_browser(
 
             let (sender, receiver) = std::sync::mpsc::channel::<NetworkBrowseMessage>();
             let uri_for_worker = uri.clone();
-            // SMB lists through the direct libsmbclient transport when it is
-            // available: gvfs would need the share mounted, and every gvfs
-            // mount PIC creates shows up in Nautilus. NFS keeps riding gvfs
-            // (no direct NFS transport exists).
-            let direct_smb =
-                uri_for_worker.starts_with("smb://") && crate::smb_transport::direct_available();
+            let direct_smb = uri_for_worker.starts_with("smb://");
             std::thread::spawn(move || {
                 let enumerate_started = std::time::Instant::now();
                 let mut directories: Vec<(String, String, bool)> = Vec::new();
@@ -911,85 +905,8 @@ pub fn show_network_folder_browser(
                         }
                         Err(error) => failure = Some(error.to_string()),
                     }
-                    // Some Samba servers hide their share list from anonymous
-                    // sessions (restrict anonymous): the listing succeeds but
-                    // is empty, while the shares themselves are readable.
-                    // gvfs runs in its own credential context and may still
-                    // see the shares, so an empty direct listing retries
-                    // through gvfs before giving up.
-                    if directories.is_empty() && failure.is_none() {
-                        crate::source::net_trace(format!(
-                            "browse_direct_empty uri={uri_for_worker} - retrying with gvfs"
-                        ));
-                    }
-                }
-                if directories.is_empty() && failure.is_none() {
-                    if let Ok(enumerator) = gio::File::for_uri(&uri_for_worker).enumerate_children(
-                    "standard::name,standard::type,standard::is-hidden",
-                    gio::FileQueryInfoFlags::NONE,
-                    Some(&fresh_cancellable),
-                ) {
-                    loop {
-                        match enumerator.next_file(Some(&fresh_cancellable)) {
-                            Ok(Some(info)) => {
-                                // Only directories and mountable shares are
-                                // navigable here. Files are ignored.
-                                let kind = info.file_type();
-                                let browsable = kind == gio::FileType::Directory
-                                    || kind == gio::FileType::Mountable;
-                                if !browsable {
-                                    continue;
-                                }
-                                // gvfs marks macOS AppleDouble artifacts
-                                // (._Foo), .DS_Store and similar metadata as
-                                // hidden on SMB/NFS. They look like folders
-                                // in the raw listing but are not real
-                                // directories - enumerating them returns 0.
-                                // gvfs does not always populate
-                                // standard::is-hidden (e.g. on SMB), so guard
-                                // the call to avoid a GLib-GIO critical.
-                                if info.has_attribute("standard::is-hidden")
-                                    && info.is_hidden()
-                                {
-                                    continue;
-                                }
-                                let name = info.name().to_string_lossy().into_owned();
-                                let trimmed = name.trim();
-                                // Belt-and-braces: even when gvfs does not
-                                // mark them hidden, skip dotfiles and the
-                                // AppleDouble prefix.
-                                if trimmed.is_empty()
-                                    || trimmed.starts_with('.')
-                                    || trimmed == ".DS_Store"
-                                {
-                                    continue;
-                                }
-                                let mountable = kind == gio::FileType::Mountable;
-                                let child_uri = if mountable {
-                                    // gvfs mangles child construction at a
-                                    // server root into AppleDouble paths
-                                    // (smb://host/._share), so build the
-                                    // share segment manually instead.
-                                    format!(
-                                        "{}/{}",
-                                        uri_for_worker.trim_end_matches('/'),
-                                        percent_encode(&trimmed)
-                                    )
-                                } else {
-                                    enumerator.child(&info).uri().to_string()
-                                };
-                                directories.push((name, child_uri, mountable));
-                            }
-                            Ok(None) => break,
-                            Err(error) => {
-                                if error.kind() != Some(gio::IOErrorEnum::Cancelled) {
-                                    failure = Some(format!("{error}"));
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    }
+                } else {
+                    failure = Some(crate::source::NFS_UNAVAILABLE.to_string());
                 }
                 match failure {
                     Some(message) => {
@@ -1030,9 +947,7 @@ pub fn show_network_folder_browser(
             let list = list.clone();
             let status = status_for_load.clone();
             let error = error_for_load.clone();
-            let error_for_poll = error_for_load.clone();
             let load_slot = load_slot.clone();
-            let dialog_window_for_rows = dialog_window_for_load.clone();
             let contains_mountables_for_poll = contains_mountables_for_load.clone();
             let browse_closed_for_rows = browse_closed_for_load.clone();
             let uri_for_poll = uri.clone();
@@ -1075,10 +990,7 @@ pub fn show_network_folder_browser(
                             // Per-row clones: the row outlives this poll
                             // iteration, so every capture is a fresh local.
                             let load_for_activate = load_slot.clone();
-                            let dialog_window_for_activate = dialog_window_for_rows.clone();
-                            let error_for_activate = error_for_poll.clone();
                             let uri_for_activate = child_uri.clone();
-                            let row_mountable = mountable;
                             let row_closed = browse_closed_for_rows.clone();
 
                             // Mouse path. Capture phase + attached to the row's
@@ -1097,63 +1009,12 @@ pub fn show_network_folder_browser(
                                     gesture.set_state(gtk::EventSequenceState::Claimed);
                                     return;
                                 }
-                                let parent_window =
-                                    dialog_window_for_activate.clone().upcast::<gtk::Window>();
-                                let error = error_for_activate.clone();
                                 let load_for_mount = load_for_activate.clone();
-                                let uri_for_mount = uri_for_activate.clone();
                                 let uri_for_load = uri_for_activate.clone();
-                                let uri_for_error = uri_for_activate.clone();
                                 let load_slot_for_mount = load_for_mount.clone();
-                                let closed_for_mount = row_closed.clone();
-                                // An NFS export root is mountable (it is a
-                                // GVolume), but a subdirectory of an export is
-                                // not: mounting it fails with "Location is not
-                                // mountable". Such a folder is listed through
-                                // the already-mounted export, so enumerate it
-                                // directly instead of mounting first. SMB with
-                                // the direct transport lists directly too:
-                                // mounting would create a gvfs mount, and
-                                // every gvfs mount PIC creates shows up in
-                                // Nautilus.
-                                let nfs_subdirectory =
-                                    uri_for_mount.starts_with("nfs://") && !row_mountable;
-                                let smb_direct = uri_for_mount.starts_with("smb://")
-                                    && crate::smb_transport::direct_available();
-                                if nfs_subdirectory || smb_direct {
-                                    if let Some(load) =
-                                        load_slot_for_mount.borrow().as_ref()
-                                    {
-                                        load(uri_for_load.clone());
-                                    }
-                                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                                    return;
+                                if let Some(load) = load_slot_for_mount.borrow().as_ref() {
+                                    load(uri_for_load.clone());
                                 }
-                                crate::source::mount_share_async(
-                                    &uri_for_mount,
-                                    Some(&parent_window),
-                                    move |result| {
-                                        if closed_for_mount.get() {
-                                            return;
-                                        }
-                                        match result {
-                                            Ok(()) => {
-                                                if let Some(load) =
-                                                    load_slot_for_mount.borrow().as_ref()
-                                                {
-                                                    load(uri_for_load.clone());
-                                                }
-                                            }
-                                            Err(message) => {
-                                                crate::source::net_trace(format!(
-                                                    "browse_failed uri={uri_for_error} error={message}"
-                                                ));
-                                                error.set_text(&message);
-                                                error.set_visible(true);
-                                            }
-                                        }
-                                    },
-                                );
                                 gesture.set_state(gtk::EventSequenceState::Claimed);
                             });
                             box_.add_controller(click);
@@ -1161,12 +1022,9 @@ pub fn show_network_folder_browser(
                             // Space still activates it.
                             row.set_focusable(true);
 
-                            // Keyboard path: same mount-then-list as the mouse.
+                            // Keyboard navigation uses the same private listing.
                             let load_for_key = load_slot.clone();
-                            let dialog_window_for_key = dialog_window_for_rows.clone();
-                            let error_for_key = error_for_poll.clone();
                             let uri_for_key = child_uri.clone();
-                            let key_mountable = mountable;
                             let key_closed = browse_closed_for_rows.clone();
                             row.connect_activate(move |_| {
                                 crate::source::net_trace(format!(
@@ -1175,52 +1033,12 @@ pub fn show_network_folder_browser(
                                 if key_closed.get() {
                                     return;
                                 }
-                                let parent_window =
-                                    dialog_window_for_key.clone().upcast::<gtk::Window>();
-                                let error = error_for_key.clone();
                                 let load_for_mount = load_for_key.clone();
-                                let uri_for_mount = uri_for_key.clone();
                                 let uri_for_load = uri_for_key.clone();
                                 let load_slot_for_mount = load_for_mount.clone();
-                                let closed_for_mount = key_closed.clone();
-                                // Same rule as the mouse path: NFS export
-                                // subdirectories and direct-transport SMB
-                                // list directly; only genuinely mountable
-                                // gvfs locations mount first.
-                                let nfs_subdirectory =
-                                    uri_for_mount.starts_with("nfs://") && !key_mountable;
-                                let smb_direct = uri_for_mount.starts_with("smb://")
-                                    && crate::smb_transport::direct_available();
-                                if nfs_subdirectory || smb_direct {
-                                    if let Some(load) =
-                                        load_slot_for_mount.borrow().as_ref()
-                                    {
-                                        load(uri_for_load.clone());
-                                    }
-                                    return;
-                                }
-                                crate::source::mount_share_async(
-                                    &uri_for_mount,
-                                    Some(&parent_window),
-                                    move |result| {
-                                        if closed_for_mount.get() {
-                                            return;
-                                        }
-                                        match result {
-                                            Ok(()) => {
-                                                if let Some(load) =
-                                                    load_slot_for_mount.borrow().as_ref()
-                                                {
-                                                    load(uri_for_load.clone());
-                                                }
-                                            }
-                                            Err(message) => {
-                                                error.set_text(&message);
-                                                error.set_visible(true);
-                                            }
-                                        }
-                                    },
-                                );
+                                if let Some(load) = load_slot_for_mount.borrow().as_ref() {
+                                    load(uri_for_load.clone());
+                                };
                             });
                             list.append(&row);
                         }
@@ -1310,7 +1128,7 @@ pub fn show_network_folder_browser(
         let status_for_select = status_label.clone();
         select_button.connect_clicked(move |_| {
             let uri = current.borrow().clone();
-            if contains_mountables_for_select.get() {
+            if contains_mountables_for_select.get() || crate::smb_transport::parse_smb_uri(&uri).is_some_and(|target| target.share.is_empty()) {
                 // A server root only lists shares (mountable entries) - there
                 // is nothing to import here: descend into a share and choose
                 // the folder that contains your photos.
@@ -1463,7 +1281,7 @@ fn show_smb_credentials_dialog(
 
 /// Reconnect one SMB share through the direct transport (REDESIGN SHARES
 /// MOUNT). `typed` credentials come from the credentials dialog; without
-/// them the silent ladder (guest, then Secret Service) is tried first. Runs
+/// them the silent ladder (saved credentials, then guest) is tried first. Runs
 /// the network work on a worker thread and delivers the verdict back on the
 /// main thread via a polled channel. A rejected typed password is reported
 /// but never stored; accepted typed credentials are persisted to the Secret
@@ -1474,18 +1292,44 @@ fn retry_smb_direct(
     on_unavailable: Rc<dyn Fn()>,
     typed: Option<(String, String)>,
 ) {
+    connect_smb_direct(path, parent, on_unavailable, typed, None);
+}
+
+fn connect_smb_direct(
+    path: String,
+    parent: gtk::Window,
+    on_unavailable: Rc<dyn Fn()>,
+    typed: Option<(String, String)>,
+    on_success: Option<Rc<dyn Fn()>>,
+) {
     let (sender, receiver) =
         std::sync::mpsc::channel::<Result<(), crate::smb_transport::SmbTransportError>>();
-    let path_for_worker = path.clone();
+    let path_for_worker = crate::source::normalize_import_reference(&path);
     let typed_for_worker = typed.clone();
     std::thread::spawn(move || {
         let outcome = match &typed_for_worker {
             Some((user, pass)) => {
                 crate::smb_transport::check_available_with(&path_for_worker, user, pass)
-                    .map(|_| ())
             }
-            None => crate::smb_transport::stat(&path_for_worker).map(|_| ()),
-        };
+            None => crate::smb_transport::stat(&path_for_worker),
+        }.and_then(|meta| {
+            let server_root = crate::smb_transport::parse_smb_uri(&path_for_worker)
+                .is_some_and(|target| target.share.is_empty());
+            if server_root && meta.shares.is_empty() {
+                let detail = "No shares were listed. Enter a share path directly in Add Network Share, or sign in with an account allowed to enumerate shares.".to_string();
+                return Err(if typed_for_worker.is_none() {
+                    crate::smb_transport::SmbTransportError::AuthRequired(detail)
+                } else {
+                    crate::smb_transport::SmbTransportError::Failed(detail)
+                });
+            }
+            if let Some((user, pass)) = &typed_for_worker {
+                if let Err(error) = crate::smb_transport::store_smb_credentials(&path_for_worker, user, pass) {
+                    crate::source::net_trace(format!("smb_credentials_store_failed error={error}"));
+                }
+            }
+            Ok(())
+        });
         let _ = sender.send(outcome);
     });
     let parent_for_dialog = parent.clone();
@@ -1494,21 +1338,10 @@ fn retry_smb_direct(
     glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
         match receiver.try_recv() {
             Ok(Ok(())) => {
-                // Accepted typed credentials are stored for future silent
-                // reconnects. A keyring failure keeps the session working
-                // but is reported in the trace.
-                if let Some((user, pass)) = &typed {
-                    if let Err(error) =
-                        crate::smb_transport::store_smb_credentials(&path, user, pass)
-                    {
-                        crate::source::net_trace(format!(
-                            "smb_credentials_store_failed uri={path} error={error}"
-                        ));
-                    }
-                }
                 crate::source::net_trace(format!("connect_smb_ok uri={path}"));
                 crate::source::refresh_availability();
                 on_unavailable();
+                if let Some(callback) = &on_success { callback(); }
                 glib::ControlFlow::Break
             }
             Ok(Err(crate::smb_transport::SmbTransportError::AuthRequired(detail))) => {
@@ -1529,12 +1362,14 @@ fn retry_smb_direct(
                         let parent = parent_for_dialog.clone();
                         let path = path_for_dialog.clone();
                         let on_unavailable = on_unavailable_for_dialog.clone();
+                        let on_success = on_success.clone();
                         Rc::new(move |user, pass| {
-                            retry_smb_direct(
+                            connect_smb_direct(
                                 path.clone(),
                                 parent.clone(),
                                 on_unavailable.clone(),
                                 Some((user, pass)),
+                                on_success.clone(),
                             );
                         })
                     };

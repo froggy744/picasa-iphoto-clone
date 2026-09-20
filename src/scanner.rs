@@ -85,6 +85,11 @@ fn scan_with_control(
     events: Option<&Sender<ScanEvent>>,
     control: &ScanControl,
 ) -> Result<usize> {
+    let normalized_root = crate::source::normalize_import_reference(root);
+    let root = normalized_root.as_str();
+    if root.starts_with("nfs://") {
+        anyhow::bail!(crate::source::NFS_UNAVAILABLE);
+    }
     if !root_is_available(root) {
         anyhow::bail!("scan root is unavailable: {root}");
     }
@@ -98,12 +103,11 @@ fn scan_with_control(
     }
     let indexed = db::photo_fingerprints(&connection)?;
     let root_file = crate::source::file(root);
-    let (files, discovered_folders) =
-        if root.starts_with("smb://") && crate::smb_transport::direct_available() {
-            collect_smb_files(root, control)?
-        } else {
-            collect_files(&root_file, control)?
-        };
+    let (files, discovered_folders) = if root.starts_with("smb://") {
+        collect_smb_files(root, control)?
+    } else {
+        collect_files(&root_file, control)?
+    };
     if control.is_cancelled() {
         send(events, ScanEvent::Cancelled { imported: 0 });
         return Ok(0);
@@ -304,20 +308,7 @@ fn scan_with_control(
 }
 
 fn root_is_available(root: &str) -> bool {
-    if root.starts_with("smb://") {
-        // Direct SMB availability (libsmbclient; worker thread only). Without
-        // libsmbclient (sandboxed flatpak) SMB rides gvfs like NFS.
-        if crate::smb_transport::direct_available() {
-            return crate::smb_transport::stat_in_lane(root, crate::smb_transport::SmbLane::User)
-                .is_ok();
-        }
-        return crate::source::file(root).query_exists(gio::Cancellable::NONE);
-    }
-    if root.contains("://") {
-        crate::source::file(root).query_exists(gio::Cancellable::NONE)
-    } else {
-        Path::new(root).is_dir()
-    }
+    crate::source::probe_source_available(root)
 }
 
 /// Enumerate an SMB tree through the direct transport. Children are wrapped
@@ -368,12 +359,13 @@ fn collect_smb_files(
             // Fingerprint attributes come from a stat (size + mtime).
             let meta =
                 crate::smb_transport::stat_in_lane(&child_uri, crate::smb_transport::SmbLane::User)
-                    .ok();
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("could not stat {child_uri}; scan is incomplete"))?;
             let info = gio::FileInfo::new();
             info.set_name(&entry.name);
             info.set_file_type(gio::FileType::Regular);
-            info.set_size(meta.as_ref().map(|meta| meta.size).unwrap_or(0) as i64);
-            if let Some(mtime) = meta.and_then(|meta| meta.mtime) {
+            info.set_size(meta.size as i64);
+            if let Some(mtime) = meta.mtime {
                 if let Ok(date_time) = glib::DateTime::from_unix_utc(mtime) {
                     info.set_modification_date_time(&date_time);
                 }

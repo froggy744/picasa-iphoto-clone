@@ -19,16 +19,13 @@ mod linux;
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 use linux as imp;
 
-/// Reveal a photograph in the host file manager from its stored reference.
-///
-/// The reference may be a plain local path, a canonical network URI
-/// (`smb://`, `nfs://`, ...) or a legacy GVfs-FUSE path. Legacy FUSE paths are
-/// normalized back to their canonical `smb://` URI first, so a stale gvfs
-/// mount can never be handed to the file manager or block the UI. The reveal
-/// never blocks the GTK main thread: D-Bus traffic and network resolution run
-/// through the async GIO pipeline, and when the selection-capable file-manager
-/// service is unavailable the containing folder is opened through GIO instead.
+/// Reveal a local photograph in the host file manager, asynchronously.
+/// Private network references (including legacy FUSE paths) stay inside PIC.
 pub(crate) fn reveal_reference(reference: &str) {
+    // Never hand a private network URI to a desktop service that may mount it.
+    if crate::source::is_network_location(reference) {
+        return;
+    }
     let (target_uri, parent_uri) = reveal_target_uris(reference);
     crate::source::net_trace(format!(
         "reveal_start reference={reference} uri={target_uri} parent={}",
@@ -47,7 +44,7 @@ pub(crate) fn reveal_reference(reference: &str) {
 /// thumbnail/source-cache path must never reach this function - callers pass
 /// the photo's stored reference.
 fn reveal_target_uris(reference: &str) -> (String, Option<String>) {
-    let reference = crate::smb_transport::normalize_smb_reference(reference);
+    let reference = crate::source::normalize_import_reference(reference);
     let file = crate::source::file(&reference);
     let target_uri = file.uri().to_string();
     let parent_uri = file.parent().map(|parent| parent.uri().to_string());
@@ -62,6 +59,9 @@ fn open_parent_directory(target_uri: &str, parent_uri: Option<&str>, started: In
     let directory = parent_uri
         .filter(|parent| !parent.is_empty())
         .unwrap_or(target_uri);
+    if crate::source::is_network_location(directory) {
+        return;
+    }
     crate::source::net_trace(format!("reveal_fallback_start directory={directory}"));
     let fallback_started = Instant::now();
     let directory = directory.to_string();
