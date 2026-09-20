@@ -88,10 +88,12 @@ pub fn nfs_note_activity() {
     }
 }
 
-/// NFS gvfs mounts PIC itself created (Add-share connect, Retry Connection,
-/// on-demand reads). These are reclaimed by the idle unmount even when the
-/// location was never registered. The explicit "Open in file manager" flow
-/// deliberately stays outside this set: its mount exists FOR Nautilus.
+/// NFS gvfs mounts PIC itself created this session (Add-share connect,
+/// Retry Connection, on-demand reads) and may therefore reclaim. Only a
+/// mount PIC actually performed is recorded - an "already mounted" hit
+/// usually means the user mounted it in Nautilus and is never recorded. The
+/// explicit "Open in file manager" flow deliberately stays outside this
+/// set: its mount exists FOR Nautilus.
 static NFS_PIC_MOUNTS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
 
 fn nfs_pic_mounts() -> &'static Mutex<std::collections::HashSet<String>> {
@@ -120,10 +122,11 @@ fn nfs_note_pic_mount_if_tracked(track: bool, reference: &str) {
     }
 }
 
-/// Cheap poll hook (UI thread): reclaim gvfs mounts PIC no longer needs
-/// (PIC-mounted NFS exports, registered NFS exports, and SMB leftovers on
-/// registered roots) once nothing used them for a while. The check itself is
-/// a single flag comparison; the DBus and disk work happens on a worker.
+/// Cheap poll hook (UI thread): reclaim gvfs mounts PIC created this
+/// session once nothing used them for a while. Mounts created by the user
+/// (Nautilus) or by anything else are never touched - PIC only ever
+/// unmounts what it can prove it mounted itself. The check itself is a
+/// single flag comparison; the DBus and disk work happens on a worker.
 pub fn nfs_idle_unmount_tick() {
     let idle = match nfs_last_activity().lock() {
         // Never used this session (or nothing to protect): unmount candidates
@@ -157,48 +160,23 @@ pub fn nfs_idle_unmount_tick() {
     });
 }
 
-/// Reclaim gvfs mounts PIC no longer needs: NFS exports PIC mounted or has
-/// registered, and SMB shares on registered roots while the direct transport
-/// is available (which makes gvfs SMB mounts pure leftovers). Runs only when
-/// the whole share has been idle, so active imports or reads never lose
-/// their mount mid-use.
+/// Reclaim gvfs mounts PIC itself created this session (NFS exports mounted
+/// by Retry Connection, Add-share connect, or on-demand reads). Ownership is
+/// recorded only when PIC performed the actual mount, so a share the user
+/// mounted manually in Nautilus is never touched, even for the same
+/// registered location. Stale mounts left by older PIC versions are also
+/// left alone for the same reason; the user can unmount them anywhere.
 fn nfs_idle_unmount_pass() -> Result<()> {
-    let connection = crate::db::open_default().context("could not open the library")?;
-    let mut reclaim = crate::db::network_shares(&connection)?
-        .into_iter()
-        .map(|folder| folder.path)
-        .filter(|path| path.starts_with("nfs://"))
-        .collect::<Vec<_>>();
-    match nfs_pic_mounts().lock() {
-        Ok(mounts) => reclaim.extend(mounts.iter().cloned()),
-        Err(_) => {}
-    }
-    // Native builds read SMB exclusively through libsmbclient, so any gvfs
-    // SMB mount on a registered root is a leftover (older versions mounted
-    // for browsing) and only serves to confuse file-manager users.
-    let smb_reclaimable = crate::smb_transport::direct_available();
-    if smb_reclaimable {
-        reclaim.extend(
-            crate::db::network_shares(&connection)?
-                .into_iter()
-                .map(|folder| folder.path)
-                .filter(|path| path.starts_with("smb://")),
-        );
-    }
-    if reclaim.is_empty() {
-        return Ok(());
-    }
+    let owned = match nfs_pic_mounts().lock() {
+        Ok(mounts) if !mounts.is_empty() => mounts.iter().cloned().collect::<Vec<_>>(),
+        _ => return Ok(()),
+    };
     let monitor = gio::VolumeMonitor::get();
     for mount in monitor.mounts() {
         let uri = mount.root().uri();
-        let is_nfs = uri.starts_with("nfs://");
-        let is_smb = uri.starts_with("smb://");
-        if !is_nfs && !(is_smb && smb_reclaimable) {
-            continue;
-        }
-        if !reclaim
+        if !owned
             .iter()
-            .any(|reclaim| nfs_same_location(reclaim, &uri))
+            .any(|owned| nfs_same_location(owned, &uri))
         {
             continue;
         }
@@ -277,6 +255,9 @@ fn unmount_blocking(mount: &gio::Mount) -> Result<(), String> {
 /// Mount an NFS export (or confirm it already is) without any dialog, on a
 /// worker thread. gvfs only mounts on explicit request, so a photo read on an
 /// unmounted export fails with NotMounted; callers mount, then retry.
+/// Ownership is recorded ONLY when PIC performs the mount itself: an export
+/// that was already mounted may have been mounted by the user in Nautilus
+/// and is never a PIC-unmount candidate.
 pub fn ensure_nfs_mounted_blocking(reference: &str) -> Result<(), String> {
     let reference = normalize_nfs_uri(reference);
     let file = file(&reference);
@@ -790,7 +771,9 @@ fn mount_share_run(
 ) {
     let reference_for_callback = reference;
     // "Already mounted" counts as success: skip straight to the reachability
-    // check when the location has an enclosing mount.
+    // check when the location has an enclosing mount. NOTE: no PIC-ownership
+    // is recorded here - an existing mount may have been created manually by
+    // the user in Nautilus, and PIC never unmounts those.
     if file.find_enclosing_mount(gio::Cancellable::NONE).is_ok()
         && query_exists(
             &reference_for_callback,
@@ -801,7 +784,6 @@ fn mount_share_run(
         net_trace(format!(
             "mount_success uri={reference_for_callback} (already mounted)"
         ));
-        nfs_note_pic_mount_if_tracked(track_nfs, &reference_for_callback);
         on_result(Ok(()), false);
         return;
     }
@@ -835,11 +817,12 @@ fn mount_share_run(
                 }
                 Err(error) => {
                     if error.kind() == Some(gio::IOErrorEnum::AlreadyMounted) {
+                        // Another process (often the user in Nautilus) mounted
+                        // it first: success, but NOT PIC-owned.
                         net_trace(format!(
                             "mount_success uri={} (already mounted)",
                             reference_for_callback
                         ));
-                        nfs_note_pic_mount_if_tracked(track_nfs, &reference_for_callback);
                         on_result(Ok(()), false);
                         return;
                     }

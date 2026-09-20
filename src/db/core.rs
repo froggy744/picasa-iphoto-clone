@@ -25,7 +25,13 @@ pub fn open(path: &Path) -> Result<Connection> {
     migrate_photo_schema(&connection)?;
     migrate_folder_schema(&connection)?;
     migrate_album_schema(&connection)?;
-    migrate_gvfs_paths(&connection)?;
+    // Best-effort: a failed gvfs-path rewrite (e.g. a folder/path collision
+    // with an existing canonical row) must never keep the library from
+    // opening. The migration is transactional, so a failure leaves every
+    // path exactly as it was; the legacy paths keep working.
+    if let Err(error) = migrate_gvfs_paths(&connection) {
+        eprintln!("gvfs path migration skipped: {error:#}");
+    }
     Ok(connection)
 }
 
