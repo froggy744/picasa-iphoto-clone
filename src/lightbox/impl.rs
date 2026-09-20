@@ -727,7 +727,6 @@ impl Lightbox {
     }
 
     pub fn open(&self, photos: Vec<PhotoObject>, selected: usize) {
-        crate::source::net_trace(format!("lightbox_open index={selected}"));
         self.photos.replace(photos);
 
         let len = self.photos.borrow().len();
@@ -765,9 +764,12 @@ impl Lightbox {
             }
         });
 
-        if let Some(photo) = self.photos.borrow().get(self.index.get()) {
-            show_cached_preview(&self.picture, photo);
-        }
+        // An open can reuse the same GtkPicture from the previous lightbox.
+        // Clear it so the first image loads against the neutral viewer
+        // background instead of flashing a low-resolution cached thumbnail
+        // or briefly showing the prior photo.
+        self.picture.set_paintable(gtk::gdk::Paintable::NONE);
+        self.picture.set_filename(Option::<&str>::None);
 
         // GTK does not allocate an overlay synchronously when it becomes
         // visible. Start the first full decode on its first allocated frame,
@@ -790,6 +792,13 @@ impl Lightbox {
                 return glib::ControlFlow::Continue;
             }
 
+            let (fit_geometry_fixed, cache_hit) = prepare_navigation_photo(
+                &picture,
+                photos.borrow().get(index.get()),
+                root,
+                zoom.get(),
+                &display_texture_cache,
+            );
             show_photo(
                 &picture,
                 &photos.borrow(),
@@ -802,8 +811,8 @@ impl Lightbox {
                 &picture_viewport,
                 native_texture.clone(),
                 display_texture_cache.clone(),
-                false,
-                false,
+                fit_geometry_fixed,
+                cache_hit,
             );
             fit_picture(
                 &picture,

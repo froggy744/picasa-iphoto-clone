@@ -152,17 +152,11 @@ fn spawn_thumbnail_recovery(
             .collect();
         let (mut ready, mut offline) = crate::thumbnail::recovery_items(items);
         ready.sort_by_key(|(path, _, _)| !startup_paths.contains(path));
-        crate::source::net_trace(format!(
-            "recovery_start total={} offline={}",
-            ready.len(),
-            offline
-        ));
-
+        
         if !ready.is_empty() && !control.is_cancelled() {
             send(scanner::ScanEvent::ThumbnailsStarted { total: ready.len() });
         }
         let mut failed = 0;
-        let mut lost = 0;
         for chunk in ready.chunks(64) {
             if control.is_cancelled() {
                 break;
@@ -178,7 +172,6 @@ fn spawn_thumbnail_recovery(
                 if let Some(Err(error)) = result {
                     // The drive can disappear during an active thumbnail pass.
                     if !crate::source::file_available(path) {
-                        lost += 1;
                         offline += 1;
                         continue;
                     }
@@ -190,13 +183,6 @@ fn spawn_thumbnail_recovery(
                 }
             }
         }
-        crate::source::net_trace(format!(
-            "recovery_done created={} failed={} offline={} cancelled={}",
-            ready.len() - lost - failed,
-            failed,
-            offline,
-            control.is_cancelled()
-        ));
         send(scanner::ScanEvent::ThumbnailsDeferred { total: offline });
         send(if control.is_cancelled() {
             scanner::ScanEvent::Cancelled { imported: 0 }
@@ -279,6 +265,8 @@ fn refresh_availability_ui(
     std::thread::spawn(move || {
         crate::source::refresh_availability();
         let sidebar_data = db::open_default().and_then(|connection| {
+            #[cfg(target_os="linux")]
+            crate::source::probe_network_roots(&db::imported_root_paths(&connection)?);
             let folders = db::folders(&connection)?;
             let gallery_updates = changed_folder_availability(&previous_folder_availability, &folders);
             Ok((

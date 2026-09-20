@@ -42,7 +42,6 @@ Build targets:
   • Both AppImage + Flatpak (default)
   • AppImage only
   • Flatpak only
-  • Cargo bundle (native release binary + shared libraries in a .tar.gz)
 
 Source modes:
   local    Build the files already on this PC. OFFLINE: no fetch, pull or download.
@@ -59,7 +58,6 @@ Direct commands:
   ./build-linux.sh github --branch editing.phase1
   ./build-linux.sh local --appimage-only
   ./build-linux.sh local --flatpak-only
-  ./build-linux.sh local --cargo-bundle-only
   ./build-linux.sh local --target appimage
 
 Options:
@@ -68,10 +66,9 @@ Options:
   --branch NAME       GitHub branch (default: main)
   --dist PATH         output folder (default: ./dist beside this script)
   --log-dir PATH      build log folder (default: ./build-logs beside this script)
-  --target TARGET     both, appimage, flatpak, or cargo (default: both)
+  --target TARGET     both, appimage, or flatpak (default: both)
   --appimage-only     build only the AppImage
   --flatpak-only      build only the Flatpak bundle
-  --cargo-bundle-only build only the native cargo bundle (.tar.gz)
   --strict-tests      stop packaging if cargo test fails
   --skip-tests        do not run cargo test
   -h, --help          show this help
@@ -84,7 +81,7 @@ Useful environment overrides:
   PIC_APP_ID=...               application/Flatpak ID
   PIC_BUILD_CACHE=...          build cache location
   PIC_BUILD_LOG_DIR=...        build log folder
-  PIC_BUILD_TARGET=...         both, appimage, flatpak, or cargo
+  PIC_BUILD_TARGET=...         both, appimage, or flatpak
 
 Offline rule:
   'local' mode never uses git fetch/pull/clone, curl, wget, or Flatpak downloads.
@@ -114,7 +111,7 @@ while (($#)); do
             [[ $# -ge 2 ]] || die "--log-dir needs a path"
             LOG_DIR="$2"; shift 2 ;;
         --target)
-            [[ $# -ge 2 ]] || die "--target needs both, appimage, flatpak, or cargo"
+            [[ $# -ge 2 ]] || die "--target needs both, appimage, or flatpak"
             [[ -z "$BUILD_TARGET" ]] || die "Build target specified more than once."
             BUILD_TARGET="$2"; shift 2 ;;
         --appimage-only)
@@ -123,9 +120,6 @@ while (($#)); do
         --flatpak-only)
             [[ -z "$BUILD_TARGET" ]] || die "Build target specified more than once."
             BUILD_TARGET=flatpak; shift ;;
-        --cargo-bundle-only)
-            [[ -z "$BUILD_TARGET" ]] || die "Build target specified more than once."
-            BUILD_TARGET=cargo; shift ;;
         --strict-tests)
             STRICT_TESTS=1; shift ;;
         --skip-tests)
@@ -249,8 +243,7 @@ interactive_menu() {
 [[ -n "$MODE" ]] || interactive_menu
 [[ "$MODE" == local || "$MODE" == github ]] || die "Source mode must be local or github."
 BUILD_TARGET="${BUILD_TARGET:-both}"
-[[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == appimage || "$BUILD_TARGET" == flatpak || "$BUILD_TARGET" == cargo ]] || \
-    die "Build target must be both, appimage, flatpak, or cargo."
+[[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == appimage || "$BUILD_TARGET" == flatpak ]] || \n    die "Build target must be both, appimage, or flatpak."
 
 mkdir -p "$CACHE_ROOT" "$TOOLS_DIR" "$WORK_ROOT" "$DIST_DIR"
 
@@ -532,15 +525,6 @@ else
     PREFIX="\$(dirname -- "\$BIN_DIR")"
 fi
 
-# Flatpak redirects XDG_DATA_HOME to \$HOME/.var/app/<app-id>/data by default,
-# which would silently open a separate library. Keep the same library database
-# and thumbnail cache as the native build so shares opened in either mode stay
-# in sync.
-if [ -n "\${FLATPAK_ID:-}" ]; then
-    export XDG_DATA_HOME="\$HOME/.local/share"
-    export XDG_CACHE_HOME="\$HOME/.cache"
-fi
-
 cd "\$PREFIX/share/$BIN_NAME"
 exec "\$PREFIX/libexec/$BIN_NAME" "\$@"
 EOF_LAUNCHER
@@ -612,91 +596,6 @@ build_native() {
     NATIVE_BIN="$SOURCE_DIR/target/release/$BIN_NAME"
     [[ -x "$NATIVE_BIN" ]] || die "Release executable not found: $NATIVE_BIN"
     ok "Native release binary: $NATIVE_BIN"
-}
-
-# Stage the native release binary plus every shared library it links against
-# into a portable folder, then compress it to a .tar.gz. The embedded launcher
-# has no build-time tool dependencies, so the bundle runs on any machine that
-# ships the matching GLIBC.
-#
-# Layout (mirrors a conventional prefix so the binary finds its resources):
-#   bin/pic-rs        launcher (for PATH installation)
-#   lib/              bundled shared libraries
-#   libexec/pic-rs    the real executable
-#   share/            desktop entry + app metadata
-#   images/ themes/   runtime resources, resolved relative to the CWD
-#   pic-rs            top-level launcher shim (run: ./pic-rs)
-build_cargo_bundle() {
-    local bundle_work bundle_prefix output_name lib_dir bin_dir libexec_dir launcher shim desktop share_dir
-    [[ -x "$NATIVE_BIN" ]] || die "Release executable not found: $NATIVE_BIN"
-
-    bundle_work="$WORK_ROOT/cargo-bundle"
-    bundle_prefix="$bundle_work/$BIN_NAME-$VERSION"
-    output_name="PIC-${BUILD_LABEL}-${ARCH_NAME}.tar.gz"
-    rm -rf "$bundle_work"
-    mkdir -p "$bundle_prefix/bin" "$bundle_prefix/lib" "$bundle_prefix/libexec" "$bundle_prefix/share"
-
-    bin_dir="$bundle_prefix/bin"
-    lib_dir="$bundle_prefix/lib"
-    libexec_dir="$bundle_prefix/libexec"
-    install -Dm755 "$NATIVE_BIN" "$libexec_dir/$BIN_NAME"
-
-    # Collect the shared libraries the binary needs (and only those). ldd is
-    # read-only here; nothing is installed or linked on the build host.
-    log "Collecting shared-library dependencies (ldd)"
-    local missing=0
-    while IFS= read -r lib; do
-        [[ -z "$lib" ]] && continue
-        if [[ ! -e "$lib" ]]; then
-            warn "Missing dependency, skipping: $lib"
-            missing=1
-            continue
-        fi
-        install -Dm755 "$lib" "$lib_dir/$(basename "$lib")"
-    done < <(ldd "$NATIVE_BIN" 2>/dev/null \
-        | awk '/=> \// {print $3; next} /^\// {print $1}')
-    [[ "$missing" == 0 ]] || warn "Bundle is incomplete: some libraries could not be found."
-    ok "Staged $(ls "$lib_dir" | wc -l) shared libraries"
-
-    # Launcher in bin/: pick the bundled libs first, then fall back to system
-    # ones so the bundle also runs on hosts that already provide them. The
-    # working directory is the bundle root so the CWD-relative images/ and
-    # themes/ resources resolve correctly.
-    launcher="$bin_dir/$BIN_NAME"
-    cat > "$launcher" <<EOF_LAUNCHER
-#!/bin/sh
-set -eu
-PREFIX="\$(CDPATH= cd -- "\$(dirname -- "\$0")/.." && pwd)"
-export LD_LIBRARY_PATH="\$PREFIX/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
-cd "\$PREFIX"
-exec "\$PREFIX/libexec/$BIN_NAME" "\$@"
-EOF_LAUNCHER
-    chmod +x "$launcher"
-
-    # Top-level shim so the bundle is directly runnable as ./pic-rs.
-    shim="$bundle_prefix/$BIN_NAME"
-    cat > "$shim" <<EOF_SHIM
-#!/bin/sh
-set -eu
-PREFIX="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
-exec "\$PREFIX/bin/$BIN_NAME" "\$@"
-EOF_SHIM
-    chmod +x "$shim"
-
-    # Desktop entry + metadata under share/.
-    share_dir="$bundle_prefix/share"
-    write_desktop_file "$share_dir/applications/$APP_ID.desktop"
-
-    # Runtime resources at the top level, next to the binary.
-    copy_runtime_resources "$bundle_prefix"
-
-    log "Writing cargo bundle: $DIST_DIR/$output_name"
-    mkdir -p "$DIST_DIR"
-    rm -f "$DIST_DIR/$output_name"
-    (cd "$bundle_work" && tar -czf "$DIST_DIR/$output_name" "$(basename -- "$bundle_prefix")")
-    [[ -s "$DIST_DIR/$output_name" ]] || return 1
-    CARGO_BUNDLE_OUTPUT="$DIST_DIR/$output_name"
-    ok "Cargo bundle created: $CARGO_BUNDLE_OUTPUT"
 }
 
 build_appimage() {
@@ -834,7 +733,6 @@ EOF_CARGO
     "--device=dri",
     "--share=network",
     "--filesystem=host",
-    "--filesystem=xdg-run/gvfsd",
     "--talk-name=org.gtk.vfs.*"
   ],
   "build-options": {
@@ -917,10 +815,8 @@ build_native
 
 appimage_ok=0
 flatpak_ok=0
-cargo_bundle_ok=0
 appimage_selected=0
 flatpak_selected=0
-cargo_bundle_selected=0
 
 if [[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == appimage ]]; then
     appimage_selected=1
@@ -944,15 +840,6 @@ if [[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == flatpak ]]; then
     fi
 fi
 
-if [[ "$BUILD_TARGET" == cargo ]]; then
-    cargo_bundle_selected=1
-    if build_cargo_bundle; then
-        cargo_bundle_ok=1
-    else
-        warn "Cargo bundle build failed."
-    fi
-fi
-
 printf '\n============================================================\n'
 printf 'PIC Linux packaging finished\n'
 printf '============================================================\n'
@@ -966,11 +853,6 @@ if ((flatpak_selected)); then
 else
     printf 'Flatpak:  SKIPPED\n'
 fi
-if ((cargo_bundle_selected)); then
-    ((cargo_bundle_ok)) && printf 'Cargo:    %s\n' "$CARGO_BUNDLE_OUTPUT" || printf 'Cargo:    FAILED\n'
-else
-    printf 'Cargo:    SKIPPED\n'
-fi
 printf 'Source:   %s (%s)\n' "$SOURCE_DIR" "$MODE"
 printf 'Log:      %s\n' "$LOG_FILE"
 printf '============================================================\n'
@@ -979,9 +861,6 @@ if ((appimage_selected && ! appimage_ok)); then
     exit 1
 fi
 if ((flatpak_selected && ! flatpak_ok)); then
-    exit 1
-fi
-if ((cargo_bundle_selected && ! cargo_bundle_ok)); then
     exit 1
 fi
 

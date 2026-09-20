@@ -1,0 +1,1348 @@
+diff --git a/README-NFS-HELPER.md b/README-NFS-HELPER.md
+new file mode 100644
+index 0000000..938264a
+--- /dev/null
++++ b/README-NFS-HELPER.md
+@@ -0,0 +1,79 @@
++# PIC private NFSv4 helper — source-based implementation
++
++This patch is based on the supplied `nfs-error.zip` snapshot, **not a live checkout of GitHub**.
++It does not add Nautilus, GVfs, FUSE, or a kernel NFS mount. PIC itself remains UID 1000.
++The separate C helper is linked to libnfs and receives only CAP_NET_BIND_SERVICE.
++The helper has a root-owned allowlist and implements `stat`, `list_dir` and `read_file`.
++It maintains one userspace NFSv4 connection per current server, mounted at the v4 pseudo-root `/`.
++
++## 1 — Work safely in a branch
++
++In the PIC repository, BEFORE extracting this zip:
++
++```sh
++cd ~/Downloads/picasa/picasa-iphoto-clone
++git status --short
++git switch -c nfs-private-helper
++```
++
++If `git status --short` shows changes, save them first: do not overwrite modified files.
++Extract the zip into that repository so `src/nfs_transport.rs`, `src/source.rs`,
++`src/window/build.rs` and `helper/*` have their normal locations.
++
++## 2 — Install the *separate* helper on Fedora
++
++```sh
++sudo dnf install gcc libnfs-devel libcap pkgconf-pkg-config
++bash helper/install-fedora.sh
++getcap /usr/local/libexec/pic-nfs-helper
++cat /etc/pic-nfs-helper.conf
++```
++
++The installed executable must be `root:root`, *not* user-writable, and show
++`cap_net_bind_service=ep` in `getcap`. The config must be root-owned and not
++writable by group/others. The installer preserves an existing config file.
++The example authorizes ONLY `10.0.0.1 /mnt/4TBP`. To enable 4TBS or 4TBM,
++edit `/etc/pic-nfs-helper.conf` as root and add their explicit paths.
++Restart PIC after modifying this file so its helper reloads the policy.
++
++Do NOT setcap `target/debug/pic-rs` or run the GTK application with sudo.
++Do NOT weaken DietPi exports, file permissions, or share access.
++
++## 3 — Live check independently of PIC (must succeed before importing)
++
++```sh
++python3 helper/smoke.py 10.0.0.1 \
++  '/mnt/4TBP/Other/Tat Sing/20190917_184453.jpg'
++```
++
++Expected: LIST OK, STAT OK, READ OK, JPEG SIGNATURE OK and
++PRIVATE HELPER LIVE TEST PASSED. This reads the entire real JPEG from NFS,
++not a cache. If this fails, stop and inspect the precise error.
++
++## 4 — Build & test PIC on Fedora
++
++```sh
++cargo fmt
++cargo check
++PIC_NFS_LIVE_FILE='nfs://DietPi.local/mnt/4TBP/Other/Tat%20Sing/20190917_184453.jpg' \
++ cargo test nfs_transport::tests::live_exact_jpeg_read -- --ignored --exact --nocapture
++PICASA_TRACE=1 cargo run 2>&1 | tee nfs-helper-first-run.log
++```
++
++The live test **requires** opening the JPEG and checking its signature; no
++skip-on-read-error logic remains. Test NFS import and fresh offline thumbnails
++in the GUI before calling the feature finished. SMB code is unchanged.
++
++## 5 — Revert safely if needed
++
++```sh
++sudo setcap -r /usr/local/libexec/pic-nfs-helper
++# In the PIC repository, only when you want to discard THIS patch's files:
++# git restore src/nfs_transport.rs src/source.rs src/window/build.rs
++```
++
++Do not remove the whole application or its SQLite photo library. This patch
++has not been compiled with your Fedora GTK stack or exercised against your
++DietPi server from the build environment; the C helper was syntax-checked
++against a libnfs API stub and its protocol was mock-tested for stat/list/read
++and allowlist denial. Actual deployment and live validation remain required.
+diff --git a/helper/install-fedora.sh b/helper/install-fedora.sh
+new file mode 100755
+index 0000000..35dbf99
+--- /dev/null
++++ b/helper/install-fedora.sh
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bash
++set -euo pipefail
++cd "$(dirname "${BASH_SOURCE[0]}")"
++command -v cc >/dev/null || { echo 'Install gcc first: sudo dnf install gcc libnfs-devel libcap' >&2; exit 1; }
++command -v setcap >/dev/null || { echo 'Install libcap first: sudo dnf install libcap' >&2; exit 1; }
++cc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong \
++   -fPIE -pie pic-nfs-helper.c -o pic-nfs-helper \
++   $(pkg-config --cflags --libs libnfs)
++sudo install -d -m 755 -o root -g root /usr/local/libexec
++sudo install -o root -g root -m 755 pic-nfs-helper /usr/local/libexec/pic-nfs-helper
++if [ ! -e /etc/pic-nfs-helper.conf ]; then
++    sudo install -o root -g root -m 644 pic-nfs-helper.conf /etc/pic-nfs-helper.conf
++else
++    echo 'Preserving existing /etc/pic-nfs-helper.conf'
++fi
++sudo chown root:root /etc/pic-nfs-helper.conf
++sudo chmod 644 /etc/pic-nfs-helper.conf
++sudo setcap cap_net_bind_service=ep /usr/local/libexec/pic-nfs-helper
++getcap /usr/local/libexec/pic-nfs-helper
+diff --git a/helper/pic-nfs-helper.c b/helper/pic-nfs-helper.c
+new file mode 100644
+index 0000000..5a5fb7b
+--- /dev/null
++++ b/helper/pic-nfs-helper.c
+@@ -0,0 +1,279 @@
++/*
++ * PIC private NFSv4 helper.  Copyright (c) 2026. MIT.
++ * Read-only libnfs access through stdio; no mount(2), GVfs or FUSE.
++ * Intended for a root-owned executable with CAP_NET_BIND_SERVICE ONLY.
++ * Root-owned /etc/pic-nfs-helper.conf allowlists server IPv4/export prefixes.
++ * Protocol: request [op:1][host len:u32be][host][path len:u32be][path].
++ * Response: E [error len:u32be][error], or O followed by:
++ *   S: [is_dir:1][size:u64be][mtime:u64be]
++ *   L: repeated [name len:u32be][name][is_dir:1][size:u64be][mtime:u64be], 0 len ends.
++ *   R: repeated [chunk len:u32be][bytes], 0 len ends; 0xffffffff len means
++ *      [error len:u32be][error] after a partial transfer.
++ */
++#define _POSIX_C_SOURCE 200809L
++#include <nfsc/libnfs.h>
++#include <arpa/inet.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <netdb.h>
++#include <signal.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
++
++#define CONF "/etc/pic-nfs-helper.conf"
++#define MAX_HOST 253U
++#define MAX_PATH 4096U
++#define MAX_ENTRIES 100000U
++#define MAX_FILE (512ULL * 1024 * 1024)
++#define MAX_RULES 64
++
++struct rule { char ip[INET_ADDRSTRLEN]; char prefix[MAX_PATH + 1]; };
++static struct rule rules[MAX_RULES];
++static size_t rule_count;
++static struct nfs_context *nfs;
++static char mounted_host[INET_ADDRSTRLEN];
++
++static int read_all(void *dst, size_t len) {
++    unsigned char *out = dst;
++    while (len) {
++        ssize_t count = read(STDIN_FILENO, out, len);
++        if (count < 0 && errno == EINTR) continue;
++        if (count <= 0) return 0;
++        out += count; len -= (size_t)count;
++    }
++    return 1;
++}
++static int write_all(const void *src, size_t len) {
++    const unsigned char *p = src;
++    while (len) {
++        ssize_t count = write(STDOUT_FILENO, p, len);
++        if (count < 0 && errno == EINTR) continue;
++        if (count <= 0) return 0;
++        p += count; len -= (size_t)count;
++    }
++    return 1;
++}
++static int put_u32(uint32_t n) {
++    uint32_t net = htonl(n);
++    return write_all(&net, sizeof(net));
++}
++static int get_u32(uint32_t *n) {
++    uint32_t net;
++    if (!read_all(&net, sizeof(net))) return 0;
++    *n = ntohl(net);
++    return 1;
++}
++static int put_u64(uint64_t n) {
++    unsigned char b[8];
++    for (int i = 7; i >= 0; --i) { b[i] = (unsigned char)n; n >>= 8; }
++    return write_all(b, 8);
++}
++static int fail(const char *message) {
++    size_t len = strlen(message);
++    if (len > 1024) len = 1024;
++    return write_all("E", 1) && put_u32((uint32_t)len) && write_all(message, len);
++}
++static int lib_fail(const char *name, int rc) {
++    char message[1200];
++    const char *detail = nfs ? nfs_get_error(nfs) : "nfs context unavailable";
++    snprintf(message, sizeof(message), "%s rc=%d libnfs=%s", name, rc,
++             (detail && *detail) ? detail : "<empty>");
++    return fail(message);
++}
++static int valid_prefix(const char *p) {
++    if (p[0] != '/' || p[1] == 0 || strlen(p) > MAX_PATH) return 0;
++    /* Forbid dot components, double slashes and backslashes in allowlist. */
++    for (const char *s = p; *s; ++s) {
++        if (*s == '\\' || (*s == '/' && s[1] == '/')) return 0;
++        if ((*s == '.' && (s == p + 1 || s[-1] == '/') &&
++             (s[1] == '/' || !s[1] || (s[1] == '.' && (s[2] == '/' || !s[2]))))) return 0;
++    }
++    return 1;
++}
++static int valid_path(const char *p) {
++    return valid_prefix(p);
++}
++static int load_rules(void) {
++    /* Prevent a user from substituting a symlink or user-modifiable policy. */
++    int fd = open(CONF, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
++    if (fd < 0) { fprintf(stderr, "PIC NFS: cannot open %s: %s\n", CONF, strerror(errno)); return 0; }
++    struct stat st;
++    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != 0 || (st.st_mode & 022)) {
++        fprintf(stderr, "PIC NFS: config must be root-owned and not group/other writable\n");
++        close(fd); return 0;
++    }
++    FILE *f = fdopen(fd, "r");
++    if (!f) { close(fd); return 0; }
++    char line[8192];
++    while (fgets(line, sizeof(line), f)) {
++        char ip[INET_ADDRSTRLEN], prefix[MAX_PATH + 1], extra[2];
++        char *s = line;
++        while (*s == ' ' || *s == '\t') ++s;
++        if (*s == '#' || *s == '\n' || *s == 0) continue;
++        if (sscanf(s, "%15s %4096s %1s", ip, prefix, extra) != 2 ||
++            rule_count == MAX_RULES || !valid_prefix(prefix)) { rule_count = 0; break; }
++        struct in_addr address;
++        if (inet_pton(AF_INET, ip, &address) != 1 ||
++            !inet_ntop(AF_INET, &address, rules[rule_count].ip, INET_ADDRSTRLEN)) {
++            rule_count = 0; break;
++        }
++        strcpy(rules[rule_count].prefix, prefix);
++        ++rule_count;
++    }
++    int bad = ferror(f) || !feof(f);
++    fclose(f);
++    if (bad || !rule_count) {
++        fprintf(stderr, "PIC NFS: invalid or empty policy in %s\n", CONF);
++        return 0;
++    }
++    return 1;
++}
++static int path_allowed(const char *ip, const char *path) {
++    for (size_t i = 0; i < rule_count; ++i) {
++        size_t n = strlen(rules[i].prefix);
++        if (!strcmp(ip, rules[i].ip) && !strncmp(path, rules[i].prefix, n) &&
++            (!path[n] || path[n] == '/')) return 1;
++    }
++    return 0;
++}
++static int resolve_allowed(const char *host, const char *path, char *out) {
++    struct addrinfo hints = {0}, *addresses = NULL;
++    hints.ai_family = AF_INET;
++    hints.ai_socktype = SOCK_STREAM;
++    if (getaddrinfo(host, NULL, &hints, &addresses)) return 0;
++    int allowed = 0;
++    for (struct addrinfo *item = addresses; item; item = item->ai_next) {
++        char ip[INET_ADDRSTRLEN];
++        struct sockaddr_in *a = (struct sockaddr_in *)item->ai_addr;
++        if (inet_ntop(AF_INET, &a->sin_addr, ip, sizeof(ip)) && path_allowed(ip, path)) {
++            strcpy(out, ip); allowed = 1; break;
++        }
++    }
++    freeaddrinfo(addresses);
++    return allowed;
++}
++static int prepare_nfs(const char *ip) {
++    if (nfs && !strcmp(mounted_host, ip)) return 0;
++    if (nfs) { nfs_destroy_context(nfs); nfs = NULL; mounted_host[0] = 0; }
++    nfs = nfs_init_context();
++    if (!nfs) return -1;
++    nfs_set_autoreconnect(nfs, 2);
++    nfs_set_retrans(nfs, 2);
++    int rc = nfs_set_version(nfs, 4);
++    if (rc != 0) return rc;
++    rc = nfs_mount(nfs, ip, "/");
++    if (rc == 0) strcpy(mounted_host, ip);
++    return rc;
++}
++static int respond_stat(const char *path) {
++    struct nfs_stat_64 st = {0};
++    int rc = nfs_stat64(nfs, path, &st);
++    if (rc < 0) return lib_fail("nfs_stat64", rc);
++    unsigned char dir = (st.nfs_mode & S_IFMT) == S_IFDIR;
++    return write_all("O", 1) && write_all(&dir, 1) &&
++           put_u64(st.nfs_size) && put_u64(st.nfs_mtime);
++}
++static int respond_list(const char *path) {
++    struct nfsdir *dir = NULL;
++    int rc = nfs_opendir(nfs, path, &dir);
++    if (rc < 0) return lib_fail("nfs_opendir", rc);
++    if (!write_all("O", 1)) { nfs_closedir(nfs, dir); return 0; }
++    uint32_t count = 0;
++    struct nfsdirent *ent;
++    while ((ent = nfs_readdir(nfs, dir))) {
++        if (!ent->name || !strcmp(ent->name, ".") || !strcmp(ent->name, "..")) continue;
++        size_t len = strlen(ent->name);
++        if (++count > MAX_ENTRIES || !len || len > 4096) {
++            nfs_closedir(nfs, dir);
++            const char *message = "NFS directory exceeds response limit";
++            return put_u32(UINT32_MAX) && put_u32((uint32_t)strlen(message)) &&
++                   write_all(message, strlen(message));
++        }
++        unsigned char is_dir = ent->type == 2;
++        if (!put_u32((uint32_t)len) || !write_all(ent->name, len) ||
++            !write_all(&is_dir, 1) || !put_u64(ent->size) ||
++            !put_u64((uint64_t)ent->mtime.tv_sec)) {
++            nfs_closedir(nfs, dir); return 0;
++        }
++    }
++    nfs_closedir(nfs, dir);
++    return put_u32(0);
++}
++static int respond_read(const char *path) {
++    struct nfs_stat_64 st = {0};
++    int rc = nfs_stat64(nfs, path, &st);
++    if (rc < 0) return lib_fail("nfs_stat64 before read", rc);
++    if ((st.nfs_mode & S_IFMT) != S_IFREG) return fail("NFS read requires a regular file");
++    if (st.nfs_size > MAX_FILE) return fail("NFS file exceeds 512 MiB limit");
++    struct nfsfh *fh = NULL;
++    rc = nfs_open(nfs, path, O_RDONLY, &fh);
++    if (rc < 0) return lib_fail("nfs_open(O_RDONLY)", rc);
++    if (!write_all("O", 1)) { nfs_close(nfs, fh); return 0; }
++    unsigned char buf[64 * 1024];
++    uint64_t total = 0;
++    while (1) {
++        rc = nfs_read(nfs, fh, buf, sizeof(buf));
++        if (rc <= 0) break;
++        total += (unsigned)rc;
++        if (total > MAX_FILE) {
++            nfs_close(nfs, fh);
++            const char *message = "NFS file exceeds 512 MiB limit";
++            return put_u32(UINT32_MAX) && put_u32((uint32_t)strlen(message)) &&
++                   write_all(message, strlen(message));
++        }
++        if (!put_u32((uint32_t)rc) || !write_all(buf, (size_t)rc)) {
++            nfs_close(nfs, fh); return 0;
++        }
++    }
++    if (rc < 0) {
++        char message[1200];
++        const char *detail = nfs_get_error(nfs);
++        snprintf(message, sizeof(message), "nfs_read rc=%d libnfs=%s", rc,
++                 (detail && *detail) ? detail : "<empty>");
++        nfs_close(nfs, fh);
++        size_t len = strlen(message);
++        return put_u32(UINT32_MAX) && put_u32((uint32_t)len) && write_all(message, len);
++    }
++    nfs_close(nfs, fh);
++    return put_u32(0);
++}
++int main(void) {
++    signal(SIGPIPE, SIG_IGN);
++    if (!load_rules()) return 2;
++    while (1) {
++        unsigned char op;
++        uint32_t host_len, path_len;
++        char host[MAX_HOST + 1], path[MAX_PATH + 1], ip[INET_ADDRSTRLEN];
++        if (!read_all(&op, 1)) break;
++        if (!get_u32(&host_len) || !host_len || host_len > MAX_HOST) break;
++        if (!read_all(host, host_len)) break;
++        host[host_len] = 0;
++        if (!get_u32(&path_len) || !path_len || path_len > MAX_PATH) break;
++        if (!read_all(path, path_len)) break;
++        path[path_len] = 0;
++        if (memchr(host, 0, host_len) || memchr(path, 0, path_len) ||
++            !valid_path(path) || (op != 'S' && op != 'L' && op != 'R')) {
++            if (!fail("Invalid helper request")) break;
++            continue;
++        }
++        if (!resolve_allowed(host, path, ip)) {
++            if (!fail("NFS server/export not permitted by root-owned helper policy")) break;
++            continue;
++        }
++        int rc = prepare_nfs(ip);
++        if (rc) {
++            if (!lib_fail("NFSv4 mount", rc)) break;
++            continue;
++        }
++        int ok = (op == 'S') ? respond_stat(path) :
++                 (op == 'L') ? respond_list(path) : respond_read(path);
++        if (!ok) break;
++    }
++    if (nfs) nfs_destroy_context(nfs);
++    return 0;
++}
+diff --git a/helper/pic-nfs-helper.conf b/helper/pic-nfs-helper.conf
+new file mode 100644
+index 0000000..db740e7
+--- /dev/null
++++ b/helper/pic-nfs-helper.conf
+@@ -0,0 +1,6 @@
++# Root-owned; format: server IPv4 + allowed NFSv4 export path.
++# This only authorizes the helper to READ these paths, never to write.
++10.0.0.1 /mnt/4TBP
++# After verifying 4TBP, enable other read-only LAN exports if desired:
++# 10.0.0.1 /mnt/4TBS
++# 10.0.0.1 /mnt/4TBM
+diff --git a/helper/smoke.py b/helper/smoke.py
+new file mode 100755
+index 0000000..e199c05
+--- /dev/null
++++ b/helper/smoke.py
+@@ -0,0 +1,103 @@
++#!/usr/bin/env python3
++"""End-to-end standalone helper test: list directory, stat exact JPEG, read JPEG bytes.
++Usage: python3 helper/smoke.py 10.0.0.1 '/mnt/4TBP/Other/Tat Sing/20190917_184453.jpg'
++No PIC process, GVfs, mount(2), sudo, or cached image involved.
++"""
++import os
++import struct
++import subprocess
++import sys
++
++HELPER = os.environ.get("PIC_NFS_HELPER_PATH", "/usr/local/libexec/pic-nfs-helper")
++
++
++def read_exact(stream, size):
++    data = stream.read(size)
++    if len(data) != size:
++        raise RuntimeError(f"helper ended while reading {size} bytes (got {len(data)})")
++    return data
++
++
++def u32(stream):
++    return struct.unpack(">I", read_exact(stream, 4))[0]
++
++
++def u64(stream):
++    return struct.unpack(">Q", read_exact(stream, 8))[0]
++
++
++def request(proc, op, host, path):
++    host, path = host.encode(), path.encode()
++    frame = op.encode() + struct.pack(">I", len(host)) + host
++    frame += struct.pack(">I", len(path)) + path
++    proc.stdin.write(frame)
++    proc.stdin.flush()
++    status = read_exact(proc.stdout, 1)
++    if status == b"E":
++        raise RuntimeError(read_exact(proc.stdout, u32(proc.stdout)).decode(errors="replace"))
++    if status != b"O":
++        raise RuntimeError(f"unexpected helper status: {status!r}")
++
++
++def main():
++    if len(sys.argv) != 3 or not sys.argv[2].startswith("/"):
++        sys.exit("usage: python3 helper/smoke.py HOST '/absolute/export/path/photo.jpg'")
++    host, path = sys.argv[1:]
++    directory = os.path.dirname(path)
++    proc = subprocess.Popen([HELPER], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
++    try:
++        request(proc, "L", host, directory)
++        files = []
++        while True:
++            size = u32(proc.stdout)
++            if size == 0:
++                break
++            if size == 0xFFFFFFFF:
++                raise RuntimeError(read_exact(proc.stdout, u32(proc.stdout)).decode(errors="replace"))
++            if size > 4096:
++                raise RuntimeError("invalid listing")
++            name = read_exact(proc.stdout, size).decode(errors="replace")
++            directory_flag = read_exact(proc.stdout, 1)[0]
++            _file_size = u64(proc.stdout)
++            _mtime = u64(proc.stdout)
++            files.append((name, directory_flag))
++        print(f"LIST OK: {len(files)} entries")
++        if not any(name == os.path.basename(path) for name, _ in files):
++            raise RuntimeError("exact JPEG not present in directory listing")
++        request(proc, "S", host, path)
++        is_directory = read_exact(proc.stdout, 1)[0]
++        file_size = u64(proc.stdout)
++        _mtime = u64(proc.stdout)
++        if is_directory or not file_size:
++            raise RuntimeError("JPEG is not a nonempty regular file")
++        print(f"STAT OK: {file_size} bytes")
++        request(proc, "R", host, path)
++        first = b""
++        total = 0
++        while True:
++            size = u32(proc.stdout)
++            if size == 0:
++                break
++            if size == 0xFFFFFFFF:
++                raise RuntimeError(read_exact(proc.stdout, u32(proc.stdout)).decode(errors="replace"))
++            if size > 65536:
++                raise RuntimeError("invalid read chunk")
++            data = read_exact(proc.stdout, size)
++            if len(first) < 3:
++                first += data[:3 - len(first)]
++            total += len(data)
++            if total > 512 * 1024 * 1024:
++                raise RuntimeError("read limit exceeded")
++        if first != b"\xff\xd8\xff":
++            raise RuntimeError(f"wrong JPEG signature: {first.hex()}")
++        if total != file_size:
++            raise RuntimeError(f"incomplete JPEG: read {total}, stat said {file_size}")
++        print(f"READ OK: {total} bytes; JPEG SIGNATURE OK: {first.hex(' ')}")
++        print("PRIVATE HELPER LIVE TEST PASSED")
++    finally:
++        proc.stdin.close()
++        proc.wait(timeout=5)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/nfs_transport.rs b/src/nfs_transport.rs
+index 1b8cf8a..44cf469 100644
+--- a/src/nfs_transport.rs
++++ b/src/nfs_transport.rs
+@@ -1,174 +1,22 @@
+-//! Private NFS transport backed by libnfs.
++//! Direct NFSv4 transport via a separate, narrowly privileged read-only helper.
+ //!
+-//! libnfs speaks NFS directly from the process.  No GIO/GVfs objects are
+-//! created and no system mount is ever performed.  The synchronous libnfs
+-//! calls run on short-lived worker threads so GTK never waits on the server.
++//! PIC itself remains an ordinary desktop process. The root-owned helper holds
++//! CAP_NET_BIND_SERVICE (not root), and its root-owned allowlist restricts both
++//! the server and export paths. No mount(2), GVfs, Nautilus or FUSE is used.
++//! The helper is persistent and maintains its libnfs context across requests.
+ 
+-use std::ffi::{c_char, c_int, c_void, CStr, CString};
++use std::fs;
++use std::io::{self, Read, Write};
++use std::os::unix::fs::PermissionsExt;
++use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+ use std::sync::{mpsc, Mutex, OnceLock};
+ use std::time::Duration;
+ 
+-use anyhow::Result;
+-
+-const OP_TIMEOUT: Duration = Duration::from_secs(25);
+-static OP_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+-
+-#[repr(C)]
+-struct NfsContext;
+-#[repr(C)]
+-struct NfsFh;
+-#[repr(C)]
+-struct NfsDir;
+-
+-#[repr(C)]
+-#[derive(Default)]
+-struct NfsStat64 {
+-    _dev: u64,
+-    _ino: u64,
+-    mode: u64,
+-    _nlink: u64,
+-    _uid: u64,
+-    _gid: u64,
+-    _rdev: u64,
+-    size: u64,
+-    _blksize: u64,
+-    _blocks: u64,
+-    _atime: u64,
+-    mtime: u64,
+-    _ctime: u64,
+-    _atime_nsec: u64,
+-    _mtime_nsec: u64,
+-    _ctime_nsec: u64,
+-    _used: u64,
+-}
+-
+-#[repr(C)]
+-struct NfsDirent {
+-    next: *mut NfsDirent,
+-    name: *mut c_char,
+-    _inode: u64,
+-    file_type: u32,
+-    _mode: u32,
+-    size: u64,
+-    _atime: libc::timeval,
+-    mtime: libc::timeval,
+-    _ctime: libc::timeval,
+-    _uid: u32,
+-    _gid: u32,
+-    _nlink: u32,
+-    _dev: u64,
+-    _rdev: u64,
+-    _blksize: u64,
+-    _blocks: u64,
+-    _used: u64,
+-    _atime_nsec: u32,
+-    _mtime_nsec: u32,
+-    _ctime_nsec: u32,
+-}
+-
+-type Init = unsafe extern "C" fn() -> *mut NfsContext;
+-type Destroy = unsafe extern "C" fn(*mut NfsContext);
+-type GetError = unsafe extern "C" fn(*mut NfsContext) -> *const c_char;
+-type SetInt = unsafe extern "C" fn(*mut NfsContext, c_int);
+-type SetVersion = unsafe extern "C" fn(*mut NfsContext, c_int) -> c_int;
+-type Mount = unsafe extern "C" fn(*mut NfsContext, *const c_char, *const c_char) -> c_int;
+-type Stat = unsafe extern "C" fn(*mut NfsContext, *const c_char, *mut NfsStat64) -> c_int;
+-type OpenDir = unsafe extern "C" fn(*mut NfsContext, *const c_char, *mut *mut NfsDir) -> c_int;
+-type ReadDir = unsafe extern "C" fn(*mut NfsContext, *mut NfsDir) -> *mut NfsDirent;
+-type CloseDir = unsafe extern "C" fn(*mut NfsContext, *mut NfsDir);
+-type Open = unsafe extern "C" fn(*mut NfsContext, *const c_char, c_int, *mut *mut NfsFh) -> c_int;
+-type Read = unsafe extern "C" fn(*mut NfsContext, *mut NfsFh, *mut c_void, usize) -> c_int;
+-type Close = unsafe extern "C" fn(*mut NfsContext, *mut NfsFh) -> c_int;
+-
+-struct Api {
+-    handle: *mut c_void,
+-    init: Init,
+-    destroy: Destroy,
+-    get_error: GetError,
+-    set_autoreconnect: SetInt,
+-    set_retrans: SetInt,
+-    set_version: SetVersion,
+-    mount: Mount,
+-    stat: Stat,
+-    opendir: OpenDir,
+-    readdir: ReadDir,
+-    closedir: CloseDir,
+-    open: Open,
+-    read: Read,
+-    close: Close,
+-}
+-unsafe impl Send for Api {}
+-unsafe impl Sync for Api {}
+-
+-impl Drop for Api {
+-    fn drop(&mut self) {
+-        if !self.handle.is_null() {
+-            unsafe { libc::dlclose(self.handle) };
+-        }
+-    }
+-}
+-
+-static API: OnceLock<Result<Api, String>> = OnceLock::new();
+-
+-fn symbol<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, String> {
+-    let ptr = unsafe { libc::dlsym(handle, name.as_ptr()) };
+-    if ptr.is_null() {
+-        return Err(format!("missing libnfs symbol {}", name.to_string_lossy()));
+-    }
+-    Ok(unsafe { std::mem::transmute_copy(&ptr) })
+-}
+-
+-fn load_api() -> Result<Api, String> {
+-    for library in ["libnfs.so.16", "libnfs.so"] {
+-        let name = CString::new(library).unwrap();
+-        let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+-        if handle.is_null() {
+-            continue;
+-        }
+-        macro_rules! sym {
+-            ($kind:ty, $name:expr) => {
+-                symbol::<$kind>(handle, CString::new($name).unwrap().as_c_str())?
+-            };
+-        }
+-        let result: Result<Api, String> = (|| {
+-            Ok(Api {
+-                handle,
+-                init: sym!(Init, "nfs_init_context"),
+-                destroy: sym!(Destroy, "nfs_destroy_context"),
+-                get_error: sym!(GetError, "nfs_get_error"),
+-                set_autoreconnect: sym!(SetInt, "nfs_set_autoreconnect"),
+-                set_retrans: sym!(SetInt, "nfs_set_retrans"),
+-                set_version: sym!(SetVersion, "nfs_set_version"),
+-                mount: sym!(Mount, "nfs_mount"),
+-                stat: sym!(Stat, "nfs_stat64"),
+-                opendir: sym!(OpenDir, "nfs_opendir"),
+-                readdir: sym!(ReadDir, "nfs_readdir"),
+-                closedir: sym!(CloseDir, "nfs_closedir"),
+-                open: sym!(Open, "nfs_open"),
+-                read: sym!(Read, "nfs_read"),
+-                close: sym!(Close, "nfs_close"),
+-            })
+-        })();
+-        match result {
+-            Ok(api) => return Ok(api),
+-            Err(_error) => unsafe {
+-                libc::dlclose(handle);
+-            },
+-        }
+-    }
+-    Err("libnfs is unavailable (install libnfs.so.16)".into())
+-}
+-
+-fn api() -> Result<&'static Api, String> {
+-    match API.get_or_init(load_api) {
+-        Ok(api) => Ok(api),
+-        Err(error) => Err(error.clone()),
+-    }
+-}
+-
+-pub fn direct_available() -> bool {
+-    api().is_ok() && std::env::var_os("PIC_TEST_NO_NFSCLIENT").is_none()
+-}
++const DEFAULT_HELPER: &str = "/usr/local/libexec/pic-nfs-helper";
++const OP_TIMEOUT: Duration = Duration::from_secs(30);
++const MAX_BYTES: usize = 512 * 1024 * 1024;
++const MAX_ENTRIES: usize = 100_000;
++static HELPER: OnceLock<Mutex<Option<Helper>>> = OnceLock::new();
+ 
+ #[derive(Debug, Clone)]
+ pub struct Entry {
+@@ -188,311 +36,251 @@ pub struct Metadata {
+ #[derive(Debug, Clone)]
+ struct Target {
+     host: String,
+-    segments: Vec<String>,
++    path: String,
++}
++
++fn helper_path() -> String {
++    std::env::var("PIC_NFS_HELPER_PATH").unwrap_or_else(|_| DEFAULT_HELPER.to_owned())
++}
++
++pub fn direct_available() -> bool {
++    if std::env::var_os("PIC_TEST_NO_NFSCLIENT").is_some() {
++        return false;
++    }
++    fs::metadata(helper_path())
++        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
++        .unwrap_or(false)
+ }
+ 
+-fn decode(value: &str) -> String {
+-    let mut out = Vec::with_capacity(value.len());
++fn decode(value: &str) -> Result<String, String> {
+     let bytes = value.as_bytes();
++    let mut out = Vec::with_capacity(bytes.len());
+     let mut i = 0;
+     while i < bytes.len() {
+-        if bytes[i] == b'%' && i + 2 < bytes.len() {
+-            if let Ok(v) = u8::from_str_radix(&value[i + 1..i + 3], 16) {
+-                out.push(v);
+-                i += 3;
+-                continue;
++        if bytes[i] == b'%' {
++            if i + 2 >= bytes.len() {
++                return Err("Invalid NFS URI percent encoding".into());
+             }
++            let chunk = std::str::from_utf8(&bytes[i + 1..i + 3]).map_err(|e| e.to_string())?;
++            out.push(u8::from_str_radix(chunk, 16).map_err(|e| e.to_string())?);
++            i += 3;
++        } else {
++            out.push(bytes[i]);
++            i += 1;
+         }
+-        out.push(bytes[i]);
+-        i += 1;
+     }
+-    String::from_utf8_lossy(&out).into_owned()
++    String::from_utf8(out).map_err(|e| e.to_string())
+ }
+ 
+ fn target(uri: &str) -> Result<Target, String> {
+-    let rest = uri.strip_prefix("nfs://").ok_or("not an nfs URI")?;
+-    let (authority, path) = rest.split_once('/').ok_or("NFS URI has no export")?;
++    let rest = uri.strip_prefix("nfs://").ok_or("not an NFS URI")?;
++    let (authority, path) = rest.split_once('/').ok_or("NFS URI has no path")?;
+     let host = authority
+         .trim_matches(['[', ']'])
+         .split(':')
+         .next()
+         .unwrap_or(authority);
+-    if host.is_empty() {
+-        return Err("NFS URI has no host".into());
++    if host.is_empty() || host.len() > 253 || host.as_bytes().contains(&0) {
++        return Err("Invalid NFS hostname".into());
+     }
+-    let decoded = decode(path);
+-    let segments = decoded
+-        .split('/')
+-        .filter(|part| !part.is_empty())
+-        .map(str::to_owned)
+-        .collect::<Vec<_>>();
+-    if segments.is_empty() {
+-        return Err("NFS URI has no export".into());
++    let path = decode(path)?;
++    if path.is_empty() || path.len() > 4095 || path.as_bytes().contains(&0) {
++        return Err("Invalid NFS path".into());
+     }
+-    Ok(Target {
+-        host: host.to_string(),
+-        segments,
+-    })
++    // The helper separately enforces its root-owned server/export allowlist.
++    Ok(Target { host: host.to_owned(), path: format!("/{path}") })
++}
++
++struct Helper {
++    child: Child,
++    stdin: ChildStdin,
++    stdout: ChildStdout,
+ }
+ 
+-fn error(api: &Api, context: *mut NfsContext, operation: &str, rc: i32) -> String {
+-    let ptr = unsafe { (api.get_error)(context) };
+-    let detail = if ptr.is_null() {
+-        String::new()
+-    } else {
+-        unsafe { CStr::from_ptr(ptr) }
+-            .to_string_lossy()
+-            .into_owned()
++impl Helper {
++    fn spawn() -> Result<Self, String> {
++        let path = helper_path();
++        let mut child = Command::new(&path)
++            .stdin(Stdio::piped())
++            .stdout(Stdio::piped())
++            .stderr(Stdio::inherit())
++            .spawn()
++            .map_err(|e| format!("NFS helper '{path}' cannot start: {e}; install helper/install-fedora.sh"))?;
++        let stdin = child.stdin.take().ok_or("NFS helper stdin unavailable")?;
++        let stdout = child.stdout.take().ok_or("NFS helper stdout unavailable")?;
++        Ok(Self { child, stdin, stdout })
+     }
+-    .trim()
+-    .to_string();
+-    let errno = std::io::Error::last_os_error();
+-    let message = if detail.is_empty() {
+-        format!("{operation} failed (return_code={rc}, errno={errno})")
+-    } else {
+-        format!("{operation} failed (return_code={rc}, errno={errno}): {detail}")
+-    };
+-    crate::source::net_trace(format!(
+-        "nfs_ffi_error operation={operation} return_code={rc} errno={errno} libnfs_error={}",
+-        if detail.is_empty() {
+-            "<empty>"
+-        } else {
+-            &detail
++
++    fn begin(&mut self, op: u8, target: &Target) -> Result<(), Failure> {
++        let host = target.host.as_bytes();
++        let path = target.path.as_bytes();
++        self.stdin.write_all(&[op])?;
++        self.stdin.write_all(&(host.len() as u32).to_be_bytes())?;
++        self.stdin.write_all(host)?;
++        self.stdin.write_all(&(path.len() as u32).to_be_bytes())?;
++        self.stdin.write_all(path)?;
++        self.stdin.flush()?;
++        let mut status = [0u8];
++        self.stdout.read_exact(&mut status)?;
++        match status[0] {
++            b'O' => Ok(()),
++            b'E' => {
++                let size = read_u32(&mut self.stdout)? as usize;
++                if size > 1024 { return Err(Failure::Protocol("NFS helper error too large".into())); }
++                let mut message = vec![0; size];
++                self.stdout.read_exact(&mut message)?;
++                Err(Failure::Remote(String::from_utf8_lossy(&message).into_owned()))
++            }
++            _ => Err(Failure::Protocol("Invalid NFS helper status".into())),
+         }
+-    ));
+-    message
++    }
+ }
+ 
+-fn run<T: Send + 'static>(
+-    operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+-) -> Result<T, String> {
+-    let (sender, receiver) = mpsc::sync_channel(1);
+-    std::thread::Builder::new()
+-        .name("pic-nfs-transport".into())
+-        .spawn(move || {
+-            let _guard = OP_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+-            let _ = sender.send(operation());
+-        })
+-        .map_err(|error| error.to_string())?;
+-    receiver
+-        .recv_timeout(OP_TIMEOUT)
+-        .map_err(|_| "NFS operation timed out".to_string())?
++impl Drop for Helper {
++    fn drop(&mut self) {
++        let _ = self.child.kill();
++        let _ = self.child.wait();
++    }
+ }
+ 
+-fn with_context<T>(
+-    target: Target,
+-    operation: impl Fn(&Api, *mut NfsContext, &str) -> Result<T, String>,
+-) -> Result<T, String> {
+-    let api = api()?;
+-    let host = CString::new(target.host).map_err(|_| "invalid NFS host".to_string())?;
+-    let full_path = format!("/{}", target.segments.join("/"));
+-    let mut last_error = "nfs_mount failed".to_string();
++#[derive(Debug)]
++enum Failure {
++    Remote(String),
++    Protocol(String),
++    Io(io::Error),
++}
+ 
+-    // NFSv4 uses a server-wide pseudo-root.  The paths returned by
+-    // showmount (for example /mnt/4TBP) must therefore be retained in the
+-    // subsequent stat/list/read path; mounting /mnt/4TBP directly produces a
+-    // context which mounts successfully but rejects every operation with
+-    // NFS4ERR_PERM.
+-    let v4_export = CString::new("/").unwrap();
+-    let v4_path = CString::new(full_path).unwrap();
+-    let context = unsafe { (api.init)() };
+-    if !context.is_null() {
+-        unsafe {
+-            (api.set_autoreconnect)(context, 2);
+-            (api.set_retrans)(context, 2);
+-        }
+-        let version_result = unsafe { (api.set_version)(context, 4) };
+-        crate::source::net_trace(format!(
+-            "nfs_set_version version=4 return_code={version_result}"
+-        ));
+-        let mounted = unsafe { (api.mount)(context, host.as_ptr(), v4_export.as_ptr()) };
+-        crate::source::net_trace(format!(
+-            "nfs_mount_result version=4 host={} export=/ return_code={mounted}",
+-            host.to_string_lossy()
+-        ));
+-        if mounted >= 0 {
+-            let result = operation(api, context, v4_path.to_str().unwrap_or("/"));
+-            unsafe { (api.destroy)(context) };
+-            return result;
+-        }
+-        last_error = error(api, context, "nfs_mount(v4)", mounted);
+-        unsafe { (api.destroy)(context) };
+-    } else {
+-        last_error = format!(
+-            "nfs_init_context failed (errno={})",
+-            std::io::Error::last_os_error()
+-        );
+-    }
++impl From<io::Error> for Failure {
++    fn from(value: io::Error) -> Self { Self::Io(value) }
++}
+ 
+-    // NFSv3 exports are mounted directly and the operation path is relative
+-    // to that export. Try the longest URI prefix first.
+-    for export_len in (1..=target.segments.len()).rev() {
+-        let export = format!("/{}", target.segments[..export_len].join("/"));
+-        let path = if export_len == target.segments.len() {
+-            "/".to_string()
+-        } else {
+-            format!("/{}", target.segments[export_len..].join("/"))
+-        };
+-        let export = CString::new(export).map_err(|_| "invalid NFS export".to_string())?;
+-        let path = CString::new(path).map_err(|_| "invalid NFS path".to_string())?;
+-        crate::source::net_trace(format!(
+-            "nfs_mount_attempt host={} export={} relative={}",
+-            host.to_string_lossy(),
+-            export.to_string_lossy(),
+-            path.to_string_lossy()
+-        ));
+-        let context = unsafe { (api.init)() };
+-        if context.is_null() {
+-            let errno = std::io::Error::last_os_error();
+-            return Err(format!("nfs_init_context failed (errno={errno})"));
+-        }
+-        unsafe {
+-            (api.set_autoreconnect)(context, 2);
+-            (api.set_retrans)(context, 2);
+-            let version_result = (api.set_version)(context, 3);
+-            crate::source::net_trace(format!(
+-                "nfs_set_version version=3 return_code={version_result}"
+-            ));
++fn read_u32(reader: &mut impl Read) -> io::Result<u32> {
++    let mut bytes = [0; 4];
++    reader.read_exact(&mut bytes)?;
++    Ok(u32::from_be_bytes(bytes))
++}
++
++fn read_u64(reader: &mut impl Read) -> io::Result<u64> {
++    let mut bytes = [0; 8];
++    reader.read_exact(&mut bytes)?;
++    Ok(u64::from_be_bytes(bytes))
++}
++
++fn invoke<T>(target: Target, operation: u8, decode: impl FnOnce(&mut ChildStdout) -> Result<T, Failure>) -> Result<T, String> {
++    let lock = HELPER.get_or_init(|| Mutex::new(None));
++    let mut guard = lock.lock().map_err(|_| "NFS helper lock poisoned")?;
++    if guard.is_none() { *guard = Some(Helper::spawn()?); }
++    let result = (|| {
++        let helper = guard.as_mut().ok_or(Failure::Protocol("No NFS helper".into()))?;
++        helper.begin(operation, &target)?;
++        decode(&mut helper.stdout)
++    })();
++    match result {
++        Ok(value) => Ok(value),
++        Err(Failure::Remote(message)) => Err(message),
++        Err(Failure::Io(error)) => {
++            *guard = None;
++            Err(format!("NFS helper connection lost: {error}"))
+         }
+-        let mounted = unsafe { (api.mount)(context, host.as_ptr(), export.as_ptr()) };
+-        crate::source::net_trace(format!(
+-            "nfs_mount_result host={} export={} return_code={mounted}",
+-            host.to_string_lossy(),
+-            export.to_string_lossy()
+-        ));
+-        if mounted < 0 {
+-            last_error = error(api, context, "nfs_mount", mounted);
+-            unsafe { (api.destroy)(context) };
+-            continue;
++        Err(Failure::Protocol(message)) => {
++            *guard = None;
++            Err(format!("NFS helper protocol error: {message}"))
+         }
+-        let result = operation(api, context, path.to_str().unwrap_or("/"));
+-        unsafe { (api.destroy)(context) };
+-        return result;
+     }
+-    Err(last_error)
++}
++
++fn run<T: Send + 'static>(op: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
++    let (sender, receiver) = mpsc::sync_channel(1);
++    std::thread::Builder::new()
++        .name("pic-nfs-request".into())
++        .spawn(move || { let _ = sender.send(op()); })
++        .map_err(|e| e.to_string())?;
++    receiver.recv_timeout(OP_TIMEOUT)
++        .map_err(|_| "NFS helper request timed out".to_owned())?
+ }
+ 
+ pub fn stat(uri: &str) -> Result<Metadata, String> {
+-    let uri = uri.to_string();
+-    crate::source::net_trace(format!("nfs_stat_start uri={uri}"));
+-    let result = run(move || {
+-        let target = target(&uri)?;
+-        with_context(target, |api, context, path| {
+-            let path = CString::new(path).unwrap();
+-            let mut stat = NfsStat64::default();
+-            let result = unsafe { (api.stat)(context, path.as_ptr(), &mut stat) };
+-            crate::source::net_trace(format!(
+-                "nfs_stat_result path={} return_code={result}",
+-                path.to_string_lossy()
+-            ));
+-            if result < 0 {
+-                return Err(error(api, context, "nfs_stat64", result));
+-            }
+-            Ok(Metadata {
+-                is_dir: stat.mode & 0o170000 == 0o040000,
+-                size: stat.size,
+-                mtime: stat.mtime as i64,
+-            })
+-        })
+-    });
+-    if let Err(error) = &result {
+-        crate::source::net_trace(format!("nfs_stat_failed error={error}"));
++    let target = target(uri)?;
++    let result = run(move || invoke(target, b'S', |out| {
++        let mut dir = [0u8];
++        out.read_exact(&mut dir)?;
++        let size = read_u64(out)?;
++        let mtime = read_u64(out)?;
++        Ok(Metadata { is_dir: dir[0] != 0, size, mtime: mtime as i64 })
++    }));
++    match &result {
++        Ok(meta) => crate::source::net_trace(format!("nfs_helper_stat_ok uri={uri} size={}", meta.size)),
++        Err(err) => crate::source::net_trace(format!("nfs_helper_stat_failed uri={uri} error={err}")),
+     }
+     result
+ }
+ 
+ pub fn list_dir(uri: &str) -> Result<Vec<Entry>, String> {
+-    let uri = uri.to_string();
+-    crate::source::net_trace(format!("nfs_list_start uri={uri}"));
+-    let result = run(move || {
+-        let target = target(&uri)?;
+-        with_context(target, |api, context, path| {
+-            let path = CString::new(path).unwrap();
+-            let mut directory = std::ptr::null_mut();
+-            let result = unsafe { (api.opendir)(context, path.as_ptr(), &mut directory) };
+-            crate::source::net_trace(format!(
+-                "nfs_opendir_result path={} return_code={result}",
+-                path.to_string_lossy()
+-            ));
+-            if result < 0 {
+-                return Err(error(api, context, "nfs_opendir", result));
++    let target = target(uri)?;
++    let result = run(move || invoke(target, b'L', |out| {
++        let mut entries = Vec::new();
++        loop {
++            let len = read_u32(out)? as usize;
++            if len == 0 { break; }
++            if len == u32::MAX as usize {
++                let size = read_u32(out)? as usize;
++                if size > 1200 { return Err(Failure::Protocol("Invalid NFS directory error".into())); }
++                let mut message = vec![0; size];
++                out.read_exact(&mut message)?;
++                return Err(Failure::Remote(String::from_utf8_lossy(&message).into_owned()));
+             }
+-            let mut entries = Vec::new();
+-            loop {
+-                let entry = unsafe { (api.readdir)(context, directory) };
+-                if entry.is_null() {
+-                    break;
+-                }
+-                let entry = unsafe { &*entry };
+-                if entry.name.is_null() {
+-                    continue;
+-                }
+-                let name = unsafe { CStr::from_ptr(entry.name) }
+-                    .to_string_lossy()
+-                    .into_owned();
+-                if name != "." && name != ".." {
+-                    entries.push(Entry {
+-                        name,
+-                        is_dir: entry.file_type == 2,
+-                        size: entry.size,
+-                        mtime: entry.mtime.tv_sec,
+-                    });
+-                }
++            if len > 4096 || entries.len() >= MAX_ENTRIES {
++                return Err(Failure::Protocol("Invalid NFS directory response".into()));
+             }
+-            unsafe { (api.closedir)(context, directory) };
+-            Ok(entries)
+-        })
+-    });
++            let mut name = vec![0u8; len];
++            out.read_exact(&mut name)?;
++            let mut is_dir = [0u8];
++            out.read_exact(&mut is_dir)?;
++            let size = read_u64(out)?;
++            let mtime = read_u64(out)?;
++            entries.push(Entry {
++                name: String::from_utf8_lossy(&name).into_owned(),
++                is_dir: is_dir[0] != 0,
++                size,
++                mtime: mtime as i64,
++            });
++        }
++        Ok(entries)
++    }));
+     match &result {
+-        Ok(entries) => crate::source::net_trace(format!("nfs_list_done count={}", entries.len())),
+-        Err(error) => crate::source::net_trace(format!("nfs_list_failed error={error}")),
++        Ok(entries) => crate::source::net_trace(format!("nfs_helper_list_ok uri={uri} count={}", entries.len())),
++        Err(err) => crate::source::net_trace(format!("nfs_helper_list_failed uri={uri} error={err}")),
+     }
+     result
+ }
+ 
+ pub fn read_file(uri: &str) -> Result<Vec<u8>, String> {
+-    let uri = uri.to_string();
+-    crate::source::net_trace(format!("nfs_read_start uri={uri}"));
+-    let result = run(move || {
+-        let target = target(&uri)?;
+-        with_context(target, |api, context, path| {
+-            let path = CString::new(path).unwrap();
+-            let mut handle = std::ptr::null_mut();
+-            let result = unsafe { (api.open)(context, path.as_ptr(), libc::O_RDONLY, &mut handle) };
+-            crate::source::net_trace(format!(
+-                "nfs_open_result path={} return_code={result}",
+-                path.to_string_lossy()
+-            ));
+-            if result < 0 {
+-                return Err(error(api, context, "nfs_open", result));
++    let target = target(uri)?;
++    let result = run(move || invoke(target, b'R', |out| {
++        let mut bytes = Vec::new();
++        loop {
++            let len = read_u32(out)?;
++            if len == 0 { break; }
++            if len == u32::MAX {
++                let size = read_u32(out)? as usize;
++                if size > 1200 { return Err(Failure::Protocol("Invalid NFS read error".into())); }
++                let mut message = vec![0; size];
++                out.read_exact(&mut message)?;
++                return Err(Failure::Remote(String::from_utf8_lossy(&message).into_owned()));
+             }
+-            let mut bytes = Vec::new();
+-            let mut buffer = vec![0u8; 1024 * 1024];
+-            let result = loop {
+-                let count = unsafe {
+-                    (api.read)(context, handle, buffer.as_mut_ptr().cast(), buffer.len())
+-                };
+-                if count < 0 {
+-                    break Err(error(api, context, "nfs_read", count));
+-                }
+-                if count == 0 {
+-                    break Ok(());
+-                }
+-                bytes.extend_from_slice(&buffer[..count as usize]);
+-                if bytes.len() > 512 * 1024 * 1024 {
+-                    break Err("NFS file exceeds 512 MiB safety limit".into());
+-                }
+-            };
+-            let close_result = unsafe { (api.close)(context, handle) };
+-            result.map(|()| {
+-                if close_result < 0 { /* preserve successful reads; close is best effort */ }
+-                bytes
+-            })
+-        })
+-    });
++            let size = len as usize;
++            if size > 64 * 1024 || bytes.len().saturating_add(size) > MAX_BYTES {
++                return Err(Failure::Protocol("NFS file exceeds transport limit".into()));
++            }
++            let start = bytes.len();
++            bytes.resize(start + size, 0);
++            out.read_exact(&mut bytes[start..])?;
++        }
++        Ok(bytes)
++    }));
+     match &result {
+-        Ok(bytes) => crate::source::net_trace(format!("nfs_read_done bytes={}", bytes.len())),
+-        Err(error) => crate::source::net_trace(format!("nfs_read_failed error={error}")),
++        Ok(bytes) => crate::source::net_trace(format!("nfs_helper_read_ok uri={uri} bytes={}", bytes.len())),
++        Err(err) => crate::source::net_trace(format!("nfs_helper_read_failed uri={uri} error={err}")),
+     }
+     result
+ }
+@@ -502,55 +290,24 @@ mod tests {
+     use super::*;
+ 
+     #[test]
+-    fn parses_export_and_nested_path() {
+-        let parsed = target("nfs://server:2049/mnt/photos/2026/a.jpg").unwrap();
+-        assert_eq!(parsed.host, "server");
+-        assert_eq!(parsed.segments, ["mnt", "photos", "2026", "a.jpg"]);
++    fn parses_server_and_path() {
++        let result = target("nfs://DietPi.local:2049/mnt/4TBP/Other/Tat%20Sing/a.jpg").unwrap();
++        assert_eq!(result.host, "DietPi.local");
++        assert_eq!(result.path, "/mnt/4TBP/Other/Tat Sing/a.jpg");
+     }
+ 
+     #[test]
+-    fn missing_client_fails_closed() {
+-        if std::env::var_os("PIC_TEST_NO_NFSCLIENT").is_some() {
+-            assert!(!direct_available());
+-        }
++    fn rejects_invalid_encoding() {
++        assert!(target("nfs://DietPi.local/mnt/4TBP/foo%Q1.jpg").is_err());
+     }
+ 
+     #[test]
+-    #[ignore = "requires a reachable NFS export; set PIC_NFS_LIVE_URI"]
+-    fn live_export_stat_list_and_read() {
+-        let root = std::env::var("PIC_NFS_LIVE_URI").expect("PIC_NFS_LIVE_URI");
+-        let meta = stat(&root).expect("export root stat");
+-        assert!(meta.is_dir);
+-        let mut pending = vec![(root.trim_end_matches('/').to_string(), 0usize)];
+-        let mut read_image = false;
+-        while let Some((directory, depth)) = pending.pop() {
+-            let Ok(entries) = list_dir(&directory) else {
+-                continue;
+-            };
+-            assert!(!entries.is_empty() || depth > 0);
+-            for entry in entries {
+-                let uri = format!("{directory}/{}", entry.name);
+-                if entry.is_dir && depth < 3 {
+-                    pending.push((uri, depth + 1));
+-                } else if !entry.is_dir
+-                    && ["jpg", "jpeg", "png", "heic", "webp"]
+-                        .iter()
+-                        .any(|extension| entry.name.to_ascii_lowercase().ends_with(extension))
+-                {
+-                    if !stat(&uri).expect("image stat").is_dir {
+-                        if read_file(&uri).is_ok_and(|bytes| !bytes.is_empty()) {
+-                            read_image = true;
+-                            break;
+-                        }
+-                    }
+-                }
+-            }
+-            if read_image {
+-                break;
+-            }
+-        }
+-        // Some exports contain ACL-protected media directories. Stat/list
+-        // remains a valid transport check even when every sampled image is
+-        // denied by the server.
++    #[ignore = "requires installed privileged helper and a reachable NFS export"]
++    fn live_exact_jpeg_read() {
++        let file = std::env::var("PIC_NFS_LIVE_FILE").expect("set PIC_NFS_LIVE_FILE to an exact JPEG URI");
++        let metadata = stat(&file).expect("JPEG stat failed");
++        assert!(!metadata.is_dir);
++        let bytes = read_file(&file).expect("JPEG read failed; do not mark NFS fixed");
++        assert!(bytes.starts_with(&[0xff, 0xd8, 0xff]), "JPEG signature missing");
+     }
+ }
+diff --git a/src/source.rs b/src/source.rs
+index b4dea7e..1f88cc5 100644
+--- a/src/source.rs
++++ b/src/source.rs
+@@ -33,8 +33,8 @@ pub fn folder_available(folder_id: Option<i64>) -> bool {
+ }
+ 
+ pub const NFS_UNAVAILABLE: &str =
+-    "NFS private transport is unavailable; no desktop mount will be created.";
+-pub const NFS_EXPERIMENTAL: bool = false;
++    "NFS private helper is not installed or unavailable; no desktop mount will be created.";
++pub const NFS_EXPERIMENTAL: bool = true;
+ 
+ fn query_exists(reference: &str, directory: bool, lane: crate::smb_transport::SmbLane) -> bool {
+     let reference = normalize_import_reference(reference);
+@@ -923,16 +923,17 @@ pub(crate) mod private_transport_tests {
+         let reference = "/run/user/1000/gvfs/nfs:host=nas,prefix=%2Fphotos/a.jpg";
+         assert!(is_network_location(reference));
+         assert!(!file_available(reference));
+-        assert!(!cached_file_available(reference));
++        // With an installed helper the availability cache may legitimately
++        // still say 'not probed', unlike the old globally-disabled NFS mode.
++        if !crate::nfs_transport::direct_available() {
++            assert!(!cached_file_available(reference));
++        }
+     }
+ 
+     #[test]
+-    fn nfs_failures_are_explicit_and_do_not_probe_or_mount() {
+-        for reference in [
+-            "nfs://localhost/photos/a.jpg",
+-            "NFS://localhost:2049/photos/a.jpg",
+-            "/run/user/1000/gvfs/nfs:host=localhost,prefix=%2Fphotos/a.jpg",
+-        ] {
++    fn nfs_without_installed_helper_fails_closed() {
++        if !crate::nfs_transport::direct_available() {
++            let reference = "nfs://localhost/photos/a.jpg";
+             assert!(!read(reference).unwrap_err().to_string().is_empty());
+             assert!(!probe_source_available(reference));
+             assert!(!probe_file_available(reference));
+diff --git a/src/window/build.rs b/src/window/build.rs
+index f7f54bc..bbe2810 100644
+--- a/src/window/build.rs
++++ b/src/window/build.rs
+@@ -2829,6 +2829,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
+             // service endpoint, not a mountable export - GIO mounts
+             // nfs://host/export).
+             let chooser_root = crate::source::network_browse_root(&browse_root);
++            // DNS-SD advertises nfs://host/mnt as a *service*, not an export.
++            // Show the server's actual showmount exports instead of trying to
++            // stat /mnt through the restricted helper.
++            let chooser_root = if chooser_root.starts_with("nfs://")
++                && chooser_root.ends_with("/mnt/")
++                && chooser_root.trim_end_matches('/').matches('/').count() == 3
++            {
++                chooser_root.trim_end_matches("mnt/").to_string()
++            } else {
++                chooser_root
++            };
+             if !chooser_root.contains("://") || !chooser_root.ends_with('/') {
+                 let message = format!(
+                     "could not browse {browse_root}: not a valid network location"

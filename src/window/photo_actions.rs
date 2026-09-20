@@ -31,7 +31,7 @@ fn dismiss_active_photo_context_menu() -> bool {
         if menu.parent().is_some() {
             menu.unparent();
         }
-
+        
         true
     })
 }
@@ -119,9 +119,10 @@ fn show_photo_context_menu(
     let click_point = if anchor == host_widget {
         gtk::graphene::Point::new(x as f32, y as f32)
     } else {
-        let Some(point) =
-            anchor.compute_point(&host_widget, &gtk::graphene::Point::new(x as f32, y as f32))
-        else {
+        let Some(point) = anchor.compute_point(
+            &host_widget,
+            &gtk::graphene::Point::new(x as f32, y as f32),
+        ) else {
             return;
         };
         point
@@ -178,74 +179,11 @@ fn show_photo_context_menu(
     let open = add_action("Open");
     let edit = add_action("Edit Photo…");
     let open_with = add_action("Open With…");
-    let photo_path = photo.path();
-    // Classify the clicked photo, never the currently selected sidebar row.
-    // Photos may be stored as a GVfs file, or have a network folder path in
-    // the DB even when the displayed file reference is a relative/local path.
-    let photo_folder_id = photo.folder_id();
-    // A context menu needs two small DB lookups, not folders_light(): that
-    // computes every folder's recursive photo count and can fail under an
-    // existing RefCell borrow. A separate read connection is safe here.
-    let resolve_source =
-        |connection: &rusqlite::Connection| -> (bool, Option<i64>, Option<String>) {
-            let folder_path = crate::db::folder_path_by_id(connection, photo_folder_id)
-                .ok()
-                .flatten();
-            let network = sidebar::is_network_photo_path(&photo_path)
-                || folder_path
-                    .as_deref()
-                    .is_some_and(sidebar::is_network_photo_path);
-            if !network {
-                return (false, None, folder_path);
-            }
-            let owning_share = connection
-                .prepare("SELECT id, path FROM folders WHERE imported_root = 1")
-                .ok()
-                .and_then(|mut statement| {
-                    statement
-                        .query_map([], |row| {
-                            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                        })
-                        .ok()
-                        .map(|rows| {
-                            rows.filter_map(Result::ok)
-                                .filter(|(_, root)| crate::source::is_network_location(root))
-                                .filter(|(_, root)| {
-                                    crate::window::path_belongs_to_share(root, &photo_path)
-                                        || folder_path.as_deref().is_some_and(|path| {
-                                            crate::window::path_belongs_to_share(root, path)
-                                        })
-                                })
-                                .max_by_key(|(_, root)| root.len())
-                                .map(|(id, _)| id)
-                        })
-                })
-                .flatten();
-            (true, owning_share, folder_path)
-        };
-    let (photo_is_network, owning_share_id, photo_folder_path) =
-        if let Ok(connection) = context.connection.try_borrow() {
-            resolve_source(&connection)
-        } else if let Ok(connection) = crate::db::open_default() {
-            resolve_source(&connection)
-        } else {
-            (sidebar::is_network_photo_path(&photo_path), None, None)
-        };
-    crate::source::net_trace(format!(
-        "photo_context_source photo={} path={} folder_id={} folder_path={:?} network={} share_id={:?}",
-        photo.id(), photo_path, photo_folder_id, photo_folder_path,
-        photo_is_network, owning_share_id
-    ));
-    let open_in_folder = add_action(if photo_is_network {
-        "Open in Network Share"
-    } else {
-        "Open in Folder"
-    });
-    // Keep the two distinct actions adjacent and visible without scrolling.
-    let file_manager = add_action("Open in File Manager");
-    if photo_is_network && owning_share_id.is_none() {
-        open_in_folder.set_sensitive(false);
-    }
+    let open_in_folder = (!matches!(
+        context.filter.get(),
+        sidebar::SidebarFilter::Albums
+    ))
+    .then(|| add_action("Open in Folder"));
     {
         let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
         separator.add_css_class("photo-context-separator");
@@ -253,7 +191,7 @@ fn show_photo_context_menu(
     }
 
     let selection_ids = selected_photo_ids(&context, Some(photo.id()));
-
+    
     let selection_for_provider = selection_ids.clone();
     let selection_provider: Rc<dyn Fn() -> Vec<i64>> =
         Rc::new(move || selection_for_provider.clone());
@@ -274,7 +212,9 @@ fn show_photo_context_menu(
     let album_popover = build_album_popover(
         context.clone(),
         selection_provider.clone(),
-        { dismiss_menu.clone() },
+        {
+            dismiss_menu.clone()
+        },
         restore_album_view.clone(),
     );
     unfocus_submenu(&album_popover);
@@ -288,7 +228,7 @@ fn show_photo_context_menu(
     let dismiss_menu_for_collage = dismiss_menu.clone();
     collage.connect_clicked(move |_| {
         dismiss_menu_for_collage();
-
+        
         (collage_context.open_collage)(collage_ids.clone());
     });
 
@@ -304,17 +244,12 @@ fn show_photo_context_menu(
     let clicked_is_edited = !crate::edit::EditRecipe::decode(&clicked_recipe).is_default();
     copy_edits.set_sensitive(clicked_is_edited);
     paste_edits.set_sensitive(context.edit_clipboard.borrow().is_some());
-    reset_edits.set_sensitive(
-        clicked_is_edited
-            || selection_ids.iter().any(|id| {
-                db::photo(&context.connection.borrow(), *id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|item| {
-                        !crate::edit::EditRecipe::decode(&item.edit_recipe).is_default()
-                    })
-            }),
-    );
+    reset_edits.set_sensitive(clicked_is_edited || selection_ids.iter().any(|id| {
+        db::photo(&context.connection.borrow(), *id)
+            .ok()
+            .flatten()
+            .is_some_and(|item| !crate::edit::EditRecipe::decode(&item.edit_recipe).is_default())
+    }));
 
     {
         let clipboard = context.edit_clipboard.clone();
@@ -334,20 +269,16 @@ fn show_photo_context_menu(
                 return;
             };
             for id in &paste_selection {
-                if let Err(error) =
-                    db::set_edit_recipe(&paste_context.connection.borrow(), *id, &recipe)
-                {
-                    show_error(
-                        button.upcast_ref(),
-                        "Could not paste edits",
-                        &error.to_string(),
-                    );
+                if let Err(error) = db::set_edit_recipe(&paste_context.connection.borrow(), *id, &recipe) {
+                    show_error(button.upcast_ref(), "Could not paste edits", &error.to_string());
                     return;
                 }
                 if let Some(gallery) = paste_context.gallery.borrow().upgrade() {
                     gallery.update_edit_recipe(*id, &recipe);
                 }
-                let selected = { paste_context.selected_photo.borrow().as_ref().cloned() };
+                let selected = {
+                    paste_context.selected_photo.borrow().as_ref().cloned()
+                };
                 if let Some(selected) = selected {
                     if selected.id() == *id {
                         selected.set_edit_recipe(recipe.clone());
@@ -368,19 +299,16 @@ fn show_photo_context_menu(
         let dismiss_menu = dismiss_menu.clone();
         reset_edits.connect_clicked(move |button| {
             for id in &reset_selection {
-                if let Err(error) = db::set_edit_recipe(&reset_context.connection.borrow(), *id, "")
-                {
-                    show_error(
-                        button.upcast_ref(),
-                        "Could not reset edits",
-                        &error.to_string(),
-                    );
+                if let Err(error) = db::set_edit_recipe(&reset_context.connection.borrow(), *id, "") {
+                    show_error(button.upcast_ref(), "Could not reset edits", &error.to_string());
                     return;
                 }
                 if let Some(gallery) = reset_context.gallery.borrow().upgrade() {
                     gallery.update_edit_recipe(*id, "");
                 }
-                let selected = { reset_context.selected_photo.borrow().as_ref().cloned() };
+                let selected = {
+                    reset_context.selected_photo.borrow().as_ref().cloned()
+                };
                 if let Some(selected) = selected {
                     if selected.id() == *id {
                         selected.set_edit_recipe(String::new());
@@ -411,8 +339,11 @@ fn show_photo_context_menu(
         let target = !favorite_photo.favorite();
         let ids = favorite_selection();
         for id in &ids {
-            if let Err(error) = db::set_favorite(&favorite_context.connection.borrow(), *id, target)
-            {
+            if let Err(error) = db::set_favorite(
+                &favorite_context.connection.borrow(),
+                *id,
+                target,
+            ) {
                 show_error(
                     button.upcast_ref(),
                     "Could not update favourite",
@@ -490,9 +421,11 @@ fn show_photo_context_menu(
         remove.connect_clicked(move |button| {
             dismiss_menu_for_remove();
             let ids = remove_selection();
-            if let Err(error) =
-                db::remove_photos_from_album(&remove_context.connection.borrow(), album_id, &ids)
-            {
+            if let Err(error) = db::remove_photos_from_album(
+                &remove_context.connection.borrow(),
+                album_id,
+                &ids,
+            ) {
                 show_error(
                     button.upcast_ref(),
                     "Could not remove from album",
@@ -523,6 +456,7 @@ fn show_photo_context_menu(
     }
     let move_file = add_action("Move…");
     let rename = add_action("Rename…");
+    let file_manager = add_action("Open in File Manager");
     let wallpaper = add_action("Set as Wallpaper");
     let print = add_action("Print");
     let properties = add_action("Properties");
@@ -533,6 +467,13 @@ fn show_photo_context_menu(
     }
     let delete = add_action("Delete");
     delete.add_css_class("destructive-action");
+    #[cfg(target_os="linux")]
+    if crate::network_shares::private(&photo.path()) {
+        for action in [&move_file,&rename,&file_manager,&delete] {
+            action.set_sensitive(false);
+            action.set_tooltip_text(Some("Direct network shares are read-only inside PIC; no desktop mount or remote write is attempted"));
+        }
+    }
 
     let edit_context = context.clone();
     let edit_id = photo.id();
@@ -568,15 +509,12 @@ fn show_photo_context_menu(
         }
     });
 
-    let file = crate::source::file(&photo.path());
-    if crate::source::is_network_location(&photo.path()) {
+    #[cfg(target_os="linux")]
+    if crate::network_shares::private(&photo.path()) {
         open_with.set_sensitive(false);
-        open_with.set_tooltip_text(Some("Export a local copy to open this photo in another application."));
-        file_manager.set_sensitive(false);
-        file_manager.set_tooltip_text(Some("This network location is private to PIC."));
-        rename.set_sensitive(false);
-        rename.set_tooltip_text(Some("Renaming network originals is not supported by the private transport."));
+        open_with.set_tooltip_text(Some("Network originals stay in PIC's private SMB/NFS transport; desktop file-manager mounts are disabled"));
     }
+    let file = crate::source::file(&photo.path());
     let open_with_file = file.clone();
     let open_with_window = context.window.clone();
     let dismiss_menu_for_open_with = dismiss_menu.clone();
@@ -590,8 +528,8 @@ fn show_photo_context_menu(
         }
     });
 
-    {
-        let folder_id = owning_share_id.unwrap_or_else(|| photo.folder_id());
+    if let Some(open_in_folder) = open_in_folder {
+        let folder_id = photo.folder_id();
         let navigate_to_folder = context.navigate_to_folder.clone();
         let dismiss_menu_for_folder = dismiss_menu.clone();
         let photo_id = photo.id();
@@ -600,10 +538,6 @@ fn show_photo_context_menu(
         let gallery_for_folder = context.gallery.clone();
         let sidebar_for_folder = context.sidebar.clone();
         open_in_folder.connect_clicked(move |_| {
-            crate::source::net_trace(format!(
-                "photo_context_navigate photo={} network={} folder={} share={:?}",
-                photo_id, photo_is_network, folder_id, owning_share_id
-            ));
             if folder_id != 0 {
                 // If we are already in the continuous Folder tree/stream and no
                 // search filter is active, do not route through destination
@@ -611,8 +545,7 @@ fn show_photo_context_menu(
                 // header and then re-select the photo, which is fragile for
                 // virtualized folder rows. Directly select/scroll the clicked
                 // photo instead, and still reveal its folder in the sidebar.
-                if !photo_is_network
-                    && matches!(current_filter.get(), sidebar::SidebarFilter::Folder(_))
+                if matches!(current_filter.get(), sidebar::SidebarFilter::Folder(_))
                     && current_search.borrow().is_empty()
                 {
                     if let Some(gallery) = gallery_for_folder.borrow().upgrade() {
@@ -639,16 +572,11 @@ fn show_photo_context_menu(
         dismiss_menu_for_copy();
     });
 
-    // Pass the stored reference, not a materialized/cached path: the platform
-    // layer normalizes it back to the canonical SMB URI for network photos.
-    let reference_for_manager = photo.path();
+    let file_for_manager = file.clone();
     let dismiss_menu_for_manager = dismiss_menu.clone();
     file_manager.connect_clicked(move |_| {
-        // Close the popover immediately, independently of the launch result.
-        // Revealing is asynchronous and must never keep the GTK main loop
-        // (or the menu) waiting on D-Bus or a network resolve.
+        open_file_in_manager(&file_for_manager);
         dismiss_menu_for_manager();
-        crate::platform::reveal_reference(&reference_for_manager);
     });
 
     let wallpaper_path = photo.path();
@@ -696,29 +624,29 @@ fn show_photo_context_menu(
         });
 
         let window = wallpaper_window.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(50), move || match receiver
-            .try_recv()
-        {
-            Ok(Ok(path)) => {
-                if let Err(error) = apply_wallpaper(&path) {
-                    if let Some(window) = window.upgrade() {
-                        show_error(
-                            window.upcast_ref(),
-                            "Could not set wallpaper",
-                            &error.to_string(),
-                        );
+        glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+            match receiver.try_recv() {
+                Ok(Ok(path)) => {
+                    if let Err(error) = apply_wallpaper(&path) {
+                        if let Some(window) = window.upgrade() {
+                            show_error(
+                                window.upcast_ref(),
+                                "Could not set wallpaper",
+                                &error.to_string(),
+                            );
+                        }
                     }
+                    glib::ControlFlow::Break
                 }
-                glib::ControlFlow::Break
-            }
-            Ok(Err(error)) => {
-                if let Some(window) = window.upgrade() {
-                    show_error(window.upcast_ref(), "Could not set wallpaper", &error);
+                Ok(Err(error)) => {
+                    if let Some(window) = window.upgrade() {
+                        show_error(window.upcast_ref(), "Could not set wallpaper", &error);
+                    }
+                    glib::ControlFlow::Break
                 }
-                glib::ControlFlow::Break
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
         });
     });
 
@@ -792,7 +720,8 @@ fn show_photo_context_menu(
     // so the centring also follows dynamic items such as album actions.
     let (_, natural_width, _, _) = menu_host.measure(gtk::Orientation::Horizontal, -1);
     let measured_width = natural_width.max(272).min(host.width().max(1));
-    let (_, natural_height, _, _) = menu_host.measure(gtk::Orientation::Vertical, measured_width);
+    let (_, natural_height, _, _) =
+        menu_host.measure(gtk::Orientation::Vertical, measured_width);
     let measured_height = natural_height
         .max(1)
         .min(menu_host.max_content_height().max(1));
@@ -800,10 +729,10 @@ fn show_photo_context_menu(
     const MENU_EDGE_INSET: i32 = 4;
     let max_x = (host.width() - measured_width - MENU_EDGE_INSET).max(MENU_EDGE_INSET);
     let max_y = (host.height() - measured_height - MENU_EDGE_INSET).max(MENU_EDGE_INSET);
-    let menu_x =
-        (click_point.x().round() as i32 - measured_width / 2).clamp(MENU_EDGE_INSET, max_x);
-    let menu_y =
-        (click_point.y().round() as i32 - measured_height / 2).clamp(MENU_EDGE_INSET, max_y);
+    let menu_x = (click_point.x().round() as i32 - measured_width / 2)
+        .clamp(MENU_EDGE_INSET, max_x);
+    let menu_y = (click_point.y().round() as i32 - measured_height / 2)
+        .clamp(MENU_EDGE_INSET, max_y);
     menu_host.set_margin_start(menu_x);
     menu_host.set_margin_top(menu_y);
 
@@ -813,8 +742,14 @@ fn show_photo_context_menu(
         active.borrow_mut().replace(menu_widget);
     });
 
+    
+
     host.add_overlay(&menu_host);
     menu_host.set_visible(true);
+}
+
+fn open_file_in_manager(file: &gio::File) {
+    crate::platform::reveal_file(file);
 }
 
 fn prepare_wallpaper(
@@ -835,7 +770,8 @@ fn prepare_wallpaper(
         )
     })?;
 
-    let directory = crate::thumbnail::wallpaper_dir()?;
+    let directory = crate::thumbnail::cache_dir()?.join("wallpaper");
+    std::fs::create_dir_all(&directory)?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"picasa-wallpaper-v2-fit\0");
     hasher.update(reference.as_bytes());
@@ -898,7 +834,12 @@ fn compose_wallpaper(
 ) -> image::RgbaImage {
     let target_width = target_width.max(1);
     let target_height = target_height.max(1);
-    let layout = wallpaper_layout(source.width(), source.height(), target_width, target_height);
+    let layout = wallpaper_layout(
+        source.width(),
+        source.height(),
+        target_width,
+        target_height,
+    );
     let source = image::DynamicImage::ImageRgba8(source);
     if layout == WallpaperLayout::Cover {
         return source
@@ -959,14 +900,16 @@ fn apply_wallpaper(path: &std::path::Path) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Desktop wallpaper settings are unavailable."))?;
     let schema = schema_source
         .lookup("org.gnome.desktop.background", true)
-        .ok_or_else(|| {
-            anyhow::anyhow!("This desktop does not support setting the wallpaper here.")
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("This desktop does not support setting the wallpaper here."))?;
     if !schema.has_key("picture-uri") {
         anyhow::bail!("This desktop does not expose a wallpaper setting.");
     }
 
-    let settings = gio::Settings::new_full(&schema, None::<&gio::SettingsBackend>, None);
+    let settings = gio::Settings::new_full(
+        &schema,
+        None::<&gio::SettingsBackend>,
+        None,
+    );
     settings.set_string("picture-uri", uri.as_str())?;
     if schema.has_key("picture-uri-dark") {
         settings.set_string("picture-uri-dark", uri.as_str())?;
@@ -979,10 +922,6 @@ fn apply_wallpaper(path: &std::path::Path) -> anyhow::Result<()> {
 }
 
 fn show_open_with_dialog(parent: &gtk::Widget, file: &gio::File) {
-    if crate::source::is_network_location(&crate::source::reference(file)) {
-        show_error(parent, "Private network photo", "Export a local copy to open this photo in another application.");
-        return;
-    }
     let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
     content.set_margin_top(6);
     content.set_margin_bottom(6);
@@ -1081,10 +1020,6 @@ fn show_rename_dialog(
             .flatten()
             .map(|record| (record.mtime, record.size_bytes));
         let source = crate::source::file(&photo.path());
-        if crate::source::is_network_location(&photo.path()) {
-            show_error(&parent_for_response, "Could not rename photo", "Renaming network originals is not supported by the private transport.");
-            return;
-        }
         let renamed = match source.set_display_name(&new_name, gio::Cancellable::NONE) {
             Ok(file) => file,
             Err(error) => {
@@ -1186,10 +1121,6 @@ fn show_delete_confirmation(
                 }
             };
 
-            if crate::source::is_network_location(&path) {
-                show_error(&parent_for_response, "Could not delete photo", "Trashing network originals is not supported by the private transport. You can remove photos from the PIC library instead.");
-                return;
-            }
             if let Err(error) = db::set_trashed(&context.connection.borrow(), *id, true) {
                 show_error(
                     &parent_for_response,
@@ -1402,8 +1333,12 @@ mod photo_actions_tests {
             context_menu_host: Rc::new(RefCell::new(None)),
         };
 
-        let popover =
-            build_album_popover(context, Rc::new(Vec::new), Rc::new(|| {}), Rc::new(|| {}));
+        let popover = build_album_popover(
+            context,
+            Rc::new(Vec::new),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+        );
         let scroll = popover
             .child()
             .and_then(|child| child.downcast::<gtk::ScrolledWindow>().ok())
@@ -1439,7 +1374,9 @@ mod photo_actions_tests {
         ));
         connection
             .borrow()
-            .execute_batch("INSERT INTO photos (id, path) VALUES (1, 'samples/01-Start Up.jpg');")
+            .execute_batch(
+                "INSERT INTO photos (id, path) VALUES (1, 'samples/01-Start Up.jpg');",
+            )
             .unwrap();
         let album = db::create_album(&connection.borrow(), "Holiday").unwrap();
         db::add_photos_to_album(&connection.borrow(), album.id, &[1]).unwrap();
@@ -1498,10 +1435,7 @@ mod photo_actions_tests {
             .unwrap()
             .emit_clicked();
         assert_eq!(
-            db::albums(&connection.borrow())
-                .unwrap()
-                .remove(0)
-                .cover_photo_id,
+            db::albums(&connection.borrow()).unwrap().remove(0).cover_photo_id,
             Some(1)
         );
 
@@ -1513,9 +1447,11 @@ mod photo_actions_tests {
             10.0,
             10.0,
         );
-        assert!(!find_action(&menu(), "Set as Album Cover")
-            .unwrap()
-            .is_sensitive());
+        assert!(
+            !find_action(&menu(), "Set as Album Cover")
+                .unwrap()
+                .is_sensitive()
+        );
         dismiss_active_photo_context_menu();
 
         // Outside an album the cover action is not offered at all.

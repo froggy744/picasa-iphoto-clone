@@ -142,9 +142,7 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
     let id = connection.query_row("SELECT id FROM folders WHERE path = ?1", [path], |row| {
         row.get(0)
     })?;
-    // Network shares are independent user registrations, even when one is
-    // inside another. Reparenting must never silently unregister a share.
-    let _reparented = if imported_root && !is_remote_path(path) {
+    let _reparented = if imported_root {
         connection.execute(
             "UPDATE folders
              SET parent_id = ?1, imported_root = 0
@@ -165,15 +163,11 @@ pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
 pub fn mark_import_root(connection: &Connection, path: &str) -> Result<i64> {
     let id = insert_folder(connection, path)?;
     let transaction = connection.unchecked_transaction()?;
-    // Preserve nested network-share registrations. A parent share and its
-    // independently added child share must both remain in the sidebar.
-    if !is_remote_path(path) {
-        transaction.execute(
-            "UPDATE folders SET imported_root = 0
-             WHERE imported_root = 1 AND path != ?1 AND ?1 LIKE path || '/%'",
-            [path],
-        )?;
-    }
+    transaction.execute(
+        "UPDATE folders SET imported_root = 0
+         WHERE imported_root = 1 AND path != ?1 AND ?1 LIKE path || '/%'",
+        [path],
+    )?;
     transaction.execute("UPDATE folders SET imported_root = 1 WHERE id = ?1", [id])?;
     transaction.commit()?;
     Ok(id)
@@ -193,41 +187,6 @@ pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: 
     let id = connection.query_row("SELECT id FROM folders WHERE path = ?1", [path], |row| row.get(0))?;
     
     Ok(id)
-}
-
-/// Register a network share (such as `smb://host/share`) as an independent
-/// library root with a user-chosen display name. The share behaves like an
-/// imported folder: it is scanned, indexed and availability-tracked through
-/// the ordinary GIO source layer. Registered shares persist in the folders
-/// table, so they remain visible (with cached thumbnails) while offline.
-pub fn insert_network_share(connection: &Connection, uri: &str, name: &str) -> Result<i64> {
-    let id = mark_import_root(connection, uri)?;
-    connection.execute(
-        "UPDATE folders SET name = ?1 WHERE id = ?2",
-        params![name, id],
-    )?;
-    Ok(id)
-}
-
-/// Registered network share roots: URI-based folders the user added. Their
-/// indexed subfolders stay descendants in the folders table but are presented
-/// only inside the sidebar's Network Shares section.
-pub fn network_shares(connection: &Connection) -> Result<Vec<Folder>> {
-    Ok(folders_cached(connection)?
-        .into_iter()
-        .filter(|folder| folder.imported_root && is_remote_path(&folder.path))
-        .collect())
-}
-
-/// True when a folder path is a remote URI (smb://, nfs://, ...) rather than a
-/// local filesystem path. Local-only sidebar sections and local-only behaviour
-/// key off this.
-///
-/// Detection is scheme-based, not `contains("://")`: a manually NFS-mounted
-/// share lives at a plain local path (e.g. `/mnt/4TBP`) and an imported folder
-/// may be stored with a `file://` URI, neither of which is a network share.
-pub fn is_remote_path(path: &str) -> bool {
-    crate::source::is_network_location(path)
 }
 
 pub fn search_folders(
@@ -289,44 +248,6 @@ pub fn folder_path_by_id(connection: &Connection, folder_id: i64) -> Result<Opti
 }
 
 pub fn folders(connection: &Connection) -> Result<Vec<Folder>> {
-    // Worker threads only: resolves availability by probing every imported
-    // source root, which may block for up to `URI_PROBE_TIMEOUT` per unmounted
-    // remote. This is the availability refresher's job.
-    folders_query(
-        connection,
-        true,
-        |path| crate::source::probe_source_available(path),
-    )
-}
-
-/// Availability resolved from the cached probe results only (never probes the
-/// filesystem/GIO). Safe on the GTK thread. The asynchronous availability
-/// refresher keeps the cache populated; until it has run, uncached roots read
-/// as available (the historical online default).
-pub fn folders_cached(connection: &Connection) -> Result<Vec<Folder>> {
-    folders_query(
-        connection,
-        true,
-        |path| crate::source::cached_source_available(path),
-    )
-}
-
-/// Ordering-only folder listing for the grid read path (continuous Folder
-/// stream and navigation). Availability is resolved separately and
-/// asynchronously by the availability refresher; the grid never needs to probe
-/// imported roots itself. Probing here would stall the caller (the GTK thread
-/// or the grid worker) for up to `URI_PROBE_TIMEOUT` per unmounted remote
-/// root, which is exactly the multi-second freeze when navigating to a network
-/// share.
-pub fn folders_light(connection: &Connection) -> Result<Vec<Folder>> {
-    folders_query(connection, false, |_path| true)
-}
-
-fn folders_query(
-    connection: &Connection,
-    resolve_availability: bool,
-    mut resolve_source: impl FnMut(&str) -> bool,
-) -> Result<Vec<Folder>> {
     let mut statement = connection.prepare(
         "SELECT f.id, f.path, COALESCE(f.name, f.path), f.parent_id, f.imported_root, f.watched,
                 (WITH RECURSIVE descendants(id) AS (
@@ -355,13 +276,13 @@ fn folders_query(
         })
     })?;
     let mut folders = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    if resolve_availability {
-        let availability = folder_availability_by_id(&folders, &mut resolve_source);
-        for folder in &mut folders {
-            folder.available = availability.get(&folder.id).copied().unwrap_or(true);
-        }
-        crate::source::replace_folder_availability(availability);
+    let availability = folder_availability_by_id(&folders, |path| {
+        crate::source::cached_source_available(path)
+    });
+    for folder in &mut folders {
+        folder.available = availability.get(&folder.id).copied().unwrap_or(true);
     }
+    crate::source::replace_folder_availability(availability);
     Ok(folders)
 }
 
@@ -627,26 +548,6 @@ pub fn photos(
         params![folder_id, favorites_only as i32, search],
         photo_from_row,
     )?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
-/// The newest non-trashed photos for the Recently Added startup view,
-/// fetched at SQL level so the 70k+ library is never materialized on the
-/// main thread at startup. `limit` over-fetches; the caller filters enabled
-/// formats and truncates to the configured Recently Added limit.
-pub fn recently_added_photos(connection: &Connection, limit: usize) -> Result<Vec<Photo>> {
-    // Plain DESC order lets SQLite walk idx_photos_added_at instead of
-    // scanning and sorting the whole library (`added_at IS NULL` in the
-    // ORDER BY defeats the index and cost ~120ms on a 73k library; the
-    // schema migration backfills every row, so NULLs do not occur).
-    let mut statement = connection.prepare(
-        "SELECT p.id,p.path,p.folder_id,p.taken_at,p.camera,p.width,p.height,p.size_bytes,p.mtime,p.added_at,p.rotation,p.edit_recipe,p.favorite,p.trashed,f.path
-         FROM photos p LEFT JOIN folders f ON f.id = p.folder_id
-         WHERE p.trashed = 0
-         ORDER BY p.added_at DESC
-         LIMIT ?1",
-    )?;
-    let rows = statement.query_map(params![limit as i64], photo_from_row)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 

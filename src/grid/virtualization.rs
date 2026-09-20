@@ -1233,7 +1233,6 @@ impl Gallery {
             }
         }
         if photos.is_empty() {
-            crate::source::net_trace("availability_apply no_updates");
             return;
         }
         let generation = self.replace_generation.get();
@@ -1261,10 +1260,6 @@ impl Gallery {
             if offset < photos.len() {
                 return glib::ControlFlow::Continue;
             }
-            crate::source::net_trace(format!(
-                "availability_apply_done count={}",
-                photos.len()
-            ));
             let mut tiles = Vec::new();
             if let Some(root) = root.upgrade() {
                 collect_tiles(root.upcast_ref(), &mut tiles);
@@ -1280,53 +1275,6 @@ impl Gallery {
     }
 
     pub fn replace(&self, photos: &[Photo]) {
-        self.replace_inner(photos, true, true);
-    }
-
-    /// Swap in the interim scoped Folder snapshot without treating it as the
-    /// continuous Folder stream.
-    ///
-    /// The visible model must open fast, but the cache and the
-    /// `folder_stream_ready()`/`try_focus_pending_folder()` checks describe the
-    /// FULL stream. Saving a scoped cache here would satisfy those checks and
-    /// clear the scroll/focus destination before the real stream swaps in.
-    /// In any grouping other than Folder the cache is never consulted, so
-    /// fall back to a normal replace.
-    ///
-    /// The snapshot is spliced synchronously even for large folders: the
-    /// `replace_progressive` idle build would otherwise leave the grid empty
-    /// for ~10 s when opening a big network share root, which is exactly the
-    /// failure this two-phase path exists to remove. Constructing the objects
-    /// in advance is under a second of actual work per the progressive-path
-    /// measurements, and the Folder stream swap-in that follows is backgrounded.
-    pub fn replace_scoped_folder(&self, photos: &[Photo]) {
-        if self.group_mode.get() == GroupMode::Folder {
-            // Large scoped folders no longer splice every tile
-            // synchronously (a 2.4k-photo folder stalled the main thread
-            // for ~275ms): the first chunk installs in this click handler,
-            // the remainder appends in idle batches through the same
-            // machinery as the progressive library stream. The grid is
-            // never empty, unlike the plain progressive path this replaces.
-            const SCOPED_SYNC_CHUNK: usize = 600;
-            if photos.len() > SCOPED_SYNC_CHUNK {
-                let generation = self.replace_generation.get().wrapping_add(1);
-                self.replace_generation.set(generation);
-                self.stream_building.set(true);
-                self.replace_progressive(photos.to_vec(), generation, SCOPED_SYNC_CHUNK);
-                return;
-            }
-            self.replace_inner(photos, false, false);
-        } else {
-            self.replace(photos);
-        }
-    }
-
-    fn replace_inner(&self, photos: &[Photo], cache_scoped: bool, allow_progressive: bool) {
-        crate::source::net_trace(format!(
-            "gallery_replace_start op={} count={} cache_scoped={cache_scoped} progressive={allow_progressive}",
-            crate::source::current_trace_op(),
-            photos.len()
-        ));
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
         // Assume a build is in progress until each completion path clears it.
@@ -1342,7 +1290,6 @@ impl Gallery {
                     .all(|(object, photo)| object.id() == photo.id)
         };
         if unchanged {
-            crate::source::net_trace("gallery_replace_unchanged skip_rebuild");
             // Entering Folder mode can intentionally clear the transient
             // Folder ListView while the correctly ordered stream is prepared.
             // If the DB result happens to have the same id order (for example
@@ -1350,7 +1297,7 @@ impl Gallery {
             // than leaving the Folder view blank.
             if self.group_mode.get() == GroupMode::Folder && self.folder_store.n_items() == 0 {
                 self.rebuild_group_ranges();
-                self.rebuild_folder_rows_for_current(cache_scoped);
+                self.rebuild_folder_rows();
             }
 
             self.stream_building.set(false);
@@ -1371,7 +1318,6 @@ impl Gallery {
             }
         };
         if same_set {
-            crate::source::net_trace("gallery_replace_reorder reorder_only");
             let current = self.current_photos.borrow().clone();
             let mut by_id = current
                 .into_iter()
@@ -1396,7 +1342,7 @@ impl Gallery {
             if self.group_mode.get() != GroupMode::None {
                 self.rebuild_group_ranges();
                 if self.group_mode.get() == GroupMode::Folder {
-                    self.rebuild_folder_rows_for_current(cache_scoped);
+                    self.rebuild_folder_rows();
                 } else {
                     self.update_group_header_for_scroll(self.last_scroll_y.get());
                 }
@@ -1411,8 +1357,9 @@ impl Gallery {
         // normal refreshes, but let the main loop make progress between small
         // batches for library-sized replacements.
         const PROGRESSIVE_REPLACE_THRESHOLD: usize = 1_000;
-        if allow_progressive && photos.len() > PROGRESSIVE_REPLACE_THRESHOLD {
-            self.replace_progressive(photos.to_vec(), generation, 0);
+        if photos.len() > PROGRESSIVE_REPLACE_THRESHOLD {
+
+            self.replace_progressive(photos.to_vec(), generation);
             return;
         }
 
@@ -1432,7 +1379,7 @@ impl Gallery {
         if self.group_mode.get() != GroupMode::None {
             self.rebuild_group_ranges();
             if self.group_mode.get() == GroupMode::Folder {
-                self.rebuild_folder_rows_for_current(cache_scoped);
+                self.rebuild_folder_rows();
             } else {
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
             }
@@ -1441,29 +1388,10 @@ impl Gallery {
         self.stream_building.set(false);
     }
 
-    fn rebuild_folder_rows_for_current(&self, save_cache: bool) {
-        if save_cache {
-            self.rebuild_folder_rows();
-        } else {
-            // Interim scoped snapshots must never become the Folder stream
-            // cache: `folder_stream_ready()` and pending-folder focus treat a
-            // non-empty cache as the fully built continuous stream.
-            rebuild_folder_rows_for(
-                &self.current_photos,
-                &self.group_ranges,
-                &self.current_columns,
-                &self.folder_order,
-                &self.folder_catalog,
-                &self.folder_store,
-            );
-        }
-    }
-
     fn replace_progressive(
         &self,
         photos: Vec<Photo>,
         generation: u64,
-        sync_first_chunk: usize,
     ) {
         // Larger batches finish the model build in far fewer main-loop hops.
         // Each hop is scheduled at idle priority, so with 500-photo batches a
@@ -1472,25 +1400,8 @@ impl Gallery {
         const BATCH_SIZE: usize = 2_000;
 
         let photos = Rc::new(photos);
-        let mut offset_value = 0usize;
-        // A synchronous first chunk populates the grid immediately: scoped
-        // folder views install their first tiles in the click handler itself
-        // and never show an empty grid while the idle batches catch up.
-        if sync_first_chunk > 0 && photos.len() > sync_first_chunk {
-            let objects: Vec<PhotoObject> = photos[..sync_first_chunk]
-                .iter()
-                .map(PhotoObject::from_photo)
-                .collect();
-            if !self.collage_selection_mode.get() {
-                (self.selected)(None);
-            }
-            self.current_photos.replace(objects.clone());
-            self.store.splice(0, self.store.n_items(), &objects);
-            offset_value = sync_first_chunk;
-        }
-        let photos = Rc::new(photos);
-        let offset = Rc::new(Cell::new(offset_value));
-        let initialized = Rc::new(Cell::new(offset_value > 0));
+        let offset = Rc::new(Cell::new(0usize));
+        let initialized = Rc::new(Cell::new(false));
         let store = self.store.clone();
         let selected = self.selected.clone();
         let current_photos = self.current_photos.clone();
@@ -1633,103 +1544,6 @@ impl Gallery {
         self.replace_generation
             .set(self.replace_generation.get().wrapping_add(1));
         self.stream_building.set(false);
-    }
-
-    /// Build the continuous Folder stream into the cache without disturbing
-    /// the currently visible grid.
-    ///
-    /// The first Folder click after startup otherwise rebuilds the whole
-    /// library through `replace_progressive`, leaving the grid empty for ten
-    /// seconds or more while tens of thousands of PhotoObjects are
-    /// constructed. Callers that already presented a scoped Folder snapshot
-    /// use this to construct the stream at idle priority in the background,
-    /// then present it in a single splice (and save the cache) once the final
-    /// batch is ready, so the visible folder never disappears mid-build.
-    pub fn prewarm_folder_stream(&self, photos: Vec<Photo>) {
-        // Larger batches finish the model build in far fewer main-loop hops.
-        // Each hop is scheduled at idle priority, so with 500-photo batches a
-        // 66k stream needed 133 hops and could take >20 s of wall time even
-        // though the actual construction work was under a second.
-        const BATCH_SIZE: usize = 2_000;
-        if photos.len() <= BATCH_SIZE {
-            // Whole-library snapshots this small replace synchronously and
-            // already rebuild the Folder rows and cache.
-            self.replace(&photos);
-            // A scoped snapshot shown first can make replace() take its
-            // "unchanged" early return, which leaves the cache empty. The
-            // current_photos/ranges are the full stream at this point, so save
-            // the cache explicitly or folder navigation would wait forever.
-            if self.group_mode.get() == GroupMode::Folder && self.folder_cache.borrow().is_none() {
-                self.save_folder_cache();
-            }
-            return;
-        }
-        let generation = self.replace_generation.get();
-        self.stream_building.set(true);
-        let photos = Rc::new(photos);
-        let offset = Rc::new(Cell::new(0usize));
-        let objects = Rc::new(RefCell::new(Vec::new()));
-        let ranges = Rc::new(RefCell::new(Vec::new()));
-        let store = self.store.clone();
-        let current_photos = self.current_photos.clone();
-        let group_ranges = self.group_ranges.clone();
-        let group_mode = self.group_mode.clone();
-        let group_date = self.group_date.clone();
-        let current_columns = self.current_columns.clone();
-        let folder_store = self.folder_store.clone();
-        let folder_order = self.folder_order.clone();
-        let folder_catalog = self.folder_catalog.clone();
-        let folder_cache = self.folder_cache.clone();
-        let replace_generation = self.replace_generation.clone();
-        let stream_building = self.stream_building.clone();
-
-        glib::idle_add_local(move || {
-            if replace_generation.get() != generation {
-                // A newer replacement took over the model; it owns the
-                // stream_building flag from here on.
-                return glib::ControlFlow::Break;
-            }
-            let start = offset.get();
-            let end = (start + BATCH_SIZE).min(photos.len());
-            let batch: Vec<PhotoObject> = photos[start..end]
-                .iter()
-                .map(PhotoObject::from_photo)
-                .collect();
-            offset.set(end);
-            objects.borrow_mut().extend(batch);
-
-            if end >= photos.len() {
-                // Present the fully-built stream exactly once. Keep the scoped
-                // Folder snapshot on screen until this point so the user never
-                // sees an empty grid or a progressive yank to the library start.
-                rebuild_group_ranges_for(&objects, &group_mode, &group_date, &ranges);
-                let final_objects = objects.borrow().clone();
-                current_photos.replace(final_objects.clone());
-                group_ranges.replace(ranges.borrow().clone());
-                store.splice(0, store.n_items(), &final_objects);
-                rebuild_folder_rows_for(
-                    &objects,
-                    &ranges,
-                    &current_columns,
-                    &folder_order,
-                    &folder_catalog,
-                    &folder_store,
-                );
-                if group_mode.get() == GroupMode::Folder {
-                    save_folder_cache_for(
-                        &folder_cache,
-                        &objects,
-                        &ranges,
-                        &current_columns,
-                        &folder_order,
-                    );
-                }
-                stream_building.set(false);
-                glib::ControlFlow::Break
-            } else {
-                glib::ControlFlow::Continue
-            }
-        });
     }
 
 }

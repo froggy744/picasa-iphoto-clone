@@ -1,0 +1,1397 @@
+warning: unused import: `Instant`
+ --> src/edit/editor.rs:4:27
+  |
+4 | use std::time::{Duration, Instant};
+  |                           ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary braces around function argument
+   --> src/window/photo_actions.rs:277:9
+    |
+277 |         { dismiss_menu.clone() },
+    |         ^^                    ^^
+    |
+    = note: `#[warn(unused_braces)]` (part of `#[warn(unused)]`) on by default
+help: remove these braces
+    |
+277 -         { dismiss_menu.clone() },
+277 +         dismiss_menu.clone(),
+    |
+
+warning: use of deprecated struct `gtk4::MessageDialog`: Since 4.10
+  --> src/main.rs:70:35
+   |
+70 |                 let dialog = gtk::MessageDialog::builder()
+   |                                   ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+    --> src/collage/editor.rs:1344:23
+     |
+1344 |     let dialog = gtk::Dialog::new();
+     |                       ^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/collage/editor.rs:1462:23
+     |
+1462 |     let dialog = gtk::FileChooserNative::new(
+     |                       ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+  --> src/edit/export.rs:11:27
+   |
+11 |         let dialog = gtk::FileChooserNative::new(
+   |                           ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::MessageDialog`: Since 4.10
+   --> src/settings.rs:624:23
+    |
+624 |     let dialog = gtk::MessageDialog::builder()
+    |                       ^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+   --> src/window/dialogs.rs:140:23
+    |
+140 |     let dialog = gtk::Dialog::new();
+    |                       ^^^^^^
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+   --> src/window/dialogs.rs:702:37
+    |
+702 | fn key_controller_log(dialog: &gtk::Dialog, controller: gtk::EventControllerKey) {
+    |                                     ^^^^^^
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+   --> src/window/dialogs.rs:755:23
+    |
+755 |     let dialog = gtk::Dialog::new();
+    |                       ^^^^^^
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+    --> src/window/dialogs.rs:1246:23
+     |
+1246 |     let dialog = gtk::Dialog::new();
+     |                       ^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/window/build.rs:2397:27
+     |
+2397 |         let dialog = gtk::FileChooserNative::new(
+     |                           ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/window/build.rs:2977:27
+     |
+2977 |         let dialog = gtk::FileChooserNative::new(
+     |                           ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::style_context`: Since 4.10
+  --> src/albums/view.rs:20:10
+   |
+20 |         .style_context()
+   |          ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::StyleContextExt::add_provider`: Since 4.10
+  --> src/albums/view.rs:21:10
+   |
+21 |         .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+   |          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::style_context`: Since 4.10
+  --> src/albums/view.rs:92:10
+   |
+92 |         .style_context()
+   |          ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::StyleContextExt::add_provider`: Since 4.10
+  --> src/albums/view.rs:93:10
+   |
+93 |         .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+   |          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+   --> src/collage/editor.rs:175:13
+    |
+175 |         css.load_from_data(&css_data);
+    |             ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
+    --> src/collage/editor.rs:1344:31
+     |
+1344 |     let dialog = gtk::Dialog::new();
+     |                               ^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+    --> src/collage/editor.rs:1348:12
+     |
+1348 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+     |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+    --> src/collage/editor.rs:1349:32
+     |
+1349 |     let export_button = dialog.add_button("Export", gtk::ResponseType::Ok);
+     |                                ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+    --> src/collage/editor.rs:1351:12
+     |
+1351 |     dialog.set_default_response(gtk::ResponseType::Ok);
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+    --> src/collage/editor.rs:1353:26
+     |
+1353 |     let content = dialog.content_area();
+     |                          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+    --> src/collage/editor.rs:1427:16
+     |
+1427 |         dialog.connect_response(move |_, response| {
+     |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::show`: Since 4.10
+    --> src/collage/editor.rs:1450:12
+     |
+1450 |     dialog.show();
+     |            ^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/collage/editor.rs:1462:42
+     |
+1462 |     let dialog = gtk::FileChooserNative::new(
+     |                                          ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+    --> src/collage/editor.rs:1469:12
+     |
+1469 |     dialog.set_current_name(&format!("collage.{extension}"));
+     |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::add_filter`: Since 4.10
+    --> src/collage/editor.rs:1476:12
+     |
+1476 |     dialog.add_filter(&filter);
+     |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/collage/editor.rs:1482:33
+     |
+1482 |         let Some(path) = dialog.file().and_then(|file| file.path()) else {
+     |                                 ^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/css/mod.rs:46:10
+   |
+46 |     base.load_from_data(BASE);
+   |          ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/css/mod.rs:54:14
+   |
+54 |     platform.load_from_data(PLATFORM);
+   |              ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/css/mod.rs:65:20
+   |
+65 |     square_corners.load_from_data(SQUARE_CORNERS);
+   |                    ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+  --> src/edit/export.rs:11:46
+   |
+11 |         let dialog = gtk::FileChooserNative::new(
+   |                                              ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+  --> src/edit/export.rs:23:16
+   |
+23 |         dialog.set_current_name(&filename);
+   |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+  --> src/edit/export.rs:32:51
+   |
+32 |                 if let Some(destination) = dialog.file().and_then(|file| file.path()) {
+   |                                                   ^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::hide`: Since 4.10
+  --> src/settings.rs:67:24
+   |
+67 |                 window.hide();
+   |                        ^^^^
+
+warning: use of deprecated associated function `gtk4::MessageDialog::builder`: Since 4.10
+   --> src/settings.rs:624:38
+    |
+624 |     let dialog = gtk::MessageDialog::builder()
+    |                                      ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::transient_for`: Since 4.10
+   --> src/settings.rs:625:10
+    |
+625 |         .transient_for(parent)
+    |          ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::modal`: Since 4.10
+   --> src/settings.rs:626:10
+    |
+626 |         .modal(true)
+    |          ^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::message_type`: Since 4.10
+   --> src/settings.rs:627:10
+    |
+627 |         .message_type(gtk::MessageType::Warning)
+    |          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::buttons`: Since 4.10
+   --> src/settings.rs:628:10
+    |
+628 |         .buttons(gtk::ButtonsType::Cancel)
+    |          ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::text`: Since 4.10
+   --> src/settings.rs:629:10
+    |
+629 |         .text(title)
+    |          ^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::secondary_text`: Since 4.10
+   --> src/settings.rs:630:10
+    |
+630 |         .secondary_text(message)
+    |          ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::build`: Since 4.10
+   --> src/settings.rs:631:10
+    |
+631 |         .build();
+    |          ^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/settings.rs:632:12
+    |
+632 |     dialog.add_button("Continue", gtk::ResponseType::Accept);
+    |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+   --> src/settings.rs:633:12
+    |
+633 |     dialog.connect_response(move |dialog, response| {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
+    --> src/sidebar.rs:1785:58
+     |
+1785 |                         .unwrap_or_else(|| f64::from(row.allocation().y()));
+     |                                                          ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+   --> src/window/theme.rs:151:22
+    |
+151 |             provider.load_from_data(base.css.as_str());
+    |                      ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+   --> src/window/theme.rs:207:22
+    |
+207 |             provider.load_from_data(theme.css.as_str());
+    |                      ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
+   --> src/window/dialogs.rs:140:31
+    |
+140 |     let dialog = gtk::Dialog::new();
+    |                               ^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/window/dialogs.rs:150:12
+    |
+150 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/window/dialogs.rs:151:33
+    |
+151 |     let connect_button = dialog.add_button("Connect", gtk::ResponseType::Accept);
+    |                                 ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+   --> src/window/dialogs.rs:152:12
+    |
+152 |     dialog.set_default_response(gtk::ResponseType::Accept);
+    |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+   --> src/window/dialogs.rs:166:26
+    |
+166 |     let content = dialog.content_area();
+    |                          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+   --> src/window/dialogs.rs:601:12
+    |
+601 |     dialog.connect_response(move |dialog, response| {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
+   --> src/window/dialogs.rs:755:31
+    |
+755 |     let dialog = gtk::Dialog::new();
+    |                               ^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/window/dialogs.rs:764:12
+    |
+764 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/window/dialogs.rs:766:10
+    |
+766 |         .add_button("Select This Folder", gtk::ResponseType::Accept)
+    |          ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+   --> src/window/dialogs.rs:769:12
+    |
+769 |     dialog.set_default_response(gtk::ResponseType::Accept);
+    |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+   --> src/window/dialogs.rs:771:26
+    |
+771 |     let content = dialog.content_area();
+    |                          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+    --> src/window/dialogs.rs:1207:16
+     |
+1207 |         dialog.connect_response(move |dialog, response| {
+     |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
+    --> src/window/dialogs.rs:1246:31
+     |
+1246 |     let dialog = gtk::Dialog::new();
+     |                               ^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+    --> src/window/dialogs.rs:1250:12
+     |
+1250 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+     |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+    --> src/window/dialogs.rs:1251:33
+     |
+1251 |     let connect_button = dialog.add_button("Connect", gtk::ResponseType::Accept);
+     |                                 ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+    --> src/window/dialogs.rs:1252:12
+     |
+1252 |     dialog.set_default_response(gtk::ResponseType::Accept);
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+    --> src/window/dialogs.rs:1254:26
+     |
+1254 |     let content = dialog.content_area();
+     |                          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+    --> src/window/dialogs.rs:1299:12
+     |
+1299 |     dialog.connect_response(move |dialog, response| {
+     |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/window/build.rs:2397:46
+     |
+2397 |         let dialog = gtk::FileChooserNative::new(
+     |                                              ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+    --> src/window/build.rs:2410:16
+     |
+2410 |         dialog.set_current_name(&filename);
+     |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/window/build.rs:2414:44
+     |
+2414 |                 if let Some(file) = dialog.file() {
+     |                                            ^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/window/build.rs:2977:46
+     |
+2977 |         let dialog = gtk::FileChooserNative::new(
+     |                                              ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/window/build.rs:2987:44
+     |
+2987 |                 if let Some(file) = dialog.file() {
+     |                                            ^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/window/photo_actions.rs:16:9
+   |
+16 |     css.load_from_data(crate::css::PHOTO_CONTEXT_MENU);
+   |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::MessageDialog::builder`: Since 4.10
+  --> src/main.rs:70:50
+   |
+70 |                 let dialog = gtk::MessageDialog::builder()
+   |                                                  ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::message_type`: Since 4.10
+  --> src/main.rs:71:22
+   |
+71 |                     .message_type(gtk::MessageType::Error)
+   |                      ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::buttons`: Since 4.10
+  --> src/main.rs:72:22
+   |
+72 |                     .buttons(gtk::ButtonsType::Close)
+   |                      ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::text`: Since 4.10
+  --> src/main.rs:73:22
+   |
+73 |                     .text("Could not open the photo library")
+   |                      ^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::secondary_text`: Since 4.10
+  --> src/main.rs:74:22
+   |
+74 |                     .secondary_text(error.to_string())
+   |                      ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::build`: Since 4.10
+  --> src/main.rs:75:22
+   |
+75 |                     .build();
+   |                      ^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+  --> src/main.rs:76:24
+   |
+76 |                 dialog.connect_response(|dialog, _| dialog.close());
+   |                        ^^^^^^^^^^^^^^^^
+
+warning: unused import: `gtk::prelude`
+ --> src/css/mod.rs:3:5
+  |
+3 | use gtk::prelude::*;
+  |     ^^^^^^^^^^^^
+
+warning: unreachable pattern
+   --> src/css/theme_discovery.rs:200:39
+    |
+200 |                     "traffic-light" | "traffic-light" | "trafficlights" => {
+    |                     ---------------   ^^^^^^^^^^^^^^^ no value can reach this
+    |                     |
+    |                     matches all the relevant values
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `window_for_close`
+  --> src/settings.rs:64:17
+   |
+64 |             let window_for_close = window.clone();
+   |                 ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_window_for_close`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+    --> src/sidebar.rs:1390:42
+     |
+1388 |             let matches = unsafe {
+     |                           ------ because it's nested under this `unsafe` block
+1389 |                 row.data::<SidebarFilter>("picasa-filter")
+1390 |                     .is_some_and(|value| unsafe { *value.as_ref() == filter })
+     |                                          ^^^^^^ unnecessary `unsafe` block
+     |
+     = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `row`
+    --> src/sidebar.rs:1624:14
+     |
+1624 |     let Some(row) = (|| {
+     |              ^^^ help: if this is intentional, prefix it with an underscore: `_row`
+
+warning: unnecessary `unsafe` block
+   --> src/smb_transport.rs:622:9
+    |
+622 |         unsafe {
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unused variable: `error`
+   --> src/thumbnail_display.rs:374:13
+    |
+374 |         Err(error) => {
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_error`
+
+warning: unused variable: `connect_button`
+    --> src/window/dialogs.rs:1251:9
+     |
+1251 |     let connect_button = dialog.add_button("Connect", gtk::ResponseType::Accept);
+     |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_connect_button`
+
+warning: unused variable: `path`
+    --> src/window/build.rs:3314:21
+     |
+3314 |                     path,
+     |                     ^^^^ help: try ignoring the field: `path: _`
+
+warning: unused variable: `count`
+    --> src/window/build.rs:3084:17
+     |
+3084 |             let count = roots.as_ref().map(|roots| roots.len()).unwrap_or(0);
+     |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_count`
+
+warning: unused variable: `kind`
+    --> src/window/build.rs:2612:41
+     |
+2612 |             let Some((root, generation, kind)) = next else {
+     |                                         ^^^^ help: if this is intentional, prefix it with an underscore: `_kind`
+
+warning: unused variable: `mount`
+   --> src/window/layout.rs:575:51
+    |
+575 |     volume_monitor.connect_mount_changed(move |_, mount| {
+    |                                                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
+
+warning: unused variable: `mount`
+   --> src/window/layout.rs:570:51
+    |
+570 |     volume_monitor.connect_mount_removed(move |_, mount| {
+    |                                                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
+
+warning: unused variable: `mount`
+   --> src/window/layout.rs:565:49
+    |
+565 |     volume_monitor.connect_mount_added(move |_, mount| {
+    |                                                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
+
+warning: unused variable: `changed`
+   --> src/window/layout.rs:353:24
+    |
+353 |                     Ok(changed) => {
+    |                        ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_changed`
+
+warning: unused variable: `file`
+   --> src/window/build.rs:235:50
+    |
+235 |                 monitor.connect_changed(move |_, file, other_file, event| {
+    |                                                  ^^^^ help: if this is intentional, prefix it with an underscore: `_file`
+
+warning: unused variable: `other_file`
+   --> src/window/build.rs:235:56
+    |
+235 |                 monitor.connect_changed(move |_, file, other_file, event| {
+    |                                                        ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_other_file`
+
+warning: unused variable: `search`
+    --> src/window/build.rs:2497:9
+     |
+2497 |         search,
+     |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_search`
+
+warning: unused variable: `add_network_share_slot_for_import`
+    --> src/window/build.rs:2810:9
+     |
+2810 |     let add_network_share_slot_for_import = add_network_share_slot.clone();
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_add_network_share_slot_for_import`
+
+warning: unused variable: `search`
+   --> src/window/search.rs:207:22
+    |
+207 |         if let (Some(search), Some(popup)) = (search_weak.upgrade(), popup_weak.upgrade()) {
+    |                      ^^^^^^ help: if this is intentional, prefix it with an underscore: `_search`
+
+warning: function `bookshelf_background_path` is never used
+   --> src/albums/bookshelf.rs:135:4
+    |
+135 | fn bookshelf_background_path(directory: &Path, index: usize) -> Option<PathBuf> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `add_photos` is never used
+   --> src/collage/editor.rs:136:12
+    |
+126 | impl CollageEditor {
+    | ------------------ method in this implementation
+...
+136 |     pub fn add_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
+    |            ^^^^^^^^^^
+
+warning: method `add_photos` is never used
+   --> src/collage/model.rs:153:12
+    |
+102 | impl CollageProject {
+    | ------------------- method in this implementation
+...
+153 |     pub fn add_photos(&mut self, photos: Vec<PhotoObject>) {
+    |            ^^^^^^^^^^
+
+warning: field `interactive` is never read
+  --> src/edit/preview.rs:94:5
+   |
+84 | struct PreviewJob {
+   |        ---------- field in this struct
+...
+94 |     interactive: bool,
+   |     ^^^^^^^^^^^
+
+warning: function `pointer_over_content` is never used
+  --> src/edit/zoom.rs:54:4
+   |
+54 | fn pointer_over_content(pointer: f64, viewport: f64, content: f64) -> bool {
+   |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `apply_recipe_without_crop` is never used
+  --> src/edit/render.rs:31:8
+   |
+31 | pub fn apply_recipe_without_crop(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `clear_photo` is never used
+   --> src/grid/tile.rs:656:8
+    |
+164 | impl SquareTile {
+    | --------------- method in this implementation
+...
+656 |     fn clear_photo(&self) {
+    |        ^^^^^^^^^^^
+
+warning: method `visible_folder_id` is never used
+   --> src/grid/grouping.rs:286:12
+    |
+ 27 | impl Gallery {
+    | ------------ method in this implementation
+...
+286 |     pub fn visible_folder_id(&self) -> Option<i64> {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: function `folder_row_offset` is never used
+  --> src/grid/virtualization.rs:59:4
+   |
+59 | fn folder_row_offset(rows: &[FolderVirtualRow], target_row: usize, tile_height: i32) -> f64 {
+   |    ^^^^^^^^^^^^^^^^^
+
+warning: struct `FolderVirtualRow` is never constructed
+  --> src/grid/virtualization.rs:82:8
+   |
+82 | struct FolderVirtualRow {
+   |        ^^^^^^^^^^^^^^^^
+
+warning: function `folder_virtual_rows` is never used
+  --> src/grid/virtualization.rs:91:4
+   |
+91 | fn folder_virtual_rows(ranges: &[GroupRange], chunk_size: usize) -> Vec<FolderVirtualRow> {
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: method `refresh_availability` is never used
+    --> src/grid/virtualization.rs:1182:12
+     |
+ 208 | impl Gallery {
+     | ------------ method in this implementation
+...
+1182 |     pub fn refresh_availability(&self) {
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `hover_select_source` and `pointer_pressed` are never read
+   --> src/grid/view.rs:132:5
+    |
+ 52 | pub struct Gallery {
+    |            ------- fields in this struct
+...
+132 |     hover_select_source: Rc<RefCell<Option<glib::SourceId>>>,
+    |     ^^^^^^^^^^^^^^^^^^^
+133 |     pointer_pressed: Rc<Cell<bool>>,
+    |     ^^^^^^^^^^^^^^^
+
+warning: methods `selected_position` and `is_at_vertical_boundary` are never used
+   --> src/grid/selection.rs:5:12
+    |
+  1 | impl Gallery {
+    | ------------ methods in this implementation
+...
+  5 |     pub fn selected_position(&self) -> Option<usize> {
+    |            ^^^^^^^^^^^^^^^^^
+...
+148 |     pub fn is_at_vertical_boundary(&self, direction: i32) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `folder_id_from_named_ancestor` is never used
+   --> src/grid/selection.rs:923:4
+    |
+923 | fn folder_id_from_named_ancestor(widget: &gtk::Widget) -> Option<i64> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `grid_zoom_menu` is never read
+  --> src/infobar.rs:24:9
+   |
+10 | pub struct InfoBar {
+   |            ------- field in this struct
+...
+24 |     pub grid_zoom_menu: gtk::MenuButton,
+   |         ^^^^^^^^^^^^^^
+
+warning: fields `size` and `mtime` are never read
+  --> src/nfs_transport.rs:29:9
+   |
+26 | pub struct Entry {
+   |            ----- fields in this struct
+...
+29 |     pub size: u64,
+   |         ^^^^
+30 |     pub mtime: i64,
+   |         ^^^^^
+   |
+   = note: `Entry` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `rotated_thumbnail` is never used
+  --> src/photo_texture.rs:52:8
+   |
+52 | pub fn rotated_thumbnail(path: &str, rotation: i32) -> Option<gtk::gdk::Paintable> {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: field `id` is never read
+  --> src/scanner.rs:27:9
+   |
+25 |     PhotoIndexed {
+   |     ------------ field in this variant
+26 |         path: PathBuf,
+27 |         id: i64,
+   |         ^^
+   |
+   = note: `ScanEvent` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `scan` is never used
+  --> src/scanner.rs:79:8
+   |
+79 | pub fn scan(root: &str, events: Option<&Sender<ScanEvent>>) -> Result<usize> {
+   |        ^^^^
+
+warning: field `size` is never read
+  --> src/smb_transport.rs:35:9
+   |
+32 | pub struct SmbEntry {
+   |            -------- field in this struct
+...
+35 |     pub size: u64,
+   |         ^^^^
+   |
+   = note: `SmbEntry` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `delete_smb_credentials` is never used
+    --> src/smb_transport.rs:1081:8
+     |
+1081 | pub fn delete_smb_credentials(uri: &str) -> Result<(), String> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `read_prefix` is never used
+    --> src/smb_transport.rs:1231:8
+     |
+1231 | pub fn read_prefix(uri: &str, max_bytes: usize) -> Result<Vec<u8>, SmbTransportError> {
+     |        ^^^^^^^^^^^
+
+warning: function `probe_file_available` is never used
+   --> src/source.rs:245:8
+    |
+245 | pub fn probe_file_available(reference: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `clear_trace_op` is never used
+   --> src/source.rs:277:15
+    |
+277 | pub(crate) fn clear_trace_op() {
+    |               ^^^^^^^^^^^^^^
+
+warning: function `wait_for_priority_requests` is never used
+   --> src/thumbnail.rs:191:8
+    |
+191 | pub fn wait_for_priority_requests() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `scale` is never read
+ --> src/thumbnail/viewer.rs:5:5
+  |
+1 | struct DecodedThumbnailSource {
+  |        ---------------------- field in this struct
+...
+5 |     scale: &'static str,
+  |     ^^^^^
+
+warning: function `create_many` is never used
+ --> src/thumbnail/batch.rs:1:8
+  |
+1 | pub fn create_many(
+  |        ^^^^^^^^^^^
+
+warning: constant `EDIT_PANEL_CSS` is never used
+  --> src/window.rs:24:18
+   |
+24 | pub(crate) const EDIT_PANEL_CSS: &str = crate::css::BASE;
+   |                  ^^^^^^^^^^^^^^
+
+warning: variants `FilesystemNotification` and `ProgrammaticSidebarSelection` are never constructed
+   --> src/window.rs:182:5
+    |
+178 | enum PhotoScanRequestReason {
+    |      ---------------------- variants in this enum
+...
+182 |     FilesystemNotification,
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+...
+185 |     ProgrammaticSidebarSelection,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `PhotoScanRequestReason` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `install_gallery_zoom_scroll` is never used
+   --> src/window/navigation.rs:588:4
+    |
+588 | fn install_gallery_zoom_scroll(scrolled: &gtk::ScrolledWindow, gallery: Rc<grid::Gallery>) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `mounted` is never read
+  --> src/window/availability.rs:24:5
+   |
+23 | struct ReconnectedSources {
+   |        ------------------ field in this struct
+24 |     mounted: std::collections::HashSet<String>,
+   |     ^^^^^^^
+
+warning: method `update` is never used
+  --> src/window/availability.rs:29:8
+   |
+28 | impl ReconnectedSources {
+   | ----------------------- method in this implementation
+29 |     fn update(&mut self, mounted: std::collections::HashSet<String>) {
+   |        ^^^^^^
+
+warning: variant `Scoped` is never constructed
+   --> src/window/library.rs:130:5
+    |
+129 | enum GridPayload {
+    |      ----------- variant in this enum
+130 |     Scoped(Vec<db::Photo>),
+    |     ^^^^^^
+
+warning: method `active_window_controls` is never used
+   --> src/window/theme.rs:128:19
+    |
+ 55 | impl ThemeEngine {
+    | ---------------- method in this implementation
+...
+128 |     pub(crate) fn active_window_controls(&self) -> WindowControls {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/smb_transport.rs:726:18
+    |
+726 |     fn lock_lane(&self, lane: SmbLane) -> FlightGuard {
+    |                  ^^^^^                    ^^^^^^^^^^^ the same lifetime is hidden here
+    |                  |
+    |                  the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+726 |     fn lock_lane(&self, lane: SmbLane) -> FlightGuard<'_> {
+    |                                                      ++++
+
+warning: `pic-rs` (bin "pic-rs") generated 136 warnings (run `cargo fix --bin "pic-rs" -p pic-rs` to apply 19 suggestions)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.13s
+     Running `target/debug/pic-rs`
+NETWORK t=     0.0ms dt=    0.0ms tid=ThreadId(2) discovery_started
+NETWORK t=     0.2ms dt=    0.2ms tid=ThreadId(3) discovery_attempt attempt=1
+NETWORK t=     2.3ms dt=    2.2ms tid=ThreadId(3) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(3) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(3) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(3) discovery_complete count=2
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(2) discovery_prefetch_done
+NETWORK t=    34.7ms dt=   32.3ms tid=main startup_phase recent_view_loaded ms=0.4
+STARTUP cold_start_ms=35 photos=1455 displayed=50 folders=274 albums=1 scan=disabled rss_mb=60
+NETWORK t=    36.6ms dt=    1.9ms tid=main gallery_replace_start op=0 count=0 cache_scoped=true progressive=true
+NETWORK t=    36.6ms dt=    0.0ms tid=main gallery_replace_unchanged skip_rebuild
+NETWORK t=   229.6ms dt=  193.0ms tid=main shares_refresh_start
+NETWORK t=   229.9ms dt=    0.3ms tid=main shares_refresh_done count=6
+NETWORK t=   241.0ms dt=   11.2ms tid=main startup_phase layout_built ms=21.0
+NETWORK t=   242.2ms dt=    1.1ms tid=main startup_phase gallery_and_actions_built ms=22.2
+NETWORK t=   247.6ms dt=    5.5ms tid=main recovery_scheduled photos=1455
+NETWORK t=   249.3ms dt=    1.7ms tid=main startup_nfs_probe uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 delay_ms=2500
+NETWORK t=   249.3ms dt=    0.0ms tid=main startup_nfs_probe uri=nfs://DietPi.local/mnt/4TBP/pics-sport/1%20City%202024/FB/FB%201%20City%20Awards delay_ms=3100
+NETWORK t=   249.3ms dt=    0.0ms tid=main startup_nfs_probe uri=nfs://DietPi.local/mnt/4TBP/Work/Hyman delay_ms=3700
+NETWORK t=   249.3ms dt=    0.0ms tid=main startup_smb_probe uri=smb://DietPi.local:445/4TBP/pics-sport/Forest%20Run%202026 delay_ms=4300
+NETWORK t=   249.4ms dt=    0.0ms tid=main startup_smb_probe uri=smb://DietPi.local:445/4TBP/Work delay_ms=4900
+NETWORK t=   249.4ms dt=    0.0ms tid=main startup_smb_probe uri=smb://DietPi.local:445/4TBP/Work/Denver delay_ms=5500
+NETWORK t=   249.4ms dt=    0.0ms tid=main startup_phase build_done_pre_present ms=29.4
+NETWORK t=   253.3ms dt=    3.9ms tid=ThreadId(6) recovery_start total=0 offline=0
+NETWORK t=   253.3ms dt=    0.0ms tid=ThreadId(6) recovery_done created=0 failed=0 offline=0 cancelled=false
+WARNING: radv is not a conformant Vulkan implementation, testing use only.
+NETWORK t=   323.2ms dt=   69.9ms tid=main ui_stall ms=323.4
+NETWORK t=   323.3ms dt=    0.0ms tid=main shares_counts_ready count=6
+NETWORK t=   352.9ms dt=   29.7ms tid=main startup_phase first_idle_batch ms=132.9
+NETWORK t=   353.0ms dt=    0.0ms tid=main gallery_replace_start op=0 count=50 cache_scoped=true progressive=true
+===== SCAN COMPLETE: imported=0 failed=0 | progressive gallery updates complete =====
+NETWORK t=  2763.9ms dt= 2410.9ms tid=ThreadId(15) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 size=4096
+NETWORK t=  2799.5ms dt=   35.6ms tid=main startup_nfs_probe_done uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 ok=true
+NETWORK t=  3055.4ms dt=  255.9ms tid=ThreadId(17) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 size=4096
+NETWORK t=  3056.3ms dt=    0.9ms tid=ThreadId(17) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/pics-sport/1%20City%202024/FB/FB%201%20City%20Awards size=4096
+NETWORK t=  3057.1ms dt=    0.8ms tid=ThreadId(17) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/Work/Hyman size=4096
+NETWORK t=  3057.1ms dt=    0.0ms tid=ThreadId(17) smb_stat_start url=smb://DietPi.local/4TBP/pics-sport/Forest Run 2026 lane=background
+NETWORK t=  3059.7ms dt=    2.6ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  3060.5ms dt=    0.9ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  3060.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  3060.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  3084.4ms dt=   23.8ms tid=pic-smb-transport smb_transport stat ms=23.8
+NETWORK t=  3084.8ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  3084.9ms dt=    0.1ms tid=ThreadId(17) smb_stat_start url=smb://DietPi.local/4TBP/Work lane=background
+NETWORK t=  3087.2ms dt=    2.3ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  3087.9ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  3087.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  3087.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  3100.6ms dt=   12.7ms tid=pic-smb-transport smb_transport stat ms=12.7
+NETWORK t=  3101.0ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  3101.0ms dt=    0.0ms tid=ThreadId(17) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t=  3103.1ms dt=    2.1ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  3103.7ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  3103.7ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  3103.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  3120.2ms dt=   16.4ms tid=pic-smb-transport smb_transport stat ms=16.4
+NETWORK t=  3120.7ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  3150.7ms dt=   30.0ms tid=main shares_refresh_start
+NETWORK t=  3151.3ms dt=    0.6ms tid=main shares_refresh_done count=6
+NETWORK t=  3201.4ms dt=   50.1ms tid=main shares_counts_ready count=6
+NETWORK t=  3351.1ms dt=  149.7ms tid=ThreadId(25) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/pics-sport/1%20City%202024/FB/FB%201%20City%20Awards size=4096
+NETWORK t=  3399.5ms dt=   48.4ms tid=main startup_nfs_probe_done uri=nfs://DietPi.local/mnt/4TBP/pics-sport/1%20City%202024/FB/FB%201%20City%20Awards ok=true
+NETWORK t=  3950.7ms dt=  551.2ms tid=ThreadId(27) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/Work/Hyman size=4096
+NETWORK t=  3999.5ms dt=   48.8ms tid=main startup_nfs_probe_done uri=nfs://DietPi.local/mnt/4TBP/Work/Hyman ok=true
+NETWORK t=  4549.7ms dt=  550.2ms tid=ThreadId(29) smb_stat_start url=smb://DietPi.local/4TBP/pics-sport/Forest Run 2026 lane=background
+NETWORK t=  4552.3ms dt=    2.5ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4552.9ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4552.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4552.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4570.2ms dt=   17.3ms tid=pic-smb-transport smb_transport stat ms=17.2
+NETWORK t=  4570.6ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  4599.5ms dt=   28.9ms tid=main startup_smb_probe_done uri=smb://DietPi.local:445/4TBP/pics-sport/Forest%20Run%202026 ok=true reason=ok
+NETWORK t=  5149.6ms dt=  550.0ms tid=ThreadId(31) smb_stat_start url=smb://DietPi.local/4TBP/Work lane=background
+NETWORK t=  5152.0ms dt=    2.4ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  5152.7ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  5152.7ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  5152.7ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  5170.0ms dt=   17.2ms tid=pic-smb-transport smb_transport stat ms=17.2
+NETWORK t=  5170.3ms dt=    0.3ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  5199.5ms dt=   29.2ms tid=main startup_smb_probe_done uri=smb://DietPi.local:445/4TBP/Work ok=true reason=ok
+NETWORK t=  5749.8ms dt=  550.2ms tid=ThreadId(33) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t=  5752.4ms dt=    2.7ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  5753.1ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  5753.2ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  5753.2ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  5771.6ms dt=   18.4ms tid=pic-smb-transport smb_transport stat ms=18.4
+NETWORK t=  5772.1ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  5799.5ms dt=   27.4ms tid=main startup_smb_probe_done uri=smb://DietPi.local:445/4TBP/Work/Denver ok=true reason=ok
+NETWORK t=  8055.0ms dt= 2255.5ms tid=ThreadId(35) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 size=4096
+NETWORK t=  8056.0ms dt=    1.0ms tid=ThreadId(35) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/pics-sport/1%20City%202024/FB/FB%201%20City%20Awards size=4096
+NETWORK t=  8056.9ms dt=    0.9ms tid=ThreadId(35) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/Work/Hyman size=4096
+NETWORK t=  8056.9ms dt=    0.0ms tid=ThreadId(35) smb_stat_start url=smb://DietPi.local/4TBP/pics-sport/Forest Run 2026 lane=background
+NETWORK t=  8059.5ms dt=    2.5ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  8060.1ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  8060.1ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  8060.2ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  8077.7ms dt=   17.5ms tid=pic-smb-transport smb_transport stat ms=17.5
+NETWORK t=  8078.1ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  8078.1ms dt=    0.0ms tid=ThreadId(35) smb_stat_start url=smb://DietPi.local/4TBP/Work lane=background
+NETWORK t=  8264.8ms dt=  186.6ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  8265.8ms dt=    1.0ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  8265.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  8265.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  8283.6ms dt=   17.8ms tid=pic-smb-transport smb_transport stat ms=17.8
+NETWORK t=  8284.0ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  8284.1ms dt=    0.0ms tid=ThreadId(35) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t=  8313.5ms dt=   29.4ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  8314.3ms dt=    0.8ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  8314.3ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  8314.4ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  8340.7ms dt=   26.4ms tid=pic-smb-transport smb_transport stat ms=26.3
+NETWORK t=  8341.4ms dt=    0.7ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  8350.7ms dt=    9.2ms tid=main shares_refresh_start
+NETWORK t=  8351.2ms dt=    0.5ms tid=main shares_refresh_done count=6
+NETWORK t=  8401.3ms dt=   50.1ms tid=main shares_counts_ready count=6
+NETWORK t= 10680.4ms dt= 2279.0ms tid=main share_row_press folder=47 op=1 op=1
+NETWORK t= 10764.1ms dt=   83.7ms tid=main filter_selected Folder(47) op=1 op=1
+NETWORK t= 10764.1ms dt=    0.0ms tid=main filter_selected_begin op=1
+NETWORK t= 10764.1ms dt=    0.0ms tid=main apply_filter_start filter=Folder(47) exact=false op=1
+NETWORK t= 10764.9ms dt=    0.7ms tid=main apply_filter_done network_share_scoped op=1
+NETWORK t= 10764.9ms dt=    0.0ms tid=main filter_selected_end op=1
+NETWORK t= 10764.9ms dt=    0.0ms tid=ThreadId(43) grid_query_start op=1 filter=Folder(47) folder_stream=true
+NETWORK t= 10769.5ms dt=    4.6ms tid=ThreadId(43) grid_share_matched op=1 root=nfs://DietPi.local/mnt/4TBP/mypics-2026 descendants=0 matched=0
+NETWORK t= 10771.4ms dt=    1.9ms tid=ThreadId(43) grid_share_scoped op=1 count=0
+NETWORK t= 10789.9ms dt=   18.5ms tid=main grid_share_replace op=1 count=0 op=1
+NETWORK t= 10789.9ms dt=    0.0ms tid=main gallery_replace_start op=1 count=0 cache_scoped=false progressive=false op=1
+NETWORK t= 10792.4ms dt=    2.4ms tid=main grid_share_ready op=1 op=1
+NETWORK t= 11388.4ms dt=  596.1ms tid=main share_row_press folder=273 op=2 op=2
+NETWORK t= 11516.2ms dt=  127.7ms tid=main filter_selected Folder(273) op=2 op=2
+NETWORK t= 11516.2ms dt=    0.0ms tid=main filter_selected_begin op=2
+NETWORK t= 11516.2ms dt=    0.0ms tid=main apply_filter_start filter=Folder(273) exact=false op=2
+NETWORK t= 11516.4ms dt=    0.2ms tid=main apply_filter_done network_share_scoped op=2
+NETWORK t= 11516.4ms dt=    0.0ms tid=main filter_selected_end op=2
+NETWORK t= 11516.4ms dt=    0.0ms tid=ThreadId(44) grid_query_start op=2 filter=Folder(273) folder_stream=true
+NETWORK t= 11519.8ms dt=    3.4ms tid=ThreadId(44) grid_share_matched op=2 root=nfs://DietPi.local/mnt/4TBP/pics-sport/1%20City%202024/FB/FB%201%20City%20Awards descendants=0 matched=0
+NETWORK t= 11521.7ms dt=    1.9ms tid=ThreadId(44) grid_share_scoped op=2 count=0
+NETWORK t= 11541.4ms dt=   19.8ms tid=main grid_share_replace op=2 count=0 op=2
+NETWORK t= 11541.4ms dt=    0.0ms tid=main gallery_replace_start op=2 count=0 cache_scoped=false progressive=false op=2
+NETWORK t= 11541.5ms dt=    0.0ms tid=main gallery_replace_unchanged skip_rebuild op=2
+NETWORK t= 11541.5ms dt=    0.0ms tid=main grid_share_ready op=2 op=2
+NETWORK t= 11996.4ms dt=  454.9ms tid=main share_row_press folder=18 op=3 op=3
+NETWORK t= 12092.4ms dt=   96.0ms tid=main filter_selected Folder(18) op=3 op=3
+NETWORK t= 12092.4ms dt=    0.0ms tid=main filter_selected_begin op=3
+NETWORK t= 12092.4ms dt=    0.0ms tid=main apply_filter_start filter=Folder(18) exact=false op=3
+NETWORK t= 12092.6ms dt=    0.2ms tid=main apply_filter_done network_share_scoped op=3
+NETWORK t= 12092.6ms dt=    0.0ms tid=main filter_selected_end op=3
+NETWORK t= 12092.7ms dt=    0.0ms tid=ThreadId(45) grid_query_start op=3 filter=Folder(18) folder_stream=true
+NETWORK t= 12096.0ms dt=    3.4ms tid=ThreadId(45) grid_share_matched op=3 root=nfs://DietPi.local/mnt/4TBP/Work/Hyman descendants=89 matched=89
+NETWORK t= 12098.2ms dt=    2.2ms tid=ThreadId(45) grid_share_scoped op=3 count=89
+NETWORK t= 12117.7ms dt=   19.5ms tid=main grid_share_replace op=3 count=89 op=3
+NETWORK t= 12117.7ms dt=    0.0ms tid=main gallery_replace_start op=3 count=89 cache_scoped=false progressive=false op=3
+NETWORK t= 12140.5ms dt=   22.8ms tid=main grid_share_ready op=3 op=3
+NETWORK t= 13036.6ms dt=  896.1ms tid=main share_row_press folder=255 op=4 op=4
+NETWORK t= 13132.1ms dt=   95.6ms tid=main filter_selected Folder(255) op=4 op=4
+NETWORK t= 13132.1ms dt=    0.0ms tid=main filter_selected_begin op=4
+NETWORK t= 13132.1ms dt=    0.0ms tid=main apply_filter_start filter=Folder(255) exact=false op=4
+NETWORK t= 13132.7ms dt=    0.6ms tid=main apply_filter_done network_share_scoped op=4
+NETWORK t= 13132.7ms dt=    0.0ms tid=main filter_selected_end op=4
+NETWORK t= 13132.8ms dt=    0.0ms tid=ThreadId(46) grid_query_start op=4 filter=Folder(255) folder_stream=true
+NETWORK t= 13137.8ms dt=    5.0ms tid=ThreadId(46) grid_share_matched op=4 root=smb://DietPi.local:445/4TBP/pics-sport/Forest%20Run%202026 descendants=355 matched=355
+NETWORK t= 13139.8ms dt=    2.0ms tid=ThreadId(46) grid_share_scoped op=4 count=355
+NETWORK t= 13157.8ms dt=   18.0ms tid=main grid_share_replace op=4 count=355 op=4
+NETWORK t= 13157.8ms dt=    0.0ms tid=main gallery_replace_start op=4 count=355 cache_scoped=false progressive=false op=4
+NETWORK t= 13217.8ms dt=   59.9ms tid=main grid_share_ready op=4 op=4
+NETWORK t= 13468.7ms dt=  251.0ms tid=main share_row_press folder=10 op=5 op=5
+NETWORK t= 13564.2ms dt=   95.5ms tid=main filter_selected Folder(10) op=5 op=5
+NETWORK t= 13564.2ms dt=    0.0ms tid=main filter_selected_begin op=5
+NETWORK t= 13564.2ms dt=    0.0ms tid=main apply_filter_start filter=Folder(10) exact=false op=5
+NETWORK t= 13565.6ms dt=    1.4ms tid=main apply_filter_done network_share_scoped op=5
+NETWORK t= 13565.6ms dt=    0.0ms tid=main filter_selected_end op=5
+NETWORK t= 13565.6ms dt=    0.0ms tid=ThreadId(47) grid_query_start op=5 filter=Folder(10) folder_stream=true
+NETWORK t= 13570.9ms dt=    5.3ms tid=ThreadId(47) grid_share_matched op=5 root=smb://DietPi.local:445/4TBP/Work descendants=101 matched=161
+NETWORK t= 13572.9ms dt=    2.0ms tid=ThreadId(47) grid_share_scoped op=5 count=161
+NETWORK t= 13590.6ms dt=   17.8ms tid=main grid_share_replace op=5 count=161 op=5
+NETWORK t= 13590.7ms dt=    0.0ms tid=main gallery_replace_start op=5 count=161 cache_scoped=false progressive=false op=5
+NETWORK t= 13650.3ms dt=   59.6ms tid=main grid_share_ready op=5 op=5
+NETWORK t= 13953.5ms dt=  303.2ms tid=main share_row_press folder=11 op=6 op=6
+NETWORK t= 14064.2ms dt=  110.7ms tid=main filter_selected Folder(11) op=6 op=6
+NETWORK t= 14064.2ms dt=    0.0ms tid=main filter_selected_begin op=6
+NETWORK t= 14064.2ms dt=    0.0ms tid=main apply_filter_start filter=Folder(11) exact=false op=6
+NETWORK t= 14065.1ms dt=    0.9ms tid=main apply_filter_done network_share_scoped op=6
+NETWORK t= 14065.1ms dt=    0.0ms tid=main filter_selected_end op=6
+NETWORK t= 14065.1ms dt=    0.0ms tid=ThreadId(48) grid_query_start op=6 filter=Folder(11) folder_stream=true
+NETWORK t= 14069.4ms dt=    4.3ms tid=ThreadId(48) grid_share_matched op=6 root=smb://DietPi.local:445/4TBP/Work/Denver descendants=0 matched=33
+NETWORK t= 14071.3ms dt=    1.9ms tid=ThreadId(48) grid_share_scoped op=6 count=33
+NETWORK t= 14090.2ms dt=   18.9ms tid=main grid_share_replace op=6 count=33 op=6
+NETWORK t= 14090.2ms dt=    0.0ms tid=main gallery_replace_start op=6 count=33 cache_scoped=false progressive=false op=6
+NETWORK t= 14108.8ms dt=   18.6ms tid=main grid_share_ready op=6 op=6
+NETWORK t= 14690.6ms dt=  581.8ms tid=main discovery_ui_started
+NETWORK t= 14690.6ms dt=    0.0ms tid=main discovery_cache_seeded count=2
+NETWORK t= 14690.7ms dt=    0.1ms tid=main dialog_opened
+NETWORK t= 14690.7ms dt=    0.0ms tid=ThreadId(49) discovery_started
+NETWORK t= 14690.8ms dt=    0.1ms tid=ThreadId(50) discovery_attempt attempt=1
+NETWORK t= 14692.1ms dt=    1.3ms tid=ThreadId(50) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t= 14692.1ms dt=    0.0ms tid=ThreadId(50) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t= 14692.1ms dt=    0.0ms tid=ThreadId(50) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t= 14692.1ms dt=    0.0ms tid=ThreadId(50) discovery_complete count=2
+NETWORK t= 14740.7ms dt=   48.6ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t= 14741.4ms dt=    0.7ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t= 14741.7ms dt=    0.2ms tid=main discovery_ui_done count=2 shown=2
+NETWORK t= 15664.2ms dt=  922.6ms tid=main discovery_row_clicked name=DIETPI uri=smb://DietPi.local:445/
+NETWORK t= 16424.2ms dt=  760.0ms tid=main discovery_row_clicked name=NFS file sharing on DietPi uri=nfs://DietPi.local/mnt
+NETWORK t= 16648.3ms dt=  224.0ms tid=main discovery_row_clicked name=NFS file sharing on DietPi uri=nfs://DietPi.local/mnt
+NETWORK t= 17048.5ms dt=  400.2ms tid=main nfs_lookup_started host=DietPi.local
+NETWORK t= 17056.9ms dt=    8.4ms tid=ThreadId(52) nfs_exports host=DietPi.local count=5
+NETWORK t= 17093.5ms dt=   36.7ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t= 17093.8ms dt=    0.3ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 17093.9ms dt=    0.2ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t= 17094.1ms dt=    0.1ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t= 17094.2ms dt=    0.1ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 17484.1ms dt=  389.9ms tid=main dialog_connect_state server='DietPi.local' discovered=true protocol=1
+NETWORK t= 17484.1ms dt=    0.0ms tid=main dialog_connect_source=discovered uri=nfs://DietPi.local/mnt
+NETWORK t= 17484.1ms dt=    0.0ms tid=main dialog_accepted root=nfs://DietPi.local/mnt name=
+NETWORK t= 17484.2ms dt=    0.0ms tid=main connect_requested uri=nfs://DietPi.local/mnt
+NETWORK t= 17484.2ms dt=    0.0ms tid=main browse_root_in uri=nfs://DietPi.local/mnt
+NETWORK t= 17484.2ms dt=    0.0ms tid=main browse_root_out uri=nfs://DietPi.local/mnt/
+NETWORK t= 17484.2ms dt=    0.0ms tid=main connect_root normalized=nfs://DietPi.local/
+NETWORK t= 17484.2ms dt=    0.0ms tid=main browse_root uri=nfs://DietPi.local/
+NETWORK t= 17491.8ms dt=    7.6ms tid=ThreadId(53) nfs_exports host=DietPi.local count=5
+NETWORK t= 17491.8ms dt=    0.0ms tid=ThreadId(53) browse_enumerate uri=nfs://DietPi.local/ count=5 ms=6.9
+NETWORK t= 17494.2ms dt=    2.3ms tid=main discovery_ui_closed_flag
+NETWORK t= 17494.2ms dt=    0.0ms tid=main dialog_closed
+NETWORK t= 17498.1ms dt=    3.9ms tid=main discovery_ui_stopped_closed
+NETWORK t= 17535.3ms dt=   37.2ms tid=main browse_list uri=nfs://DietPi.local/ count=5
+NETWORK t= 18652.2ms dt= 1116.9ms tid=main browse_enter uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t= 18654.2ms dt=    2.0ms tid=ThreadId(54) nfs_helper_list_ok uri=nfs://DietPi.local/mnt/4TBP count=11
+NETWORK t= 18654.2ms dt=    0.0ms tid=ThreadId(54) browse_enumerate uri=nfs://DietPi.local/mnt/4TBP count=11 ms=1.5
+NETWORK t= 18703.8ms dt=   49.6ms tid=main browse_list uri=nfs://DietPi.local/mnt/4TBP count=11
+NETWORK t= 20920.6ms dt= 2216.7ms tid=main browse_enter uri=nfs://DietPi.local/mnt/4TBP/mypics-2026
+NETWORK t= 20922.6ms dt=    2.0ms tid=ThreadId(56) nfs_helper_list_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 count=2
+NETWORK t= 20922.6ms dt=    0.0ms tid=ThreadId(56) browse_enumerate uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 count=2 ms=1.3
+NETWORK t= 20971.6ms dt=   49.1ms tid=main browse_list uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 count=2
+NETWORK t= 21848.5ms dt=  876.8ms tid=main browse_enter uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell
+NETWORK t= 21850.2ms dt=    1.8ms tid=ThreadId(58) nfs_helper_list_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell count=5
+NETWORK t= 21850.3ms dt=    0.0ms tid=ThreadId(58) browse_enumerate uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell count=4 ms=1.4
+NETWORK t= 21899.3ms dt=   49.0ms tid=main browse_list uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell count=4
+NETWORK t= 22552.3ms dt=  653.0ms tid=main browse_enter uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell
+NETWORK t= 22555.9ms dt=    3.6ms tid=ThreadId(60) nfs_helper_list_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell count=90
+NETWORK t= 22555.9ms dt=    0.0ms tid=ThreadId(60) browse_enumerate uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell count=0 ms=3.0
+NETWORK t= 22602.9ms dt=   47.0ms tid=main browse_list uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell count=0
+NETWORK t= 23756.1ms dt= 1153.2ms tid=main browse_selected uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell
+NETWORK t= 23756.2ms dt=    0.0ms tid=main register_start uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell name=FB-Tatiana Matric Farewell
+NETWORK t= 23766.1ms dt=   10.0ms tid=main registered uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell
+NETWORK t= 23769.0ms dt=    2.9ms tid=main shares_refresh_start
+NETWORK t= 23770.0ms dt=    0.9ms tid=main shares_refresh_done count=7
+NETWORK t= 23770.1ms dt=    0.2ms tid=main scan_queued uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell
+NETWORK t= 23770.2ms dt=    0.0ms tid=main browse_closed
+NETWORK t= 23771.7ms dt=    1.5ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell size=4096
+NETWORK t= 23776.6ms dt=    4.9ms tid=ThreadId(63) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 size=4096
+NETWORK t= 23777.7ms dt=    1.1ms tid=ThreadId(63) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell size=4096
+NETWORK t= 23778.6ms dt=    0.9ms tid=ThreadId(63) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/pics-sport/1%20City%202024/FB/FB%201%20City%20Awards size=4096
+NETWORK t= 23779.7ms dt=    1.1ms tid=ThreadId(63) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/Work/Hyman size=4096
+NETWORK t= 23779.7ms dt=    0.0ms tid=ThreadId(63) smb_stat_start url=smb://DietPi.local/4TBP/pics-sport/Forest Run 2026 lane=background
+NETWORK t= 23780.7ms dt=    1.0ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 size=4096
+NETWORK t= 23781.6ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell size=4096
+NETWORK t= 23782.5ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/pics-sport/1%20City%202024/FB/FB%201%20City%20Awards size=4096
+NETWORK t= 23782.7ms dt=    0.2ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 23783.4ms dt=    0.7ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/Work/Hyman size=4096
+NETWORK t= 23783.4ms dt=    0.0ms tid=ThreadId(64) smb_stat_start url=smb://DietPi.local/4TBP/pics-sport/Forest Run 2026 lane=background
+NETWORK t= 23783.9ms dt=    0.5ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 23783.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 23783.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 23811.0ms dt=   27.0ms tid=pic-smb-transport smb_transport stat ms=27.0
+NETWORK t= 23811.6ms dt=    0.6ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 23811.6ms dt=    0.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 23811.7ms dt=    0.0ms tid=ThreadId(63) smb_stat_start url=smb://DietPi.local/4TBP/Work lane=background
+NETWORK t= 23812.3ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 23812.3ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 23812.3ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 23820.2ms dt=    7.8ms tid=main shares_counts_ready count=7
+NETWORK t= 23828.8ms dt=    8.6ms tid=pic-smb-transport smb_transport stat ms=16.4
+NETWORK t= 23829.1ms dt=    0.3ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 23829.1ms dt=    0.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 23829.2ms dt=    0.0ms tid=ThreadId(64) smb_stat_start url=smb://DietPi.local/4TBP/Work lane=background
+NETWORK t= 23829.8ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 23829.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 23829.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 23841.0ms dt=   11.2ms tid=pic-smb-transport smb_transport stat ms=11.2
+NETWORK t= 23841.4ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 23841.5ms dt=    0.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 23841.5ms dt=    0.0ms tid=ThreadId(63) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t= 23842.0ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 23842.1ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 23842.1ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 23853.8ms dt=   11.8ms tid=pic-smb-transport smb_transport stat ms=11.7
+NETWORK t= 23854.3ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 23854.3ms dt=    0.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 23854.3ms dt=    0.0ms tid=ThreadId(64) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t= 23854.9ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 23854.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 23855.0ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 23867.3ms dt=   12.4ms tid=pic-smb-transport smb_transport stat ms=12.3
+NETWORK t= 23867.8ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 23867.8ms dt=    0.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 23868.3ms dt=    0.5ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 23868.4ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 23868.4ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 23871.0ms dt=    2.6ms tid=main shares_refresh_start
+NETWORK t= 23872.2ms dt=    1.2ms tid=main shares_refresh_done count=7
+NETWORK t= 23881.0ms dt=    8.9ms tid=pic-smb-transport smb_transport stat ms=12.6
+NETWORK t= 23881.4ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 23884.2ms dt=    2.8ms tid=ThreadId(64) nfs_helper_list_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/ count=90
+NETWORK t= 23884.9ms dt=    0.7ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5809.jpg size=1173324
+NETWORK t= 23885.6ms dt=    0.7ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5914.jpg size=1583373
+NETWORK t= 23886.4ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/zDSC_5696.jpg size=2693030
+NETWORK t= 23887.1ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5756.jpg size=3082853
+NETWORK t= 23887.9ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5870.jpg size=1921604
+NETWORK t= 23888.8ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5828.jpg size=967128
+NETWORK t= 23889.6ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5873.jpg size=1972220
+NETWORK t= 23890.5ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5882.jpg size=1600042
+NETWORK t= 23891.3ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5844.jpg size=1844472
+NETWORK t= 23892.2ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5850.jpg size=1903874
+NETWORK t= 23892.9ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5884.jpg size=1588043
+NETWORK t= 23893.7ms dt=    0.7ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/zDSC_5695.jpg size=2187819
+NETWORK t= 23894.3ms dt=    0.6ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5847.jpg size=2236885
+NETWORK t= 23895.1ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5856.jpg size=3177652
+NETWORK t= 23895.8ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5773.jpg size=823239
+NETWORK t= 23896.6ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5865.jpg size=2551852
+NETWORK t= 23897.5ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5917.jpg size=1250788
+NETWORK t= 23898.3ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/zDSC_5698.jpg size=2888222
+NETWORK t= 23899.2ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5713.jpg size=1721167
+NETWORK t= 23900.0ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5854.jpg size=1091668
+NETWORK t= 23900.8ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5868.jpg size=1715595
+NETWORK t= 23901.5ms dt=    0.7ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5738.jpg size=982612
+NETWORK t= 23902.2ms dt=    0.7ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5875.jpg size=1914448
+NETWORK t= 23903.0ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5862.jpg size=1650891
+NETWORK t= 23903.8ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5793.jpg size=1274310
+NETWORK t= 23904.5ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5920.jpg size=1231300
+NETWORK t= 23905.4ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5823.jpg size=1471379
+NETWORK t= 23906.2ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5830.jpg size=1074385
+NETWORK t= 23907.1ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5822.jpg size=1495300
+NETWORK t= 23907.8ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5774.jpg size=763385
+NETWORK t= 23908.6ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5817.jpg size=1832455
+NETWORK t= 23909.4ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5771.jpg size=791871
+NETWORK t= 23910.3ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5869.jpg size=1758038
+NETWORK t= 23911.1ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5841.jpg size=2083720
+NETWORK t= 23911.9ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5880.jpg size=2381966
+NETWORK t= 23912.9ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5718.jpg size=1264168
+NETWORK t= 23913.8ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5819.jpg size=1738742
+NETWORK t= 23914.6ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5806.jpg size=907546
+NETWORK t= 23915.5ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5732.jpg size=1933862
+NETWORK t= 23916.4ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5807.jpg size=1051716
+NETWORK t= 23917.3ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/zDSC_5701.jpg size=3784071
+NETWORK t= 23918.2ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5876.jpg size=1749362
+NETWORK t= 23919.1ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/zDSC_5694.jpg size=2742338
+NETWORK t= 23919.9ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5824.jpg size=1505373
+NETWORK t= 23920.8ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5903.jpg size=1416000
+NETWORK t= 23921.8ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5772.jpg size=763159
+NETWORK t= 23922.3ms dt=    0.5ms tid=main shares_counts_ready count=7
+NETWORK t= 23922.7ms dt=    0.4ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5742.jpg size=978554
+NETWORK t= 23923.6ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5799.jpg size=841356
+NETWORK t= 23924.5ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5710.jpg size=1626239
+NETWORK t= 23925.4ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5766.jpg size=962349
+NETWORK t= 23926.2ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5794.jpg size=1183949
+NETWORK t= 23927.1ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5736.jpg size=1109630
+NETWORK t= 23927.9ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5800.jpg size=903244
+NETWORK t= 23928.8ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/zDSC_5699.jpg size=2552927
+NETWORK t= 23929.8ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5916.jpg size=1286995
+NETWORK t= 23930.6ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5833.jpg size=818934
+NETWORK t= 23931.5ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5714.jpg size=1337691
+NETWORK t= 23932.4ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5758.jpg size=2812009
+NETWORK t= 23933.3ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5820.jpg size=2061288
+NETWORK t= 23934.2ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5860.jpg size=1994688
+NETWORK t= 23935.1ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5821.jpg size=1959383
+NETWORK t= 23935.9ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5918.jpg size=1134504
+NETWORK t= 23936.7ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5735.jpg size=916497
+NETWORK t= 23937.6ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5783.jpg size=689858
+NETWORK t= 23938.5ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5904.jpg size=2317507
+NETWORK t= 23939.4ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/zDSC_5693.jpg size=2082513
+NETWORK t= 23940.4ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5867.jpg size=2217832
+NETWORK t= 23941.2ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5810.jpg size=1211588
+NETWORK t= 23942.0ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5890.jpg size=775922
+NETWORK t= 23942.8ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5785.jpg size=821614
+NETWORK t= 23943.6ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/zDSC_5697.jpg size=3000938
+NETWORK t= 23944.3ms dt=    0.7ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/zDSC_5700.jpg size=1738886
+NETWORK t= 23945.1ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5788.jpg size=1341418
+NETWORK t= 23946.1ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5765.jpg size=975669
+NETWORK t= 23947.0ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5791.jpg size=1483294
+NETWORK t= 23948.0ms dt=    1.0ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5885.jpg size=1554072
+NETWORK t= 23948.9ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5857.jpg size=2047337
+NETWORK t= 23949.7ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5782.jpg size=1045535
+NETWORK t= 23950.5ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5866.jpg size=1604208
+NETWORK t= 23951.4ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5839.jpg size=771632
+NETWORK t= 23952.2ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5811.jpg size=1123243
+NETWORK t= 23953.1ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5891.jpg size=1312363
+NETWORK t= 23954.0ms dt=    1.0ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5743.jpg size=777081
+NETWORK t= 23955.0ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5732-3.jpg size=1470496
+NETWORK t= 23955.9ms dt=    1.0ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5912.jpg size=1340575
+NETWORK t= 23956.9ms dt=    1.0ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5803.jpg size=1056005
+NETWORK t= 23957.9ms dt=    0.9ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5724.jpg size=1824472
+NETWORK t= 23958.7ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell/DSC_5863.jpg size=1699763
+NETWORK t= 23959.5ms dt=    0.8ms tid=ThreadId(64) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell size=4096
+NETWORK t= 24274.4ms dt=  314.9ms tid=ThreadId(181) grid_query_start op=0 filter=Folder(11) folder_stream=true
+===== SCAN COMPLETE: imported=0 failed=0 | progressive gallery updates complete =====
+NETWORK t= 24279.0ms dt=    4.6ms tid=ThreadId(181) grid_share_matched op=0 root=smb://DietPi.local:445/4TBP/Work/Denver descendants=0 matched=33
+NETWORK t= 24282.4ms dt=    3.4ms tid=ThreadId(182) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 size=4096
+NETWORK t= 24282.5ms dt=    0.1ms tid=ThreadId(181) grid_share_scoped op=0 count=33
+NETWORK t= 24283.3ms dt=    0.7ms tid=ThreadId(184) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026 size=4096
+NETWORK t= 24284.1ms dt=    0.9ms tid=ThreadId(182) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell size=4096
+NETWORK t= 24285.0ms dt=    0.9ms tid=ThreadId(184) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell size=4096
+NETWORK t= 24285.8ms dt=    0.8ms tid=ThreadId(182) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/pics-sport/1%20City%202024/FB/FB%201%20City%20Awards size=4096
+NETWORK t= 24286.5ms dt=    0.8ms tid=ThreadId(184) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/pics-sport/1%20City%202024/FB/FB%201%20City%20Awards size=4096
+NETWORK t= 24287.2ms dt=    0.7ms tid=ThreadId(182) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/Work/Hyman size=4096
+NETWORK t= 24287.3ms dt=    0.0ms tid=ThreadId(182) smb_stat_start url=smb://DietPi.local/4TBP/pics-sport/Forest Run 2026 lane=background
+NETWORK t= 24288.1ms dt=    0.8ms tid=ThreadId(184) nfs_helper_stat_ok uri=nfs://DietPi.local/mnt/4TBP/Work/Hyman size=4096
+NETWORK t= 24288.1ms dt=    0.0ms tid=ThreadId(184) smb_stat_start url=smb://DietPi.local/4TBP/pics-sport/Forest Run 2026 lane=background
+NETWORK t= 24290.1ms dt=    2.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 24290.7ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 24290.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 24290.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 24299.5ms dt=    8.7ms tid=main grid_share_replace op=0 count=33
+NETWORK t= 24299.5ms dt=    0.0ms tid=main gallery_replace_start op=0 count=33 cache_scoped=false progressive=false
+NETWORK t= 24299.5ms dt=    0.0ms tid=main gallery_replace_unchanged skip_rebuild
+NETWORK t= 24299.5ms dt=    0.0ms tid=main grid_share_ready op=0
+NETWORK t= 24308.1ms dt=    8.6ms tid=pic-smb-transport smb_transport stat ms=17.3
+NETWORK t= 24308.6ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 24308.6ms dt=    0.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 24308.6ms dt=    0.0ms tid=ThreadId(182) smb_stat_start url=smb://DietPi.local/4TBP/Work lane=background
+NETWORK t= 24309.2ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 24309.2ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 24309.2ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 24321.6ms dt=   12.4ms tid=pic-smb-transport smb_transport stat ms=12.4
+NETWORK t= 24322.1ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 24322.1ms dt=    0.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 24322.1ms dt=    0.0ms tid=ThreadId(184) smb_stat_start url=smb://DietPi.local/4TBP/Work lane=background
+NETWORK t= 24322.7ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 24322.7ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 24322.7ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 24338.1ms dt=   15.4ms tid=pic-smb-transport smb_transport stat ms=15.4
+NETWORK t= 24338.6ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 24338.6ms dt=    0.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 24338.6ms dt=    0.0ms tid=ThreadId(182) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t= 24339.2ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 24339.2ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 24339.2ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 24353.8ms dt=   14.5ms tid=pic-smb-transport smb_transport stat ms=14.5
+NETWORK t= 24354.1ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 24354.2ms dt=    0.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 24354.2ms dt=    0.0ms tid=ThreadId(184) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t= 24354.7ms dt=    0.5ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 24354.7ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 24354.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 24370.2ms dt=   15.4ms tid=pic-smb-transport smb_transport stat ms=15.4
+NETWORK t= 24370.7ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 24370.7ms dt=    0.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 24371.3ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 24371.3ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 24371.4ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 24385.5ms dt=   14.2ms tid=pic-smb-transport smb_transport stat ms=14.2
+NETWORK t= 24385.9ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 24425.4ms dt=   39.5ms tid=main shares_refresh_start
+NETWORK t= 24426.3ms dt=    0.9ms tid=main shares_refresh_done count=7
+NETWORK t= 24476.5ms dt=   50.1ms tid=main shares_counts_ready count=7
+NETWORK t= 29528.5ms dt= 5052.0ms tid=main filter_selected Folder(47) op=7 op=7
+NETWORK t= 29528.5ms dt=    0.0ms tid=main filter_selected_begin op=7
+NETWORK t= 29528.5ms dt=    0.0ms tid=main apply_filter_start filter=Folder(47) exact=false op=7
+NETWORK t= 29528.9ms dt=    0.4ms tid=main apply_filter_done network_share_scoped op=7
+NETWORK t= 29529.0ms dt=    0.0ms tid=main filter_selected_end op=7
+NETWORK t= 29529.0ms dt=    0.0ms tid=ThreadId(200) grid_query_start op=7 filter=Folder(47) folder_stream=true
+NETWORK t= 29532.5ms dt=    3.5ms tid=ThreadId(200) grid_share_matched op=7 root=nfs://DietPi.local/mnt/4TBP/mypics-2026 descendants=88 matched=88
+NETWORK t= 29534.5ms dt=    2.0ms tid=ThreadId(200) grid_share_scoped op=7 count=88
+NETWORK t= 29554.0ms dt=   19.5ms tid=main grid_share_replace op=7 count=88 op=7
+NETWORK t= 29554.0ms dt=    0.0ms tid=main gallery_replace_start op=7 count=88 cache_scoped=false progressive=false op=7
+NETWORK t= 29578.4ms dt=   24.4ms tid=main grid_share_ready op=7 op=7
+NETWORK t= 30072.6ms dt=  494.2ms tid=main share_row_press folder=276 op=8 op=8
+NETWORK t= 30184.5ms dt=  111.9ms tid=main filter_selected Folder(276) op=8 op=8
+NETWORK t= 30184.5ms dt=    0.0ms tid=main filter_selected_begin op=8
+NETWORK t= 30184.5ms dt=    0.0ms tid=main apply_filter_start filter=Folder(276) exact=false op=8
+NETWORK t= 30185.1ms dt=    0.6ms tid=main apply_filter_done network_share_scoped op=8
+NETWORK t= 30185.1ms dt=    0.0ms tid=main filter_selected_end op=8
+NETWORK t= 30185.2ms dt=    0.0ms tid=ThreadId(201) grid_query_start op=8 filter=Folder(276) folder_stream=true
+NETWORK t= 30189.5ms dt=    4.3ms tid=ThreadId(201) grid_share_matched op=8 root=nfs://DietPi.local/mnt/4TBP/mypics-2026/Tat%20Matric%20Farewell/FB-Tatiana%20Matric%20Farewell descendants=0 matched=0
+NETWORK t= 30191.5ms dt=    2.0ms tid=ThreadId(201) grid_share_scoped op=8 count=0
+NETWORK t= 30210.2ms dt=   18.7ms tid=main grid_share_replace op=8 count=0 op=8
+NETWORK t= 30210.2ms dt=    0.0ms tid=main gallery_replace_start op=8 count=0 cache_scoped=false progressive=false op=8
+NETWORK t= 30217.1ms dt=    6.9ms tid=main grid_share_ready op=8 op=8

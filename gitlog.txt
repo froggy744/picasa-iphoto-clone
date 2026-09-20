@@ -1,0 +1,3031 @@
+commit e622ca333cf79eb4ee16110d0b8454090bad7c62
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 13:42:52 2026 +0200
+
+    Keep NFS experimental after JPEG read failure
+
+commit 0453a930e4a60d71695bec90116ba8db4465cc0f
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 13:33:49 2026 +0200
+
+    Use NFSv4 pseudo-root for private transport
+
+commit e2aa62210b2148cdda7761c3ff8d7518009a6f43
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 13:14:52 2026 +0200
+
+    Fix NFS export routing and diagnostics
+
+commit 50656a05eb60fda7baca4cf0867ffd6eea45725e
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 13:02:54 2026 +0200
+
+    Implement private libnfs transport
+
+commit 3cd64d3cba365b11feaa89ec161c3e8ff392fe2c
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 12:29:37 2026 +0200
+
+    Keep network shares private to PIC
+
+commit 66cfa7bc5fe1c2c4230e73e0a28f2d63371399c3
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 09:19:42 2026 +0200
+
+    fix(network): empty SMB share list falls back to gvfs; NFS online probe fixes
+    
+    logv8 diagnosis: DietPi's Samba hides its share list from anonymous
+    sessions - smb_list_shares succeeds with 0 shares, so the new direct
+    browser opened empty, while guest access to the shares themselves works
+    (live list/read tests pass). The old gvfs flow only worked because its
+    mount dialog stored credentials in gvfs's own context.
+    
+    - The Add-share connect flow now pre-flights list_shares: non-empty
+      opens the direct no-mount browser; empty (or probe loss) falls back
+      to the gvfs mount path whose auth dialog collects credentials gvfs
+      enumerates with. The folder browser likewise retries an empty direct
+      listing through gvfs (browse_direct_empty).
+    - The gvfs mount created by that fallback is recorded PIC-owned and
+      reclaimed by the idle unmount like NFS (mount tracking now covers any
+      scheme; 'already mounted' hits are still never recorded).
+    - nfs_online: a mounted export probes through gvfs; an unresolvable
+      host (mDNS .local invisible to getaddrinfo - observed as
+      online=false ms=0.0 on this NAS while NFS worked) reads as online
+      instead of falsely marking shares unavailable; a resolvable host
+      still gets the bounded TCP probe.
+
+commit 618701c85223a7c760a239d7573ff8dbfd48a473
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 08:58:55 2026 +0200
+
+    docs(network): document mounted-visibility policy and the NFS limitation
+
+commit 5f212c029625d4eefb4da214a70db44be6f5ce3c
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 08:58:32 2026 +0200
+
+    fix(migration): PIC never unmounts user mounts; migration failure is non-fatal
+    
+    Audit fixes before merge:
+    
+    - Mount ownership: only a mount PIC itself created (fresh
+      mount_enclosing_volume success) is recorded as PIC-owned and eligible
+      for the idle unmount. 'Already mounted' hits - typically the user
+      mounting the share in Nautilus - are never recorded, and the sweep of
+      registered-root mounts (which could not distinguish ownership) is
+      removed. PIC can now never unmount a network share it did not mount
+      itself; stale gvfs mounts from older versions are likewise left for
+      the user to remove.
+    
+    - A failed gvfs-path migration (e.g. a folder path colliding with an
+      existing canonical row - observed in a real library snapshot) no
+      longer propagates through open(): it is logged and skipped,
+      transactionally leaving every path untouched.
+    
+    - Verification: hermetic tests cover the rewrite (folder/photo paths,
+      preserved IDs, rotation, edit recipes, favourites, album links, backup
+      contents, idempotence, local-only no-backup path). A real-library
+      snapshot verified 251 gvfs photos across 13 folders were detected and
+      that a collision aborts cleanly without changing the library.
+
+commit 0b02feb18d473dee59df48eef3067e37ea68c25e
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 08:44:29 2026 +0200
+
+    fix(network): never leave gvfs mounts in Nautilus; repair gvfs-path imports
+    
+    Verified experimentally (cross-process, real shares): GMount::shadow()
+    is process-local for gvfs daemon mounts - the shadow flag never reaches
+    Nautilus or any other process, and the gvfs MountTracker carries no
+    shadow state. So the hiding strategy is dropped entirely; instead PIC no
+    longer creates gvfs mounts it does not need, and reclaims its leftovers.
+    
+    - SMB Add-share connect and the folder browser now list through the
+      direct libsmbclient transport (new list_shares for server roots); the
+      browse dialog skips mount-then-list for SMB. SMB gvfs mounts are no
+      longer created by browsing at all.
+    - NFS keeps gvfs (no direct transport exists) but mounts are on demand:
+      availability is a plain TCP probe of the NFS port (no mount), photo
+      reads mount on NotMounted and retry once, and an idle unmount pass (5
+      min) reclaims PIC-mounted and registered exports. The explicit Open in
+      file manager action keeps its visible mount by design.
+    - The 250ms UI poll reclaims stale gvfs mounts on registered roots,
+      including SMB leftovers from older versions (native builds only).
+    - Import Folder rewrites gvfs FUSE paths to stable smb:// / nfs:// URIs
+      (new nfs fuse parser) and refuses anything still under /run/user gvfs,
+      which previously indexed photos into a folder PIC displayed nowhere.
+    - One-time DB migration rewrites folders/photos off gvfs FUSE paths:
+      backed up via VACUUM INTO first (never overwritten), one transaction,
+      idempotent via a settings flag, preserving photo IDs, edits, albums,
+      favourites; thumbnails and materialized sources are renamed to the new
+      cache keys instead of regenerating.
+    - Traces: import_root_registered/rejected, nfs_mount_start/done,
+      nfs_online, gvfs_idle_unmount_*, migration progress.
+
+commit 26bd5cd83b3e63bbfbf081272b1de048d43adda1
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 08:09:40 2026 +0200
+
+    fix(sidebar): update folder counts when indexing ends, not after thumbnails
+    
+    The full sidebar refresh ran only on the scan Finished event, which
+    fires after the background thumbnail pass - so a newly added folder sat
+    with a stale (zero) count for the whole thumbnail phase even though all
+    photos were already committed at IndexingFinished.
+    
+    Refresh the sidebar counts at IndexingFinished, and also when an import
+    is cancelled after photos were indexed (the Finished refresh never runs
+    on that path).
+
+commit 8cbafd074cdfc14efe5d0aaea9fcb98025dde837
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 08:02:09 2026 +0200
+
+    feat(trace): trace thumbnail recovery and the maintenance clear actions
+    
+    The recovery pass and the Settings clear buttons left no trace in
+    PICASA_TRACE logs, so a Clear-thumbnails run was impossible to verify.
+    Trace when a pass is scheduled (recovery_scheduled), starts
+    (recovery_start total/offline) and finishes (recovery_done
+    created/failed/offline/cancelled), and trace the three maintenance
+    buttons. Refresh re-arms a preempted recovery instead of cancelling it,
+    and Clear thumbnails requests a pass automatically.
+
+commit 88a026066c5cf6283c5ea8784c1d1301082c1e53
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 07:41:37 2026 +0200
+
+    fix(maintenance): Clear all wipes the whole picasa-rs cache root
+    
+    clear_cache() only emptied thumbs/, so after Clear All the materialized
+    remote sources (source/) and wallpapers (wallpaper/) survived - the
+    sources usually dominate the cache size. Add clear_all_cache() that
+    removes the entire cache root (thumbs, source, wallpaper, anything else
+    under it) and use it for Clear all; thumbs/ and shard folders are
+    recreated on demand. Clear thumbnails keeps its thumbs-only behavior.
+
+commit 8480890d0f3f439326cbc2949b58029874e99180
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 20 07:30:23 2026 +0200
+
+    fix(smb): free the SMBCCTX after every operation
+    
+    SmbClient stored its initialized Samba context but never freed it, so
+    each list_dir/stat/read_prefix leaked a whole SMBCCTX with its cached
+    socket and krb5 state. Long sessions exhausted the process file-descriptor
+    limit: krb5 context init failed with EMFILE, Samba could no longer
+    enumerate network interfaces, and GDK/Vulkan allocations collapsed as
+    collateral.
+    
+    Free the context in a Drop impl (smbc_free_context with close-all, on
+    the creating worker thread) and also free it on the rare
+    get-function-failure path in SmbClient::new.
+
+commit d1c89a0a27067a3682828f2fa0b7d5338ea5fd5c
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 23:32:05 2026 +0200
+
+    feat(cache): shard thumbnails into a-z / 0-9 folders; name-based cleanup safety
+    
+    Replace the 2-hex shard naming with single alphanumeric folders (0-9, a-z,
+    36 buckets, ~4k files each): the shard folder is derived from the first four
+    hex chars of the cache key (u16 % 36), giving an even spread with at most
+    0.05% bucket-size skew. Foreign names fall into 'misc'.
+    
+    Cleanup and stats now key validity on the cache file NAME instead of its
+    full path: cache keys are globally unique, so valid thumbnails survive in
+    any layout generation - legacy flat files and any earlier shard layout are
+    preserved, only unreferenced keys are pruned. The sweep covers both the
+    legacy flat root and the shard directories.
+
+commit 6babd96773d2b93065581fc51a902431de116cc7
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 23:14:34 2026 +0200
+
+    perf(cache): shard thumbnails by hash prefix; move source/wallpaper out of thumbs/
+    
+    The flat thumbs/ directory held 143k files (77k thumbnails + 66k failure
+    markers) and mixed in materialized remote RAW sources (430 MB) and wallpaper
+    exports, making scans, cleanup and stats passes crawl.
+    
+    - Thumbnails now live under thumbs/files/<2-hex-shard>/ (256 buckets keyed
+      by the cache-key prefix). Legacy flat files migrate into their shard on
+      first access (resolve_cache_path), so no disruptive bulk migration.
+    - Materialized sources moved to ~/.cache/picasa-rs/source and wallpapers to
+      picasa-rs/wallpaper (one-time relocate on cache init), sharded the same
+      way with lazy migration inside source::materialize.
+    - Cleanup and stats are shard-aware: empty shards are pruned, and a new
+      source-cache sweep removes materialized RAW sources the library no longer
+      references (re-materializable on demand). The settings Clean button now
+      reports freed source bytes and the size label includes sources.
+    - request_priority hands migrated thumbnails straight back to the waiting
+      tile instead of leaving it blank until a rebind.
+
+commit eb9a1a326fd7d1c1f78c0c6b5d1e683d14b229c9
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 22:46:07 2026 +0200
+
+    fix(file-manager): reveal via FileManager1 D-Bus, async with GIO fallback
+    
+    Replace the blocking launch_default_for_uri fallback with a non-blocking
+    org.freedesktop.FileManager1.ShowItems call so right-click Open in File
+    Manager no longer stalls GTK for seconds on SMB shares. Network photos use
+    their canonical smb:// URI (legacy gvfs-FUSE paths normalized first, never
+    a materialized cache path); local, gvfs and other remote URIs keep working.
+    The popover closes immediately, all failures and timings go to PICASA_TRACE,
+    and the containing folder opens through async GIO when ShowItems fails.
+
+commit 11fa005874f68540e05bfbfb18c39504b27f7a2a
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 21:35:07 2026 +0200
+
+    build: add native cargo bundle target (.tar.gz)
+    
+    New --cargo-bundle-only / --target cargo target compresses the native
+    release binary, all linked shared libraries, and runtime resources into
+    a portable .tar.gz. Resources (images/, themes/) sit at the bundle root
+    because the app resolves them relative to the CWD; bin/ ships a launcher
+    that prepends the bundled lib/ to LD_LIBRARY_PATH, libexec/ holds the
+    real executable, and a top-level pic-rs shim makes the bundle directly
+    runnable. Also fixed a literal backslash-n in the target validation
+    guard that would have broken the error path.
+
+commit 4b3f756d105596db7e98f95df52988c6fb0a42d7
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 21:03:53 2026 +0200
+
+    fix(flatpak): share the native thumbnail cache via XDG_CACHE_HOME
+    
+    The launcher pinned only XDG_DATA_HOME, so the flatpak still resolved
+    dirs::cache_dir() to $HOME/.var/app/<id>/cache and regenerated every
+    thumbnail. Pin XDG_CACHE_HOME to $HOME/.cache alongside the data dir
+    so the sandbox reuses the native cache.
+
+commit f795cb475f1705b943442a7cacdc4b1d955d921b
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 20:52:27 2026 +0200
+
+    fix(flatpak): fall back to gvfs for SMB without libsmbclient; share one library DB
+    
+    Sandboxed flatpak builds have no libsmbclient.so.0 (runtime glibc 2.42),
+    so every SMB path went dead. Introduce smb_transport::direct_available()
+    and gate the direct transport behind it: read(), query_exists(), the
+    scanner dispatch, root_is_available, the startup probe, and the SMB
+    reconnect path all fall back to gvfs when the transport is absent.
+    Native builds keep libsmbclient unconditionally (no gvfs mounts).
+    
+    The flatpak also redirected XDG_DATA_HOME to .var/app/<id>/data,
+    silently opening a separate library with no NFS shares. The launcher
+    now pins XDG_DATA_HOME to $HOME/.local/share so flatpak and native
+    share one database, and finish-args grant xdg-run/gvfsd for the
+    peer-to-peer mount socket.
+
+commit 1df159d074f7f628a3dcd387a6ddbee85149a2d4
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 19:58:28 2026 +0200
+
+    grid, db, viewer: single-download decode, index-first recent sort, chunked scoped splice
+    
+    - viewer: JPEG/HEIF/generic decode reads from the materialized cache copy
+      instead of re-downloading (exif_orientation already fetched it), so each
+      original is fetched over the network exactly once per viewer decode.
+    - db: recently_added_photos sorts by plain added_at DESC so SQLite walks
+      idx_photos_added_at instead of scanning+soring all 73k rows (~120ms -> ~1ms).
+    - grid: replace_scoped_folder installs a 600-tile first chunk synchronously
+      then appends the rest in idle batches (was one giant ~275ms synchronous
+      splice); generation-guarded, never shows an empty grid.
+
+commit be4a563c0902a5077d45f644ed2256941c721afa
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 19:58:02 2026 +0200
+
+    viewer: normalize CRLF -> LF line endings
+
+commit e4135e1a83ffc09eebbb4aa7afeaf92d99dc3874
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 19:35:02 2026 +0200
+
+    perf(startup): fetch the Recently Added view at SQL level
+    
+    The startup view is Recently Added (50 photos), but the main thread
+    loaded, cloned and sorted the entire 73,677-record library to derive it
+    (~218ms + ~60MB RSS of the startup stall, scaling linearly with library
+    size).
+    
+    recently_added_photos() fetches the newest non-trashed photos in SQL
+    (ORDER BY added_at DESC LIMIT, over-fetched for the enabled-format
+    filter, truncated to the configured limit).
+    
+    Fedora-validated on v22: photo pipeline 218ms -> 122ms, cold_start
+    285ms -> 179ms, RSS 115MB -> 53MB; startup cost no longer scales with
+    library size. Startup phase probes added under PICASA_TRACE.
+
+commit 5d50c61871dfc47d2a43fda4317b71ce8531f10d
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 19:07:18 2026 +0200
+
+    fix(source): normalize legacy gvfs-FUSE paths in materialize (stale-FUSE deadlock)
+    
+    materialize_inner treated gvfs-FUSE photo paths (/run/user/.../
+    smb-share:...) as local files because they contain no :// - and std::fs
+    on a stale gvfs mount blocks indefinitely. exif_orientation calls
+    materialize BEFORE source::read, so the lightbox decode thread hung
+    before any read was attempted (Fedora v19: 9 opens, 0 completions, no
+    read traces).
+    
+    materialize now normalizes first: legacy paths download through the
+    direct SMB transport into the local cache, and std::fs never touches a
+    FUSE path.
+    
+    Fedora-validated on v20: legacy opens flow materialize_start ->
+    read_start uri=smb://... -> read_done (36 reads, 0 failures), lightbox
+    decodes complete.
+
+commit 1f012bb828859495037623fc92ed531e8900a94d
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 18:50:05 2026 +0200
+
+    fix(network): read legacy gvfs-FUSE photo paths via direct SMB transport
+    
+    Photos imported before the redesign carry gvfs-FUSE paths
+    (/run/user/UID/gvfs/smb-share:server=H,share=S/...), which only resolve
+    while a gvfs mount exists - reads failed instantly once the transport
+    stopped mounting (Fedora v17: 19 lightbox read failures, all on legacy
+    paths).
+    
+    - normalize_smb_reference() rewrites gvfs-FUSE paths to canonical smb://
+      URIs (case-preserving, percent-encoded segments, ports dropped) at the
+      read/probe boundary in source::read and query_exists; library records
+      are never modified
+    - the lightbox now explains failed network reads: an offline share shows
+      a rate-limited 'Original unavailable' notice pointing at Retry
+      Connection instead of failing silently
+    
+    Fedora-validated on v18: 101 normalized legacy reads succeeded, zero
+    smb-share failures; the 8 remaining failures were offline NFS (manual
+    by design) and now surface the notice.
+
+commit f1174a6de5b8d915ca18ade24761409e762813d2
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 18:32:50 2026 +0200
+
+    fix(network): per-host priority scheduling, scoped folder navigation, probe throttle
+    
+    - SMB operations queue per host with user/background lanes: photo reads
+      and navigation always go before background probes; attempts cancel on
+      caller timeout (queued work aborts, running C calls bounded by the
+      Samba context timeout) - fixes the StillInFlight probe storms that
+      marked shares offline
+    - Server-root URIs (no share name) probe by listing the server's shares
+    - Availability refreshes throttle to one pass per 5s minimum (a 15-root
+      probe burst previously scheduled 15 full-library passes)
+    - Folder selection shows the folder subtree only; the 73k-photo
+      continuous library stream no longer builds on every folder click
+    - Startup auto-scan gated off (STARTUP_AUTO_SCAN=false) pending a
+      smarter population policy
+    
+    Fedora-validated on v16: 15/15 SMB probes online, zero browsing stalls,
+    zero automatic gvfs mounts, NFS retry working end to end.
+
+commit 0b52907ef60dda59e59118f02ea68249cc878dbb
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 17:44:12 2026 +0200
+
+    feat(network): direct SMB transport with priority scheduling (REDESIGN SHARES MOUNT)
+    
+    Milestone 2 - credentials:
+    - Secret Service storage (keyring crate, vendored libdbus) keyed per
+      server+share; passwords never in SQLite, sources, or traces
+    - Credential ladder: guest first, then stored credentials; auth failures
+      (errno-based) advance the ladder, offline failures stop it
+    - PIC-owned credentials dialog shown only during explicit Retry
+      Connection; typed credentials stored only after the server accepts
+    
+    Milestone 3 - integration:
+    - source::read / materialize / query_exists dispatch smb:// URIs to the
+      direct libsmbclient transport: scanning, thumbnails, RAW
+      materialization, lightbox and export all read without gvfs mounts
+    - Scanner enumerates SMB trees via the transport with synthetic
+      FileInfo (size+mtime from stat); stored URIs, folder IDs, photo
+      records, albums and thumbnail-cache keys unchanged
+    - Startup: SMB roots get silent direct probes (staggered, one bounded
+      re-probe); NFS is manual-only; no gvfs mounts are created and none
+      are touched
+    - Per-host flight slots with a two-lane priority lock: user reads and
+      navigation always go before queued background probes; attempts are
+      cancellable and bounded by the Samba context timeout
+    - Availability refreshes are coalesced (one trailing-edge pass per
+      probe burst instead of one per probe)
+
+commit d2e3bd5449f8fc51b789f95c671780656e0a9608
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 15:56:17 2026 +0200
+
+    feat(network): silent startup reconnect
+    
+    REDESIGN SHARES MOUNT note: this is groundwork for the planned share
+    access redesign. Silent GMountOperation startup remounts with bounded
+    per-share backoff, auth-required detection and no startup dialogs. The
+    planned direct-SMB (libsmbclient) transport will supersede the automatic
+    gvfs remount path; this stays as the gvfs-based fallback.
+
+commit dc826704abb3a17b6f5b2d01a80312e16f4f87e9
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 15:39:28 2026 +0200
+
+    feat(network): remount registered shares automatically at startup
+    
+    gvfs mounts are session-scoped, so after a reboot no share is mounted.
+    Remount each registered share root in the background shortly after
+    startup (staggered), then refresh availability so the sidebar returns
+    online without a manual Retry Connection per share.
+
+commit 3e77f81d82c554e76dcec1cd6442d499b4d5f713
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 15:20:01 2026 +0200
+
+    fix(network): always render browser listings and list real NFS exports
+    
+    - Folder browser poll no longer breaks on an empty channel: a cold gvfs
+      enumeration (>50ms) used to kill the poll on its first tick, leaving the
+      share list empty until the dialog was closed and re-opened
+    - Show real NFS exports in the Add dialog: gvfs cannot enumerate NFS
+      exports, so query the server's mountd (showmount -e) on a worker thread
+      when NFS is selected and feed the results into the discovered list
+    - Keep the discovery poll alive after gvfs discovery finishes so late NFS
+      export rows render; clear the zero-state note when they arrive
+    - Discovery cache + startup prefetch so the first dialog open lists
+      locations instantly; explicit mount error hint when the gvfs NFS backend
+      (gvfs-nfs) is not installed
+
+commit 35cf1731437fcb9a81e3d4d8ab7197281a15d3a4
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 13:58:13 2026 +0200
+
+    fix(network): add browser back navigation and reliable cancel for NFS subfolders
+    
+    - Back button (go-previous-symbolic) in the folder browser with a visited-URI
+      history stack; disabled when empty
+    - Distinguish user Cancel from dialog teardown (DeleteEvent) in both dialogs;
+      browse_closed flag + generation bump invalidate in-flight mounts/polls
+    - Add Network Share dialog: smaller default size, two-line discovered rows
+      showing the resolved gvfs URI
+    - NFS: plain subdirectories of an export enumerate directly instead of being
+      mounted (only mountable export roots mount); SMB path unchanged
+
+commit 677d93b2ddd2c3e3880152d47562426258f389a0
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 13:18:02 2026 +0200
+
+    fix(network): populate discovery on first dialog open and support NFS mounts
+    
+    The Add Network Share dialog ran discovery once with a 3s hard timeout;
+    cold gvfs/network backends commonly errored or returned nothing, so the
+    list appeared empty on the first open until Cancel+reopen. Discovery now
+    retries an errored pass until a deadline, dedupes by URI, and the dialog
+    shows a spinner, populates the list on first results, and stops the poll
+    when closed.
+    
+    NFS discovery advertises service endpoints (nfs://host:2049/export) but
+    GIO mounts the canonical nfs://host/export form. Normalize those URIs in
+    the discovery worker, row click, browse root, and mount path; mount
+    errors now carry the underlying GIO/GVfs detail. PICASA_TRACE=1
+    diagnostics cover discovery attempts/passes and dialog lifecycle.
+    
+    Dialog and folder browser are resizable with an independently scrolling
+    location list; NFS exports show the full path instead of one segment.
+
+commit 63f829a9a4a285d40b612e19477520bae133d7d1
+Merge: 4db3ffb 30b003c
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 12:30:56 2026 +0200
+
+    Merge branch 'netshare-integrate' into rc3
+    
+    # Conflicts:
+    #       .gitignore
+    #       src/css/theme_discovery.rs
+    #       src/db/photos.rs
+    #       src/db/tests.rs
+    #       src/grid/grouping.rs
+    #       src/grid/selection.rs
+    #       src/grid/view.rs
+    #       src/grid/virtualization.rs
+    #       src/lightbox/impl.rs
+    #       src/lightbox/render.rs
+    #       src/settings.rs
+    #       src/sidebar.rs
+    #       src/source.rs
+    #       src/window/albums.rs
+    #       src/window/build.rs
+    #       src/window/dialogs.rs
+    #       src/window/layout.rs
+    #       src/window/library.rs
+    #       src/window/photo_actions.rs
+    #       src/window/theme.rs
+
+commit 30b003c9c8ae04ec2ccd2b49b55eea851738dbca
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 12:26:17 2026 +0200
+
+    chore: bring over resources/ icon bundle missing from netshares lineage
+    
+    main.rs includes resources/icons.gresource at compile time (include_bytes!),
+    but origin/netshares dropped the whole resources/ tree, so netshare-integrate
+    could not compile. Restore it verbatim from the local lineage (3d30af6) and
+    whitelist it in .gitignore so it stays tracked.
+
+commit 9680bccd09976d1049d901bff38e6d9674fcd011
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 12:10:24 2026 +0200
+
+    style(sidebar): rustfmt reformat of pane-animation and scroll helpers
+
+commit 45237f28bcb008c3c9cb9335b9a8b2572bd614aa
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 12:05:12 2026 +0200
+
+    Sidebar Netshars auto collapse/vertical adjustment done
+
+commit c10a62e2c30e1026ab819f52be703df79b7bb1c8
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 11:46:55 2026 +0200
+
+    chore: drop stray src/albums_view.orig.rs editor backup
+
+commit 931c8e93b1a2bacb71e98e1ac9dc56410e4e5c4b
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 11:46:42 2026 +0200
+
+    feat(sidebar,context): right-click 'Open in Network Share' + GVfs-aware routing
+    
+    Network-share photos are reclassified as network-backed even when indexed via
+    GVfs FUSE paths under /run/user/UID/gvfs. Right-clicking a share photo now:
+    
+    - Opens 'Open in Network Share' (instead of the local Folder action) and
+      resolves the owning registered share root directly to the photo,
+      independent of the currently selected sidebar row.
+    - Navigates straight to the scoped 39-photo share grid, never the 73k-photo
+      local Folder stream, and defers the auto-reveal timer until the scoped
+      grid is ready (SHARE_READY_GENERATION).
+    - Selects + scrolls the Network Shares row via scroll_to_network_share
+      without entering the local Folders tree.
+    
+    Also keeps the Folders tree strictly local: GVfs paths (and synthetic
+    /run/user ancestors) are excluded from append_folder/refresh/populate paths,
+    and insert_folder/mark_import_root no longer reparent or unregister nested
+    network shares. Adds two network_share_tests covering overlapping-share
+    registration preservation.
+
+commit 6e96d0dc0a1d544d2f0211c500bae73cb4338f8d
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 11:08:30 2026 +0200
+
+    fix(sidebar): kill the 8ms network-share delay — async path-matched counts
+    
+    The last remaining main-thread stall on switching shares was the synchronous
+    photo-count calculation during refresh_network_shares. Replace it with an
+    async worker that resolves each share's real photo count using the exact
+    ancestor/path rules the share gallery uses, fenced by a generation counter so
+    a stale worker result can never overwrite a newer refresh. Rows now render
+    immediately with the previous cached count (or stored folder count) and update
+    in place when the worker lands; counts never disappear during a pending refresh.
+    
+    Also keep the Folder stream reusable when switching to a local destination
+    (is_network_location check) and drop obsolete scroll-baseline/run log files.
+
+commit f38783bfcb5492a5d6e5ee04c25760c4355a7766
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 19 10:44:00 2026 +0200
+
+    feat(netshares): instant network-share clicks — cache-only GTK availability + op traces
+    
+    Network share clicks had a multi-second delay from synchronous gvfs probes
+    running on the GTK main thread. This sweeps the availability layer off the
+    UI thread and makes every click traceable op-by-op:
+    
+    - Availability is now cache-only on the GTK thread (cached_source_available /
+      cached_file_available); gvfs probing lives exclusively in the availability
+      worker, and no cache mutex is held across network I/O.
+    - db::folders (probing) is worker-only; all GTK call sites use folders_cached.
+    - Remote files default to cached-available; local/file:// resolved locally via
+      local_exists without touching gvfs.
+    - Background thumbnail + availability work no longer blocks interactive photo
+      opens; opening a photo no longer clears and sync-repopulates remote state.
+    - Gallery rebuild is skipped when re-activating the already-visible folder.
+    - Tracing: per-click operation ids captured at the earliest GTK input callback
+      (capture-phase share-row press), propagated through selection, query, payload
+      and gallery replace, then released; ui heartbeat logs stalls >250 ms;
+      net_trace lines carry t=/dt=/tid/op.
+    
+    Includes all accumulated prior uncommitted work in the working tree at branch
+    cut; excludes stray src/albums_view.orig.rs backup.
+
+commit 4db3ffb7d8d2bf485ea1752fa64b124c344e19ec
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 22:10:02 2026 +0200
+
+    Network Shares v2: in-app GIO browser, discovery targets, guards
+    
+    - discovery emits concrete gvfs target URIs (smb://DietPi.local:445/)
+    - in-app GIO folder browser replaces GtkFileDialog (which cannot display
+      remote initial folders and silently fell back to $HOME)
+    - browser lists directories AND mountable shares; descending mounts
+      through gvfs first (auth dialog if needed); Up navigation; real GIO
+      errors surfaced in-dialog and as browse_failed traces
+    - guard: selecting a server root (all-mountable listing) shows a hint
+      instead of registering an empty root
+    - temporary commit on rc3; canonical home of this work is netshares
+
+commit 59698eb69d0f577b3fa039b82e7e9f4d494922e8
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 19:39:45 2026 +0200
+
+    Scroll-to-focus + hover-to-focus selection for Space/1:1
+    
+    Wheel-scrolling with the pointer resting on the grid now moves the
+    selection to the photo under the pointer once the eased scroll settles,
+    and resting the pointer on any thumbnail (200ms) selects it too - so
+    Space and the 1:1 toggle always open exactly what is under the pointer,
+    at any delay.
+    
+    - pointer tracked in WINDOW space via EventControllerMotion on both grid
+      views; converted to view space only at resolution time (widget-space
+      coordinates go stale by the scroll distance and resolved to the first
+      rows of the library)
+    - wheel input stamped from the smooth scrollers' capture-phase handlers
+      (grid/folder views never see wheel events through them); Ctrl+wheel
+      zoom never stamps
+    - debounced select_photo_under_pointer re-armed while the spring tail
+      moves content; hover-select (200ms rest) armed from pointer motion,
+      suppressed while buttons are held and in multi-selection/collage modes
+    - hovered_photo_after_scroll fallback (2.5s) for very fast activations
+    - gated debug traces behind PIC_DEBUG_SPACE=1
+    - includes the two reproduction guides (scroll + network shares)
+
+commit 79c7e520aee89d01701333c24dbae1d0031fc5f1
+Merge: 2ec21e1 f368359
+Author: Petie Rademeyer <70881506+froggy744@users.noreply.github.com>
+Date:   Fri Sep 18 14:22:32 2026 +0200
+
+    Merge pull request #67 from froggy744/main
+    
+    updates artwork
+
+commit f368359c64a875d252a1e15f9b2c88fcb2b84fb7
+Author: Froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 11:57:47 2026 +0200
+
+    updates artwork
+
+commit 2ec21e19f15c8ef5793b047be187955c1450c3c2
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 11:16:43 2026 +0200
+
+    Ignore dist/ and build-logs/ packaging output
+
+commit 81985d0216fd755215bc826aebd1aee5361fc8cc
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 09:54:26 2026 +0200
+
+    Move css/themes to top-level themes folder
+    
+    The css/ folder contained only themes/, so it is replaced outright by
+    themes/ at the repository root.
+    
+    - src/window/theme.rs: THEMES_DIRECTORY is now "themes" (the only
+      runtime behaviour change; resolve_runtime_dir is unchanged)
+    - build.rs: stage themes/ + images/ next to the binary instead of css/
+    - build-linux.sh: bundle themes/ directly; flatpak manifest copies
+      themes/ to /app/share
+    - docs (THEMES.md, theme-template, SUMMARY.md) and code comments updated
+      to the new path; settings empty-state string reworded
+    
+    Windows build script needs no change (its share/themes references are
+    GTK's own theme engines, not app themes). Old installs with css/themes
+    next to the binary fall back to the stock GTK look until upgraded.
+
+commit 1cde770d3827042703cb80cddb1325901c68556b
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 06:57:41 2026 +0200
+
+    Fix cargo build --release shipping without themes: stage css/images next to the binary and fall back to the executable directory
+
+commit f4dcfd3ea7dabe05bfa4b30639c45342a717d921
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 06:18:58 2026 +0200
+
+    SUMMARY.md: refresh offline handoff summary (theme system, UI updates, tracing removed)
+
+commit 6dad2ddbb848c2bc68b70ba7a826a0461168b9f3
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 06:14:31 2026 +0200
+
+    Readme Cleanup
+
+commit f7503f7acf735cb95b6376155caf0e61a80431f5
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 06:11:48 2026 +0200
+
+    Screenshots: update samples for release candidate docs
+
+commit 5b067d9c9fb9d4e2db8a3f36572c12041a80f278
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 06:09:00 2026 +0200
+
+    Readme for all setions/Release Candidate preparation
+
+commit 12ba48dee2af0074df3d66c1806791067470fedb
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 18 05:59:09 2026 +0200
+
+    Themes Samples
+
+commit b6f15b9ff686efdbbb3f7ac3a46dccc3cde6b74a
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 22:01:18 2026 +0200
+
+    Add Velvet Dusk theme
+    
+    A muted plum-and-lavender dark theme - the first violet in the set.
+    Deep aubergine surfaces keep photographs in charge; soft violet carries
+    selection, focus rings and segmented checked states; rose marks the
+    scroll-follow browsing marker and favourites (distinct from the violet
+    selection); muted gold is reserved for offline warnings. Matte overall
+    with glow only in focus rings. Ships the full template selector set:
+    search entry neutralized, scroll-follow marker, segmented toggles,
+    metadata version 1, native window controls.
+
+commit f7a2f98d7540b3d31ccb44d9a071123d8fc9f61e
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 21:57:06 2026 +0200
+
+    Docs: sync THEMES.md and template README with the theme fixes
+    
+    - THEMES.md shipped-theme list now matches the curated set (standard,
+      iphone, teal, blue, glass, tron, claude/Orange, archive ledger, green,
+      retro, aqua-garageband-v2, aqua-garageband-lights)
+    - Authoring tips gained the debugging lessons: neutralize the search
+      entry's own background (light-on-light / dark-on-dark trap), GTK CSS
+      has no width/height/transform/brightness, metadata must be the first
+      comment block
+    - Template README: window-controls added to the metadata example and
+      reference table, plus the metadata-first-comment, valid-GTK-CSS and
+      search-entry-background rules of the road
+
+commit 2d792738c2ac007b97486817a854592b4f2062a9
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 21:46:42 2026 +0200
+
+    Themes: fix search entry contrast, unsupported CSS, metadata, coverage
+    
+    - Search bar: the inner GtkSearchEntry kept its system view background
+      on top of the themed wrapper, so themes showed light-on-light or
+      dark-on-dark text depending on the system appearance. Every theme's
+      .search-field entry is now transparent so the themed wrapper gradient
+      always shows and the theme's text color always contrasts with it.
+    - Remove unsupported CSS: brightness() filters (GTK only supports
+      blur()) in the GarageBand Lights traffic-light hover/active - the
+      active state now darkens via explicit gradients - and transform-based
+      album card hover in Studio/Orange (now a soft drop-shadow lift).
+    - Fix wrong selectors in Archive Ledger and Retro: the segmented
+      checked/hover rules targeted .crop-orientation-row and .collage-tabs
+      containers (which never have a :checked state) instead of the buttons
+      inside them; orientation and collage tab buttons now follow the
+      accent.
+    - Move Retro's picasa-theme header to the first comment block (only the
+      first block is parsed) and add the missing metadata header to Archive
+      Ledger.
+    - Add version: 1 to every metadata header missing it.
+    - Theme set updated per curation: Green and Retro added; Aqua2, Aqua
+      GarageBand v1, Contact Sheet, Liquid Glass, Studio and Superman
+      removed. GarageBand v2 search entry text stays white on graphite.
+
+commit 9f63183be8b27f2bb97a4a1e84f5de3bd37ca4c7
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 21:17:58 2026 +0200
+
+    Aqua GarageBand themes: capsule-shaped joined segmented rows
+    
+    The crop orientation row and collage tab rows rendered with square outer
+    corners while the checked gel pill was rounded on all four corners, so
+    the capsule ends looked straight and the checked button poked round
+    inside the row. Joined buttons now get pill-outer/straight-inner
+    corners (first-child 16/0, last-child 0/16, middle 0) for both the
+    resting chrome and the checked gel gradient, in v2 and the Lights copy.
+
+commit 5c8b95c44bbd3b6285bd2424886c6e9603a81a5d
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 21:05:12 2026 +0200
+
+    Aqua GarageBand themes: cap unbounded border radii to fix pixman warnings
+    
+    pixman_region32_init_rect: Invalid rectangle passed fired repeatedly
+    under the GarageBand themes. The trigger is border-radius: 9999px on
+    scrollbar, scrollbar trough, and scrollbar slider: scrollbars animate
+    through zero-width allocations and the radius clamping math on the
+    cairo fallback path builds an invalid pixman rectangle. Cap all
+    unbounded radii to real pixel values (search 16px, gel buttons 10px,
+    pills 12px, scrub date 14px, badges 10px, scrollbar 6px/6px/4px,
+    traffic lights 6px) - visually identical pills and circles, but the
+    radius math stays finite. Mirrored in the Lights copy.
+
+commit f127b89fda4dbd0852eec0bd90fe70bf40957c61
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 20:58:42 2026 +0200
+
+    Fix traffic-light CSS parse errors and header-bar reparent assertion
+    
+    - GTK CSS has no width/height properties; the traffic-light block's
+      width/height lines produced 'Theme parser error' spam on load. The
+      min-width/min-height pair sizes the buttons; drop the invalid lines
+      from the theme and the template.
+    - Placement closure: gtk_widget_get_parent() of a headerbar-packed child
+      is the header bar's internal start box, not the header bar itself, so
+      the HeaderBar downcast failed, removal was skipped, and the following
+      pack_start tripped 'gtk_widget_get_parent (child) == NULL'. Track the
+      hosting header in a cell and unparent() the box before repacking;
+      pack only in traffic mode and detach when returning to native.
+
+commit 48695e982fbb8f84b5dcdbfdba38d8efe2918a1d
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 20:49:49 2026 +0200
+
+    Aqua GarageBand v2: rounded-square info bar buttons and grey search field
+    
+    The info/action bar buttons (.photo-action-button) were full pills; they
+    are now rounded squares while the settings clear-action button keeps its
+    pill shape. The search field traded its white recessed look for a
+    graphite grey gradient with white text, caret, and icon, keeping the
+    inset shadow and the blue GarageBand focus ring.
+
+commit 18a96490c8a54bcd9af13f6e921ee496c4d1282c
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 20:37:42 2026 +0200
+
+    Theme-overridable traffic-light window controls + Aqua GarageBand Lights
+    
+    Themes can now opt into app-drawn window controls with a new metadata
+    key: window-controls: traffic-light (default: native). The ThemeEngine
+    reports the active style on every activation; layout.rs owns a
+    placement closure that shows the gel-style Close/Minimize/Maximize
+    buttons and hides the native start title buttons, moving the lights
+    between the sidebar and main headers exactly like the native buttons
+    follow the sidebar visibility state. Non-opting themes keep stock
+    GTK/libadwaita controls.
+    
+    - theme_discovery: WindowControls enum, window-controls parsing with
+      warn-and-fallback on unknown values, unit tests
+    - theme.rs: window_controls_hook fired from activate(); exposed
+      active_window_controls
+    - layout.rs: traffic-light box (flat buttons, close/minimize/zoom wired
+      to the window), mode cell + placement closure replacing the old
+      direct set_show_start_title_buttons writes in the sidebar notify
+    - aqua-garageband-lights: new theme copied from aqua-garageband-v2 with
+      the traffic-light opt-in and iLife '09 gel button styling
+    - template: window-controls documented in metadata + commented
+      traffic-light CSS example; docs/THEMES.md metadata table updated
+
+commit 24c325a5416353978911fb7e5d4c1eb1a76592a1
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 20:23:19 2026 +0200
+
+    Add TRON Legacy theme and community themes: Studio, Contact Sheet, Liquid Glass, Aqua
+    
+    - tron: TRON Legacy dark theme - ice-cyan light lines on the void, white-hot
+      identity-disc gradients on checked toggles, CLU-orange browsing marker and
+      favourites, glowing headers, titles and selection halos
+    - studio: vermillion accent on warm paper surfaces (picasa-theme metadata
+      added so it displays as Studio)
+    - contactsheet: Contact Sheet - warm paper, darkroom-red accent
+    - liquidglass: Liquid Glass - frosted translucent panels, blue-violet accent
+    - PIC-Aqua-Theme: Aqua2; aqua-garageband and aqua-garageband-v2: Aqua
+      GarageBand (v2 folder renamed from 'aqua-garageband (Copy)' and labelled
+      'Aqua GarageBand v2' so the two are distinguishable in the picker)
+    - 'archive ledger' committed as authored (legacy comment header; displays
+      via folder-name fallback as Archive Ledger)
+    - contactsheet/liquidglass folder contents were swapped relative to their
+      names; folders renamed so each id matches its theme
+    - docs: shipped theme list updated with tron
+
+commit d4ebd233aaee2246a913c56bea25e19503f2a085
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 19:27:53 2026 +0200
+
+    Studio theme and accent coverage for scroll marker and segmented toggles
+    
+    Add the Studio community theme (css/themes/claude, vermillion accent on
+    warm paper surfaces) with proper picasa-theme metadata so it displays as
+    Studio instead of the folder-name fallback.
+    
+    Retrofit every overlay theme (standard, teal, blue, glass, superman) with
+    the two selectors third-party themes were missing: the scroll-follow
+    folder marker (.navigation-sidebar row.sidebar-scroll-location), which is
+    deliberately not row:selected and otherwise shows the base theme's blue,
+    and the segmented toggle checked states (.crop-aspect-button:checked,
+    .crop-orientation-row button:checked, .collage-layout-tile:checked,
+    .collage-tabs > button:checked). Selection-state additions only; no
+    existing rules modified.
+
+commit 1c6c66d62a09c8a238593181e5d124e634c44bd9
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 19:27:18 2026 +0200
+
+    Add community theme template for development
+    
+    docs/theme-template/ holds a complete, commented starter theme: a
+    picasa-theme metadata header carrying version: 1 (the metadata contract
+    going forward), a palette-only edit block, and every selector the app
+    exercises - surfaces, photo tiles and selection, folder content view,
+    albums home, sidebar selected rows plus the scroll-follow folder marker,
+    segmented toggle :checked states, info bar, and context menu.
+    
+    The template lives outside css/themes so it is never discovered as an
+    installed theme. Its README documents the three-step install, the
+    folder-name-is-stable-id rule, and a testing checklist. docs/THEMES.md
+    documents the version field and points authors at the template, and a
+    discovery guard test copies the template into a temp themes root and
+    verifies it parses with the expected metadata and key selectors.
+
+commit 90e2abdf52f8f5e88b91cc1e531008bddcb6576b
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 18:33:47 2026 +0200
+
+    Theme system hardening and CSS provider leak fixes
+    
+    - theme discovery warnings and safer fallback diagnostics: warn on
+      ambiguous theme folders (multiple stylesheets, no theme.css) and on
+      unrecognized dark:/mode: metadata values; startup logs when no themes
+      are found and when the saved theme id is missing and a fallback is used
+    - theme discovery/rescan/fallback tests: unreadable and non-UTF8
+      stylesheets are skipped, invalid values rejected, rescans pick up
+      folders added after startup, resolve_active covers the
+      deleted-selected-theme and restart fallback order
+    - display tests (require a display) for 50x rapid theme switching with
+      persistence checks, recovery after the active theme's folder is
+      deleted, and an inert engine on an empty themes folder
+    - prevent repeated photo context-menu CSS provider installation: the
+      stylesheet now installs once per process instead of on every
+      right-click
+    - prevent repeated collage CSS provider installation: installed once per
+      process instead of per collage session
+
+commit fc77155ce5d5044a08d7a680e9c19f3c1a874a36
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 18:13:29 2026 +0200
+
+    Runtime-discovered themes replace the hardcoded theme list
+    
+    Themes now live in css/themes/<id>/theme.css next to the executable and
+    are scanned at runtime; nothing about the available themes is compiled
+    in. The display name and dark/base flags come from a picasa-theme
+    metadata comment in the stylesheet (folder name is the stable id stored
+    in settings, so existing selections keep working).
+    
+    - ThemeEngine (new window::theme module) owns the base + overlay
+      CssProviders, the color scheme, lightbox backdrop, and persistence;
+      the ~450-line hardcoded popover wiring in the theme.rs include is gone
+    - Settings -> Themes gains an Appearance section rebuilt from a fresh
+      scan on every open; the header-bar button opens it and shows the
+      sun/moon indicator
+    - Shipped themes migrated to folders (standard, iphone, teal, blue,
+      glass, superman); iphone is the always-loaded base theme via
+      mode: base; unused aqua and 'glass copy' stylesheets deleted
+    - build-linux.sh and the flatpak manifest bundle css/themes alongside
+      images/; docs/THEMES.md documents authoring themes
+    - 8 new discovery unit tests; full suite 233 passed
+
+commit 5a4e3fd8256a5810399e49c24792722fb9fe83ac
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 17:32:35 2026 +0200
+
+    Delete every selected photo from the context menu
+    
+    Right-click Delete only trashed the single clicked photo because it
+    ignored the selection ids the other menu actions already use. Pass the
+    selection into show_delete_confirmation, resolve each path from the
+    database, trash each file (reverting the trashed flag on failure), and
+    word the confirmation for one vs multiple photos.
+
+commit a0f79372c6616c98ae5a9a5c3f58e9ac63bb65ea
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 17:26:10 2026 +0200
+
+    Move thumbnail appearance toggles to the Themes tab above Albums
+    
+    Square thumbnail corners and Show entire photo in thumbnails now live in
+    a new Thumbnails section at the top of the Themes page, above the Albums
+    theme options. The Library page keeps Recently Added limit, stats, and
+    maintenance; themes_page gains a thumbnail_changed callback and the
+    switch-count test was updated for the new page layout.
+
+commit 6d461dcfe03737cca8ad1b0386685564b47e44b2
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 16:42:31 2026 +0200
+
+    Thumbnail appearance toggles and reliable settings close
+    
+    - Settings > Library: 'Square thumbnail corners' toggles a window CSS class handled by a dedicated provider above theme/album priorities
+    - Settings > Library: 'Show entire photo in thumbnails' letterboxes landscape and portrait photos (Contain) instead of cropping to the 3:2 tile; applies live via idle-deferred tile walk so the switch never stalls the UI
+    - Settings window now hides on close instead of depending on destroy ordering, fixing the stuck close button when toggles are enabled
+    - Both toggles persist and re-apply at startup
+    - Glass theme update; temporary UI debug log to /tmp/pic-ui-debug.log
+
+commit c1372265bcc7516b941c15ddcf5b41118cffde9d
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 15:56:28 2026 +0200
+
+    Archive Ledger theme replaces Superman; rustfmt pass and LF line endings
+
+commit 55f0ac5c28e718f66751d831f014ecbe37826651
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 15:56:28 2026 +0200
+
+    Natural zoom steps and resolution-aware default view level
+    
+    - Multiplicative zoom ladder (x1.17): 100/117/137/160/187/219/256/300; +/-, Ctrl+wheel and Reset snap to levels instead of drifting from fixed 24px steps
+    - Default view: ~4 thumbnails per row on 1080p-class surfaces, applied on first layout as a session default; stored legacy default 136 counts as unchosen
+    - Wider monitors: tiles cap at 300px, columns grow with width; column ceiling raised 8->12 so 4K/ultrawide fills the surface
+    - Reset button returns to the same 4-per-row level for the current window
+
+commit d3444170ca93b387e3110abc62447ca00be60055
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 15:26:19 2026 +0200
+
+    Ready for realease candidate - Mostly themes to be finalized
+
+commit b3a64b73c024495af4ba0d69e25756cce8cb4771
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 15:22:56 2026 +0200
+
+    Info Bar file name heading with dd Mmm yyyy taken date and fixed date width
+    
+    - File name heading above value next to thumbnail; duplicated camera subtitle removed
+    - Taken date shows dd Mmm yyyy only; format_date now parses EXIF dashed timestamps that previously fell through as raw text
+    - Group headers use matching dd Mmm yyyy / Mmm yyyy style
+    - Taken metric fixed 110px column; date visible from 640px, filename shrinks first, camera/dimensions/size return at 1030px
+
+commit 4c6496b4941fee16d7bc9d6895a5d585f3f4848a
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 14:46:20 2026 +0200
+
+    Side Bar Auto Close Button Show or Hide - Still have an option inside reveal to also pin..
+
+commit e17fda98acfea6491599d17a604b674340c12d0e
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 14:23:17 2026 +0200
+
+    Remove Top Bar Gear Icon/Added Appearance/Themes and move clear database functions to settings library
+
+commit 5f275f8d87b91bb7c775d2dd1f7b457d55eae8fc
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 13:53:24 2026 +0200
+
+    Fixed Left Titlebar Buttons to show when left buttons used in settings
+
+commit 56c046b5e9597feb6ba0e719665863be692bab4f
+Author: Froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 13:01:42 2026 +0200
+
+    Removed ALL trace logs
+
+commit ba33b61ca2fb38ccdc549839226f056d447c3442
+Author: Froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 12:13:29 2026 +0200
+
+    Removing Trace Logs
+
+commit e056d81638982d6b1ce303cf632e96c9182887b3
+Author: Froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 12:02:14 2026 +0200
+
+    Library single click to open in folder removed due to previous sidebar fixes
+
+commit 4954862af4eae493ac1df8a0013520c66c806599
+Author: Froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 11:41:13 2026 +0200
+
+    Grid Sidebar Smooth Scrolling Fix - Again
+
+commit 3801eea660ea1640e7c1c788df39928cd9439d80
+Author: Froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 10:11:28 2026 +0200
+
+    Massive sidebar rewrite/fixes - Collapse all/Resizable albums height. Reorder action buttons. Fix count/sum totals. Smooth scrolling
+
+commit 1f26b66d3150569a572a6ace2b0f6dffba3ab578
+Author: Froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 08:54:30 2026 +0200
+
+    Fixed top left windows controls
+
+commit 2c9df942a472537245e557a6d5bcca3869f6093a
+Author: Froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 08:40:00 2026 +0200
+
+    Fixed Collage Resume - All Collage buttons notify on new/resume
+
+commit 69d45e8b6ee5fbd609af3dadfa7c6f4cb2c0df96
+Author: Froggy744 <petie74@gmail.com>
+Date:   Thu Sep 17 08:34:41 2026 +0200
+
+    Added Themes - Fix Themes Support
+
+commit 69eba15b3474999f6e6a112cdf423d5fd00a0ba1
+Author: froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 18:45:40 2026 +0200
+
+    RC2 modular refactor and lightbox stabilization
+
+commit 6baa7df0a6deb01374796cd93ecaaf9b351c5897
+Merge: 79d0ef8 dc67e53
+Author: Petie Rademeyer <70881506+froggy744@users.noreply.github.com>
+Date:   Wed Sep 16 16:22:37 2026 +0200
+
+    Merge pull request #58 from froggy744/collage-ui3
+    
+    New Collage UI and features for Phase 3 of Collage enhancements
+
+commit dc67e53885476a03bbf94ee7b3d7dedd9c9b5f2c
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 13:58:53 2026 +0200
+
+    Collage: Edit Photo tile action with return-to-collage
+    
+    - Right-click a collage tile gains 'Edit Photo' (document-edit icon)
+      which opens the photo editor for that library photo
+    - A collage_editing flag spares the collage editor from the stack
+      teardown while its photo is being edited, and edit Back/Done return
+      to the collage instead of the photos page
+    - The edit toolbar Back button is relabelled 'Back to Collage' when the
+      session came from a collage; Done saves and follows the same path
+    - On return the collage tile refreshes photo metadata (recipe,
+      rotation, thumbnails) so the preview reflects the edits
+    - Sidebar detours clear the flag; the bottom-bar Edit toggle returns to
+      the collage too when the session is collage-owned
+
+commit 1b48fd621b27dc0a8a6782b83f4608232a8e91fc
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 13:44:29 2026 +0200
+
+    Revert "Collage phase 2: undo/redo, templates, canvas zoom/pan"
+    
+    This reverts commit 82963882dd6f3be9b286a61fe1829f2f00ba02ff.
+
+commit 82963882dd6f3be9b286a61fe1829f2f00ba02ff
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 13:31:39 2026 +0200
+
+    Collage phase 2: undo/redo, templates, canvas zoom/pan
+    
+    Undo/redo:
+    - Full-project snapshots (50 deep); Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y plus
+      Undo/Redo buttons in the panel heading
+    - Every mutation is snapshotted (layout, fit, orientation, aspect,
+      background, corners, radius, spacing, shuffle, reset, templates,
+      drag-swap, tile rotate/remove); continuous slider bursts coalesce
+      into one step; undo/redo re-syncs all controls via a shared
+      sync_widgets funnel (Reset now uses the same path)
+    
+    Templates:
+    - TEMPLATES section: Picture Pile, Grid 2x2, Filmstrip, Center Focus -
+      each sets layout + aspect + spacing + corners in one click
+    - New Filmstrip layout kind: single-row equal-width strip (photos crop
+      to fill); reachable via the template, tiles stay as-is
+    
+    Zoom/pan:
+    - Canvas lives in a ScrolledWindow; Ctrl+wheel zooms 1x-4x, plain
+      scroll pans when zoomed, returning to 1x re-fits and resets the
+      view; the tick callback maintains the zoomed size request on
+      viewport/aspect changes
+
+commit c7ff7a9ea6918c491cef718e5d814b6073d3faca
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 13:01:53 2026 +0200
+
+    Collage: clear grid selection on exit so the resume prompt appears
+    
+    set_collage_selection_mode(false) only drops the internal flag; the
+    grid selection survived, so the next toolbar click read as an explicit
+    selection and bypassed the 'Resume Collage?' branch entirely. Clear
+    the selection on both exit paths (Exit button and the catch-all page
+    transition) so a plain reopen is a blank start with the prompt.
+
+commit 0e78ce8960fa95a624db1a10882cd681bed86df2
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 12:40:21 2026 +0200
+
+    Collage phase 1: draft persistence, per-photo actions, export options
+    
+    Draft persistence:
+    - CollageDraft (serde JSON in the settings table) snapshots every
+      project decision plus per-photo geometry, keyed by library photo id
+    - Leaving the editor by any path saves the draft; reopening a blank
+      collage offers 'Resume / Start New'; photos are re-fetched from the
+      library so edits and rotations stay current, and vanished photos are
+      dropped from the saved arrangement
+    
+    Per-photo actions:
+    - Right-click a tile for Rotate Clockwise / Counter-Clockwise and
+      Remove Photo (drag-to-swap still works alongside)
+    
+    Export options:
+    - New options dialog before the file chooser: JPEG or PNG, JPEG
+      quality slider (60-100, dimmed for PNG), long-edge size presets
+      (4K/2048/1920/1280); render honors all three
+    
+    Plus draft round-trip unit tests and the serde/serde_json deps.
+
+commit 5877817d90ed106425d49442a4c0645d3a9ee2bd
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 12:11:16 2026 +0200
+
+    Collage panel: drop bold button labels, normal-weight tabs
+    
+    The collage reused the edit tabs' edit-panel-tabs class whose 600
+    font-weight suits three tabs but reads heavy across ten buttons. Give
+    the collage rows their own collage-tabs class with identical geometry
+    (34px min-height, 4x10 padding) and normal label weight, and fix the
+    photo count to pluralize correctly (1 photo / N photos).
+
+commit 24c9c54c85c530b31a0305c00a90aba1e9ea877f
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 12:04:52 2026 +0200
+
+    Collage panel: adopt edit-mode styling verbatim
+    
+    - Button rows reuse the edit panel's edit-panel-tabs class (34px
+      min-height, 4x10 padding, 600 weight) so every collage button matches
+      the Tools/Filters/Crop tabs; active tiles use the default checked
+      style instead of the custom accent fill
+    - Section headings use edit's edit-section-label construction (small
+      bold dim uppercase): LAYOUT, ROUND CORNERS, SPACING
+    - Corners checkbox loses its label (the heading names the row) and
+      stays inline with the slider
+    - Aspect ratio / Background dropdowns sit in a homogeneous grid so both
+      columns are exactly equal width
+
+commit a99f9d5883ac25683bed8a21bcaa08d8d70a55e5
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 11:51:59 2026 +0200
+
+    Collage panel: orientation icons, 2/3-1/3 primary row, single corners row
+    
+    - Portrait/Landscape buttons get orientation icons beside their labels
+    - Create spans two thirds and Exit one third of the panel via a
+      homogeneous 3-column grid; Exit matches the Shuffle block size
+    - Corner radius slider range extended to the standard 0-20% and the
+      rounded end icon redrawn as a concentric quarter arc; tooltips state
+      the actual 0%/20% values
+    - Round corners checkbox and its slider share one row
+
+commit fbd0094865bd9c78d42fe5aefc82fa3a773a8bc3
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 11:30:50 2026 +0200
+
+    Collage panel: uniform block styling across control rows
+    
+    - Exit button gets an Exit label (icon+label like the other actions)
+    - Layout tiles grow ~20% taller (54px min-height via collage-layout-tile)
+    - Fit/Portrait/Landscape row becomes homogeneous thirds so its column
+      edges align with the layout tiles
+    - Reset/Add/Shuffle become the same linked, equal-width full-row style
+      as the top sections
+
+commit ee3f9ff64ad0ed47ff4cddd5012a065510f6dd2c
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 11:27:41 2026 +0200
+
+    Collage panel: use the same adjustable split pane as edit mode
+    
+    Replace the fixed-width controls column with a gtk::Paned like the
+    edit tools panel: 360px default divider position, draggable handle,
+    panel never shrinks below 320px (min content width) and keeps its
+    size on window resizes (resize_start_child off).
+
+commit 48f8891055fece298898738b062c7fb4c3c8532d
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 11:14:57 2026 +0200
+
+    Collage UI: add titles to tiles, orientation buttons and dropdowns
+    
+    - Layout tiles show icon over title (Mosaic / Smart / Grid) with a
+      Layout section label above the row
+    - Portrait/Landscape become labelled radio buttons (icon+label would
+      not fit the column beside Fit, which keeps its icon)
+    - Aspect ratio and Background get small titles above their dropdowns
+    - Drop now-unused orientation icons from REFERENCED_ICONS
+
+commit 70f9650732995803ecd37baba9a50b6cfc924e6d
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 11:04:41 2026 +0200
+
+    Collage UI: icon-tile layout rows, compact grouped actions
+    
+    - Row 1: Mosaic/Smart Mosaic/Grid as three equal icon tiles (radio,
+      active highlighted) replacing the layout dropdown
+    - Row 2: Fit toggle (aspect-fit icon, greyed for Grid instead of
+      hidden) beside Portrait/Landscape icon radio pair replacing the
+      orientation dropdown and the keep-aspect checkbox
+    - Row 3: aspect ratio and background dropdowns side by side
+    - Corner radius slider gets sharp/rounded corner end icons; section
+      labels replaced by tooltips
+    - Actions: Reset/Add/Shuffle as compact icon+label buttons grouped
+      right; Create is the full-width accent button with Exit beside it
+    - Add 5 custom symbolic icons (3 layout tiles, 2 corner ends) with
+      custom-icons/ source dir wired into build-icon-bundle.sh so full
+      icon regenerations keep them; recompiled icons.gresource
+
+commit 79d0ef868a15b13706b6416791e352ef924e9bdf
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 10:19:09 2026 +0200
+
+    Fix bottom bar disappearing on small screens in collage mode
+    
+    - Make collage controls vertically scrollable on short windows
+    - Bound collage editor minimum height so the bottom bar stays visible
+    - Detach and release the collage editor when exiting collage mode
+    - Tear down stale collage/edit editors when navigating away
+    - Preserve collage editor during the Add Photos selection detour
+    - Add regression checks for editor minimum sizing
+    
+    Fixes the bottom bar being clipped at 1366x768 and remaining
+    missing after returning from Collage to Photos.
+
+commit d90a5063af28ee0a01f2cc43bb5b1dc523b58d87
+Author: Froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 08:45:42 2026 +0200
+
+    Windows Powerscript All in One Dependancies
+
+commit a323a208bfd03ad2f185a1df6273c92b4b90e4c0
+Author: froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 06:54:39 2026 +0200
+
+    Print: portrait/landscape orientation option
+    
+    New Orientation radios in the photo options dialog choose the page
+    orientation. Landscape swaps the saved paper's width and height in the
+    live preview and overrides the saved page setup orientation, so the GTK
+    print dialog opens with the same orientation and the printed pages
+    match the preview. Persisted in the settings string (orient=).
+
+commit 7ac66c145beedfdaac83b819bd2258e4959944f2
+Author: froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 06:41:13 2026 +0200
+
+    Print: multi-photo jobs, per-page index fix, custom & paper sizes
+    
+    - Fix the prints-per-page DropDown handler: the selected index (0-based)
+      was clamped as if it were a count, so '2 per page' laid out one cell
+      and '4 per page' only three. Index now maps N-1 -> N.
+    - Print every selected photo, not just the anchor: the job carries the
+      full grid selection, pages hold N photos each (ceil(n/per) pages),
+      and cells fill round-robin so partial last pages stay full. The
+      dialog heading becomes 'Print photos' and the preview shows every
+      page in a scrollable row, sharing page_placements with the printer.
+    - Print sizes: add A4, A3 and US Letter/Legal/Tabloid presets plus a
+      Custom… entry (width x height spins, mm/inch units) mirroring the
+      collage editor. Custom dimensions persist in points via the
+      settings string (w=/h= fields).
+    
+    Verified in the running app via screenshots: 4-per-page now previews 4
+    cells, 1-per-page a single full-page photo; dialog cancel persists.
+
+commit 84dfa1b374d9dc9cf170525091bdb12081bc3429
+Author: froggy744 <petie74@gmail.com>
+Date:   Wed Sep 16 05:50:43 2026 +0200
+
+    Print options dialog: live page preview
+    
+    The photo options dialog now shows the selected photo laid out on paper,
+    redrawn live as print size, fit/crop and prints-per-page change. Paper
+    comes from the previous print's saved page setup (printer, paper size and
+    orientation) or the system default.
+    
+    The preview shares one page_placements() function with draw_print_page,
+    so what you see is exactly what the printer draws. The rendered photo is
+    converted to a Cairo surface once and shared by preview and print, and
+    the raw raster is freed as soon as it is converted.
+
+commit bac66696c068fe65511f90e7068e86074892c04c
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 23:31:15 2026 +0200
+
+    editor.rs: apply rustfmt formatting
+
+commit 5079bea650418eb0d24d5d245b209df13746de87
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 23:31:15 2026 +0200
+
+    Print options: own dialog instead of print-dialog custom tab
+    
+    The Photo tab via create-custom-widget only exists in GTK's native
+    Unix print dialog. Flatpak portals (the flatpak build path) and the
+    Windows/macOS native print dialogs never show it, so the size/fit/
+    per-page options appeared nowhere.
+    
+    Show an Adwaita AlertDialog with the size, sizing and prints-per-page
+    controls before the print operation instead; Print runs it on accept,
+    Cancel still persists previewed choices. Custom-tab wiring removed.
+
+commit ef9523baddcf52f2e092c703d616259d6f2033ef
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 22:55:29 2026 +0200
+
+    Print dialog: photo sizes, fit/crop and 1-4 prints per page
+    
+    Move printing into src/window/print.rs and add a custom 'Photo' tab to
+    the GTK print dialog:
+    
+    - Print size presets at true physical dimensions (Full page, Wallet,
+      3.5x5/4x6/5x7/8x10 in, 9x13/10x15/13x18 cm) drawn in print points so
+      printer drivers output the exact requested size.
+    - Shrink to fit (letterbox) vs Crop to fill (centre-crop) per print.
+    - Prints per page: 1, 2 (side by side), 3 (in a row), 4 (2x2 grid),
+      with a 3 mm gutter between cells.
+    - Choices persist across sessions: the GTK print settings and page
+      setup round-trip through a GKeyFile blob in the settings table and
+      the photo options through a key=value string.
+    
+    The render still runs on a worker thread; results return to the main
+    loop via MainContext::invoke carrying only Send data, and persistence
+    uses a short-lived open_default() connection to keep non-Send handles
+    out of the callback. Unit tests cover extras parsing/round-trip,
+    per-page grids and size-to-point math.
+
+commit a058cc37ef3f8fdb3441fa4a01fd989ecadef69e
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 22:37:25 2026 +0200
+
+    Print button + full Adwaita icon bundle
+    
+    Bottom bar: add a print button right of Settings that renders the
+    selected photo (rotation/crop/filters applied) on a worker thread and
+    pops the standard GTK print dialog; the page draws the photo centred
+    and scaled to fit. GTK objects stay off the worker thread via a
+    SendWeakRef window reference.
+    
+    Icons: replace the 29-icon curated bundle with the complete Adwaita
+    SVG set (716 files, 452K compiled) so every icon renders on
+    Windows/macOS, which ship no system icon theme. Add
+    resources/build-icon-bundle.sh to re-import/dedupe/recompile the
+    bundle from any machine, generate sidebar-hide/view-sidebar stand-ins
+    (upstream lacks both), and document the flat-layout constraint and
+    release workflow in resources/icons/README.md.
+
+commit 82ce85b990d0e00e7312148d74ad8b3798209467
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 20:11:44 2026 +0200
+
+    Bundle Adwaita symbolic icons as GResource for Windows/macOS
+    
+    Windows and macOS bundles ship no system icon theme, so every
+    from_icon_name lookup failed and buttons rendered blank. Embed the 28
+    referenced Adwaita symbolic SVGs (LGPL/CC-BY-SA) as a flat GResource at
+    /picrs/icons, register it at startup and add it to the display's icon
+    theme; Linux keeps preferring the system Adwaita theme.
+    
+    Note: GTK 4.22's gtk_icon_theme_add_resource_path() only enumerates the
+    direct children of the registered path as unthemed fallback icons —
+    subdirectory layouts (hicolor/scalable/...) documented elsewhere are
+    silently ignored, hence the flat layout.
+    
+    PICASA_TRACE=1 now logs any referenced icon that fails to resolve on
+    the running platform (ICONS TRACE), to debug missing-icon reports.
+
+commit f6e7134480340bbdc5516bb6401178bb39431453
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 19:46:25 2026 +0200
+
+    Edit preview: throttle drags, draft frames while dragging, 0.05 wheel steps
+    
+    - queue_preview: replace the reset-on-every-change 90ms debounce with a 40ms
+      throttle. The debounce skipped every intermediate drag position, making the
+      preview jump 0 -> 0.5 -> 1.0; the throttle renders continuously and reads
+      the live session state when it fires.
+    - While a slider drag is active (EditSession::action_active), render draft
+      frames at 900x700 (4x fewer pixels) and skip the busy spinner/status churn;
+      the release handler queues one full-resolution settle frame, only when the
+      value actually changed. Log-verified: drag frames drop from tone 56-187ms
+      at 1800x1400 to 1-26ms at 900x700.
+    - Mouse wheel over a slider track now steps the value 0.05 per click
+      (SLIDER_WHEEL_STEP) instead of GTK's coarse default; smooth-scroll devices
+      get proportional micro-steps. Wheel outside the track band still scrolls
+      the tools list.
+
+commit 42178682d29353c3c085d7ddc3a820678c567957
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 19:18:17 2026 +0200
+
+    Filter tiles: decode supersampled and resample to exact tile size
+    
+    The tiles were decoded at the on-screen preview size (156x117), which is a
+    3.2:1 Hamming downscale of the TurboJPEG 1/8 DCT base, then displayed ~4%
+    larger by the wider FlowBox cell — three stacked softening steps. Decode at
+    2x (FILTER_TILE_SUPERSAMPLE) and do the ContentFit::Cover crop+downscale on
+    the CPU in one averaging step; the 1x texture keeps widget geometry (and the
+    2-column grid) identical while eliminating both resample losses.
+
+commit 6c08833b1819a0d34854d9a41195434ce1e2b294
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 18:34:52 2026 +0200
+
+    Crop tab: add Apply Crop button beside Reset Crop
+    
+    Apply commits the pending crop via the shared apply_crop closure (same
+    path as the Enter key and leaving the tab) and returns to the Tools tab.
+    Styled suggested-action; shares the crop button min-height/margin CSS
+    with Reset Crop via .crop-apply-button. Updates the editor test, which
+    previously asserted the button's absence.
+
+commit 5d2ae5e5730c948e2576d57eaa3d4037831b7631
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 18:01:57 2026 +0200
+
+    Filters page: match sidebar padding of tabs/tools/crop; tiles 170->160
+    
+    The filters stack page had margin_start/end 0, so QUICK FIXES, the auto
+    buttons and the filter grid ran edge-to-edge while the Tools/Filters/Crop
+    tab row and the other two pages carry 14px side margins. Align to 14px.
+    
+    Tile minimum shrinks 170->160 so two columns still fit the padded default
+    pane: 2*160+6 = 326 <= 360-28 = 332 (170 needed 346 and collapsed the grid
+    to one column). Reflow expectations unchanged: 2 @360, 3 @540, 4 @720,
+    5 @1200; test wait loop now accounts for the 28px page margins.
+
+commit b5979999df3099573be26891a3c61c1cd31e62a8
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 17:43:42 2026 +0200
+
+    Filters panel: finalize reflow test, strip debug instrumentation, fix warnings
+    
+    - editor_uses_three_tab_sidebar_with_crop_workspace: remove SWEEP/PROBE/DBG
+      scaffolding and the duplicated 360px re-checks; keep the responsive
+      assertions (2 columns @360, >=3 @540, >=4 @720, 5 @1200), which pass on a
+      live display. The earlier 'never re-allocates' failures were environmental:
+      over SSH the Wayland frame clock never ticks, so GTK performs no layout
+      pass after set_position(); on a real session the start child re-allocates
+      on the first pass (test now completes in ~0.4s).
+    - cargo fix: underscore-prefix 7 unused bindings (side effects preserved),
+      drop unused FilterPreset/CropRect re-exports.
+
+commit b5cdd8ad67e506765a906059fe6cfe23b212ed41
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 17:27:53 2026 +0200
+
+    WIP: fix 2-column filters panel; test reflow verification incomplete
+    
+    App-side fix (working, verified in test run):
+    - Filter tiles now decode previews at on-screen tile size instead of
+      320x240, which was inflating tile natural size and collapsing the
+      grid to one column at the default pane width
+    - Edit-panel/filter-tile CSS moved from STANDARD_GTK4_CSS into shared
+      EDIT_PANEL_CSS const so tile chrome-less layout applies in both themes
+    - Sidebar default pane position 360px; grid shows 2 columns at default
+    
+    WIP / known issue for follow-up:
+    - editor_uses_three_tab_sidebar_with_crop_workspace still fails at
+      columns_at(540) >= 3: body.set_position() updates the Paned position
+      property but GTK 4.22.4 never re-allocates the start child (sidebar
+      allocation stays stuck at initial 360px, even when shrinking)
+    - Test currently contains SWEEP/PROBE debug instrumentation that needs
+      removing once the reflow verification strategy is decided
+    - Crop aspect presets (Free/1:1/4:3/3:2/16:9/A4/Letter) added to crop tab
+
+commit d44616c0ec6942f5241fa6446a2dcdc7e4b627fe
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 10:39:57 2026 +0200
+
+    Compact filter grid: fixed 70x70 previews, 5px spacing, single-line ellipsized labels
+
+commit 62a11c4171a01d363c4c92f6c1887bebef5b6a6a
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 10:25:48 2026 +0200
+
+    Enlarge filter thumbnails 20%, rounder corners, tighter grid spacing
+
+commit 79408b7a427e1f29878914827ef628bc9ad11aa2
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 10:07:50 2026 +0200
+
+    Strip grey card chrome from filter tiles; rounded preview thumbnails with accent selection ring
+
+commit ab8a97ac16c4bd622c18c527a3ffa8f996ac4f96
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 09:57:34 2026 +0200
+
+    Clean up debug output from responsive grid test
+
+commit c7a4210f0fd3efd7db21cf17f164e566661508d0
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 08:48:56 2026 +0200
+
+    WIP: save partial work before Codex limit
+
+commit b21d279c8bee2334734215c220172ce3ba814082
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 08:02:06 2026 +0200
+
+    Filters Fixed - Adjustments made to applied filters now work
+
+commit c18aee1126c9259519ebf6af0c45d11914555a28
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 07:36:18 2026 +0200
+
+    Work from Office checkpoint
+
+commit fbd86ed20f0247f61022a5f04468f17145e09449
+Author: froggy744 <petie74@gmail.com>
+Date:   Tue Sep 15 06:48:41 2026 +0200
+
+    Add filter presets panel
+
+commit bb00537893cf8d4df8ccb5ed14c390f9fb1a6f5d
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 22:21:14 2026 +0200
+
+    Show folder rubberband during drag selection
+
+commit 834b024598194535a139a3c26035a9cf0309b9a3
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 21:53:02 2026 +0200
+
+    Fix Edit Mode 1:1 anchoring and rotation refresh
+
+commit bdf9ad43866418a2c53bfa8c189ae2e88fb0c920
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 21:32:09 2026 +0200
+
+    Edit Mode UX Tweaks. Zoom In and Ou and other
+
+commit e02a8ff2fc1b038ebdbef71c7b64694d6314fe9d
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 21:15:36 2026 +0200
+
+    Fix Space bar ctrl zoom in Edit Mode
+
+commit 738703842e2af210a9cca6e77b8f02d139b6b314
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 21:13:40 2026 +0200
+
+    Optimize Edit Mode preview performance
+
+commit 54535ea7c875e57817d2d421587967af8c150590
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 20:28:31 2026 +0200
+
+    Improve search responsiveness during library indexing
+    
+    Cancel stale progressive gallery builds when search starts and avoid per-photo GTK/DB updates while search results are active. This keeps DB-backed folder search and navigation responsive during refreshes without changing scan or folder behavior.
+
+commit 48fc960e3d722931b5c6cc179aa61c1925110ae2
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 19:05:33 2026 +0200
+
+    fix folder search and navigation-Removed empty folders-broken photos in search suggestions
+
+commit 59f2e0c07bc8d519f2ce8750d579bca573f75162
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 17:51:09 2026 +0200
+
+    Restore automatic folder watching
+
+commit bc56413ad4d00fc760fcbd5d66a40658cf9756c2
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 15:59:42 2026 +0200
+
+    Fix folder scrolling navigation and thumbnail stability
+
+commit 3619ec4ef443dc6f0fc7455c370f5395e3404be8
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 13:44:57 2026 +0200
+
+    Fix folder scrolling with uniform virtual row heights
+
+commit 24c3bc65b1a31e74e764eb2fe395a6d91483ede1
+Author: froggy744 <petie74@gmail.com>
+Date:   Mon Sep 14 08:49:07 2026 +0200
+
+    Fix recursive folder watcher refresh loop
+    
+    Remove automatic filesystem watcher-triggered scans.
+    Keep manual refresh and import behavior unchanged.
+    Add scan authorization tracing and regression coverage.
+
+commit 7f8b40071f5b974430e9205872629f4a65bc01cd
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 23:06:18 2026 +0200
+
+    Release Candidate 1
+
+commit 555536d25ba6c99573fd2e33b59dc0da35e3b0b5
+Merge: e9b1a6f 0011d80
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 22:58:48 2026 +0200
+
+    Merge fixes branch into main
+
+commit 0011d800bd80186e19f325f43be29aa4051ffee9
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 22:45:05 2026 +0200
+
+    Resize PNG script
+
+commit 805d4f86b97766f60bca40d24d6632860a1b2e20
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 22:44:23 2026 +0200
+
+    Theme - Optimize all artwork file sizes
+
+commit df59a5f2fa627145a294c98bc40f4ddeea66f8e0
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 22:26:59 2026 +0200
+
+    Updates build script - Fixed IMAGES folder for custom theme replacemnt
+
+commit 28dc5d1e00bd48ab71becf30477e1f7290240630
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 22:01:25 2026 +0200
+
+    Build file updated
+
+commit 6659069ecf00de5186d77f97a0584828e5d1b6e6
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 21:22:16 2026 +0200
+
+    Themes - Updates Bookshelf seemless pattern
+
+commit f7f2ffb6fa4e75bfe7050885df9acecf3ec1c876
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 21:20:01 2026 +0200
+
+    Offline/Online linux build script - I am tired of manual build everytime
+
+commit 0b6df10a718c446f11ee8324b37843aa39dab7d1
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 21:19:16 2026 +0200
+
+    Offline Badges - Rewrite 2.0 on all offline-badge for mount/unmount drives. Quickest was to check folders and not each photo. When a drive/folder is unmount. That folder/photos will show offline. Lets CPU usuage
+
+commit 27a2fe626666107f640a9a3190965f5f92613b82
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 16:26:37 2026 +0200
+
+    Edit Photo Tweaks - Add Contrast
+
+commit fcfffdc8f409aa4aea805a5aa52f0bce2b10cdc4
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 16:20:23 2026 +0200
+
+    before UI Not Responsive Library Scan Fix - Recovery again
+
+commit d795070bee564901fba8fe74f3db8eb40d1e3c92
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 14:56:53 2026 +0200
+
+     Implemented the All Photos scrollbar date scrubber.
+    
+     - Floating Month YYYY label beside the main grid scrollbar.
+     - Appears while dragging/clicking the scrollbar, updates with scroll position, hides after release.
+     - Enabled only for All Photos with Date Taken or Date Added sorting.
+     - Folder, album, favourites, recent, search, and non-date sorts remain unaffected.
+     - Uses existing photo date parsing and grid position logic.
+
+commit 96166129c2a57559dcb8d8700434f0fa3c18bfe6
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 14:46:26 2026 +0200
+
+    Thumnail Cleanup Script in Settings. Removal all thumbnails that does not have a photo linked to it.  Added themes-Bookshelf for more tests to themes
+
+commit 941ec718a192d78e09d8de86880b99e19494d74c
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 13:05:20 2026 +0200
+
+    Fixed 1px jump in mouse scroll in all sections with ease out
+
+commit 04a9fc3b64ae51adfd8e72c5ef1cafd8a9db6d27
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 12:10:39 2026 +0200
+
+    Fast Scrolling for Folder View Fixed - GLM5.3 somehow got this correct in one go
+
+commit 9319ac0e25864a4225270f6d679c32e291dc3b4c
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 08:06:01 2026 +0200
+
+    V9 - Improve fast scrolling thumbnail loading.missing main.rs
+
+commit f3b87952c6962f3261715cb08666c7cce8dff3b8
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 08:03:07 2026 +0200
+
+    V9 - Improve fast scrolling thumbnail loading
+    
+    - prioritize newly visible Folder thumbnails
+    - load cached thumbnails immediately when Folder rows bind
+    - preload scrollbar scrub destinations asynchronously
+    - add post-scroll catch-up for late realized rows
+    - keep previous thumbnails visible while replacements load
+    - prevent stale queued work from delaying the current viewport
+
+commit 708b54ab54c2272e2ab532edea8c4c74a604c48a
+Author: froggy744 <petie74@gmail.com>
+Date:   Sun Sep 13 00:00:01 2026 +0200
+
+    Fixed the Scrolling issue. This is the one to keep. Fix Folder view scrolling, anchoring and thumbnail loading
+
+commit 9c5bfce73352d64ba8d05449a5688ba243107634
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 23:25:52 2026 +0200
+
+    Fixed small debounce in folders view. This is the closest to a proper fix after the afternoons challenges of letting deepseek/gpt and pi/opencode/codex attempt to restore
+
+commit 40c328b708ec265072d3e7e6624b34318270e857
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 22:22:17 2026 +0200
+
+    Bypass Fix Sidebar Autohide/Show thumbnail/grid recalculate/freeze
+
+commit b7bb1b6509c7c873217fba4803fbf09e4dadb02d
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 20:52:30 2026 +0200
+
+    Keep the Folder anchor stable across overlapping column changes
+
+commit bc67a8b2752a69c777385e1b68da2cfa49612ed8
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 20:49:51 2026 +0200
+
+    Add regression coverage for overlapping Folder column changes
+
+commit 65679e3f3c629948e5ce1b7899dc35272cb345ab
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 20:47:36 2026 +0200
+
+    Fix sidebar-induced Folder scroll jumps and create tile badges lazily
+
+commit 6a9d91d1c0888a9ee9a808df5d20b1a7583a4b5d
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 18:23:55 2026 +0200
+
+    Coalesce rapid Ctrl+wheel grid zoom into one Folder reflow
+    
+    A gapless Folder grid must change row counts when the column count
+    changes, so a fast zoom spin (several column boundaries) previously
+    rebuilt the Folder rows once per wheel notch, causing a long reflow
+    storm. Keep the leading notch immediate for isolated clicks, and
+    trailing-debounce the remaining notches (150 ms) so one spin produces
+    one reflow.
+    
+    - grid.rs: add pending_zoom_width/zoom_reflow_source, request_zoom()
+      leading+trailing coalescer; rename set_zoom -> apply_zoom (now private).
+    - build.rs: zoom reset routes through request_zoom.
+    
+    Verified: 8 fast notches -> 1 rebuild (298 ms worst case); isolated
+    notch applies immediately. Tests: 116 pass, 2 pre-existing album
+    frame failures unchanged.
+
+commit 69c06369b0011d20c41c9a6686a351018d09c4c5
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 17:50:54 2026 +0200
+
+    Format grid and photo object reflows
+
+commit 276a4463254b01fe9a58e0eb4567939af2f5d1ab
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 17:08:42 2026 +0200
+
+    Keep folder tooltips out of the scroll bind path
+    
+    Folder scrolling ran at ~30-40 fps while the library grid stayed near 120.
+    Sampling gdb during a wheel scroll showed the main thread dominated by GTK
+    CSS validation, and the per-frame cost was proportional to the number of
+    Folder rows crossed.
+    
+    Instrumenting showed adjustment.set_value on the Folder ListView took 8-36 ms
+    per call. Isolating the per-bind work found the cause: setting a tooltip on
+    every recycled tile during scroll. GTK's tooltip path triggers widget picking
+    and CSS work; doing it for every bound tile turned each scroll step into a
+    synchronous ~25 ms relayout.
+    
+    Tooltips are only useful when the pointer can hover, which means scrolling
+    has stopped, so set them from the settled viewport loader instead of the fast
+    bind path. The other per-bind mutations (css classes, visibility, text,
+    height requests, widget name) are now guarded so a recycled row only touches
+    GTK when a value actually changes.
+    
+    Measured with PICASA_PROFILE on the 66k stream, same 200-click wheel run:
+      before: ~30-40 fps, worst_frame_ms 48-63
+      after:  ~90-105 fps, worst_frame_ms 18-26
+
+commit 1e91ef3631c2249b25a5da999f9c10c6d65f7050
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 16:39:22 2026 +0200
+
+    Reuse the built Folder stream when reopening Folder view
+    
+    Open in Folder from search/another view rebuilt the whole continuous Folder
+    stream: ~66k PhotoObjects plus ~11.7k GTK Folder rows. Measurement showed the
+    PhotoObject store splice is ~1ms and the model rebuild is dominated by GTK
+    populating the Folder ListView (~35us/row, ~430ms).
+    
+    Keep the fully built Folder stream (exact PhotoObjects + group ranges + the
+    tile geometry/section order they were laid out with) alive in the Gallery.
+    Re-entering Folder mode restores the backing vectors synchronously and leaves
+    the already populated `folder_store` attached, so no rows are rebuilt. The
+    subsequent database refresh then finds the model unchanged.
+    
+    Verified with PICASA_TRACE on the 66k stream:
+      before: progressive_done photos=66031 wall_ms=795
+      after re-entry: folder_cache_restore photos=66031 rows=11716
+                      gallery_replace photos=66031 unchanged=true ms=8
+    
+    The cache is dropped automatically when the tile column count or Folder
+    section order changes, and membership/order changes still fall back to a
+    normal progressive rebuild because the restored ids no longer match.
+
+commit e06ac8c7afa3bcc0d563c51a5af1dc6cc56721bb
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 16:21:32 2026 +0200
+
+    Warm folder thumbnails ahead of the scroll direction
+    
+    Scrolling the Folder stream showed visible blank tiles that then popped in.
+    Instrumentation showed why: the motion warm-up only considered tiles where
+    is_mapped() was true, i.e. tiles already visible. So the first load for a tile
+    started only once the user could already see it, which is exactly the blank
+    then load flicker. Measured windows showed scroll_calls=190 thumb_loads=30 and
+    even scroll_calls=75 thumb_loads=0.
+    
+    Changes:
+    - prefetch_folder_cached_tiles now also considers realized offscreen tiles
+      (GtkListView's recycled pool), bounded to a window around the viewport, so
+      tiles about to scroll into view are warmed before they are shown.
+    - It takes the current scroll direction and penalises tiles behind the
+      direction of travel, so request order follows the user.
+    - Widen the prefetch window and raise the warm rate: a 40 ms slice warming up
+      to 16 tiles during motion (was 120 ms / 8), and the settled pass warms 12
+      per 16 ms tick (was 4).
+    
+    The ListView bind path stays strictly RAM-only; loading is still bounded per
+    slice so scrolling cannot be starved.
+
+commit 1f68b662b26fbd5ff61fd6935c2735a5ded29e7b
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 16:11:32 2026 +0200
+
+    Speed up PhotoObject construction and instrument folder-row build
+    
+    Construct library photos directly into the subclass fields instead of going
+    through the GObject property system. Building a library-sized model sets ~15
+    properties for each of tens of thousands of photos; ParamSpec lookup, Value
+    boxing, and notifications dominated it. No consumer connects to these
+    properties' notify signals, so writing the fields directly is equivalent.
+    
+    Measured per 2000-photo batch during folder open: create_ms 19 -> 3-4 (about
+    5x faster); the object phase of the 66k stream dropped from ~780 ms to
+    ~340 ms.
+    
+    Also split the final model-build timing into rebuild_group_ranges_for
+    (ranges_ms) and rebuild_folder_rows_for (rows_ms).
+    
+    Finding: folder open is now dominated by GTK, not our construction work. For
+    the 66k stream (11,716 folder rows) the ListStore splice is ~0-1 ms, but the
+    GtkListView spends ~400 ms incorporating the rows. Detaching the model before
+    the splice and re-attaching via set_model moved the cost to the re-attach
+    (413 ms), confirming it is ListView population. Making folder open instant
+    therefore needs reusing an already-populated folder model rather than
+    rebuilding it (deferred follow-up).
+    
+    This commit also includes minor rustfmt-style line reflows in grid.rs.
+
+commit 5823b04e544ed9493588625625b0f90e9f0948b2
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 15:46:08 2026 +0200
+
+    Phase 3.1: report lightbox prefetch hit rate
+    
+    Cache entries now record whether they were produced by the directional
+    prefetch or by the visible decode. A cache hit on a prefetched entry
+    increments a new prefetch_used counter, and the lightbox_activity summary
+    reports prefetch_used alongside prefetch_done.
+    
+    This closes the last open Phase 3.1 measurement item: it makes prefetch
+    effectiveness directly visible instead of inferring it from raw cache hits.
+    
+    Measured (15 steady NEF steps forward): cache_hits=14, cache_misses=0,
+    prefetch_done=15, prefetch_used=14 - about 93% of prefetches were used and
+    every navigation was served from the prefetched cache.
+
+commit 6b7f4afaac33ad7101c3fc74bc6d1c301e376737
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 15:21:07 2026 +0200
+
+    Phase 3.3: directional lightbox prefetch
+    
+    Warm the display-texture cache for the neighbour in the direction the user
+    is moving, so stepping through a NEF/RAW burst is served from RAM instead of
+    decoding on arrival.
+    
+    - A single-slot 250 ms timer is scheduled after scroll, arrow-key, and
+      programmatic navigation, and after open (prefetch forward).
+    - Each navigation cancels the pending timer and any in-flight prefetch, so a
+      stale prefetch never competes with the photo the user moved to.
+    - Prefetch shares the viewer decode gate (so it cannot spawn unbounded RAW
+      decodes or block the visible photo), uses the same cancel token mechanism,
+      and inserts into the display cache without touching the visible picture.
+    - close() cancels the timer and in-flight prefetch.
+    - New counters: prefetch_started, prefetch_done in the lightbox_activity line.
+    
+    Measured: 10 NEF steps forward then 10 back gave 27 cache hits, 0 misses,
+    12 prefetches, and queued=0 while stepping (every photo already warm).
+    
+    Mark Phase 3.3 complete in the plan.
+
+commit a431de4859e1cb814e255ca0eaeb5620a3b3191d
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 15:17:49 2026 +0200
+
+    Phase 3.2: grow lightbox display cache and add a byte budget
+    
+    Raise DISPLAY_TEXTURE_CACHE_CAPACITY 8 -> 32 so stepping back through a
+    burst of NEF/RAW photos is served from RAM instead of decoding again, and
+    add a 256 MB byte budget so a large or zoomed viewport cannot cache an
+    unbounded amount of pixel memory.
+    
+    The cache now evicts least-recently-used entries past either the count or
+    the byte budget, always keeping at least one entry. Cache entries track their
+    approximate RGBA footprint, and the lightbox_activity summary reports
+    cache_mb and budget_mb.
+    
+    Measured (20 NEF steps forward then back):
+    - capacity 8: backward navigation mixed hits and misses with 4-5 evictions
+      per interval.
+    - capacity 32 + byte budget: backward navigation is all cache hits
+      (cache_hits=5 per interval), 0 misses, 0 evictions, ~57 MB cached.
+    
+    Mark Phase 3.1 and 3.2 complete in the plan.
+
+commit a0d9b4f89742988623594dccb7025f75a343b498
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 15:13:53 2026 +0200
+
+    Phase 3.1: add lightbox cache and decode counters
+    
+    Add global atomic counters for the lightbox and drain them every 2 s into a
+    `UI PERF lightbox_activity` summary while PICASA_TRACE is set.
+    
+    Counters:
+    - preview_hits (navigation thumbnail preview used)
+    - cache_hits / cache_misses, with miss_raw and miss_edited breakdown
+    - decodes queued / completed / failed / cancelled
+    - evictions, plus cache_size gauge and capacity
+    
+    This makes it possible to tell whether lightbox time goes to decode, cache
+    eviction, or cancellation. First measured run (20 NEF steps forward and back
+    with capacity 8) showed backward navigation mostly missing the cache
+    (cache_hits=2/4/1, evictions=4/5 per interval), confirming the cache is too
+    small for typical back-and-forth browsing.
+
+commit 2ab216f6a1eb028fb918b34f1ce64406a9f0c0f9
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 15:01:54 2026 +0200
+
+    Add Phase 3 lightbox/RAW performance plan and TODO
+    
+    Document the next focus after the Open-in-Folder and folder scrolling work: making full-screen NEF/RAW navigation fast.
+    
+    The plan is measurement-first (Phase 3.1 counters), then cache sizing/tuning (3.2), directional prefetch (3.3), an optional disk cache for final lightbox previews (3.4), and only then RAW decoder changes (3.5). Each phase has a checklist and acceptance criteria, plus an explicit do-not-do-first list to avoid touching the decoder prematurely.
+
+commit 46fb526b91d66eb79c53635df40a7cd4a8ab9636
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 14:48:00 2026 +0200
+
+    Stop smooth scroll chasing a target the view has already passed
+    
+    The folder ListView spring only detected overshoot when a single step
+    crossed the destination. If GTK's anchor handling pushed the adjustment
+    past the target while the spring was still moving in that direction, the
+    spring kept accelerating away from it and the stall guard later snapped a
+    large distance (measured 563 px in auto-2.log).
+    
+    Also treat a step that moves *away* from the destination as an overshoot,
+    and snap to the target immediately. This removes the multi-frame stall and
+    the large snap.
+    
+    Verified with heavy wheel scrolling, rapid direction reversal, and Open in
+    Folder: stalls dropped to a single 7 px quantization tail, and Open in
+    Folder still reveals the target (progressive_done wall_ms=1136,
+    open_in_folder_done revealed=true).
+
+commit ed40f688cc076b6bd01b4d993d54b5d20e580e65
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 14:41:13 2026 +0200
+
+    Cancel stale wheel scroll spring on programmatic folder jumps
+    
+    The smooth-scroll wheel spring is deliberately insensitive to GtkListView
+    anchor corrections, which look like external adjustment changes. But a
+    programmatic scroll (folder navigation, selection scroll_to, model swap)
+    can move the adjustment while a wheel spring is still active. The spring
+    then fought the programmatic scroll and the stall guard snapped it back,
+    producing a large visible jump (measured 592 px in auto-1.log).
+    
+    Keep the value-change protection installed for the folder ListView as well,
+    but with view-appropriate sensitivity:
+    
+    - GridView: any movement we did not animate cancels (2 px tolerance).
+    - ListView: only a jump larger than roughly half a viewport (min 200 px)
+      is treated as external and cancels the stale target. Sub-row anchor
+      corrections stay below that threshold and are ignored as before.
+    
+    Adds a PICASA_TRACE line `smooth_scroll_external_cancel` for validation.
+    
+    Verified: heavy wheel scrolling and rapid direction reversal produce zero
+    false cancels; Open in Folder still reveals the target
+    (progressive_done wall_ms=1246, open_in_folder_done revealed=true).
+
+commit 906b3282a457ed903ddd5fa946c45a5d76386278
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 14:35:38 2026 +0200
+
+    Fix Open in Folder root cause and speed up folder stream build
+    
+    Open in Folder could navigate to the correct folder but never reveal the
+    target photo. Root cause was a feedback loop during folder navigation:
+    
+    - Open in Folder retried select_photo()/scroll_to_folder() every 25 ms.
+    - Each call scans the whole photo model (O(photos)).
+    - That starved the low-priority idle build that creates the virtualized
+      Folder rows, so the target row never appeared.
+    - 500-photo batches made it worse: a 66k stream needed 133 idle hops.
+    - Measured: the build stalled at 40k/66k for ~22 s and the retry gave up.
+    
+    Fixes:
+    
+    grid.rs
+    - Add Gallery::stream_building() and track it across all replace paths.
+    - select_photo() in Folder mode now returns success only when the
+      virtualized Folder row exists, instead of reporting success as soon as
+      the id is present in the backing store.
+    - Raise progressive BATCH_SIZE 500 -> 2000 to cut idle hops.
+    - Add sparse progressive timing traces (offset/create/splice/wall) and
+      progressive_done with folder row count, so build time is observable.
+    
+    window/build.rs, window/library.rs
+    - Folder navigation retry loops now wait while stream_building() instead
+      of scanning the growing model every 25 ms. They scan only after the
+      build completes, then hold the target selected for a settling window.
+    - scroll_gallery_to_folder_when_ready counts give-up attempts only after
+      the stream is built, with a hard safety net.
+    - Add open_in_folder_done trace (attempt/building/first_success/revealed).
+    
+    Result: the 66k Folder stream now builds in ~1.2 s (was >20 s), and
+    Open in Folder reveals the target photo via the real context menu:
+      progressive_done photos=66031 wall_ms=1174 folder_rows=17194
+      open_in_folder_done attempt=55 building=false first_success=Some(31) revealed=true
+    
+    Smooth scroll:
+    - Finish the folder ListView wheel spring deterministically. Detect
+      overshoot and stall (error stops shrinking for several frames, which
+      happens when GTK pins the adjustment) and snap to the destination
+      instead of bouncing "up and down" until the next click/scroll.
+    
+    Thumbnails:
+    - Warm a small budgeted batch of nearby cached thumbnails during
+      sustained scrolling so the viewport does not stay blank until motion
+      stops, while keeping the ListView bind path RAM-only.
+    - Move repetitive THUMB PRIORITY skip_* traces behind
+      PICASA_TRACE_VERBOSE: a single scroll pass emitted thousands of
+      synchronous stderr lines that became part of the scroll workload.
+
+commit cc932d8c44de309846700f851a3bd233cb2c8dbb
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 13:45:46 2026 +0200
+
+    Fix Open in Folder folder reveal
+    
+    Make the photo context menu's Open in Folder action reliable from search results, lightbox, and the continuous Folder stream.\n\nWhen the user is already browsing the full Folder stream with no active search, avoid a full destination reload and directly select the target photo, while still revealing the folder in the sidebar.\n\nFor search/lightbox navigation, keep retrying target photo selection for a short settling window. This prevents an early success against the old search model from stopping the retry before the full Folder stream and progressive folder rows finish rebuilding.\n\nAlso make sidebar folder reveal deterministic by reapplying the sidebar scroll briefly after navigation. Folder reveals now force Tree mode so child folders actually exist as rows, expand ancestor folders, select/focus the exact folder row, and persist the folder display mode change through the existing callback.
+
+commit 9c12d2b3a40e236146091d944d1f65327cebe91a
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 13:02:57 2026 +0200
+
+    Cache transformed RAW thumbnails in memory
+    
+    Add a thumbnail performance plan and cache final RAW thumbnail paintables by path, rotation, and edit recipe. This avoids repeated RAW crop/edit transform work when revisiting edited RAW thumbnails during folder/grid scrolling. Folder scroll testing shows cached thumbnail paths are fast; remaining NEF/RAW delay is now isolated to lightbox/full-view decoding.
+
+commit 8c50e18e88c98adce131bc41c2329b3b1e5a0ae3
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 12:55:54 2026 +0200
+
+    Mark folder smooth scrolling complete
+    
+    Folder view now uses the existing smooth wheel scrolling path with Ctrl+wheel zoom preserved. Remaining perceived delays in the logs are attributed to thumbnail/render work, especially edited NEF/RAW thumbnails, and will be handled separately.
+
+commit 949debf2131a7e1ad5539db27245f6e6078f6194
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 12:52:12 2026 +0200
+
+    Enable smooth scrolling in folder view
+    
+    Install the existing smooth wheel scroll handler for the folder photo ListView while keeping Ctrl+wheel thumbnail zoom support. Limit stale scroll-target protection to the normal grid and cancel old wheel animation targets on pointer press so scrollbar dragging in folder view is not pulled back by a previous wheel target.
+    
+    Note: remaining delayed upward smooth scrolling appears tied to thumbnail/visible-row refresh work, not the scroll animation itself. Current behavior is accepted as the working state.
+
+commit ee1aaaf2aa9f9572a9a755c9198456f9a44655c3
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 12:36:56 2026 +0200
+
+    Prevent stale smooth scroll targets after scrollbar jumps
+    
+    Track the last adjustment value written by the wheel easing animation and only cancel the animation when GTK reports a larger external jump, such as dragging the scrollbar. This preserves smooth wheel scrolling while preventing an old animation target from pulling the photo grid back toward the start after scrollbar use.
+
+commit 9c49fef496a3ec94801104c98cf7388878ed0dee
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 12:24:39 2026 +0200
+
+    Restore folder context menu watch actions
+
+commit 56ad2d7f2556cfff38adfdaf58ba36ee9b1aacce
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 12:15:00 2026 +0200
+
+    Make sidebar section headers sticky
+
+commit 0a731a3ca79e1e37991e63ddc2dcec8d09f850e5
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 12:08:49 2026 +0200
+
+    PROJECT_MAP Updated with Pi
+
+commit e34f99ecbd909c6e393f7106936b5c69ee09c12f
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 12:07:19 2026 +0200
+
+    Rewrite 2.0 cancelled; restore stable folder view baseline
+
+commit e291673fcebc1cc6ac2cc86d7591636a0e0e6add
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 09:52:12 2026 +0200
+
+    Stabilize Folder view scrolling and thumbnail virtualization
+
+commit 8c536cd64fa0a721a15b9aeb47225adfbd1e2fd9
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 08:19:50 2026 +0200
+
+    Before uploading the New Smooth Scroll. Albumbs/Library/Photos work but Folders is still the thorn in my side and taking up all my family time... Themes need tweaks but work..
+
+commit df00b3f249e09b1b5988f9d4d39f0484eff53ee9
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 00:12:55 2026 +0200
+
+    docs(albums): record index progress
+    
+    Document the album-index layout, compact sizing, context-menu rename, and padding fixes completed so far.\n\nNote: the album-index work is not complete and needs more work, including visual polish and edge-case testing.
+
+commit 8bdb7a5a550f3a7a074bf544159d4e018cd57012
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 00:08:39 2026 +0200
+
+    fix(albums): constrain compact card labels
+
+commit 11d0e9adc318a3f196afdae200f5a17996ccce74
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 00:05:40 2026 +0200
+
+    fix(albums): keep compact cards and fit one more column
+
+commit e463ff7203e4e56a0b90ccac609f1692a88a8d97
+Author: froggy744 <petie74@gmail.com>
+Date:   Sat Sep 12 00:03:06 2026 +0200
+
+    fix(albums): make compact view denser
+
+commit 696e67063085053e5298dd5cc7997e4cbf034672
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 23:59:08 2026 +0200
+
+    fix(albums): fit another column in compact view
+
+commit b6edff461bd6e30c7b1c94f55b89063391a89631
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 23:56:48 2026 +0200
+
+    feat(albums): refine album index presentation
+
+commit 68a41424f73506673906c7be4733c17b16cce746
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 23:19:41 2026 +0200
+
+    fix: scroll long add-to-album menus
+
+commit b7b7acf233e20cb8ee48274fce1bcd4891f0b6a2
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 22:57:11 2026 +0200
+
+    feat(albums): folder-backed bookshelf row themes
+
+commit 4e22f76c45d8d1aba2a3a2b2641278606db6fe68
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 21:03:58 2026 +0200
+
+    feat(albums): choose an album's cover from its thumbnails
+    
+    Store a chosen cover photo on the album and offer "Set as Album Cover" in
+    the thumbnail menu, only while an album is open; it always applies to the
+    album being viewed, with no album picker.
+    
+    The album card draws the chosen photo ahead of its automatic first-thumbnail
+    pick, falling back to the original file until a cached thumbnail exists.
+    Deleting the photo clears the choice, Reset Album Cover clears it with the
+    frame, and Reset All Theme Settings clears every album's cover photo.
+
+commit 47ec9f82f097b1cd986330d9547ef846f078ae10
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 20:41:24 2026 +0200
+
+    fix(albums): one cover theme per page; reset all theme settings
+    
+    Keep every album that has not picked its own frame on the page's single
+    selected theme, so a page never mixes two cover themes; the colour variant
+    stays hashed per album and a single-file theme always shows that file.
+    
+    Add per-album Next Album Cover / Reset Album Cover, and Settings -> Themes
+    -> Reset All Theme Settings, which clears the switches, both stored indexes,
+    the legacy style keys and every album's own cover.
+
+commit c33570e63dbd60595739f9461117ab1211d19dbe
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 19:44:12 2026 +0200
+
+    feat: discover album cover frames and bookshelf backgrounds
+    
+    Move theme art into images/theme and drive it from disk:
+    
+    - album covers: recurse images/theme/album-covers/**/*-frame.png
+    - bookshelf backgrounds: images/theme/bookshelf/*-bookshelf.{png,jpg}
+    - per-album cover selection persisted in a new nullable albums.cover_frame
+      column, with a deterministic hash fallback and right-click cycling
+    - background cycling wraps against the discovered background count
+    - add the theme asset hierarchy spec and mark the old guide superseded
+
+commit 5d6f734bb66742fdd3eacd81fa87c8fbdf4acbb1
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 18:35:29 2026 +0200
+
+    fix: keep albums aligned with bookshelf rows
+
+commit 6358a459a70272a051f09962c95b62183128083a
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 17:37:23 2026 +0200
+
+    feat: add album appearance context menu
+
+commit c4819cec282c6b9e0eb6d146d881d11956019e82
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 16:23:03 2026 +0200
+
+    Bookshelf Themes
+
+commit 83a7e0cd23445e91be75988606749981ec962c88
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 16:20:43 2026 +0200
+
+    Different Album Covers Colours
+
+commit c441adcca4f263f689b2bbecc1158ae336069664
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 15:33:07 2026 +0200
+
+    Use jpg bookshelf album background
+
+commit 394b743d1cc52f0142e08401173cba4e5e9dcc48
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 13:05:05 2026 +0200
+
+    docs: add bookshelf theme todo
+
+commit 1b6fbd29de40bb0c045b2b72cec6ed8c2642f7ef
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 12:46:44 2026 +0200
+
+    feat: add album covers albums theme
+
+commit 223e012465fc056aa8e65553ea6989ae1152d4ed
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 11:48:29 2026 +0200
+
+    Bookshelf Album Index Instructions
+
+commit 7c9c05b03e0ab618de230ca9b107324ef88d3cac
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 11:42:32 2026 +0200
+
+    Album covers images
+
+commit e9b1a6f721fe7ff78fdc3f5b25123f8c7e053c70
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 10:30:49 2026 +0200
+
+    docs: add albums bookshelf + cover overlay implementation guide
+
+commit 42cf8b88b61aab649615ca49a9d4ecb9c34a61fd
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 10:15:35 2026 +0200
+
+    fix(folders): rubberband from empty space; robust tile hit-testing; restore badges
+    
+    - Drag selection now starts anywhere in the folder stream (row padding,
+      empty row tail, header area), matching Library GridView behavior,
+      instead of requiring the press to land on a tile.
+    - Resolve point to tile through the owning GtkFlowBox child_at_pos and
+      reject recycled tiles without a photo, so top/bottom cell edges work.
+    - Re-show the selection badge in set_manual_selected; clear_photo had
+      hidden it on recycled tiles and nothing made it visible again.
+
+commit 6b28983db978cf581f775471eed07632b114d1cf
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 09:38:16 2026 +0200
+
+    fix(folders): restore click, drag, selection, badges and focus
+    
+    Centralize folder photo input on the virtualized ListView so recycled
+    tiles share one set of controllers, add rubberband drag selection, show
+    selection/favorite/edit/offline badges, normalize FlowBox child spacing,
+    and return keyboard focus to the thumbnail after the lightbox or editor
+    closes.
+
+commit ccd9477eef4bd0060b0a2e0dc885014bf36ab2c4
+Author: froggy744 <petie74@gmail.com>
+Date:   Fri Sep 11 08:04:37 2026 +0200
+
+    Remove old reports, TODO files and logs
+
+commit f8eb0c6979f46635f2f7550ac4949c1a62370640
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 21:59:28 2026 +0200
+
+    Rewrite screenshot
+
+commit 0c5bfcb31db32637b27cc3666c6af65e5973b2d0
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 21:47:55 2026 +0200
+
+    docs: add REWRITE.md — plain-language summary of all changes
+
+commit 91b384f485598447d405efa14ea755095fc9c89b
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 21:44:39 2026 +0200
+
+    fix(sidebar): left-align folder icons in imported-only view
+    
+    The fixed 12px disclosure slot was reserved even in the flat imported-only
+    mode, indenting folder icons relative to the Library rows. Reserve it only in
+    tree mode (or when the row has children).
+
+commit 89c8c7da88e1b8844cef845d3c9b8712e6a0b850
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 21:38:22 2026 +0200
+
+    fix(sidebar): pin watched-folder icon overlay to the icon size/alignment
+    
+    The gtk::Overlay wrapping the folder icon could claim extra width and shift the
+    row, so imported-view folder icons no longer left-aligned. Give it the icon's
+    exact size request and center alignment.
+
+commit c58e38b4ff6535d39e10ac5d4237814beb781838
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 21:30:54 2026 +0200
+
+    test(edit): session keeps B&W and Sepia independently
+    
+    Confirms the toggle path (session.mutate) and recipe round-trip retain both
+    flags, narrowing the Edit Mode B&W/Sepia report to the widget layer.
+
+commit 01562cc043d1833a6437e50051f93f72c11cba95
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 21:27:18 2026 +0200
+
+    fix(lightbox): 1:1 off always returns to fit; test B&W+Sepia combine
+    
+    - set_one_to_one(false) now resets to fit-to-window instead of restoring the
+      previous Ctrl+wheel zoom.
+    - Add a render test proving black_white and sepia both apply (combined differs
+      from either alone), for the Edit Mode B&W/Sepia report.
+
+commit 6887bfa0c16c4950ea3e9f603e0cafe558a836fe
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 21:20:45 2026 +0200
+
+    feat(collage): sharpen preview from the original; add collage TODO and lightbox traces
+    
+    - Collage preview tiles decoded from the original at 1024 px off the GTK
+      thread (generation-cancelled, cached), instead of only the 320 px cached
+      thumbnail scaled up. Cached thumbnail stays as the instant placeholder.
+    - TODO.COLLAGE.md documents the preview-quality cause/fix, the B&W/Sepia
+      report, and the debug/trace plan.
+    - Fill in lightbox one-to-one/space/Ctrl+wheel traces for zoom debugging.
+
+commit 1e56bae0bd75b2bba4b24cff117706152c3e4e98
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 21:13:49 2026 +0200
+
+    fix(lightbox,sidebar): grab cursor on Ctrl+wheel zoom, 1:1 sync, eye overlay
+    
+    - Lightbox: keep the grab cursor in sync with viewport overflow (zoomed via
+      Ctrl+wheel as well as 1:1); drag end restores grab, not none.
+    - Lightbox: Ctrl+wheel now leaves 1:1 and syncs the toolbar toggle via a new
+      one_to_one_sync handler, so space/1:1 restores the manual zoom correctly.
+    - Sidebar: watched-folder eye overlays the folder icon instead of a left slot,
+      so row alignment is unchanged.
+
+commit 254bc7f0d9ecd0ee7cdbfba83f32e50603ab830b
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 21:03:36 2026 +0200
+
+    fix(lightbox,sidebar): pan when zoomed via Ctrl+wheel; correct folder scroll offset
+    
+    1. Lightbox: the pan drag was gated on 1:1 mode, so Ctrl+wheel zoom could not
+       be panned. Pan now activates whenever the image overflows the viewport
+       (zoomed in or 1:1); 1:1 keeps its grab cursor behavior.
+    2. Sidebar: after moving the folder list into the shared Albums+Folders
+       scroller, row.allocation().y() was no longer the scroll offset, so Open in
+       Folder (and scroll-follow) landed in the wrong place. Use compute_bounds
+       against the scroller instead.
+
+commit 4f82fd2381a67a3ac78ead00a070e99642e7e64a
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 20:55:26 2026 +0200
+
+    feat(sidebar): fixed Library, scrollable Albums+Folders, heading double-click, watched eye
+    
+    1. Lock the Library section and put Albums + Folders in one shared scroll
+       region so a long album list can no longer push the folders off-screen; the
+       two sections scroll together.
+    2. Double-click the Albums/Folders headings (capture phase) to collapse/expand,
+       without fighting the title's single-click navigation.
+    3. Show an eye icon to the left of folders marked watched in Settings, and
+       refresh the folder rows when Settings closes so the marker appears at once.
+
+commit 92338c72e74b4ab270f46c0769f617ad27cfd702
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 20:42:13 2026 +0200
+
+    fix(grid): re-anchor the viewport on same-column zoom too
+    
+    Zoom steps that kept the same column count reflowed the rows without restoring
+    the scroll, so the viewport drifted on those steps while column-change steps
+    were fine. Capture the zoom anchor once in set_zoom and restore it in both the
+    skip-reflow and rebuild paths.
+
+commit 8e255841086e7a03077e3152dd2cb712a6f019c1
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 20:37:18 2026 +0200
+
+    fix(grid): capture zoom anchor before the tile resize
+    
+    The anchor was read after set_zoom resized the tiles, when the layout was in
+    flux, so it was sometimes None and the view reset. Capture the visible photo at
+    the start of set_zoom and consume it in update_width; clear it afterwards.
+
+commit 6700f2ad4806e58eee93cb3389da6b6829f73267
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 20:31:07 2026 +0200
+
+    fix(grid): align zoom anchor tile to the top edge via computed bounds
+    
+    Replace the overshoot scroll_to (whose nearest-edge alignment was unreliable)
+    with: realize the target row, then set the adjustment by the anchor tile's
+    computed y so the tile sits at the viewport top. Two idle steps so the model
+    swap's layout has completed. Trace reports row/bounds_y/after.
+
+commit 869c89f58e294cc7f9d6c93326b07a46d0421754
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 20:27:31 2026 +0200
+
+    fix(grid): apply zoom scroll anchor after layout, aligned to top
+    
+    The synchronous scroll_to after the row rebuild was overridden by the model
+    swap's own layout, so the view still jumped. Schedule the anchor restore on idle
+    (after layout) and scroll past the target first so gtk_list_view_scroll_to
+    aligns it to the top edge. Add a folder_zoom_anchor trace.
+
+commit fb0ee9f07db1e74ae010d670a603692f3016aad5
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 20:21:38 2026 +0200
+
+    fix(grid): anchor zoom restore to the visible photo, not the folder's first
+    
+    Zoom reshapes the folder rows and restores the scroll to the photo at the top
+    of the viewport. photo_for_visible_folder_row returned the folder's first photo
+    via group_ranges, so zooming jumped to the top of the folder. It now prefers the
+    actual SquareTile under the probe point and only falls back to the folder's
+    first photo.
+
+commit 1c9f86fa799c7f9b15ab10cfd27017a46eb589e7
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 20:12:24 2026 +0200
+
+    fix(grid): size folder chunks to whole rows so zoom rows are full
+    
+    Folder mode chunked photos in fixed groups of 8, each its own FlowBox row with
+    max_children_per_line = columns. When columns did not divide 8 (3, 5, 6, 7)
+    every chunk ended in a partial line, so the grid had ragged, padded rows; only
+    4 and 8 columns looked right. Other views use GtkGridView and were fine.
+    
+    Chunk size is now a multiple of the current column count close to 8
+    (folder_chunk_size), so every chunk is a whole number of full rows. A column
+    change reshapes the rows (rebuilt cheaply) and keeps the top visible photo.
+
+commit ef35c0928e010fd1842f6d30bb798c832d9b61e2
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 20:00:22 2026 +0200
+
+    fix(grid): offline badge TTL re-probe + preserve selection on tree-mode reorder
+    
+    1. The async availability probe (47106d8) marked a photo checked once per
+       session, so a file/drive that went offline without a mount event never showed
+       the offline badge again. Store the last probe time and re-probe on rebind
+       after a 10 s TTL, still off the GTK thread. Replaces the original-checked
+       bool with original-checked-at.
+    
+    2. reorder_folder_stream splices the whole store, which clears
+       GtkMultiSelection, so toggling Tree <-> Imported Only dropped the selected
+       photo. Remember the selected ids and re-select them at their new positions.
+
+commit 7c431ac2ef05e54092330b2413a4ae60766adff3
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:45:30 2026 +0200
+
+    docs(phase6): memory breakdown — model 243MB, lightbox +338MB (peak 581MB)
+
+commit 4e70e853d72677440b32b6c053b0a2434bd72d1c
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:43:13 2026 +0200
+
+    docs(phase6): record cold start (178-354ms), peak RSS 631MB, and all-view results
+
+commit 6f0e1ad222c1132da7b5fdaffa6446c63680ea89
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:39:38 2026 +0200
+
+    perf(trace): report RSS in startup and refresh_finished
+    
+    Phase 6 platform tuning: cold start is already 178-354 ms, but peak memory for
+    the 66k-photo model was never measured. Log resident set size (MiB) at startup
+    and after each refresh under PICASA_TRACE.
+
+commit 438152b974e4bc5b722de47bd5a96e0199f8a0e7
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:35:06 2026 +0200
+
+    docs(phase2): views-baseline3 verified same_set_reorder 115-305ms
+
+commit c85e2e2defacfdaa571de0a136f6f0deaa8ea2dc
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:31:15 2026 +0200
+
+    docs(phase2): session-5 other-views profile (frames <=318ms) and same-set reorder
+
+commit 242008055a3ce05a438a9cb93ec9de3f939adba7
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:25:20 2026 +0200
+
+    perf(grid): reorder existing photos on same-set view switch
+    
+    views-baseline.log: switching to a 66008-photo view rebuilt every PhotoObject
+    (refresh_finished 658/698/715/1363 ms). When the new set has the same ids in a
+    different order (Folder <-> All Photos, sort/group changes), map the existing
+    objects by id and splice them in the new order instead. Data is already updated
+    in place by the actions that change it.
+
+commit 297fd15021b96c3ca33c8c45a385845e023dcef3
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:19:07 2026 +0200
+
+    perf(trace): label refresh_grid by filter and add grid_bind_slow
+    
+    Profiling the non-Folder views: the GridView bind path (bind_photo) had no
+    timing, and refresh_grid did not say which view it was. Both now emit under
+    PICASA_TRACE so a run through All Photos/Favorites/Recently Added/Albums/search
+    is analysable.
+
+commit 0df156d0f1b012f582913647585175bf767b8fb3
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:12:32 2026 +0200
+
+    docs(phase2): scroll-baseline11 verified — build 102ms, reorder 186ms, max frame 321ms
+
+commit ddd5110b32956e91ef285c860380bdba350381de
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:10:29 2026 +0200
+
+    perf(grid): eager thumbnails while scrolling, suppressed only during folder rebuild
+    
+    scroll-baseline10.log: frames dropped to <=219 ms but the height()>0 guard made
+    newly-bound tiles wait a frame, so fast scrolling showed blanks.
+    
+    Restore eager bind/map loads during normal scrolling. Add a
+    folder_rebuild_active flag set only while rebuild_folder_rows_for swaps the
+    model: GTK binds its whole offscreen pool there (~1400 tiles), so bind/map
+    decodes are suppressed and the deferred viewport pass loads the visible tiles
+    before clearing the flag.
+
+commit 1b023d253a8fd1caca46f1be5337ca9758baa990
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:02:37 2026 +0200
+
+    docs(phase2): session-4 thumbnail-decode fix and attached-splice reorder
+
+commit 9c704b2059e12f0bee1ced290f9ccee103ebcd6b
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 19:01:19 2026 +0200
+
+    perf(grid): stop decoding thumbnails for unallocated pool tiles
+    
+    scroll-baseline9.log: the bind path called load_visual for every bound tile
+    because GTK's pool tiles are unallocated (height 0, bounds at origin) at bind
+    time. A single reorder decoded 2073 cached JPEGs (~1 s frame).
+    
+    tile_near_folder_viewport now requires tile.height() > 0, so unallocated pool
+    tiles are never decoded. A deferred refresh_folder_viewport_tiles_for() runs
+    once after each folder-store rebuild to load the tiles GTK actually allocates.
+    Extracted the viewport pass into a free function so the deferred call can use it.
+
+commit f03d017d982aeede019af4df3f6ea5be67bbd89a
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 18:51:22 2026 +0200
+
+    perf(grid): splice folder store while attached for reorders
+    
+    The 6207 ms attached-splice measurement predates the O(n) selection fix; binds
+    are now ~1 ms. Detaching rebuilds GTK's ~176-row realized pool (1370 tiles),
+    while an attached splice reuses it. Only the from-scratch build still detaches.
+    Trace now reports attached_splice vs virtual_chunks_detached.
+
+commit 5eac7d232f0509a33e01cc26b0863d2615b268ee
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 18:44:14 2026 +0200
+
+    perf(grid): skip unallocated pool tiles in viewport pass; add bounds trace
+    
+    The folder-store reorder still costs model_ms~594 with a transient mapped=1373.
+    Skip tiles GTK has not allocated (height 0) so the viewport pass does not load
+    thumbnails for offscreen pool rows, and log root_h/page/first-tile bounds when
+    mapped > 100 to confirm GTK's over-realization on the next run.
+
+commit b359630b4113c54feb90a60ed640196442cabfa9
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 18:37:20 2026 +0200
+
+    docs(phase2): scroll-baseline7 verified — sidebar toggle 2565->746ms, sidebar_ms 0, no >1s frames
+
+commit bc785f51998bff060ad70a75d3ebf79d9f5082ce
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 18:33:55 2026 +0200
+
+    docs(phase2): session-3 sidebar tree-mode fast path and scroll-follow coalescing
+
+commit 16f6b1d783548401f4aab48913b96e65a788bafa
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 18:31:54 2026 +0200
+
+    perf(sidebar): coalesce scroll-follow rebuild into one idle pass
+    
+    scroll-baseline6.log: following the Folder scroll position rebuilt the sidebar
+    tree whenever a folder's ancestors expanded, measuring sidebar_ms 42-77 ms per
+    folder change (7 spikes in one scroll). Store the latest folder id and run
+    apply_scroll_location once on idle instead of synchronously per change.
+
+commit afd0cdd5b338662729ae6d1d89fd731a962d66b9
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 18:29:56 2026 +0200
+
+    perf(grid): reorder folder stream in place on sidebar tree-mode change
+    
+    scroll-baseline6.log: toggling Tree <-> Imported Only ran a full
+    refresh_grid_to_folder: DB query, progressive rebuild of all 66k PhotoObjects,
+    then folder-store reorder, taking refresh_finished=2565 ms.
+    
+    A tree-mode change only moves whole folder sections; photos keep their
+    within-folder order. Extract folder_stream_order() from sort_folder_stream and
+    add Gallery::reorder_folder_stream(), which buckets the existing PhotoObjects by
+    folder and concatenates them in the new section order. No DB query and no
+    PhotoObject construction. Existing ordering tests still pass.
+
+commit e23aae06b98ba230d7c7f5e95dcd8e16580c0f03
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 18:20:35 2026 +0200
+
+    docs(phase2): record setup-height fix for ListView over-realization
+
+commit 886b0bde1a4afd9007ab6cb136eadf8a0c4dd1fc
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 18:16:51 2026 +0200
+
+    perf(grid): give folder rows a setup height so ListView estimates correctly
+    
+    scroll-baseline5.log: a scrollbar jump realized mapped=1407 tiles and produced
+    the last 3081 ms frame. Rows measured ~0 at factory setup, so GtkListView's
+    scroll estimate was near zero and it realized hundreds of rows. Set a
+    full-chunk height request in connect_setup; connect_bind still overrides it for
+    headers and short chunks.
+
+commit bfee6ca0083ef7ca613ff5abbba1d8813c0b4ed6
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 18:10:22 2026 +0200
+
+    docs(phase2): scroll-baseline5 verified — 0 slow binds, worst frame 23410->3081
+
+commit 993ebd4f143213cfe16c91d1b3ffc288f2eb074a
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 17:48:50 2026 +0200
+
+    perf(grid): create folder tiles only for photos in the chunk
+    
+    Small folders (many of the 497) previously built seven unused tiles for their
+    sub-8-photo chunks. Create only data.photos.len() tiles; the pool still grows
+    on demand when a recycled row needs more.
+
+commit 4d8575b1629cda76ffca22bc1510651b7ad80e3c
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 17:46:54 2026 +0200
+
+    docs(phase2): session-2 fixes and scroll-baseline5 verification steps
+
+commit f4ceb42b21d9cf362f68f33fbd050ad2583e445a
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 17:46:23 2026 +0200
+
+    perf(grid): index visible-folder lookup by group range (drop 66k scan per scroll)
+    
+    photo_for_visible_folder_row scanned all current_photos on every scroll tick to
+    find the first photo of the picked folder. In Folder mode group_ranges already
+    records each folder's start index, so look it up there (O(folders) vs O(photos)).
+
+commit 6741fc7754a9f852848f55bf3da582cea63a1f6e
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 17:43:59 2026 +0200
+
+    perf(thumbnail): cache resolved cache dir (drop create_dir_all per PhotoObject)
+    
+    cache_dir() ran fs::create_dir_all on every call, and cache_path() calls it
+    once per PhotoObject built (tens of thousands per refresh). Cache the resolved
+    path in a OnceLock; the directory does not change within a session.
+
+commit 9bb30730ebee236bc4965b76271f8b05a5f688d1
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 17:43:55 2026 +0200
+
+    perf(grid): cache selected ids in folder bind (29ms -> ~1ms per row)
+    
+    scroll-baseline4.log: every bound photo chunk took folder_virtual_bind_slow
+    ~29 ms, 1325 slow binds, saturating the main thread (worst_frame_ms up to
+    23410). connect_bind called selection_position_for_id for each of the 8 tiles,
+    which scans all 66008 items in the MultiSelection. Replace it with a cached
+    HashSet<i64> of selected ids updated on selection-changed.
+
+commit a2bf3c2257552519a5437b0c3b28885e91f33393
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 17:33:53 2026 +0200
+
+    docs(phase2): record scroll-baseline3 findings and availability fix
+
+commit 47106d893f5fab19e70c8a7a7a9d84ecc3f08415
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 17:33:28 2026 +0200
+
+    perf(grid): probe original availability off the GTK thread (fs_ms 4484 -> 0)
+    
+    Measured in scroll-baseline3.log: a single load_visual on a cold external
+    drive blocked the GTK main thread for fs_ms=4484, producing
+    worst_frame_ms=7408 (folder_virtual_bind_slow row=1351 elapsed_ms=4506).
+    
+    load_visual previously called source::cached_file_available (a synchronous
+    Path::is_file stat) on every bind. Replace it with an async gio
+    query_info_async probe gated by a new PhotoObject.original-checked flag, so
+    each original is stat'ed once on a GIO worker and the offline badge updates
+    via the main-context callback. SquareTile::refresh_availability and
+    apply_availability now read the shared value instead of re-statting.
+    
+    cargo test --release: 76 passed.
+
+commit 74399ba174e3e22da5cb1381ca3d1578f57f880d
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 16:43:37 2026 +0200
+
+    docs(phase2): document index=N first-differing-row trace
+
+commit c5e24662d4b6937dc369fedc3227632fe066c6be
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 16:43:23 2026 +0200
+
+    perf(grid): trace first differing folder row, not just row 0
+    
+    Lets the next PICASA_TRACE run name the exact row/field that defeats the
+    unchanged short-circuit, closing the Rank 1 root-cause question.
+
+commit 0802ab5c30d4f11868966aa13143b5b3e2fb13d0
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 16:41:35 2026 +0200
+
+    docs(phase2): status — Rank 1 incremental splice, phase 3-5 findings, GUI blocker
+
+commit 46ed7f0b10e1b21eccf54bffb26a8bde50917403
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 16:39:45 2026 +0200
+
+    docs(phase2): pending GUI measurement for incremental folder-store splice
+
+commit 3efd6ff31915cd09bcbdc4379f11522747ead55a
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 16:39:35 2026 +0200
+
+    perf(grid): incremental folder-store splice + mismatch trace (model_ms 1467 pending re-measure)
+    
+    Why: old_rows=949 -> new_rows=949 still took model_ms=1467 because the
+    all-or-nothing 'unchanged' check (never observed to fire in
+    scroll-baseline*.log) forced a full detach/splice/attach whenever any row
+    differed. Replace it with longest-common-prefix/suffix: identical streams
+    return without touching the model; localized changes splice only the changed
+    span in place, so the live ListView rebinds only those rows.
+    
+    Also add PICASA_TRACE 'folder_store_first_row' to name the first differing
+    field on the next human run.
+    
+    cargo test folder_stream_tests: 5 passed. GUI re-measure pending.
+
+commit e0265109b95b62fdb97beca935fb39f97734efd2
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 16:24:30 2026 +0200
+
+    perf(phase2): instrument scroll + thumbnail load; Rank 3/4 disproven
+    
+    - Step 1: scroll_handler + scroll_handler_freq (pick/scan/header/sidebar ms)
+    - Step 2: load_visual/unload_visual/viewport_tiles + thumb_load_freq rollup
+    - Findings: handler cheap (pick_calls=1, scan_ms=0); load_visual cheap
+      (7333/7819 @0ms, fs_ms=0). Worst frames coincide with folder_store_update
+      model_ms=1036..1467 (Rank 1). Re-scoped TODO.PHASE2.md.
+
+commit 90a92472a4af7ea1f89fdb2b96339ec01a915367
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 16:00:20 2026 +0200
+
+    Phase2
+
+commit 07f53f06b968b2320122bdcb754f1445bcdbd758
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 15:57:15 2026 +0200
+
+    docs(phase1): report — Rank 1 rejected, Rank 2 applied
+
+commit dc199e8c52122a1a3f16e14f763836553035d431
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 15:55:08 2026 +0200
+
+    perf(grid): HashSet selected-ids for folder styles (spfid_calls 1182 → 0, ms 114 → 3)
+
+commit a1edf96a9e8a25356f013d9918615bb36f8ea799
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 15:25:26 2026 +0200
+
+    Optimization Phase 1-feels faster
+
+commit e299c788e5c81b5af3cdc5c51fc1d3fc07c61d6d
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 15:23:34 2026 +0200
+
+    perf(phase1): baseline measurements
+
+commit c5a0ec88835f9680a4a3eb7998062aa7cac50548
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 15:13:56 2026 +0200
+
+    chore: init pic-rs 1.0.0
+
+commit c407ac6899538db862181bc2138fe5379089f162
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 15:09:08 2026 +0200
+
+    Cargo
+
+commit 67f2ef1792f486f0908816c3d690843490adb647
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 14:46:59 2026 +0200
+
+    Add todo deepseek
+
+commit d4620526b3af6b79290ec9b796dbcffef87b1ae4
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 14:42:56 2026 +0200
+
+    Before Deepseek help
+
+commit 03160a7446fb185b0e9b499af2660a03ebeec384
+Author: froggy744 <petie74@gmail.com>
+Date:   Thu Sep 10 12:53:28 2026 +0200
+
+    Initial commit

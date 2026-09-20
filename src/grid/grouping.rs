@@ -202,29 +202,11 @@ impl Gallery {
         self.pending_folder_target.borrow().is_some()
     }
 
-    /// The continuous Folder stream is fully constructed (not merely the
-    /// interim scoped snapshot) and ready for folder navigation.
-    pub fn folder_stream_ready(&self) -> bool {
-        !self.stream_building.get() && self.folder_cache.borrow().is_some()
-    }
-
-    /// Drop the cached Folder stream. Callers run this after photos changed
-    /// outside Folder mode so a stale stream (missing newly imported shares)
-    /// is never restored as if it were current.
-    pub fn invalidate_folder_cache(&self) {
-        self.folder_cache.replace(None);
-    }
-
     /// Focus the search-selected folder only after its real Folder rows exist.
     /// A cache restore makes those rows available immediately; a progressive
-    /// build makes them available once ranges and rows have been rebuilt. The
-    /// scoped snapshot shown while the full stream prewarms must NOT satisfy
-    /// the focus, otherwise the target is cleared before the swap-in.
+    /// build makes them available once ranges and rows have been rebuilt.
     pub fn try_focus_pending_folder(&self) -> bool {
-        if self.stream_building.get()
-            || self.folder_cache.borrow().is_none()
-            || self.group_mode.get() != GroupMode::Folder
-        {
+        if self.stream_building.get() || self.group_mode.get() != GroupMode::Folder {
             return false;
         }
         let Some((folder_id, folder_path)) = self.pending_folder_target.borrow().clone() else {

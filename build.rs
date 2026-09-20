@@ -14,6 +14,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    // Fedora/Linux proof of concept; do not link private transports for other OSes.
+    #[cfg(target_os="linux")]
+    {
+        let samba=pkg_config::Config::new().probe("smbclient")
+            .expect("Install libsmbclient-devel for direct SMB support");
+        let nfs=pkg_config::Config::new().probe("libnfs")
+            .expect("Install libnfs-devel for direct NFS support");
+        let mut cc=cc::Build::new();
+        cc.file("native/private_smb.c").file("native/private_nfs.c");
+        for path in samba.include_paths.iter().chain(nfs.include_paths.iter()) {cc.include(path);}
+        cc.compile("pic_private_transports");
+        println!("cargo:rerun-if-changed=native/private_smb.c");
+        println!("cargo:rerun-if-changed=native/private_nfs.c");
+    }
+
     println!("cargo:rerun-if-changed=themes");
     println!("cargo:rerun-if-changed=images");
 

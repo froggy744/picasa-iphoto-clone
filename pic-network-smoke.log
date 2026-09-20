@@ -1,0 +1,898 @@
+warning: unused import: `Instant`
+ --> src/edit/editor.rs:4:27
+  |
+4 | use std::time::{Duration, Instant};
+  |                           ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary braces around function argument
+   --> src/window/photo_actions.rs:277:9
+    |
+277 |         { dismiss_menu.clone() },
+    |         ^^                    ^^
+    |
+    = note: `#[warn(unused_braces)]` (part of `#[warn(unused)]`) on by default
+help: remove these braces
+    |
+277 -         { dismiss_menu.clone() },
+277 +         dismiss_menu.clone(),
+    |
+
+warning: use of deprecated struct `gtk4::MessageDialog`: Since 4.10
+  --> src/main.rs:68:35
+   |
+68 |                 let dialog = gtk::MessageDialog::builder()
+   |                                   ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+    --> src/collage/editor.rs:1344:23
+     |
+1344 |     let dialog = gtk::Dialog::new();
+     |                       ^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/collage/editor.rs:1462:23
+     |
+1462 |     let dialog = gtk::FileChooserNative::new(
+     |                       ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+  --> src/edit/export.rs:11:27
+   |
+11 |         let dialog = gtk::FileChooserNative::new(
+   |                           ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::MessageDialog`: Since 4.10
+   --> src/settings.rs:624:23
+    |
+624 |     let dialog = gtk::MessageDialog::builder()
+    |                       ^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+   --> src/window/dialogs.rs:140:23
+    |
+140 |     let dialog = gtk::Dialog::new();
+    |                       ^^^^^^
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+   --> src/window/dialogs.rs:702:37
+    |
+702 | fn key_controller_log(dialog: &gtk::Dialog, controller: gtk::EventControllerKey) {
+    |                                     ^^^^^^
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+   --> src/window/dialogs.rs:755:23
+    |
+755 |     let dialog = gtk::Dialog::new();
+    |                       ^^^^^^
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+    --> src/window/dialogs.rs:1205:23
+     |
+1205 |     let dialog = gtk::Dialog::new();
+     |                       ^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/window/build.rs:2397:27
+     |
+2397 |         let dialog = gtk::FileChooserNative::new(
+     |                           ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/window/build.rs:2897:27
+     |
+2897 |         let dialog = gtk::FileChooserNative::new(
+     |                           ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::style_context`: Since 4.10
+  --> src/albums/view.rs:20:10
+   |
+20 |         .style_context()
+   |          ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::StyleContextExt::add_provider`: Since 4.10
+  --> src/albums/view.rs:21:10
+   |
+21 |         .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+   |          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::style_context`: Since 4.10
+  --> src/albums/view.rs:92:10
+   |
+92 |         .style_context()
+   |          ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::StyleContextExt::add_provider`: Since 4.10
+  --> src/albums/view.rs:93:10
+   |
+93 |         .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+   |          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocated_width`: Since 4.12
+   --> src/albums_view.rs:223:22
+    |
+223 |                 card.allocated_width(),
+    |                      ^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocated_width`: Since 4.12
+   --> src/albums_view.rs:257:22
+    |
+257 |                 card.allocated_width(),
+    |                      ^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::style_context`: Since 4.10
+    --> src/albums_view.rs:1375:47
+     |
+1375 |                 let count_color = photo_count.style_context().color();
+     |                                               ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::StyleContextExt::color`: Since 4.10
+    --> src/albums_view.rs:1375:63
+     |
+1375 |                 let count_color = photo_count.style_context().color();
+     |                                                               ^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+   --> src/collage/editor.rs:175:13
+    |
+175 |         css.load_from_data(&css_data);
+    |             ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
+    --> src/collage/editor.rs:1344:31
+     |
+1344 |     let dialog = gtk::Dialog::new();
+     |                               ^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+    --> src/collage/editor.rs:1348:12
+     |
+1348 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+     |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+    --> src/collage/editor.rs:1349:32
+     |
+1349 |     let export_button = dialog.add_button("Export", gtk::ResponseType::Ok);
+     |                                ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+    --> src/collage/editor.rs:1351:12
+     |
+1351 |     dialog.set_default_response(gtk::ResponseType::Ok);
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+    --> src/collage/editor.rs:1353:26
+     |
+1353 |     let content = dialog.content_area();
+     |                          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+    --> src/collage/editor.rs:1427:16
+     |
+1427 |         dialog.connect_response(move |_, response| {
+     |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::show`: Since 4.10
+    --> src/collage/editor.rs:1450:12
+     |
+1450 |     dialog.show();
+     |            ^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/collage/editor.rs:1462:42
+     |
+1462 |     let dialog = gtk::FileChooserNative::new(
+     |                                          ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+    --> src/collage/editor.rs:1469:12
+     |
+1469 |     dialog.set_current_name(&format!("collage.{extension}"));
+     |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::add_filter`: Since 4.10
+    --> src/collage/editor.rs:1476:12
+     |
+1476 |     dialog.add_filter(&filter);
+     |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/collage/editor.rs:1482:33
+     |
+1482 |         let Some(path) = dialog.file().and_then(|file| file.path()) else {
+     |                                 ^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/css/mod.rs:46:10
+   |
+46 |     base.load_from_data(BASE);
+   |          ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/css/mod.rs:54:14
+   |
+54 |     platform.load_from_data(PLATFORM);
+   |              ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/css/mod.rs:65:20
+   |
+65 |     square_corners.load_from_data(SQUARE_CORNERS);
+   |                    ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+  --> src/edit/export.rs:11:46
+   |
+11 |         let dialog = gtk::FileChooserNative::new(
+   |                                              ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+  --> src/edit/export.rs:23:16
+   |
+23 |         dialog.set_current_name(&filename);
+   |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+  --> src/edit/export.rs:32:51
+   |
+32 |                 if let Some(destination) = dialog.file().and_then(|file| file.path()) {
+   |                                                   ^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
+    --> src/edit/editor.rs:1766:27
+     |
+1766 |         let row_y = first.allocation().y();
+     |                           ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
+    --> src/edit/editor.rs:1771:23
+     |
+1771 |             if widget.allocation().y() == row_y {
+     |                       ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+    --> src/edit/editor.rs:1881:18
+     |
+1881 |         edit_css.load_from_data(crate::window::EDIT_PANEL_CSS);
+     |                  ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
+    --> src/edit/editor.rs:1951:21
+     |
+1951 |             if flow.allocation().width() > 0 {
+     |                     ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
+    --> src/edit/editor.rs:1968:26
+     |
+1968 |                 if (flow.allocation().width() - (position - 28)).abs() <= 8 {
+     |                          ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
+    --> src/edit/editor.rs:1979:18
+     |
+1979 |             flow.allocation()
+     |                  ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
+    --> src/edit/editor.rs:2005:30
+     |
+2005 |         assert!(tile_picture.allocation().height() >= tile_min_height);
+     |                              ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::hide`: Since 4.10
+  --> src/settings.rs:67:24
+   |
+67 |                 window.hide();
+   |                        ^^^^
+
+warning: use of deprecated associated function `gtk4::MessageDialog::builder`: Since 4.10
+   --> src/settings.rs:624:38
+    |
+624 |     let dialog = gtk::MessageDialog::builder()
+    |                                      ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::transient_for`: Since 4.10
+   --> src/settings.rs:625:10
+    |
+625 |         .transient_for(parent)
+    |          ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::modal`: Since 4.10
+   --> src/settings.rs:626:10
+    |
+626 |         .modal(true)
+    |          ^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::message_type`: Since 4.10
+   --> src/settings.rs:627:10
+    |
+627 |         .message_type(gtk::MessageType::Warning)
+    |          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::buttons`: Since 4.10
+   --> src/settings.rs:628:10
+    |
+628 |         .buttons(gtk::ButtonsType::Cancel)
+    |          ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::text`: Since 4.10
+   --> src/settings.rs:629:10
+    |
+629 |         .text(title)
+    |          ^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::secondary_text`: Since 4.10
+   --> src/settings.rs:630:10
+    |
+630 |         .secondary_text(message)
+    |          ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::build`: Since 4.10
+   --> src/settings.rs:631:10
+    |
+631 |         .build();
+    |          ^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/settings.rs:632:12
+    |
+632 |     dialog.add_button("Continue", gtk::ResponseType::Accept);
+    |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+   --> src/settings.rs:633:12
+    |
+633 |     dialog.connect_response(move |dialog, response| {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
+    --> src/sidebar.rs:1785:58
+     |
+1785 |                         .unwrap_or_else(|| f64::from(row.allocation().y()));
+     |                                                          ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+   --> src/window/theme.rs:151:22
+    |
+151 |             provider.load_from_data(base.css.as_str());
+    |                      ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+   --> src/window/theme.rs:207:22
+    |
+207 |             provider.load_from_data(theme.css.as_str());
+    |                      ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
+   --> src/window/dialogs.rs:140:31
+    |
+140 |     let dialog = gtk::Dialog::new();
+    |                               ^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/window/dialogs.rs:150:12
+    |
+150 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/window/dialogs.rs:151:33
+    |
+151 |     let connect_button = dialog.add_button("Connect", gtk::ResponseType::Accept);
+    |                                 ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+   --> src/window/dialogs.rs:152:12
+    |
+152 |     dialog.set_default_response(gtk::ResponseType::Accept);
+    |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+   --> src/window/dialogs.rs:166:26
+    |
+166 |     let content = dialog.content_area();
+    |                          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+   --> src/window/dialogs.rs:601:12
+    |
+601 |     dialog.connect_response(move |dialog, response| {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
+   --> src/window/dialogs.rs:755:31
+    |
+755 |     let dialog = gtk::Dialog::new();
+    |                               ^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/window/dialogs.rs:764:12
+    |
+764 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/window/dialogs.rs:766:10
+    |
+766 |         .add_button("Select This Folder", gtk::ResponseType::Accept)
+    |          ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+   --> src/window/dialogs.rs:769:12
+    |
+769 |     dialog.set_default_response(gtk::ResponseType::Accept);
+    |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+   --> src/window/dialogs.rs:771:26
+    |
+771 |     let content = dialog.content_area();
+    |                          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+    --> src/window/dialogs.rs:1166:16
+     |
+1166 |         dialog.connect_response(move |dialog, response| {
+     |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
+    --> src/window/dialogs.rs:1205:31
+     |
+1205 |     let dialog = gtk::Dialog::new();
+     |                               ^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+    --> src/window/dialogs.rs:1209:12
+     |
+1209 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+     |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+    --> src/window/dialogs.rs:1210:33
+     |
+1210 |     let connect_button = dialog.add_button("Connect", gtk::ResponseType::Accept);
+     |                                 ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+    --> src/window/dialogs.rs:1211:12
+     |
+1211 |     dialog.set_default_response(gtk::ResponseType::Accept);
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+    --> src/window/dialogs.rs:1213:26
+     |
+1213 |     let content = dialog.content_area();
+     |                          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+    --> src/window/dialogs.rs:1258:12
+     |
+1258 |     dialog.connect_response(move |dialog, response| {
+     |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/window/build.rs:2397:46
+     |
+2397 |         let dialog = gtk::FileChooserNative::new(
+     |                                              ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+    --> src/window/build.rs:2410:16
+     |
+2410 |         dialog.set_current_name(&filename);
+     |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/window/build.rs:2414:44
+     |
+2414 |                 if let Some(file) = dialog.file() {
+     |                                            ^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/window/build.rs:2897:46
+     |
+2897 |         let dialog = gtk::FileChooserNative::new(
+     |                                              ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/window/build.rs:2907:44
+     |
+2907 |                 if let Some(file) = dialog.file() {
+     |                                            ^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/window/photo_actions.rs:16:9
+   |
+16 |     css.load_from_data(crate::css::PHOTO_CONTEXT_MENU);
+   |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::MessageDialog::builder`: Since 4.10
+  --> src/main.rs:68:50
+   |
+68 |                 let dialog = gtk::MessageDialog::builder()
+   |                                                  ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::message_type`: Since 4.10
+  --> src/main.rs:69:22
+   |
+69 |                     .message_type(gtk::MessageType::Error)
+   |                      ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::buttons`: Since 4.10
+  --> src/main.rs:70:22
+   |
+70 |                     .buttons(gtk::ButtonsType::Close)
+   |                      ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::text`: Since 4.10
+  --> src/main.rs:71:22
+   |
+71 |                     .text("Could not open the photo library")
+   |                      ^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::secondary_text`: Since 4.10
+  --> src/main.rs:72:22
+   |
+72 |                     .secondary_text(error.to_string())
+   |                      ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::build`: Since 4.10
+  --> src/main.rs:73:22
+   |
+73 |                     .build();
+   |                      ^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+  --> src/main.rs:74:24
+   |
+74 |                 dialog.connect_response(|dialog, _| dialog.close());
+   |                        ^^^^^^^^^^^^^^^^
+
+warning: unused import: `gtk::prelude`
+ --> src/css/mod.rs:3:5
+  |
+3 | use gtk::prelude::*;
+  |     ^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src/collage/model.rs:387:13
+    |
+387 |         let mut project = CollageProject {
+    |             ----^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+   --> src/css/theme_discovery.rs:200:39
+    |
+200 |                     "traffic-light" | "traffic-light" | "trafficlights" => {
+    |                     ---------------   ^^^^^^^^^^^^^^^ no value can reach this
+    |                     |
+    |                     matches all the relevant values
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `window_for_close`
+  --> src/settings.rs:64:17
+   |
+64 |             let window_for_close = window.clone();
+   |                 ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_window_for_close`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+    --> src/sidebar.rs:1390:42
+     |
+1388 |             let matches = unsafe {
+     |                           ------ because it's nested under this `unsafe` block
+1389 |                 row.data::<SidebarFilter>("picasa-filter")
+1390 |                     .is_some_and(|value| unsafe { *value.as_ref() == filter })
+     |                                          ^^^^^^ unnecessary `unsafe` block
+     |
+     = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `row`
+    --> src/sidebar.rs:1624:14
+     |
+1624 |     let Some(row) = (|| {
+     |              ^^^ help: if this is intentional, prefix it with an underscore: `_row`
+
+warning: unnecessary `unsafe` block
+   --> src/smb_transport.rs:622:9
+    |
+622 |         unsafe {
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unused variable: `error`
+   --> src/thumbnail_display.rs:374:13
+    |
+374 |         Err(error) => {
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_error`
+
+warning: unused variable: `connect_button`
+    --> src/window/dialogs.rs:1210:9
+     |
+1210 |     let connect_button = dialog.add_button("Connect", gtk::ResponseType::Accept);
+     |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_connect_button`
+
+warning: unused variable: `path`
+    --> src/window/build.rs:3234:21
+     |
+3234 |                     path,
+     |                     ^^^^ help: try ignoring the field: `path: _`
+
+warning: unused variable: `count`
+    --> src/window/build.rs:3004:17
+     |
+3004 |             let count = roots.as_ref().map(|roots| roots.len()).unwrap_or(0);
+     |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_count`
+
+warning: unused variable: `kind`
+    --> src/window/build.rs:2612:41
+     |
+2612 |             let Some((root, generation, kind)) = next else {
+     |                                         ^^^^ help: if this is intentional, prefix it with an underscore: `_kind`
+
+warning: unused variable: `mount`
+   --> src/window/layout.rs:575:51
+    |
+575 |     volume_monitor.connect_mount_changed(move |_, mount| {
+    |                                                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
+
+warning: unused variable: `mount`
+   --> src/window/layout.rs:570:51
+    |
+570 |     volume_monitor.connect_mount_removed(move |_, mount| {
+    |                                                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
+
+warning: unused variable: `mount`
+   --> src/window/layout.rs:565:49
+    |
+565 |     volume_monitor.connect_mount_added(move |_, mount| {
+    |                                                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
+
+warning: unused variable: `changed`
+   --> src/window/layout.rs:353:24
+    |
+353 |                     Ok(changed) => {
+    |                        ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_changed`
+
+warning: unused variable: `file`
+   --> src/window/build.rs:235:50
+    |
+235 |                 monitor.connect_changed(move |_, file, other_file, event| {
+    |                                                  ^^^^ help: if this is intentional, prefix it with an underscore: `_file`
+
+warning: unused variable: `other_file`
+   --> src/window/build.rs:235:56
+    |
+235 |                 monitor.connect_changed(move |_, file, other_file, event| {
+    |                                                        ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_other_file`
+
+warning: unused variable: `search`
+    --> src/window/build.rs:2497:9
+     |
+2497 |         search,
+     |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_search`
+
+warning: unused variable: `add_network_share_slot_for_import`
+    --> src/window/build.rs:2810:9
+     |
+2810 |     let add_network_share_slot_for_import = add_network_share_slot.clone();
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_add_network_share_slot_for_import`
+
+warning: unused variable: `search`
+   --> src/window/search.rs:207:22
+    |
+207 |         if let (Some(search), Some(popup)) = (search_weak.upgrade(), popup_weak.upgrade()) {
+    |                      ^^^^^^ help: if this is intentional, prefix it with an underscore: `_search`
+
+warning: method `add_photos` is never used
+   --> src/collage/editor.rs:136:12
+    |
+126 | impl CollageEditor {
+    | ------------------ method in this implementation
+...
+136 |     pub fn add_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
+    |            ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `add_photos` is never used
+   --> src/collage/model.rs:153:12
+    |
+102 | impl CollageProject {
+    | ------------------- method in this implementation
+...
+153 |     pub fn add_photos(&mut self, photos: Vec<PhotoObject>) {
+    |            ^^^^^^^^^^
+
+warning: field `interactive` is never read
+  --> src/edit/preview.rs:94:5
+   |
+84 | struct PreviewJob {
+   |        ---------- field in this struct
+...
+94 |     interactive: bool,
+   |     ^^^^^^^^^^^
+
+warning: function `apply_recipe_without_crop` is never used
+  --> src/edit/render.rs:31:8
+   |
+31 | pub fn apply_recipe_without_crop(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `clear_photo` is never used
+   --> src/grid/tile.rs:656:8
+    |
+164 | impl SquareTile {
+    | --------------- method in this implementation
+...
+656 |     fn clear_photo(&self) {
+    |        ^^^^^^^^^^^
+
+warning: method `visible_folder_id` is never used
+   --> src/grid/grouping.rs:286:12
+    |
+ 27 | impl Gallery {
+    | ------------ method in this implementation
+...
+286 |     pub fn visible_folder_id(&self) -> Option<i64> {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: method `refresh_availability` is never used
+    --> src/grid/virtualization.rs:1182:12
+     |
+ 208 | impl Gallery {
+     | ------------ method in this implementation
+...
+1182 |     pub fn refresh_availability(&self) {
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `hover_select_source` and `pointer_pressed` are never read
+   --> src/grid/view.rs:132:5
+    |
+ 52 | pub struct Gallery {
+    |            ------- fields in this struct
+...
+132 |     hover_select_source: Rc<RefCell<Option<glib::SourceId>>>,
+    |     ^^^^^^^^^^^^^^^^^^^
+133 |     pointer_pressed: Rc<Cell<bool>>,
+    |     ^^^^^^^^^^^^^^^
+
+warning: methods `selected_position` and `is_at_vertical_boundary` are never used
+   --> src/grid/selection.rs:5:12
+    |
+  1 | impl Gallery {
+    | ------------ methods in this implementation
+...
+  5 |     pub fn selected_position(&self) -> Option<usize> {
+    |            ^^^^^^^^^^^^^^^^^
+...
+148 |     pub fn is_at_vertical_boundary(&self, direction: i32) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `folder_id_from_named_ancestor` is never used
+   --> src/grid/selection.rs:923:4
+    |
+923 | fn folder_id_from_named_ancestor(widget: &gtk::Widget) -> Option<i64> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `grid_zoom_menu` is never read
+  --> src/infobar.rs:24:9
+   |
+10 | pub struct InfoBar {
+   |            ------- field in this struct
+...
+24 |     pub grid_zoom_menu: gtk::MenuButton,
+   |         ^^^^^^^^^^^^^^
+
+warning: function `rotated_thumbnail` is never used
+  --> src/photo_texture.rs:52:8
+   |
+52 | pub fn rotated_thumbnail(path: &str, rotation: i32) -> Option<gtk::gdk::Paintable> {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: field `id` is never read
+  --> src/scanner.rs:27:9
+   |
+25 |     PhotoIndexed {
+   |     ------------ field in this variant
+26 |         path: PathBuf,
+27 |         id: i64,
+   |         ^^
+   |
+   = note: `ScanEvent` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `scan` is never used
+  --> src/scanner.rs:79:8
+   |
+79 | pub fn scan(root: &str, events: Option<&Sender<ScanEvent>>) -> Result<usize> {
+   |        ^^^^
+
+warning: function `delete_smb_credentials` is never used
+    --> src/smb_transport.rs:1081:8
+     |
+1081 | pub fn delete_smb_credentials(uri: &str) -> Result<(), String> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `clear_trace_op` is never used
+   --> src/source.rs:260:15
+    |
+260 | pub(crate) fn clear_trace_op() {
+    |               ^^^^^^^^^^^^^^
+
+warning: function `wait_for_priority_requests` is never used
+   --> src/thumbnail.rs:191:8
+    |
+191 | pub fn wait_for_priority_requests() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_many` is never used
+ --> src/thumbnail/batch.rs:1:8
+  |
+1 | pub fn create_many(
+  |        ^^^^^^^^^^^
+
+warning: function `install_gallery_zoom_scroll` is never used
+   --> src/window/navigation.rs:588:4
+    |
+588 | fn install_gallery_zoom_scroll(scrolled: &gtk::ScrolledWindow, gallery: Rc<grid::Gallery>) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variant `Scoped` is never constructed
+   --> src/window/library.rs:130:5
+    |
+129 | enum GridPayload {
+    |      ----------- variant in this enum
+130 |     Scoped(Vec<db::Photo>),
+    |     ^^^^^^
+
+warning: method `active_window_controls` is never used
+   --> src/window/theme.rs:128:19
+    |
+ 55 | impl ThemeEngine {
+    | ---------------- method in this implementation
+...
+128 |     pub(crate) fn active_window_controls(&self) -> WindowControls {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `exact_photo_navigation_never_schedules_generic_folder_scroll` is never used
+   --> src/window/navigation.rs:729:8
+    |
+729 |     fn exact_photo_navigation_never_schedules_generic_folder_scroll() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/smb_transport.rs:726:18
+    |
+726 |     fn lock_lane(&self, lane: SmbLane) -> FlightGuard {
+    |                  ^^^^^                    ^^^^^^^^^^^ the same lifetime is hidden here
+    |                  |
+    |                  the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+726 |     fn lock_lane(&self, lane: SmbLane) -> FlightGuard<'_> {
+    |                                                      ++++
+
+warning: `pic-rs` (bin "pic-rs" test) generated 135 warnings (run `cargo fix --bin "pic-rs" -p pic-rs --tests` to apply 20 suggestions)
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.12s
+     Running unittests src/main.rs (target/debug/deps/pic_rs-4e4db103a6962e26)
+
+running 1 test
+test smb_transport::tests::private_network_mount_list_smoke ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 308 filtered out; finished in 7.08s
+

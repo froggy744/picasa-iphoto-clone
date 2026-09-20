@@ -74,9 +74,13 @@ fn thumbnail_worker_threads(items: &[(String, Option<i64>, Option<i64>)]) -> usi
     // RAW preview decoding is substantially more CPU- and memory-intensive
     // than JPEG thumbnailing. Keep mixed refreshes responsive while still
     // allowing ordinary image batches to use the available cores.
-    let has_raw = items
-        .iter()
-        .any(|(path, _, _)| crate::image_format::uses(path, crate::image_format::DecoderKind::Raw));
+    #[cfg(target_os="linux")]
+    if items.iter().any(|(path,_,_)| crate::network_shares::private(path)) {
+        return available.clamp(1,4);
+    }
+    let has_raw = items.iter().any(|(path, _, _)| {
+        crate::image_format::uses(path, crate::image_format::DecoderKind::Raw)
+    });
     if has_raw {
         available.clamp(1, 2)
     } else {
@@ -90,77 +94,11 @@ pub fn clear_cache() -> Result<()> {
         return Ok(());
     }
 
-    for entry in fs::read_dir(&directory)? {
+    for entry in fs::read_dir(directory)? {
         let path = entry?.path();
         if path.is_file() {
-            // Legacy flat-layout thumbnails left from before sharding.
             fs::remove_file(path)?;
         }
-    }
-    let files_root = directory.join("files");
-    if files_root.is_dir() {
-        for shard in fs::read_dir(&files_root)? {
-            let shard_path = shard?.path();
-            if !shard_path.is_dir() {
-                continue;
-            }
-            for entry in fs::read_dir(&shard_path)? {
-                let path = entry?.path();
-                if path.is_file() {
-                    fs::remove_file(path)?;
-                }
-            }
-            let _ = fs::remove_dir(&shard_path);
-        }
-    }
-    Ok(())
-}
-
-/// Move a photo's thumbnail (and decode-failure marker) from the cache key
-/// of the old source path to the one of the new path. Used by the gvfs-path
-/// migration so an unmounted-share import keeps its thumbnails instead of
-/// regenerating them. Best-effort: a miss only regenerates lazily.
-pub fn migrate_cache_entry(
-    old_reference: &str,
-    new_reference: &str,
-    mtime: Option<i64>,
-    size_bytes: Option<i64>,
-) {
-    let old_name = cache_file_name(old_reference, mtime, size_bytes);
-    let new_name = cache_file_name(new_reference, mtime, size_bytes);
-    if old_name == new_name {
-        return;
-    }
-    let Some(old_path) = existing_cache_path(old_reference, mtime, size_bytes)
-        .ok()
-        .flatten()
-    else {
-        return;
-    };
-    let Ok(new_path) = resolve_cache_path(new_reference, mtime, size_bytes) else {
-        return;
-    };
-    if let Some(parent) = new_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if fs::rename(&old_path, &new_path).is_ok() {
-        let _ = fs::rename(
-            old_path.with_extension("failed"),
-            new_path.with_extension("failed"),
-        );
-    }
-}
-
-/// Wipe the whole application cache root - `thumbs/`, `source/`
-/// (materialized remote RAWs), `wallpaper/`, and anything else under it.
-/// Used by "Clear all": the database is emptied too, so no cached file can
-/// still be referenced. `cache_dir()` re-creates `thumbs/` on demand, and
-/// `create_dir_all` on each write re-creates shard folders, so nothing needs
-/// to be restored here.
-pub fn clear_all_cache() -> Result<()> {
-    let directory = cache_dir()?;
-    if directory.exists() {
-        fs::remove_dir_all(&directory)?;
     }
     Ok(())
 }

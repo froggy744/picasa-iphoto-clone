@@ -1,0 +1,33 @@
+--- a/src/window/build.rs
++++ b/src/window/build.rs
+@@ -2811,7 +2811,29 @@
+     let connection_for_share = connection.clone();
+     let scan_job_for_share = scan_job.clone();
+     let start_next_scan_for_share = start_next_scan.clone();
+-    let sidebar_refresh_for_share = availability_refresh.clone();
++    // Registration changes the *set of sidebar rows*, not necessarily any
++    // availability state. Refresh Network Shares immediately from the database;
++    // availability refresh alone may report `no_updates` and skip the new row.
++    let sidebar_refresh_for_share: Rc<dyn Fn()> = {
++        let availability_refresh = availability_refresh.clone();
++        let sidebar = sidebar_for_unavailable.clone();
++        let connection = connection.clone();
++        Rc::new(move || {
++            if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
++                match db::folders_cached(&connection.borrow()) {
++                    Ok(folders) => sidebar::refresh_folder_rows(
++                        &sidebar,
++                        &folders,
++                        &availability_refresh,
++                    ),
++                    Err(error) => crate::source::net_trace(format!(
++                        "network_share_sidebar_refresh_failed error={error}"
++                    )),
++                }
++            }
++            availability_refresh();
++        })
++    };
+     let window_for_share = window.clone();
+     add_network_share_slot.replace(Some(Rc::new(move || {
+         let connection = connection_for_share.clone();

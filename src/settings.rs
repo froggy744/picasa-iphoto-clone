@@ -207,7 +207,7 @@ fn folders_page(
         Some(automatic.upcast_ref()),
     );
 
-    let folders = crate::db::folders_cached(&connection.borrow()).unwrap_or_default();
+    let folders = crate::db::folders(&connection.borrow()).unwrap_or_default();
     for folder in &folders {
         let status = if folder.available {
             "Available"
@@ -410,7 +410,7 @@ fn library_page(
     append_row(
         &list,
         "Clear all",
-        Some("Indexed photos, albums, registered folders, and every cached file (thumbnails, materialized sources, wallpapers) are all deleted."),
+        Some("Indexed photos, albums, registered folders, and cached thumbnails are all deleted."),
         Some(clear_all_button.upcast_ref()),
     );
     content.append(&list);
@@ -469,8 +469,8 @@ fn library_page(
             button_for_cleanup.set_sensitive(false);
             clean_status.set_text("Cleaning thumbnail cache…");
             // The database connection is main-thread only, so build the
-            // expected key sets here and let a worker do the file work.
-            let valid = match crate::thumbnail::valid_cache_names(&connection.borrow()) {
+            // expected key set here and let a worker do the file work.
+            let valid = match crate::thumbnail::valid_cache_paths(&connection.borrow()) {
                 Ok(valid) => valid,
                 Err(error) => {
                     eprintln!("Could not collect thumbnail cache keys: {error:#}");
@@ -480,29 +480,12 @@ fn library_page(
                     return;
                 }
             };
-            let valid_sources = match crate::thumbnail::valid_source_names(&connection.borrow()) {
-                Ok(valid) => valid,
-                Err(error) => {
-                    eprintln!("Could not collect source cache keys: {error:#}");
-                    clean_status.set_text("Could not clean the thumbnail cache.");
-                    button_for_cleanup.set_sensitive(true);
-                    cleanup_running.set(false);
-                    return;
-                }
-            };
             let (sender, receiver) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let result = crate::thumbnail::cleanup_cache(&valid)
-                    .and_then(|cleanup| {
-                        // Materialized remote sources dwarf the thumbnails;
-                        // prune what the current library no longer references.
-                        crate::thumbnail::cleanup_sources(&valid_sources)
-                            .map(|source_cleanup| (cleanup, source_cleanup))
-                    })
-                    .and_then(|(cleanup, source_cleanup)| {
-                        let stats = crate::thumbnail::cache_stats(&valid)?;
-                        Ok((cleanup, source_cleanup, stats))
-                    });
+                let result = crate::thumbnail::cleanup_cache(&valid).and_then(|cleanup| {
+                    let stats = crate::thumbnail::cache_stats(&valid)?;
+                    Ok((cleanup, stats))
+                });
                 let _ = sender.send(result);
             });
             // The clicked handler may run again, so the polling closure gets
@@ -517,15 +500,12 @@ fn library_page(
             glib::timeout_add_local(std::time::Duration::from_millis(50), move || match receiver
                 .try_recv()
             {
-                Ok(Ok((cleanup, source_cleanup, stats))) => {
-                    let mut combined = cleanup;
-                    combined.removed += source_cleanup.removed;
-                    combined.bytes_freed += source_cleanup.bytes_freed;
-                    poll_status.set_text(&cleanup_result_text(&combined));
+                Ok(Ok((cleanup, stats))) => {
+                    poll_status.set_text(&cleanup_result_text(&cleanup));
                     poll_cached.set_text(&format_count(stats.cached));
                     poll_required.set_text(&format_count(stats.required));
                     poll_unused.set_text(&format_count(stats.unused()));
-                    poll_size.set_text(&format_bytes(stats.bytes + stats.source_bytes));
+                    poll_size.set_text(&format_bytes(stats.bytes));
                     poll_button.set_sensitive(true);
                     poll_running.set(false);
                     glib::ControlFlow::Break
@@ -650,7 +630,7 @@ fn refresh_thumbnail_cache_stats(
     unused: gtk::Label,
     size: gtk::Label,
 ) {
-    let valid = match crate::thumbnail::valid_cache_names(&connection.borrow()) {
+    let valid = match crate::thumbnail::valid_cache_paths(&connection.borrow()) {
         Ok(valid) => valid,
         Err(error) => {
             eprintln!("Could not collect thumbnail cache keys: {error:#}");
@@ -671,7 +651,7 @@ fn refresh_thumbnail_cache_stats(
                 cached.set_text(&format_count(stats.cached));
                 required.set_text(&format_count(stats.required));
                 unused.set_text(&format_count(stats.unused()));
-                size.set_text(&format_bytes(stats.bytes + stats.source_bytes));
+                size.set_text(&format_bytes(stats.bytes));
                 glib::ControlFlow::Break
             }
             Ok(Err(error)) => {
@@ -1053,11 +1033,7 @@ fn themes_page(
                 }
                 append_row(&list, &theme.name, None, Some(check.upcast_ref()));
             }
-            append_empty_state(
-                &list,
-                "No themes found in the themes folder",
-                themes.is_empty(),
-            );
+            append_empty_state(&list, "No themes found in the themes folder", themes.is_empty());
             section.append(&list);
         })
     };
@@ -1075,11 +1051,8 @@ fn themes_page(
     let square_corners = gtk::Switch::new();
     square_corners.set_valign(gtk::Align::Center);
     square_corners.set_active(
-        saved_bool(
-            &connection.borrow(),
-            crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY,
-        )
-        .unwrap_or(false),
+        saved_bool(&connection.borrow(), crate::db::THUMBNAIL_SQUARE_CORNERS_SETTING_KEY)
+            .unwrap_or(false),
     );
     {
         let connection = connection.clone();
@@ -1108,11 +1081,8 @@ fn themes_page(
     let fit_whole_photo = gtk::Switch::new();
     fit_whole_photo.set_valign(gtk::Align::Center);
     fit_whole_photo.set_active(
-        saved_bool(
-            &connection.borrow(),
-            crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
-        )
-        .unwrap_or(false),
+        saved_bool(&connection.borrow(), crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY)
+            .unwrap_or(false),
     );
     {
         let connection = connection.clone();
@@ -1750,7 +1720,11 @@ mod tests {
         let notified_for_callback = notified.clone();
         let display = gtk::gdk::Display::default().unwrap();
         let lightbox = Rc::new(crate::lightbox::Lightbox::new());
-        let engine = crate::window::theme::ThemeEngine::new(display, connection.clone(), lightbox);
+        let engine = crate::window::theme::ThemeEngine::new(
+            display,
+            connection.clone(),
+            lightbox,
+        );
         let (page, _refresh_appearance) = themes_page(
             connection.clone(),
             Rc::new(move || notified_for_callback.set(notified_for_callback.get() + 1)),

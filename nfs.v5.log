@@ -1,0 +1,382 @@
+NETWORK t=     0.0ms dt=    0.0ms tid=ThreadId(2) discovery_started
+NETWORK t=     0.1ms dt=    0.1ms tid=ThreadId(3) discovery_attempt attempt=1
+NETWORK t=     2.3ms dt=    2.2ms tid=ThreadId(3) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t=     2.3ms dt=    0.0ms tid=ThreadId(3) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(3) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(3) discovery_complete count=2
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(2) discovery_prefetch_done
+NETWORK t=    34.5ms dt=   32.1ms tid=main startup_phase recent_view_loaded ms=0.4
+STARTUP cold_start_ms=35 photos=649 displayed=50 folders=55 albums=0 scan=disabled rss_mb=61
+NETWORK t=    36.3ms dt=    1.8ms tid=main gallery_replace_start op=0 count=0 cache_scoped=true progressive=true
+NETWORK t=    36.3ms dt=    0.0ms tid=main gallery_replace_unchanged skip_rebuild
+NETWORK t=   198.4ms dt=  162.1ms tid=main shares_refresh_start
+NETWORK t=   198.8ms dt=    0.4ms tid=main shares_refresh_done count=7
+NETWORK t=   218.2ms dt=   19.4ms tid=main startup_phase layout_built ms=21.7
+NETWORK t=   219.3ms dt=    1.1ms tid=main startup_phase gallery_and_actions_built ms=22.8
+NETWORK t=   222.9ms dt=    3.6ms tid=main recovery_scheduled photos=649
+NETWORK t=   223.7ms dt=    0.8ms tid=main startup_nfs_experimental_unavailable uri=nfs://DietPi.local/mnt/4TBP/Other/Tat%20Sing
+NETWORK t=   223.7ms dt=    0.0ms tid=main startup_nfs_experimental_unavailable uri=nfs://DietPi.local/mnt/4TBS/sg1/Extras-Stargate%20Atlantis
+NETWORK t=   223.7ms dt=    0.0ms tid=main startup_smb_probe uri=smb://dietpi.local/4tbs/pics-sport/NMB%20Half%202025/FB%20NMB%20Half%202025%20%20All-Timestamp delay_ms=3700
+NETWORK t=   223.7ms dt=    0.0ms tid=main startup_smb_probe uri=smb://DietPi.local:445/4TBP/mypics-2026/Tats%28Shoot%29_2/tat%20photshoot%203 delay_ms=4300
+NETWORK t=   223.7ms dt=    0.0ms tid=main startup_smb_probe uri=smb://DietPi.local:445/4TBS/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20%281983%29 delay_ms=4900
+NETWORK t=   223.7ms dt=    0.0ms tid=main startup_smb_probe uri=smb://DietPi.local:445/4TBS/sg1 delay_ms=5500
+NETWORK t=   223.8ms dt=    0.0ms tid=main startup_smb_probe uri=smb://DietPi.local:445/epg delay_ms=6100
+NETWORK t=   223.8ms dt=    0.0ms tid=main startup_phase build_done_pre_present ms=27.3
+NETWORK t=   225.6ms dt=    1.9ms tid=ThreadId(6) recovery_start total=0 offline=0
+NETWORK t=   225.7ms dt=    0.0ms tid=ThreadId(6) recovery_done created=0 failed=0 offline=0 cancelled=false
+WARNING: radv is not a conformant Vulkan implementation, testing use only.
+NETWORK t=   294.7ms dt=   69.1ms tid=main ui_stall ms=294.9
+NETWORK t=   294.8ms dt=    0.0ms tid=main shares_counts_ready count=7
+NETWORK t=   320.5ms dt=   25.8ms tid=main startup_phase first_idle_batch ms=124.0
+NETWORK t=   320.5ms dt=    0.0ms tid=main gallery_replace_start op=0 count=50 cache_scoped=true progressive=true
+===== SCAN COMPLETE: imported=0 failed=0 | progressive gallery updates complete =====
+NETWORK t=  3923.8ms dt= 3603.3ms tid=ThreadId(15) smb_stat_start url=smb://dietpi.local/4tbs/pics-sport/NMB Half 2025/FB NMB Half 2025  All-Timestamp lane=background
+NETWORK t=  3926.5ms dt=    2.7ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  3927.6ms dt=    1.1ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  3927.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  3927.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  3956.0ms dt=   28.4ms tid=pic-smb-transport smb_transport stat ms=28.3
+NETWORK t=  3956.5ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  3973.9ms dt=   17.4ms tid=main startup_smb_probe_done uri=smb://dietpi.local/4tbs/pics-sport/NMB%20Half%202025/FB%20NMB%20Half%202025%20%20All-Timestamp ok=true reason=ok
+NETWORK t=  4225.8ms dt=  251.9ms tid=ThreadId(17) smb_stat_start url=smb://dietpi.local/4tbs/pics-sport/NMB Half 2025/FB NMB Half 2025  All-Timestamp lane=background
+NETWORK t=  4228.1ms dt=    2.3ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4228.9ms dt=    0.8ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4228.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4228.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4257.2ms dt=   28.3ms tid=pic-smb-transport smb_transport stat ms=28.2
+NETWORK t=  4257.8ms dt=    0.7ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  4257.9ms dt=    0.0ms tid=ThreadId(17) smb_stat_start url=smb://DietPi.local/4TBP/mypics-2026/Tats(Shoot)_2/tat photshoot 3 lane=background
+NETWORK t=  4259.8ms dt=    1.9ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4260.3ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4260.4ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4260.4ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4276.4ms dt=   16.0ms tid=pic-smb-transport smb_transport stat ms=16.0
+NETWORK t=  4276.8ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  4276.8ms dt=    0.0ms tid=ThreadId(17) smb_stat_start url=smb://DietPi.local/4TBS/series-kids/He-Man and the Masters of the Universe (1983) lane=background
+NETWORK t=  4278.8ms dt=    2.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4279.5ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4279.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4279.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4290.8ms dt=   11.3ms tid=pic-smb-transport smb_transport stat ms=11.3
+NETWORK t=  4291.3ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  4291.3ms dt=    0.0ms tid=ThreadId(17) smb_stat_start url=smb://DietPi.local/4TBS/sg1 lane=background
+NETWORK t=  4293.1ms dt=    1.8ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4293.7ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4293.7ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4293.7ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4303.9ms dt=   10.2ms tid=pic-smb-transport smb_transport stat ms=10.2
+NETWORK t=  4304.3ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  4304.4ms dt=    0.0ms tid=ThreadId(17) smb_stat_start url=smb://DietPi.local/epg/ lane=background
+NETWORK t=  4307.2ms dt=    2.8ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4307.8ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4307.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4307.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4317.6ms dt=    9.8ms tid=pic-smb-transport smb_transport stat ms=9.8
+NETWORK t=  4317.9ms dt=    0.3ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  4325.1ms dt=    7.1ms tid=main shares_refresh_start
+NETWORK t=  4325.7ms dt=    0.6ms tid=main shares_refresh_done count=7
+NETWORK t=  4375.8ms dt=   50.1ms tid=main shares_counts_ready count=7
+NETWORK t=  4523.9ms dt=  148.1ms tid=ThreadId(24) smb_stat_start url=smb://DietPi.local/4TBP/mypics-2026/Tats(Shoot)_2/tat photshoot 3 lane=background
+NETWORK t=  4526.1ms dt=    2.3ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4526.8ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4526.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4526.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4543.5ms dt=   16.6ms tid=pic-smb-transport smb_transport stat ms=16.6
+NETWORK t=  4543.9ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  4573.9ms dt=   30.0ms tid=main startup_smb_probe_done uri=smb://DietPi.local:445/4TBP/mypics-2026/Tats%28Shoot%29_2/tat%20photshoot%203 ok=true reason=ok
+NETWORK t=  5123.9ms dt=  550.0ms tid=ThreadId(26) smb_stat_start url=smb://DietPi.local/4TBS/series-kids/He-Man and the Masters of the Universe (1983) lane=background
+NETWORK t=  5126.2ms dt=    2.3ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  5126.8ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  5126.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  5126.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  5145.6ms dt=   18.8ms tid=pic-smb-transport smb_transport stat ms=18.8
+NETWORK t=  5146.0ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  5173.9ms dt=   27.9ms tid=main startup_smb_probe_done uri=smb://DietPi.local:445/4TBS/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20%281983%29 ok=true reason=ok
+NETWORK t=  5723.9ms dt=  550.0ms tid=ThreadId(28) smb_stat_start url=smb://DietPi.local/4TBS/sg1 lane=background
+NETWORK t=  5726.3ms dt=    2.4ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  5727.0ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  5727.0ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  5727.0ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  5749.7ms dt=   22.7ms tid=pic-smb-transport smb_transport stat ms=22.7
+NETWORK t=  5750.3ms dt=    0.6ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  5773.9ms dt=   23.6ms tid=main startup_smb_probe_done uri=smb://DietPi.local:445/4TBS/sg1 ok=true reason=ok
+NETWORK t=  6323.9ms dt=  550.0ms tid=ThreadId(30) smb_stat_start url=smb://DietPi.local/epg/ lane=background
+NETWORK t=  6326.2ms dt=    2.3ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  6326.8ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  6326.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  6326.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  6336.9ms dt=   10.0ms tid=pic-smb-transport smb_transport stat ms=10.0
+NETWORK t=  6337.2ms dt=    0.3ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  6373.9ms dt=   36.7ms tid=main startup_smb_probe_done uri=smb://DietPi.local:445/epg ok=true reason=ok
+NETWORK t=  9225.5ms dt= 2851.6ms tid=ThreadId(32) smb_stat_start url=smb://dietpi.local/4tbs/pics-sport/NMB Half 2025/FB NMB Half 2025  All-Timestamp lane=background
+NETWORK t=  9227.9ms dt=    2.4ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  9228.6ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  9228.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  9228.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  9246.5ms dt=   17.9ms tid=pic-smb-transport smb_transport stat ms=17.9
+NETWORK t=  9246.9ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  9247.0ms dt=    0.0ms tid=ThreadId(32) smb_stat_start url=smb://DietPi.local/4TBP/mypics-2026/Tats(Shoot)_2/tat photshoot 3 lane=background
+NETWORK t=  9249.0ms dt=    2.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  9249.6ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  9249.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  9249.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  9263.1ms dt=   13.5ms tid=pic-smb-transport smb_transport stat ms=13.5
+NETWORK t=  9263.6ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  9263.6ms dt=    0.0ms tid=ThreadId(32) smb_stat_start url=smb://DietPi.local/4TBS/series-kids/He-Man and the Masters of the Universe (1983) lane=background
+NETWORK t=  9265.8ms dt=    2.2ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  9266.5ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  9266.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  9266.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  9283.3ms dt=   16.8ms tid=pic-smb-transport smb_transport stat ms=16.8
+NETWORK t=  9283.7ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  9283.8ms dt=    0.0ms tid=ThreadId(32) smb_stat_start url=smb://DietPi.local/4TBS/sg1 lane=background
+NETWORK t=  9285.7ms dt=    1.9ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  9286.3ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  9286.3ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  9286.4ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  9301.6ms dt=   15.2ms tid=pic-smb-transport smb_transport stat ms=15.2
+NETWORK t=  9301.9ms dt=    0.3ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  9301.9ms dt=    0.0ms tid=ThreadId(32) smb_stat_start url=smb://DietPi.local/epg/ lane=background
+NETWORK t=  9304.2ms dt=    2.3ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  9304.8ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  9304.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  9304.8ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  9314.1ms dt=    9.3ms tid=pic-smb-transport smb_transport stat ms=9.3
+NETWORK t=  9314.4ms dt=    0.3ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  9324.8ms dt=   10.4ms tid=main shares_refresh_start
+NETWORK t=  9325.4ms dt=    0.6ms tid=main shares_refresh_done count=7
+NETWORK t=  9375.5ms dt=   50.1ms tid=main shares_counts_ready count=7
+NETWORK t= 14551.7ms dt= 5176.2ms tid=main share_row_press folder=47 op=1 op=1
+NETWORK t= 14647.3ms dt=   95.6ms tid=main filter_selected Folder(47) op=1 op=1
+NETWORK t= 14647.3ms dt=    0.0ms tid=main filter_selected_begin op=1
+NETWORK t= 14647.4ms dt=    0.0ms tid=main apply_filter_start filter=Folder(47) exact=false op=1
+NETWORK t= 14647.9ms dt=    0.6ms tid=main apply_filter_done network_share_scoped op=1
+NETWORK t= 14647.9ms dt=    0.0ms tid=main filter_selected_end op=1
+NETWORK t= 14648.0ms dt=    0.0ms tid=ThreadId(39) grid_query_start op=1 filter=Folder(47) folder_stream=true
+NETWORK t= 14651.0ms dt=    3.0ms tid=ThreadId(39) grid_share_matched op=1 root=smb://DietPi.local:445/4TBP/mypics-2026/Tats%28Shoot%29_2/tat%20photshoot%203 descendants=145 matched=257
+NETWORK t= 14651.9ms dt=    0.9ms tid=ThreadId(39) grid_share_scoped op=1 count=257
+NETWORK t= 14673.0ms dt=   21.1ms tid=main grid_share_replace op=1 count=257 op=1
+NETWORK t= 14673.0ms dt=    0.0ms tid=main gallery_replace_start op=1 count=257 cache_scoped=false progressive=false op=1
+NETWORK t= 14713.0ms dt=   40.0ms tid=main grid_share_ready op=1 op=1
+NETWORK t= 15235.7ms dt=  522.7ms tid=main share_row_press folder=28 op=2 op=2
+NETWORK t= 15347.5ms dt=  111.8ms tid=main filter_selected Folder(28) op=2 op=2
+NETWORK t= 15347.5ms dt=    0.0ms tid=main filter_selected_begin op=2
+NETWORK t= 15347.5ms dt=    0.0ms tid=main apply_filter_start filter=Folder(28) exact=false op=2
+NETWORK t= 15348.5ms dt=    1.0ms tid=main apply_filter_done network_share_scoped op=2
+NETWORK t= 15348.5ms dt=    0.0ms tid=main filter_selected_end op=2
+NETWORK t= 15348.5ms dt=    0.0ms tid=ThreadId(40) grid_query_start op=2 filter=Folder(28) folder_stream=true
+NETWORK t= 15351.7ms dt=    3.2ms tid=ThreadId(40) grid_share_matched op=2 root=smb://DietPi.local:445/4TBS/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20%281983%29 descendants=41 matched=53
+NETWORK t= 15352.5ms dt=    0.8ms tid=ThreadId(40) grid_share_scoped op=2 count=53
+NETWORK t= 15373.6ms dt=   21.1ms tid=main grid_share_replace op=2 count=53 op=2
+NETWORK t= 15373.6ms dt=    0.0ms tid=main gallery_replace_start op=2 count=53 cache_scoped=false progressive=false op=2
+NETWORK t= 15397.0ms dt=   23.5ms tid=main grid_share_ready op=2 op=2
+NETWORK t= 17156.1ms dt= 1759.1ms tid=main tile_activated photo_id=699 index=5
+NETWORK t= 17156.1ms dt=    0.0ms tid=main lightbox_open index=5
+NETWORK t= 17168.8ms dt=   12.7ms tid=main decode_start uri=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E09%20-%20She-Demon%20of%20Phantos-thumb.jpg
+NETWORK t= 17168.9ms dt=    0.1ms tid=lightbox-decode materialize_start uri=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E09%20-%20She-Demon%20of%20Phantos-thumb.jpg
+NETWORK t= 17169.0ms dt=    0.0ms tid=lightbox-decode materialize_done uri=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E09%20-%20She-Demon%20of%20Phantos-thumb.jpg path=/home/peet/.cache/picasa-rs/source/e/c026df417357c8a020827c963ae8d884fc9f8a27d9ee09e7eafa017a594b25d3.jpg ms=0.0
+NETWORK t= 17169.0ms dt=    0.1ms tid=lightbox-decode materialize_start uri=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E09%20-%20She-Demon%20of%20Phantos-thumb.jpg
+NETWORK t= 17169.1ms dt=    0.0ms tid=lightbox-decode materialize_done uri=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E09%20-%20She-Demon%20of%20Phantos-thumb.jpg path=/home/peet/.cache/picasa-rs/source/e/c026df417357c8a020827c963ae8d884fc9f8a27d9ee09e7eafa017a594b25d3.jpg ms=0.0
+NETWORK t= 17172.2ms dt=    3.1ms tid=main decode_done uri=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E09%20-%20She-Demon%20of%20Phantos-thumb.jpg w=400 h=300 ms=3.3
+NETWORK t= 17407.3ms dt=  235.2ms tid=lightbox-prefetch materialize_start uri=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E11%20-%20Like%20Father,%20Like%20Daughter-thumb.jpg
+NETWORK t= 17407.4ms dt=    0.0ms tid=lightbox-prefetch materialize_done uri=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E11%20-%20Like%20Father,%20Like%20Daughter-thumb.jpg path=/home/peet/.cache/picasa-rs/source/6/d5c61c3a51a1944c32a43c767ae0db0ed691b3629b3ac3ec4c1e0144bd4e9e06.jpg ms=0.0
+NETWORK t= 17407.5ms dt=    0.1ms tid=lightbox-prefetch materialize_start uri=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E11%20-%20Like%20Father,%20Like%20Daughter-thumb.jpg
+NETWORK t= 17407.5ms dt=    0.0ms tid=lightbox-prefetch materialize_done uri=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E11%20-%20Like%20Father,%20Like%20Daughter-thumb.jpg path=/home/peet/.cache/picasa-rs/source/6/d5c61c3a51a1944c32a43c767ae0db0ed691b3629b3ac3ec4c1e0144bd4e9e06.jpg ms=0.0
+NETWORK t= 17652.0ms dt=  244.5ms tid=main photo_context_source photo=699 path=smb://dietpi.local/4tbs/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20(1983)/Season%201/He-Man%20and%20the%20Masters%20of%20the%20Universe%20-%20S01E09%20-%20She-Demon%20of%20Phantos-thumb.jpg folder_id=31 folder_path=Some("smb://DietPi.local:445/4TBS/series-kids/He-Man%20and%20the%20Masters%20of%20the%20Universe%20%281983%29/Season%201/") network=true share_id=Some(28)
+NETWORK t= 19448.0ms dt= 1796.0ms tid=main share_row_press folder=22 op=3 op=3
+NETWORK t= 19527.4ms dt=   79.4ms tid=main filter_selected Folder(22) op=3 op=3
+NETWORK t= 19527.4ms dt=    0.0ms tid=main filter_selected_begin op=3
+NETWORK t= 19527.4ms dt=    0.0ms tid=main apply_filter_start filter=Folder(22) exact=false op=3
+NETWORK t= 19527.9ms dt=    0.4ms tid=main apply_filter_done network_share_scoped op=3
+NETWORK t= 19527.9ms dt=    0.0ms tid=main filter_selected_end op=3
+NETWORK t= 19527.9ms dt=    0.0ms tid=ThreadId(55) grid_query_start op=3 filter=Folder(22) folder_stream=true
+NETWORK t= 19530.1ms dt=    2.2ms tid=ThreadId(55) grid_share_matched op=3 root=nfs://DietPi.local/mnt/4TBP/Other/Tat%20Sing descendants=0 matched=0
+NETWORK t= 19530.9ms dt=    0.8ms tid=ThreadId(55) grid_share_scoped op=3 count=0
+NETWORK t= 19552.9ms dt=   22.0ms tid=main grid_share_replace op=3 count=0 op=3
+NETWORK t= 19552.9ms dt=    0.0ms tid=main gallery_replace_start op=3 count=0 cache_scoped=false progressive=false op=3
+NETWORK t= 19557.3ms dt=    4.4ms tid=main grid_share_ready op=3 op=3
+NETWORK t= 20345.6ms dt=  788.3ms tid=main discovery_ui_started
+NETWORK t= 20345.6ms dt=    0.0ms tid=main discovery_cache_seeded count=2
+NETWORK t= 20345.7ms dt=    0.1ms tid=main dialog_opened
+NETWORK t= 20345.7ms dt=    0.0ms tid=ThreadId(56) discovery_started
+NETWORK t= 20345.8ms dt=    0.1ms tid=ThreadId(57) discovery_attempt attempt=1
+NETWORK t= 20347.4ms dt=    1.6ms tid=ThreadId(57) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t= 20347.4ms dt=    0.0ms tid=ThreadId(57) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t= 20347.4ms dt=    0.0ms tid=ThreadId(57) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t= 20347.5ms dt=    0.0ms tid=ThreadId(57) discovery_complete count=2
+NETWORK t= 20395.7ms dt=   48.2ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t= 20396.2ms dt=    0.5ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t= 20396.3ms dt=    0.1ms tid=main discovery_ui_done count=2 shown=2
+NETWORK t= 21611.5ms dt= 1215.1ms tid=main discovery_row_clicked name=NFS file sharing on DietPi uri=nfs://DietPi.local/mnt
+NETWORK t= 22012.1ms dt=  400.6ms tid=main nfs_lookup_started host=DietPi.local
+NETWORK t= 22020.7ms dt=    8.6ms tid=ThreadId(59) nfs_exports host=DietPi.local count=5
+NETWORK t= 22048.5ms dt=   27.8ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t= 22048.8ms dt=    0.3ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 22049.0ms dt=    0.2ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t= 22049.2ms dt=    0.2ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t= 22049.3ms dt=    0.2ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 23411.4ms dt= 1362.1ms tid=main dialog_connect_state server='DietPi.local' discovered=true protocol=1
+NETWORK t= 23411.4ms dt=    0.0ms tid=main dialog_connect_source=discovered uri=nfs://DietPi.local/mnt
+NETWORK t= 23411.4ms dt=    0.0ms tid=main dialog_accepted root=nfs://DietPi.local/mnt name=
+NETWORK t= 23411.4ms dt=    0.0ms tid=main connect_requested uri=nfs://DietPi.local/mnt
+NETWORK t= 23411.5ms dt=    0.0ms tid=main browse_root_in uri=nfs://DietPi.local/mnt
+NETWORK t= 23411.5ms dt=    0.0ms tid=main browse_root_out uri=nfs://DietPi.local/mnt/
+NETWORK t= 23411.5ms dt=    0.0ms tid=main connect_root normalized=nfs://DietPi.local/mnt/
+NETWORK t= 23411.5ms dt=    0.0ms tid=main nfs_ui_error uri=nfs://DietPi.local/mnt/ message=NFS private transport is unavailable; no desktop mount will be created.
+NETWORK t= 23418.7ms dt=    7.2ms tid=main discovery_ui_closed_flag
+NETWORK t= 23418.7ms dt=    0.0ms tid=main dialog_closed
+NETWORK t= 23450.1ms dt=   31.3ms tid=main discovery_ui_stopped_closed
+NETWORK t= 27381.3ms dt= 3931.3ms tid=main discovery_ui_started
+NETWORK t= 27381.4ms dt=    0.0ms tid=main discovery_cache_seeded count=7
+NETWORK t= 27381.4ms dt=    0.1ms tid=main dialog_opened
+NETWORK t= 27381.5ms dt=    0.1ms tid=ThreadId(60) discovery_started
+NETWORK t= 27381.6ms dt=    0.1ms tid=ThreadId(61) discovery_attempt attempt=1
+NETWORK t= 27383.0ms dt=    1.3ms tid=ThreadId(61) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t= 27383.0ms dt=    0.0ms tid=ThreadId(61) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t= 27383.0ms dt=    0.0ms tid=ThreadId(61) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t= 27383.0ms dt=    0.0ms tid=ThreadId(61) discovery_complete count=2
+NETWORK t= 27431.5ms dt=   48.5ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t= 27431.9ms dt=    0.5ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t= 27432.1ms dt=    0.1ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t= 27432.2ms dt=    0.1ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 27432.3ms dt=    0.1ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t= 27432.4ms dt=    0.1ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t= 27432.5ms dt=    0.1ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 27432.6ms dt=    0.1ms tid=main discovery_ui_done count=2 shown=7
+NETWORK t= 28499.4ms dt= 1066.8ms tid=main discovery_row_clicked name=exports/Work uri=nfs://DietPi.local/exports/Work
+NETWORK t= 28899.7ms dt=  400.3ms tid=main nfs_lookup_started host=DietPi.local
+NETWORK t= 28906.6ms dt=    6.9ms tid=ThreadId(63) nfs_exports host=DietPi.local count=5
+NETWORK t= 29427.6ms dt=  521.0ms tid=main dialog_connect_state server='DietPi.local' discovered=true protocol=1
+NETWORK t= 29427.6ms dt=    0.0ms tid=main dialog_connect_source=discovered uri=nfs://DietPi.local/exports/Work
+NETWORK t= 29427.7ms dt=    0.0ms tid=main dialog_accepted root=nfs://DietPi.local/exports/Work name=
+NETWORK t= 29427.7ms dt=    0.0ms tid=main connect_requested uri=nfs://DietPi.local/exports/Work
+NETWORK t= 29427.7ms dt=    0.0ms tid=main browse_root_in uri=nfs://DietPi.local/exports/Work
+NETWORK t= 29427.7ms dt=    0.0ms tid=main browse_root_out uri=nfs://DietPi.local/exports/Work/
+NETWORK t= 29427.7ms dt=    0.0ms tid=main connect_root normalized=nfs://DietPi.local/exports/Work/
+NETWORK t= 29427.7ms dt=    0.0ms tid=main nfs_ui_error uri=nfs://DietPi.local/exports/Work/ message=NFS private transport is unavailable; no desktop mount will be created.
+NETWORK t= 29429.9ms dt=    2.2ms tid=main discovery_ui_closed_flag
+NETWORK t= 29430.0ms dt=    0.0ms tid=main dialog_closed
+NETWORK t= 29434.0ms dt=    4.1ms tid=main discovery_ui_stopped_closed
+NETWORK t= 31057.5ms dt= 1623.5ms tid=main discovery_ui_started
+NETWORK t= 31057.6ms dt=    0.0ms tid=main discovery_cache_seeded count=7
+NETWORK t= 31057.6ms dt=    0.1ms tid=main dialog_opened
+NETWORK t= 31057.7ms dt=    0.0ms tid=ThreadId(64) discovery_started
+NETWORK t= 31057.7ms dt=    0.1ms tid=ThreadId(65) discovery_attempt attempt=1
+NETWORK t= 31059.2ms dt=    1.5ms tid=ThreadId(65) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t= 31059.2ms dt=    0.0ms tid=ThreadId(65) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t= 31059.3ms dt=    0.0ms tid=ThreadId(65) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t= 31059.3ms dt=    0.0ms tid=ThreadId(65) discovery_complete count=2
+NETWORK t= 31107.7ms dt=   48.4ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t= 31108.2ms dt=    0.5ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t= 31108.3ms dt=    0.1ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t= 31108.5ms dt=    0.2ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 31108.7ms dt=    0.2ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t= 31108.8ms dt=    0.2ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t= 31109.0ms dt=    0.1ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 31109.1ms dt=    0.1ms tid=main discovery_ui_done count=2 shown=7
+NETWORK t= 32047.6ms dt=  938.5ms tid=main discovery_row_clicked name=mnt/4TBM uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 32447.9ms dt=  400.3ms tid=main nfs_lookup_started host=DietPi.local
+NETWORK t= 32455.7ms dt=    7.8ms tid=ThreadId(67) nfs_exports host=DietPi.local count=5
+NETWORK t= 32979.5ms dt=  523.7ms tid=main dialog_connect_state server='DietPi.local' discovered=true protocol=1
+NETWORK t= 32979.5ms dt=    0.0ms tid=main dialog_connect_source=discovered uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 32979.5ms dt=    0.0ms tid=main dialog_accepted root=nfs://DietPi.local/mnt/4TBM name=
+NETWORK t= 32979.5ms dt=    0.0ms tid=main connect_requested uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 32979.5ms dt=    0.0ms tid=main browse_root_in uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 32979.6ms dt=    0.0ms tid=main browse_root_out uri=nfs://DietPi.local/mnt/4TBM/
+NETWORK t= 32979.6ms dt=    0.0ms tid=main connect_root normalized=nfs://DietPi.local/mnt/4TBM/
+NETWORK t= 32979.6ms dt=    0.0ms tid=main nfs_ui_error uri=nfs://DietPi.local/mnt/4TBM/ message=NFS private transport is unavailable; no desktop mount will be created.
+NETWORK t= 32981.8ms dt=    2.2ms tid=main discovery_ui_closed_flag
+NETWORK t= 32981.8ms dt=    0.0ms tid=main dialog_closed
+NETWORK t= 33009.9ms dt=   28.1ms tid=main discovery_ui_stopped_closed
+NETWORK t= 34565.6ms dt= 1555.7ms tid=main discovery_ui_started
+NETWORK t= 34565.7ms dt=    0.0ms tid=main discovery_cache_seeded count=7
+NETWORK t= 34565.7ms dt=    0.1ms tid=main dialog_opened
+NETWORK t= 34565.7ms dt=    0.0ms tid=ThreadId(68) discovery_started
+NETWORK t= 34565.8ms dt=    0.1ms tid=ThreadId(69) discovery_attempt attempt=1
+NETWORK t= 34567.2ms dt=    1.4ms tid=ThreadId(69) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t= 34567.2ms dt=    0.0ms tid=ThreadId(69) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t= 34567.3ms dt=    0.0ms tid=ThreadId(69) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t= 34567.3ms dt=    0.0ms tid=ThreadId(69) discovery_complete count=2
+NETWORK t= 34615.8ms dt=   48.5ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t= 34616.3ms dt=    0.5ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t= 34616.4ms dt=    0.1ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t= 34616.5ms dt=    0.1ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 34616.6ms dt=    0.1ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t= 34616.7ms dt=    0.1ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t= 34616.8ms dt=    0.1ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 34616.9ms dt=    0.1ms tid=main discovery_ui_done count=2 shown=7
+NETWORK t= 38947.9ms dt= 4331.0ms tid=main discovery_row_clicked name=mnt/dietpi_userdata uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 39348.2ms dt=  400.3ms tid=main nfs_lookup_started host=DietPi.local
+NETWORK t= 39455.7ms dt=  107.5ms tid=ThreadId(71) nfs_exports host=DietPi.local count=5
+NETWORK t= 39971.5ms dt=  515.8ms tid=main dialog_connect_state server='DietPi.local' discovered=true protocol=1
+NETWORK t= 39971.5ms dt=    0.0ms tid=main dialog_connect_source=discovered uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 39971.5ms dt=    0.0ms tid=main dialog_accepted root=nfs://DietPi.local/mnt/dietpi_userdata name=
+NETWORK t= 39971.6ms dt=    0.0ms tid=main connect_requested uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 39971.6ms dt=    0.0ms tid=main browse_root_in uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 39971.6ms dt=    0.0ms tid=main browse_root_out uri=nfs://DietPi.local/mnt/dietpi_userdata/
+NETWORK t= 39971.6ms dt=    0.0ms tid=main connect_root normalized=nfs://DietPi.local/mnt/dietpi_userdata/
+NETWORK t= 39971.6ms dt=    0.0ms tid=main nfs_ui_error uri=nfs://DietPi.local/mnt/dietpi_userdata/ message=NFS private transport is unavailable; no desktop mount will be created.
+NETWORK t= 39973.9ms dt=    2.3ms tid=main discovery_ui_closed_flag
+NETWORK t= 39973.9ms dt=    0.0ms tid=main dialog_closed
+NETWORK t= 39976.6ms dt=    2.7ms tid=main discovery_ui_stopped_closed
+NETWORK t= 41721.7ms dt= 1745.2ms tid=main discovery_ui_started
+NETWORK t= 41721.8ms dt=    0.0ms tid=main discovery_cache_seeded count=7
+NETWORK t= 41721.8ms dt=    0.1ms tid=main dialog_opened
+NETWORK t= 41721.9ms dt=    0.0ms tid=ThreadId(72) discovery_started
+NETWORK t= 41721.9ms dt=    0.1ms tid=ThreadId(73) discovery_attempt attempt=1
+NETWORK t= 41723.4ms dt=    1.4ms tid=ThreadId(73) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t= 41723.4ms dt=    0.0ms tid=ThreadId(73) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t= 41723.5ms dt=    0.0ms tid=ThreadId(73) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t= 41723.5ms dt=    0.0ms tid=ThreadId(73) discovery_complete count=2
+NETWORK t= 41771.9ms dt=   48.4ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t= 41772.3ms dt=    0.4ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t= 41772.5ms dt=    0.1ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t= 41772.6ms dt=    0.1ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 41772.7ms dt=    0.1ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t= 41772.9ms dt=    0.1ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t= 41773.0ms dt=    0.2ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 41773.2ms dt=    0.2ms tid=main discovery_ui_done count=2 shown=7
+NETWORK t= 45804.2ms dt= 4030.9ms tid=main nfs_lookup_started host=10.0.0.1
+NETWORK t= 45810.3ms dt=    6.1ms tid=ThreadId(75) nfs_exports host=10.0.0.1 count=5
+NETWORK t= 45814.3ms dt=    4.0ms tid=main dialog_connect_state server='10.0.0.1' discovered=false protocol=1
+NETWORK t= 45814.3ms dt=    0.0ms tid=main dialog_connect_source=typed uri=nfs://10.0.0.1/
+NETWORK t= 45814.3ms dt=    0.0ms tid=main dialog_accepted root=nfs://10.0.0.1/ name=
+NETWORK t= 45814.3ms dt=    0.0ms tid=main connect_requested uri=nfs://10.0.0.1/
+NETWORK t= 45814.3ms dt=    0.0ms tid=main browse_root_in uri=nfs://10.0.0.1/
+NETWORK t= 45814.4ms dt=    0.0ms tid=main browse_root_out uri=nfs://10.0.0.1/
+NETWORK t= 45814.4ms dt=    0.0ms tid=main connect_root normalized=nfs://10.0.0.1/
+NETWORK t= 45814.4ms dt=    0.0ms tid=main nfs_ui_error uri=nfs://10.0.0.1/ message=NFS private transport is unavailable; no desktop mount will be created.
+NETWORK t= 45816.7ms dt=    2.3ms tid=main discovery_ui_closed_flag
+NETWORK t= 45816.7ms dt=    0.0ms tid=main dialog_closed
+NETWORK t= 45826.6ms dt=    9.9ms tid=main discovery_ui_stopped_closed
+NETWORK t= 49309.8ms dt= 3483.2ms tid=main discovery_ui_started
+NETWORK t= 49309.8ms dt=    0.0ms tid=main discovery_cache_seeded count=7
+NETWORK t= 49309.9ms dt=    0.1ms tid=main dialog_opened
+NETWORK t= 49309.9ms dt=    0.0ms tid=ThreadId(76) discovery_started
+NETWORK t= 49310.0ms dt=    0.1ms tid=ThreadId(77) discovery_attempt attempt=1
+NETWORK t= 49311.4ms dt=    1.4ms tid=ThreadId(77) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t= 49311.5ms dt=    0.0ms tid=ThreadId(77) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t= 49311.5ms dt=    0.0ms tid=ThreadId(77) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t= 49311.5ms dt=    0.1ms tid=ThreadId(77) discovery_complete count=2
+NETWORK t= 49360.0ms dt=   48.4ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t= 49360.4ms dt=    0.5ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t= 49360.6ms dt=    0.1ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t= 49360.7ms dt=    0.1ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 49360.8ms dt=    0.1ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t= 49360.9ms dt=    0.1ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t= 49361.1ms dt=    0.1ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 49361.2ms dt=    0.1ms tid=main discovery_ui_done count=2 shown=7
+NETWORK t= 52680.0ms dt= 3318.8ms tid=main discovery_row_clicked name=exports/Work uri=nfs://DietPi.local/exports/Work
+NETWORK t= 53080.3ms dt=  400.3ms tid=main nfs_lookup_started host=DietPi.local
+NETWORK t= 53087.9ms dt=    7.6ms tid=ThreadId(79) nfs_exports host=DietPi.local count=5
+NETWORK t= 54723.7ms dt= 1635.8ms tid=main dialog_connect_state server='DietPi.local' discovered=true protocol=1
+NETWORK t= 54723.7ms dt=    0.0ms tid=main dialog_connect_source=discovered uri=nfs://DietPi.local/exports/Work
+NETWORK t= 54723.7ms dt=    0.0ms tid=main dialog_accepted root=nfs://DietPi.local/exports/Work name=
+NETWORK t= 54723.7ms dt=    0.0ms tid=main connect_requested uri=nfs://DietPi.local/exports/Work
+NETWORK t= 54723.8ms dt=    0.0ms tid=main browse_root_in uri=nfs://DietPi.local/exports/Work
+NETWORK t= 54723.8ms dt=    0.0ms tid=main browse_root_out uri=nfs://DietPi.local/exports/Work/
+NETWORK t= 54723.8ms dt=    0.0ms tid=main connect_root normalized=nfs://DietPi.local/exports/Work/
+NETWORK t= 54723.8ms dt=    0.0ms tid=main nfs_ui_error uri=nfs://DietPi.local/exports/Work/ message=NFS private transport is unavailable; no desktop mount will be created.
+NETWORK t= 54725.9ms dt=    2.1ms tid=main discovery_ui_closed_flag
+NETWORK t= 54725.9ms dt=    0.0ms tid=main dialog_closed
+NETWORK t= 54767.7ms dt=   41.8ms tid=main discovery_ui_stopped_closed

@@ -4,24 +4,13 @@ include!("navigation.rs");
 pub fn build(app: &adw::Application, connection: Connection) -> adw::ApplicationWindow {
     let build_started = Instant::now();
     let window = adw::ApplicationWindow::new(app);
-    // Test hook: fullscreen layout for UI automation.
-    if std::env::var_os("PIC_TEST_FULLSCREEN").is_some() {
-        window.fullscreen();
-    }
     window.set_title(Some("PIC - Picasa iPhoto Clone"));
     window.set_default_size(1440, 900);
-
-    crate::source::install_ui_heartbeat();
-
-    // Warm the network-location cache in the background so the FIRST Add
-    // Network Share dialog already lists the discovered shares instead of
-    // requiring Cancel + reopen after a cold DNS-SD pass.
-    crate::source::prefetch_network_locations();
 
     install_close_confirmation(&window);
 
     let connection = Rc::new(RefCell::new(connection));
-    let folders = db::folders_cached(&connection.borrow()).unwrap_or_default();
+    let folders = db::folders(&connection.borrow()).unwrap_or_default();
     let folder_cache = Rc::new(RefCell::new(folders.clone()));
     let albums = db::albums(&connection.borrow()).unwrap_or_default();
     let sidebar_counts = db::sidebar_counts(&connection.borrow()).unwrap_or_default();
@@ -50,26 +39,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     } else {
         grid::GroupMode::None
     }));
-    let startup_phase = |name: &'static str, started: &Instant| {
-        crate::source::net_trace(format!(
-            "startup_phase {name} ms={:.1}",
-            started.elapsed().as_secs_f64() * 1000.0
-        ));
-    };
-    let phase_started = Instant::now();
-    // The startup view is Recently Added (a bounded, newest-first slice):
-    // fetch it at SQL level instead of materializing the whole 70k+ library
-    // on the main thread (which cost ~200ms of the startup stall plus
-    // ~100MB RSS). Over-fetch so the enabled-format filter below still
-    // yields a full view.
-    let recently_added_limit = db::recently_added_limit(&connection.borrow());
-    let mut photos =
-        db::recently_added_photos(&connection.borrow(), recently_added_limit * 3 + 50)
-            .unwrap_or_default();
-    retain_enabled_formats(&connection.borrow(), &mut photos);
-    photos.truncate(recently_added_limit);
+    let mut all_startup_photos = db::photos(&connection.borrow(), None, false, None)
+        .unwrap_or_default();
+    retain_enabled_formats(&connection.borrow(), &mut all_startup_photos);
+    let mut photos = all_startup_photos.clone();
+    limit_recently_added(
+        &connection.borrow(),
+        sidebar::SidebarFilter::RecentlyAdded,
+        &mut photos,
+    );
     sort_photos(&mut photos, sort.get());
-    startup_phase("recent_view_loaded", &phase_started);
     let startup_photos = Rc::new(photos);
     eprintln!(
         "STARTUP cold_start_ms={} photos={} displayed={} folders={} albums={} scan=disabled rss_mb={}",
@@ -142,7 +121,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         })
     };
     let import_folder_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
-    let add_network_share_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let edit_open_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> = Rc::new(RefCell::new(None));
     let edit_clipboard: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let open_edit: Rc<dyn Fn(i64)> = {
@@ -205,7 +183,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 return;
             }
 
-            let Ok(folders) = db::folders_cached(&connection.borrow()) else {
+            let Ok(folders) = db::folders(&connection.borrow()) else {
                 eprintln!("WATCH ERROR could not read folders");
                 return;
             };
@@ -214,8 +192,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     
                     continue;
                 };
-                if crate::source::is_network_location(&folder.path) { continue; }
                 let watched_path = folder.path.clone();
+                #[cfg(target_os="linux")]
+                if crate::network_shares::private(&watched_path) {
+                    // GIO directory monitors may mount a share in the desktop.
+                    // Direct network sources use explicit refresh, never GVfs.
+                    continue;
+                }
                 let file = crate::source::file(&watched_path);
                 let monitor = match file.monitor_directory(
                     gio::FileMonitorFlags::NONE,
@@ -471,34 +454,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
         space_open_slot.replace(Some(Rc::new(move || {
             let photos = gallery.photo_objects();
-            // Scroll-then-open: when 1:1/Space is activated within a short
-            // grace after a wheel/touchpad scroll and the pointer rests on a
-            // thumbnail, that photo becomes the selection and opens. This is
-            // the fast "scroll, then Space through photos" flow. Hover alone
-            // never changes anything: the plain selection always wins.
-            let scroll_hovered =
-                gallery.hovered_photo_after_scroll(grid::SCROLL_HOVER_OPEN_GRACE);
-            if let Some(hovered) = scroll_hovered.as_ref() {
-                gallery.set_selected_photo_ids(&[hovered.id()]);
-            }
-            if std::env::var_os("PIC_DEBUG_SPACE").is_some() {
-                match scroll_hovered.as_ref() {
-                    Some(hovered) => eprintln!(
-                        "[space-debug] slot: scroll-hover wins -> {}",
-                        hovered.filename()
-                    ),
-                    None => eprintln!("[space-debug] slot: no scroll-hover -> selection decides"),
-                }
-            }
-            let selected_id = scroll_hovered
+            let selected_id = selected_photo
+                .borrow()
                 .as_ref()
                 .map(|photo| photo.id())
-                .or_else(|| {
-                    selected_photo
-                        .borrow()
-                        .as_ref()
-                        .map(|photo| photo.id())
-                })
                 .filter(|id| photos.iter().any(|photo| photo.id() == *id))
                 .or_else(|| gallery.selected_photo_ids(None).into_iter().next());
             let Some(selected_id) = selected_id else {
@@ -536,11 +495,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     configure_infobar_album_menu(&info.add_to_album, action_context.clone());
 
     // Destructive maintenance actions for the Settings → Library page. The
-    // settings window owns only the buttons and confirmations; the actual
+    // settings window owns the buttons and confirmation dialogs; the actual
     // behaviour stays here where the gallery and refresh context live.
-    // Requesting a thumbnail recovery pass is shared with layout.rs (included
-    // below): the scan-event poll consumes the flag once no scan is running.
-    let thumbnail_recovery_requested = Rc::new(Cell::new(true));
     let settings_maintenance = crate::settings::LibraryMaintenance {
         clear_thumbnails: {
             let connection = connection.clone();
@@ -549,16 +505,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let search = search_text.clone();
             let sort = sort.clone();
             let availability_refresh = availability_refresh.clone();
-            let recovery_requested = thumbnail_recovery_requested.clone();
             Rc::new(move || {
-                crate::source::net_trace("maintenance_clear_thumbnails");
                 if let Err(error) = crate::thumbnail::clear_cache() {
                     eprintln!("Could not clear thumbnails: {error}");
                 }
-                // The cache is empty now: schedule a recovery pass so every
-                // photo's thumbnail is rebuilt automatically (deferred while
-                // another scan runs).
-                recovery_requested.set(true);
                 refresh_grid(
                     &connection,
                     filter.get(),
@@ -577,7 +527,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let sort = sort.clone();
             let availability_refresh = availability_refresh.clone();
             Rc::new(move || {
-                crate::source::net_trace("maintenance_clear_database");
                 if let Err(error) = db::clear_photos(&connection.borrow()) {
                     eprintln!("Could not clear database: {error}");
                 }
@@ -599,12 +548,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let sort = sort.clone();
             let availability_refresh = availability_refresh.clone();
             Rc::new(move || {
-                crate::source::net_trace("maintenance_clear_all");
                 if let Err(error) = db::clear_all(&connection.borrow()) {
                     eprintln!("Could not clear database: {error}");
                 }
-                if let Err(error) = crate::thumbnail::clear_all_cache() {
-                    eprintln!("Could not clear the cache: {error}");
+                if let Err(error) = crate::thumbnail::clear_cache() {
+                    eprintln!("Could not clear thumbnails: {error}");
                 }
                 refresh_grid(
                     &connection,
@@ -664,7 +612,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     &gallery,
                 );
                 if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
-                    if let Ok(folders) = db::folders_cached(&connection.borrow()) {
+                    if let Ok(folders) = db::folders(&connection.borrow()) {
                         sidebar::refresh_folder_rows(&sidebar, &folders, &on_unavailable);
                     }
                     if let Ok(counts) = db::sidebar_counts(&connection.borrow()) {
@@ -713,7 +661,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 Rc::new(move || {
                     rebuild_folder_watches();
                     if let Some(sidebar) = watch_sidebar.borrow().as_ref().cloned() {
-                        if let Ok(folders) = db::folders_cached(&watch_connection.borrow()) {
+                        if let Ok(folders) = db::folders(&watch_connection.borrow()) {
                             sidebar::refresh_folder_rows(
                                 &sidebar,
                                 &folders,
@@ -770,7 +718,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 // Navigate in the order the user can actually see in the
                 // Folders sidebar. Tree mode therefore follows visible tree
                 // rows, while Imported-only mode contains only imported roots.
-                let folders = db::folders_cached(&connection_for_collection_nav.borrow())
+                let folders = db::folders(&connection_for_collection_nav.borrow())
                     .unwrap_or_default();
                 let folder_ids = sidebar_selection_for_collection_nav
                     .borrow()
@@ -908,7 +856,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
                 // The last album connects to the first available folder.
                 if direction > 0 && Some(current_index) == last_available_album {
-                    let folders = db::folders_cached(&connection_for_collection_nav.borrow())
+                    let folders = db::folders(&connection_for_collection_nav.borrow())
                         .unwrap_or_default();
                     for folder in folders {
                         let mut photos = db::photos(
@@ -1198,7 +1146,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 else {
                     return;
                 };
-                let folders = db::folders_cached(&connection_for_collection_nav.borrow())
+                let folders = db::folders(&connection_for_collection_nav.borrow())
                     .unwrap_or_default();
                 let Some(current_index) = folders
                     .iter()
@@ -2483,7 +2431,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         print_photos(&window_for_print, &connection_for_print, requests);
     });
 
-    let widgets_started = Instant::now();
     let (
         main_split,
         main_surface,
@@ -2496,7 +2443,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         right_header,
         search,
     ) = include!("layout.rs");
-    startup_phase("layout_built", &widgets_started);
 
     // Appearance button: opens Settings → Themes, where the theme list is
     // built from the theme folders on disk. toolbar.rs appends the
@@ -2520,7 +2466,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     window.set_content(Some(&main_surface));
 
-    startup_phase("gallery_and_actions_built", &widgets_started);
     let startup_gallery = gallery.clone();
     let startup_photos_for_idle = startup_photos.clone();
     let startup_total = startup_photos_for_idle.len();
@@ -2534,10 +2479,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let end = (startup_offset + STARTUP_BATCH_SIZE).min(startup_total);
         let batch = &startup_photos_for_idle[startup_offset..end];
         if startup_offset == 0 {
-            crate::source::net_trace(format!(
-                "startup_phase first_idle_batch ms={:.1}",
-                widgets_started.elapsed().as_secs_f64() * 1000.0
-            ));
             startup_gallery.replace(batch);
         } else {
             startup_gallery.append_photos(batch);
@@ -2657,7 +2598,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let sender = refresh_prepare_sender.clone();
             std::thread::spawn(move || {
                 let imported_root = db::open_default()
-                    .and_then(|connection| db::folders_cached(&connection))
+                    .and_then(|connection| db::folders(&connection))
                     .map(|folders| {
                         folders
                             .into_iter()
@@ -2672,16 +2613,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             });
         })
     }));
-
-    // Hover to focus: once the pointer rests on a thumbnail, it becomes the
-    // selection - so Space/1:1 always opens exactly what is under it.
-    {
-        let gallery_for_hover = gallery.clone();
-        gallery.set_hover_select_handler(Rc::new(move || {
-            gallery_for_hover.select_photo_under_pointer();
-        }));
-    }
-
 
     // Debounce/coalesce monitor activity independently from scan authorization.
     // One busy scan cannot be interrupted by a watch event; the dirty root
@@ -2775,10 +2706,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if photos.is_empty() {
                 return;
             }
-            crate::source::net_trace(format!(
-                "recovery_scheduled photos={}",
-                photos.len()
-            ));
             let mut job = scan_job.borrow_mut();
             job.generation = job.generation.wrapping_add(1);
             job.kind = Some(ScanJobKind::Maintenance);
@@ -2798,169 +2725,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     };
     start_thumbnail_recovery();
 
-    // Test hook: auto-open the Add Network Share dialog for UI automation.
-    if std::env::var_os("PIC_TEST_OPEN_SHARE").is_some() {
-        let slot = add_network_share_slot.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(2000), move || {
-            if let Some(callback) = slot.borrow().as_ref() {
-                callback();
-            }
-        });
-    }
-    let add_network_share_slot_for_import = add_network_share_slot.clone();
-    let connection_for_share = connection.clone();
-    let scan_job_for_share = scan_job.clone();
-    let start_next_scan_for_share = start_next_scan.clone();
-    // Registration changes the *set of sidebar rows*, not necessarily any
-    // availability state. Refresh Network Shares immediately from the database;
-    // availability refresh alone may report `no_updates` and skip the new row.
-    let sidebar_refresh_for_share: Rc<dyn Fn()> = {
-        let availability_refresh = availability_refresh.clone();
-        let sidebar = sidebar_for_unavailable.clone();
-        let connection = connection.clone();
-        Rc::new(move || {
-            if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
-                match db::folders_cached(&connection.borrow()) {
-                    Ok(folders) => sidebar::refresh_folder_rows(
-                        &sidebar,
-                        &folders,
-                        &availability_refresh,
-                    ),
-                    Err(error) => crate::source::net_trace(format!(
-                        "network_share_sidebar_refresh_failed error={error}"
-                    )),
-                }
-            }
-            availability_refresh();
-        })
-    };
-    let window_for_share = window.clone();
-    add_network_share_slot.replace(Some(Rc::new(move || {
-        let connection = connection_for_share.clone();
-        let scan_job = scan_job_for_share.clone();
-        let start_next_scan = start_next_scan_for_share.clone();
-        let sidebar_refresh = sidebar_refresh_for_share.clone();
-        let parent_window = window_for_share.clone();
-        let parent_for_dialog = window_for_share.clone();
-        let on_connect: Rc<dyn Fn(String, String)> = Rc::new(move |name, browse_root| {
-            let parent = parent_window.clone().upcast::<gtk::Widget>();
-            crate::source::net_trace(format!("connect_requested uri={browse_root}"));
-            // Normalize the connection root BEFORE mounting: resolve network://
-            // discovery shortcuts, guarantee a trailing slash, and for NFS
-            // strip the advertised service port (nfs://host:2049/export is a
-            // service endpoint, not a mountable export - GIO mounts
-            // nfs://host/export).
-            let chooser_root = crate::source::network_browse_root(&browse_root);
-            // DNS-SD advertises nfs://host/mnt as a *service*, not an export.
-            // Show the server's actual showmount exports instead of trying to
-            // stat /mnt through the restricted helper.
-            let chooser_root = if chooser_root.starts_with("nfs://")
-                && chooser_root.ends_with("/mnt/")
-                && chooser_root.trim_end_matches('/').matches('/').count() == 3
-            {
-                chooser_root.trim_end_matches("mnt/").to_string()
-            } else {
-                chooser_root
-            };
-            if !chooser_root.contains("://") || !chooser_root.ends_with('/') {
-                let message = format!(
-                    "could not browse {browse_root}: not a valid network location"
-                );
-                crate::source::net_trace(format!(
-                    "browse_failed uri={browse_root} error={message}"
-                ));
-                show_error(&parent, "Could not open network share", &message);
-                sidebar_refresh();
-                return;
-            }
-            crate::source::net_trace(format!("connect_root normalized={chooser_root}"));
-            let connection = connection.clone();
-            let scan_job = scan_job.clone();
-            let start_next_scan = start_next_scan.clone();
-            let sidebar_refresh = sidebar_refresh.clone();
-            let parent_window = parent_window.clone();
-            if chooser_root.starts_with("nfs://") {
-                if !crate::source::NFS_EXPERIMENTAL {
-                    crate::source::net_trace(format!(
-                        "nfs_ui_error uri={chooser_root} message={}",
-                        crate::source::NFS_UNAVAILABLE
-                    ));
-                    show_error(&parent, "NFS experimental", crate::source::NFS_UNAVAILABLE);
-                    return;
-                }
-                let root = chooser_root.clone();
-                let open_browser: Rc<dyn Fn()> = Rc::new({
-                    let connection = connection.clone();
-                    let parent = parent.clone();
-                    let scan_job = scan_job.clone();
-                    let start_next_scan = start_next_scan.clone();
-                    let sidebar_refresh = sidebar_refresh.clone();
-                    let name = name.clone();
-                    let root = root.clone();
-                    move || {
-                        show_network_folder_browser(parent.clone(), root.clone(), Rc::new({
-                            let connection = connection.clone();
-                            let parent = parent.clone();
-                            let scan_job = scan_job.clone();
-                            let start_next_scan = start_next_scan.clone();
-                            let sidebar_refresh = sidebar_refresh.clone();
-                            let name = name.clone();
-                            move |selected_uri| {
-                                register_selected_network_share(
-                                    &connection, &parent, &scan_job, &start_next_scan,
-                                    &sidebar_refresh, selected_uri, name.clone(),
-                                );
-                            }
-                        }));
-                    }
-                });
-                let failure_parent = parent.clone();
-                let failure: Rc<dyn Fn(String)> = Rc::new(move |error| {
-                    crate::source::net_trace(format!(
-                        "nfs_ui_error uri={root} message={error}"
-                    ));
-                    show_error(&failure_parent, "Could not connect to NFS share", &error);
-                });
-                if chooser_root
-                    .strip_prefix("nfs://")
-                    .is_some_and(|rest| rest.trim_matches('/').split('/').count() < 2)
-                {
-                    open_browser();
-                    return;
-                }
-                connect_nfs_direct(
-                    chooser_root,
-                    parent_window.clone().upcast::<gtk::Window>(),
-                    failure,
-                    open_browser,
-                );
-                return;
-            }
-            if !chooser_root.starts_with("smb://") {
-                show_error(&parent, "Could not connect", "No private transport for this network location.");
-                return;
-            }
-            let parent_widget = parent_window.clone().upcast::<gtk::Widget>();
-            let open_browser: Rc<dyn Fn()> = Rc::new({
-                let root = chooser_root.clone();
-                move || {
-                    let connection = connection.clone();
-                    let parent = parent.clone();
-                    let scan_job = scan_job.clone();
-                    let start_next_scan = start_next_scan.clone();
-                    let sidebar_refresh = sidebar_refresh.clone();
-                    let name = name.clone();
-                    show_network_folder_browser(parent_widget.clone(), root.clone(), Rc::new(move |selected_uri| {
-                        register_selected_network_share(&connection, &parent, &scan_job,
-                            &start_next_scan, &sidebar_refresh, selected_uri, name.clone());
-                    }));
-                }
-            });
-            connect_smb_direct(chooser_root, parent_window.upcast::<gtk::Window>(), Rc::new(|| {}), None, Some(open_browser));
-        });
-        show_add_network_share_dialog(parent_for_dialog.upcast::<gtk::Widget>(), on_connect);
-    })));
-
     let parent = window.clone();
     let connection_for_import = connection.clone();
     let sidebar_refresh_for_import = availability_refresh.clone();
@@ -2968,66 +2732,61 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let start_next_scan_for_import = start_next_scan.clone();
 
     import_folder_slot.replace(Some(Rc::new(move || {
-        let scan_job = scan_job_for_import.clone();
-        let start_next_scan = start_next_scan_for_import.clone();
-        let connection = connection_for_import.clone();
-        let sidebar_refresh = sidebar_refresh_for_import.clone();
-        let parent = parent.clone();
-
-        let dialog = gtk::FileChooserNative::new(
-            Some("Import Folder"),
-            Some(&parent),
-            gtk::FileChooserAction::SelectFolder,
-            Some("Import"),
-            Some("Cancel"),
-        );
-
-        dialog.connect_response(move |dialog, response| {
-            if response == gtk::ResponseType::Accept {
-                if let Some(file) = dialog.file() {
-                    // A folder chosen over a gvfs mount arrives as a FUSE
-                    // path; registering that would index photos into a
-                    // library that displays the folder nowhere. Rewrite it
-                    // to the stable smb:// / nfs:// URI first, and refuse
-                    // anything that still is not a plain path or a URI.
-                    let raw = crate::source::reference(&file);
-                    let root = crate::source::normalize_import_reference(&raw);
-                    if root.starts_with("/run/user/") && root.contains("/gvfs/") {
-                        crate::source::net_trace(format!(
-                            "import_root_rejected uri={raw}"
-                        ));
-                        show_error(
-                            parent.upcast_ref(),
-                            "Could not import this folder",
-                            "Network folders are added through Network Shares, not the folder import.",
-                        );
-                        dialog.destroy();
-                        return;
-                    }
-                    crate::source::net_trace(format!("import_root_registered uri={root}"));
-                    if let Err(error) = db::mark_import_root(&connection.borrow(), &root) {
-                        eprintln!("Could not register imported folder {root}: {error}");
-                        return;
-                    }
-                    // Re-read the folder hierarchy immediately after the
-                    // selected root is registered. The scan worker may emit
-                    // its first event later, but the sidebar must already show
-                    // the correct parent/child relationship before scanning.
-                    sidebar_refresh();
-                    {
-                        let mut job = scan_job.borrow_mut();
-                        job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
-                            .expect("import is an authorized scan reason");
-                        job.pending.push_back(root);
-                    }
-                    start_next_scan();
-                }
+        let scan_job=scan_job_for_import.clone();
+        let start_next_scan=start_next_scan_for_import.clone();
+        let connection=connection_for_import.clone();
+        let sidebar_refresh=sidebar_refresh_for_import.clone();
+        let selected: Rc<dyn Fn(String)>=Rc::new(move |root: String| {
+            if let Err(error)=db::mark_import_root(&connection.borrow(),&root){
+                eprintln!("Could not register imported folder {root}: {error}");
+                return;
             }
-
-            dialog.destroy();
+            sidebar_refresh();
+            {
+                let mut job=scan_job.borrow_mut();
+                job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
+                    .expect("import is an authorized scan reason");
+                job.pending.push_back(root);
+            }
+            start_next_scan();
         });
-
-        dialog.show();
+        let parent_for_local=parent.clone();
+        let selected_for_local=selected.clone();
+        let local:Rc<dyn Fn()>=Rc::new(move || {
+            let dialog=gtk::FileChooserNative::new(
+                Some("Import Local Folder"),Some(&parent_for_local),
+                gtk::FileChooserAction::SelectFolder,Some("Import"),Some("Cancel"));
+            let selected=selected_for_local.clone();
+            dialog.connect_response(move |dlg,response| {
+                if response==gtk::ResponseType::Accept {
+                    if let Some(file)=dlg.file(){ selected(crate::source::reference(&file)); }
+                }
+                dlg.destroy();
+            });
+            dialog.show();
+        });
+        #[cfg(target_os="linux")]
+        {
+            let choice=adw::AlertDialog::builder()
+                .heading("Import photo folder")
+                .body("Import a local folder, or browse SMB/NFS photos directly without copying originals to Picasa.")
+                .default_response("local")
+                .close_response("cancel")
+                .build();
+            choice.add_response("cancel","Cancel");
+            choice.add_response("local","Local folder");
+            choice.add_response("network","Network shares");
+            let parent_for_network=parent.clone();
+            choice.connect_response(None,move |_,response|match response {
+                "local"=>local(),
+                "network"=>crate::network_picker::open(
+                    parent_for_network.upcast_ref::<gtk::Window>(),selected.clone()),
+                _=>(),
+            });
+            choice.present(Some(&parent));
+        }
+        #[cfg(not(target_os="linux"))]
+        local();
     })));
 
     let scan_job_for_refresh = scan_job.clone();
@@ -3046,9 +2805,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             == Some(ScanJobKind::Maintenance);
         if maintenance_was_active {
             scan_job_for_refresh.borrow_mut().preempt_maintenance();
-            // A preempted thumbnail recovery resumes after this refresh:
-            // re-arm it so the idle poll restarts the pass when the scan ends.
-            recovery_requested_for_refresh.set(true);
+            
         } else if scan_job_for_refresh.borrow().kind.is_some() {
             
             refresh_status_label_for_click.set_text("Refresh already running…");
@@ -3058,11 +2815,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             return;
         }
         button.set_sensitive(false);
-        // Refresh itself never requests a recovery pass: refresh scans create
-        // thumbnails for changed items, and a full pass after repeated
-        // refreshes can monopolize the app. A pass requested elsewhere (Clear
-        // thumbnails, startup, source reconnects) stays pending - the event
-        // poll defers it while this scan runs and starts it when idle.
+        // Do not request a full post-refresh thumbnail recovery pass here.
+        // Refresh scans already create thumbnails for changed items; a recovery
+        // pass over the entire 66k-photo library immediately after repeated
+        // refreshes can monopolize the app. Startup/mount recovery remains.
+        recovery_requested_for_refresh.set(false);
         refresh_status_label_for_click.set_text("Refreshing library…");
         refresh_status_spinner_for_click.set_spinning(true);
         refresh_status_box_for_click.set_visible(true);
@@ -3365,10 +3122,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             &gallery_for_events,
                         );
                     }
-                    // Photos are committed at this point, so sidebar folder
-                    // counts are final even though the thumbnail pass is still
-                    // running in the background.
-                    availability_refresh_for_events();
                     let text = format!("Indexed {imported} photos");
                     refresh_status_label_for_events.set_text(&text);
                     refresh_status_box_for_events.set_visible(true);
@@ -3517,13 +3270,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     if kind != Some(ScanJobKind::FolderRefresh) {
                         availability_refresh_for_events();
                     }
-                    // New photos outside Folder mode never touch the cached
-                    // Folder stream, so a restored stream would silently miss
-                    // the share that was just imported. Drop it; the next
-                    // folder click rebuilds (scoped preview, then background).
-                    if total_imported > 0 {
-                        gallery_for_events.invalidate_folder_cache();
-                    }
                     
                     refresh_status_label_for_events.set_text(&message);
                     refresh_status_box_for_events.set_visible(true);
@@ -3554,13 +3300,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                         }
                         _ => format!("Import stopped · {imported} photos added"),
                     };
-                    if *imported > 0 {
-                        gallery_for_events.invalidate_folder_cache();
-                        // An import stopped during its thumbnail pass still
-                        // committed indexed photos: refresh the sidebar counts.
-                        availability_refresh_for_events();
-                    }
-
+                    
                     refresh_status_label_for_events.set_text(&message);
                     refresh_status_box_for_events.set_visible(true);
                     let panel = refresh_status_box_for_events.clone();
@@ -3616,310 +3356,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         glib::ControlFlow::Continue
     });
 
-    // Startup network availability (REDESIGN SHARES MOUNT):
-    // - SMB shares are probed DIRECTLY through libsmbclient: no gvfs mount,
-    //   nothing appears in Nautilus, guest or Secret Service credentials are
-    //   used silently, and a failed login never prompts at startup.
-    // - NFS exports stay registered and offline until a private NFS client
-    //   is available. Retry never creates a desktop mount.
-    // Registered folders and cached thumbnails stay visible either way.
-    {
-        let shares = db::network_shares(&connection.borrow()).unwrap_or_default();
-        let mut roots: Vec<String> = Vec::new();
-        for folder in shares {
-            let root = folder.path.clone();
-            if !roots.contains(&root) {
-                roots.push(root);
-            }
-        }
-        let coalesced_refresh = CoalescedAvailabilityRefresh::new(availability_refresh.clone());
-        for (index, root) in roots.into_iter().enumerate() {
-            if root.starts_with("nfs://") {
-                if !crate::source::NFS_EXPERIMENTAL {
-                    crate::source::net_trace(format!(
-                        "startup_nfs_experimental_unavailable uri={root}"
-                    ));
-                    continue;
-                }
-                schedule_startup_nfs_probe(root, startup_remount_delay(0, index), coalesced_refresh.clone());
-                continue;
-            }
-            if !root.starts_with("smb://") {
-                continue;
-            }
-            // A share that came online but has no indexed photos yet (e.g.
-            // its first scan never completed while it was offline) is
-            // scanned once, using the same authorized-scan path as
-            // registration - this is what makes a share "appear" without
-            // any gvfs mount.
-            let scan_job_for_root = scan_job.clone();
-            let start_next_scan_for_root = start_next_scan.clone();
-            let connection_for_root = connection.clone();
-            let root_for_scan = root.clone();
-            let queue_scan_if_empty: Rc<dyn Fn()> = Rc::new(move || {
-                let prefix = format!(
-                    "{}",
-                    root_for_scan.trim_end_matches('/')
-                );
-                let prefix = format!("{prefix}/");
-                let indexed = db::photo_fingerprints(&connection_for_root.borrow());
-                let indexed_count = match indexed {
-                    Ok(fingerprints) => fingerprints
-                        .keys()
-                        .filter(|photo_path| photo_path.starts_with(&prefix))
-                        .count(),
-                    Err(_) => 0,
-                };
-                if indexed_count > 0 {
-                    crate::source::net_trace(format!(
-                        "startup_scan_skipped uri={root_for_scan} indexed={indexed_count}"
-                    ));
-                    return;
-                }
-                crate::source::net_trace(format!(
-                    "startup_scan_queued uri={root_for_scan} indexed=0"
-                ));
-                if let Ok(mut job) = scan_job_for_root.try_borrow_mut() {
-                    job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
-                        .expect("import is an authorized scan reason");
-                    job.pending.push_back(root_for_scan.clone());
-                }
-                start_next_scan_for_root();
-            });
-            // Disabled after Fedora regression (v15): auto-scanning every
-            // zero-index root queued scans for share/discovery roots and
-            // duplicate subtrees. Scanning stays manual (Add Folder,
-            // Retry/Rescan). Flip the constant to re-enable.
-            const STARTUP_AUTO_SCAN: bool = false;
-            schedule_startup_smb_probe(
-                root,
-                startup_remount_delay(0, index),
-                coalesced_refresh.clone(),
-                true,
-                if STARTUP_AUTO_SCAN {
-                    Some(queue_scan_if_empty)
-                } else {
-                    None
-                },
-            );
-        }
-    }
-
-    startup_phase("build_done_pre_present", &widgets_started);
-
     window
 }
 
-fn schedule_startup_nfs_probe(
-    root: String,
-    delay_ms: u64,
-    availability_refresh: CoalescedAvailabilityRefresh,
-) {
-    crate::source::net_trace(format!("startup_nfs_probe uri={root} delay_ms={delay_ms}"));
-    glib::timeout_add_local_once(std::time::Duration::from_millis(delay_ms), move || {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let worker_root = root.clone();
-        std::thread::spawn(move || {
-            let result = crate::nfs_transport::stat(&worker_root);
-            let _ = sender.send(result.map(|_| ()).map_err(|error| error.to_string()));
-        });
-        glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-            match receiver.try_recv() {
-                Ok(Ok(())) => {
-                    crate::source::net_trace(format!("startup_nfs_probe_done uri={root} ok=true"));
-                    availability_refresh.schedule();
-                    glib::ControlFlow::Break
-                }
-                Ok(Err(error)) => {
-                    crate::source::net_trace(format!(
-                        "startup_nfs_probe_done uri={root} ok=false reason={error}"
-                    ));
-                    availability_refresh.schedule();
-                    glib::ControlFlow::Break
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
-            }
-        });
-    });
-}
-
-/// Throttled availability refresh: many SMB probe completions collapse into
-/// ONE refresh_availability_ui pass, and passes are spaced at least
-/// `MIN_INTERVAL` apart. The pure 500 ms trailing-edge debounce was not
-/// enough on Fedora (v15): probes finish ~600 ms apart, so every probe
-/// scheduled its own full-library pass (15 re-probe + republish cycles).
-#[derive(Clone)]
-struct CoalescedAvailabilityRefresh {
-    scheduled: Rc<std::cell::Cell<bool>>,
-    last_run: Rc<std::cell::Cell<Option<std::time::Instant>>>,
-    refresh: Rc<dyn Fn()>,
-}
-
-impl CoalescedAvailabilityRefresh {
-    const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
-
-    fn new(refresh: Rc<dyn Fn()>) -> Self {
-        Self {
-            scheduled: Rc::new(std::cell::Cell::new(false)),
-            last_run: Rc::new(std::cell::Cell::new(None)),
-            refresh,
-        }
-    }
-
-    fn schedule(&self) {
-        if self.scheduled.replace(true) {
-            return;
-        }
-        // Wait out the remainder of the minimum interval so a probe burst
-        // spread over several seconds collapses into one pass.
-        let delay = self
-            .last_run
-            .get()
-            .map(|last| {
-                Self::MIN_INTERVAL
-                    .saturating_sub(last.elapsed())
-                    .max(std::time::Duration::from_millis(250))
-            })
-            .unwrap_or(std::time::Duration::from_millis(250));
-        let scheduled = self.scheduled.clone();
-        let last_run = self.last_run.clone();
-        let refresh = self.refresh.clone();
-        glib::timeout_add_local_once(delay, move || {
-            scheduled.set(false);
-            last_run.set(Some(std::time::Instant::now()));
-            refresh();
-        });
-    }
-}
-
-
-/// Register the folder the user picked in the network browser as a share,
-/// then scan it through the private SMB transport.
-fn register_selected_network_share(
-    connection: &Rc<RefCell<Connection>>,
-    parent: &gtk::Widget,
-    scan_job: &Rc<RefCell<ScanJobState>>,
-    start_next_scan: &Rc<dyn Fn()>,
-    sidebar_refresh: &Rc<dyn Fn()>,
-    selected_uri: String,
-    name: String,
-) {
-    let display_name = if name.is_empty() {
-        crate::source::filename(&selected_uri)
-    } else {
-        name
-    };
-    crate::source::net_trace(format!(
-        "register_start uri={selected_uri} name={display_name}"
-    ));
-    if let Err(error) = db::insert_network_share(&connection.borrow(), &selected_uri, &display_name)
-    {
-        show_error(parent, "Could not add network share", &error.to_string());
-        return;
-    }
-    crate::source::net_trace(format!("registered uri={selected_uri}"));
-    sidebar_refresh();
-    if let Ok(mut job) = scan_job.try_borrow_mut() {
-        job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
-            .expect("import is an authorized scan reason");
-        job.pending.push_back(selected_uri.clone());
-    }
-    start_next_scan();
-    crate::source::net_trace(format!("scan_queued uri={selected_uri}"));
-}
-
-/// Probe one SMB root through the direct transport, off the GTK thread, and
-/// publish the result back on the main thread. `allow_reprobe` schedules a
-/// single follow-up probe after five minutes for a root that was offline
-/// (bounded: no background retry storm; later recovery goes through the
-/// periodic availability refresher or the interactive Retry Connection).
-fn schedule_startup_smb_probe(
-    root: String,
-    delay_ms: u64,
-    availability_refresh: CoalescedAvailabilityRefresh,
-    allow_reprobe: bool,
-    queue_scan_if_empty: Option<Rc<dyn Fn()>>,
-) {
-    crate::source::net_trace(format!("startup_smb_probe uri={root} delay_ms={delay_ms}"));
-    glib::timeout_add_local_once(
-        std::time::Duration::from_millis(delay_ms),
-        move || {
-            let (sender, receiver) = std::sync::mpsc::channel::<(bool, String)>();
-            let root_for_worker = root.clone();
-            std::thread::spawn(move || {
-                let outcome = crate::smb_transport::stat_in_lane(
-                    &root_for_worker, crate::smb_transport::SmbLane::Background);
-                let ok = outcome.is_ok();
-                let reason = outcome.err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into());
-                let _ = sender.send((ok, reason));
-            });
-            let reprobe_state = std::cell::RefCell::new(if allow_reprobe {
-                Some((root.clone(), availability_refresh.clone()))
-            } else {
-                None
-            });
-            glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-                match receiver.try_recv() {
-                    Ok((ok, reason)) => {
-                        crate::source::net_trace(format!(
-                            "startup_smb_probe_done uri={root} ok={ok} reason={reason}"
-                        ));
-                        // Coalesced: one refresh per probe burst.
-                        availability_refresh.schedule();
-                        if ok {
-                            if let Some(queue_scan) = &queue_scan_if_empty {
-                                queue_scan();
-                            }
-                        } else if let Some((root, availability_refresh)) =
-                            reprobe_state.borrow_mut().take()
-                        {
-                            schedule_startup_smb_probe(
-                                root,
-                                300_000,
-                                availability_refresh,
-                                false,
-                                None,
-                            );
-                        }
-                        glib::ControlFlow::Break
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        glib::ControlFlow::Break
-                    }
-                }
-            });
-        },
-    );
-}
-
-/// Backoff schedule for the silent startup reconnect. Attempt 0 is the
-/// staggered first pass (~2.5s after launch, one share every 600ms); every
-/// later entry is the delay before the next retry after a failure. Bounded:
-/// after the last entry a still-offline share waits for a manual
-/// Retry Connection instead of retrying forever.
-const REMOUNT_BACKOFF_MS: &[u64] = &[30_000, 60_000, 120_000, 300_000, 600_000];
-
-fn startup_remount_delay(attempt: u32, index: usize) -> u64 {
-    if attempt == 0 {
-        2500 + index as u64 * 600
-    } else {
-        REMOUNT_BACKOFF_MS[(attempt as usize - 1).min(REMOUNT_BACKOFF_MS.len() - 1)]
-    }
-}
-
-#[cfg(test)]
-mod startup_remount_tests {
-    use super::startup_remount_delay;
-
-    #[test]
-    fn first_pass_is_staggered_and_retries_back_off_boundedly() {
-        assert_eq!(startup_remount_delay(0, 0), 2500);
-        assert_eq!(startup_remount_delay(0, 3), 4300);
-        assert_eq!(startup_remount_delay(1, 0), 30_000);
-        assert_eq!(startup_remount_delay(5, 0), 600_000);
-        // Beyond the schedule: clamped to the largest backoff step.
-        assert_eq!(startup_remount_delay(9, 0), 600_000);
-    }
-}

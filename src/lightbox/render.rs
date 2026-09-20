@@ -26,10 +26,9 @@ fn show_photo(
         return;
     };
 
-    // Decode a display-quality image off the GTK thread. The cached thumbnail
-    // is shown only for the initial open. During navigation the previous full
-    // image remains until this result is ready, avoiding a low-resolution
-    // thumbnail flash between adjacent photos.
+    // Decode a display-quality image off the GTK thread. Never display a
+    // thumbnail in the lightbox; keep the previous full-size image during
+    // navigation and show a neutral backdrop on initial open.
     let path = photo.path();
     if let Some(previous) = decode_cancel.borrow_mut().take() {
         previous.store(true, Ordering::Release);
@@ -44,8 +43,6 @@ fn show_photo(
     let result_slot = ResultSlot::new();
     let result_slot_for_worker = result_slot.clone();
     let decode_path = path.clone();
-    crate::source::net_trace(format!("decode_start uri={decode_path}"));
-    let decode_started = std::time::Instant::now();
     let rotation = photo.rotation();
     let edit_recipe_text = photo.edit_recipe();
     let edit_recipe = crate::edit::EditRecipe::decode(&edit_recipe_text);
@@ -104,10 +101,6 @@ fn show_photo(
 
         match result {
             Ok((width, height, pixels)) => {
-                crate::source::net_trace(format!(
-                    "decode_done uri={cache_path} w={width} h={height} ms={:.1}",
-                    decode_started.elapsed().as_secs_f64() * 1000.0
-                ));
                 let bytes = glib::Bytes::from_owned(pixels);
                 let texture = gtk::gdk::MemoryTexture::new(
                     width as i32,
@@ -158,7 +151,7 @@ fn show_photo(
                 }
 
             }
-            Err(error) => {
+            Err(_) => {
                 // A failed decode must not leave the previous photo visible.
                 // This is especially important when navigating from a valid
                 // image to a corrupt source: retaining the old paintable makes
@@ -167,49 +160,10 @@ fn show_photo(
                 picture.set_filename(Option::<&str>::None);
                 picture.set_size_request(1, 1);
 
-                // An offline network share reads as a failed READ (not a
-                // corrupt file). Tell the user why the photo did not open
-                // and how to fix it - rate-limited so keyboard navigation
-                // through an offline folder cannot spam dialogs.
-                let message = error.to_string();
-                let network_read_failure = message.contains("could not read")
-                    && (message.contains("smb://")
-                        || message.contains("nfs://")
-                        || message.contains("/run/user/"));
-                if network_read_failure && should_show_unavailable_notice() {
-                    crate::source::net_trace(format!(
-                        "lightbox_unavailable_notice uri={cache_path}"
-                    ));
-                    use libadwaita as adw;
-                    use libadwaita::prelude::*;
-                    let dialog = adw::AlertDialog::builder()
-                        .heading("Original unavailable")
-                        .body("This photo is on a network share that is currently offline. Use \"Retry Connection\" on the share in the sidebar, then open the photo again.")
-                        .build();
-                    dialog.add_response("ok", "OK");
-                    dialog.present(Some(&root));
-                }
             }
         }
     });
 
-}
-
-/// Rate limit for the offline-original notice (one per 10 s across all
-/// lightbox decodes).
-fn should_show_unavailable_notice() -> bool {
-    static LAST_NOTICE: std::sync::OnceLock<Mutex<std::time::Instant>> = std::sync::OnceLock::new();
-    let last = LAST_NOTICE.get_or_init(|| Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(60)));
-    let mut last = match last.lock() {
-        Ok(last) => last,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if last.elapsed() >= std::time::Duration::from_secs(10) {
-        *last = std::time::Instant::now();
-        true
-    } else {
-        false
-    }
 }
 
 fn display_texture_cache_lookup(
@@ -302,10 +256,10 @@ fn cancel_lightbox_prefetch() {
     });
 }
 
-/// After the user settles on a photo, warm the display-texture cache for the
-/// neighbor in the direction they are moving. Delayed slightly so rapid
-/// stepping does not queue a decode per keypress, and cancelled on the next
-/// navigation or on close.
+/// After the user settles on a photo, warm both immediate neighbors in the
+/// display-texture RAM cache, prioritizing the direction of movement. Delayed
+/// so rapid stepping does not schedule a decode per keypress, and cancelled on
+/// the next navigation or when the viewer closes.
 fn schedule_lightbox_prefetch(
     photos: Rc<RefCell<Vec<PhotoObject>>>,
     current: usize,
@@ -328,26 +282,25 @@ fn schedule_lightbox_prefetch(
             return glib::ControlFlow::Break;
         }
         let len = photos.borrow().len();
-        let target = if direction < 0 {
-            current.checked_sub(1)
-        } else {
-            (current + 1 < len).then_some(current + 1)
-        };
-        let Some(target) = target else {
-            return glib::ControlFlow::Break;
-        };
+        let previous = current.checked_sub(1);
+        let next = current.checked_add(1).filter(|&index| index < len);
+        // Prefer the direction of travel, but warm *both* immediate neighbors.
+        // No folder-wide prefetch: at most two speculative viewer decodes.
+        let targets = if direction < 0 { [previous, next] } else { [next, previous] };
         let cancel = Arc::new(AtomicBool::new(false));
         PREFETCH_CANCEL.with(|slot| {
             slot.borrow_mut().replace(cancel.clone());
         });
-        prefetch_display_texture(
-            &photos.borrow(),
-            target,
-            &root,
-            zoom.get(),
-            cache.clone(),
-            cancel,
-        );
+        for target in targets.into_iter().flatten() {
+            prefetch_display_texture(
+                &photos.borrow(),
+                target,
+                &root,
+                zoom.get(),
+                cache.clone(),
+                cancel.clone(),
+            );
+        }
         glib::ControlFlow::Break
     });
     PREFETCH_SOURCE.with(|slot| {
@@ -501,46 +454,11 @@ fn prepare_navigation_photo(
         return (true, true);
     }
 
-    // Nikon RAW/NEF cached thumbnails can have a different presentation
-    // path/aspect from the embedded display preview. Leave the previous full
-    // image in place for uncached RAW navigation so it cannot flash a second
-    // image or trigger a transient black-bar allocation.
-    if crate::image_format::uses(&path, crate::image_format::DecoderKind::Raw) {
-
-        return (false, false);
-    }
-
-    let Some(thumbnail) = photo
-        .cached_thumbnail_path()
-        .filter(|thumbnail| std::path::Path::new(thumbnail).is_file())
-    else {
-        return (false, false);
-    };
-    let Ok((mut width, mut height)) = image::image_dimensions(&thumbnail) else {
-        return (false, false);
-    };
-    if matches!(photo.rotation().rem_euclid(360), 90 | 270) {
-        std::mem::swap(&mut width, &mut height);
-    }
-
-    set_fit_geometry_from_intrinsic(
-        picture,
-        photo,
-        root,
-        zoom,
-        width as i32,
-        height as i32,
-    );
-    if photo.rotation().rem_euclid(360) == 0 {
-        picture.set_filename(Some(thumbnail));
-    } else if let Some(rotated) = crate::photo_texture::edited_thumbnail(&thumbnail, photo.rotation(), &photo.edit_recipe())
-    {
-        picture.set_paintable(Some(&rotated));
-    } else {
-        return (false, false);
-    }
-
-    (true, false)
+    // No blurry grid thumbnail in the full-size viewer. On a RAM cache miss,
+    // retain the previous full-resolution paintable until show_photo() has
+    // decoded the requested image. This applies to JPEG and RAW alike.
+    // The generation check in show_photo() prevents stale results appearing.
+    (false, false)
 }
 
 fn set_fit_geometry_from_intrinsic(
@@ -601,26 +519,6 @@ fn center_viewport_soon(viewport: &gtk::ScrolledWindow) {
         vertical.set_value(centered_v);
 
     });
-}
-
-fn show_cached_preview(picture: &gtk::Picture, photo: &PhotoObject) {
-    if let Some(thumbnail) = photo
-        .cached_thumbnail_path()
-        .filter(|path| std::path::Path::new(path).is_file())
-    {
-        if let Some(rotated) = crate::photo_texture::edited_thumbnail(&thumbnail, photo.rotation(), &photo.edit_recipe())
-        {
-            picture.set_paintable(Some(&rotated));
-        } else {
-            picture.set_filename(Some(thumbnail));
-        }
-
-    } else {
-        // `Picture` can retain its previous paintable across lightbox opens.
-        // Clear it before decoding a photo with no usable cached thumbnail.
-        picture.set_paintable(gtk::gdk::Paintable::NONE);
-        picture.set_filename(Option::<&str>::None);
-    }
 }
 
 fn viewer_decode_target(

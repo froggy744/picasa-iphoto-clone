@@ -1,0 +1,273 @@
+
+NETWORK t=     0.0ms dt=    0.0ms tid=ThreadId(2) discovery_started
+NETWORK t=     0.1ms dt=    0.1ms tid=ThreadId(3) discovery_attempt attempt=1
+NETWORK t=     2.3ms dt=    2.2ms tid=ThreadId(3) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(3) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(3) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(3) discovery_complete count=2
+NETWORK t=     2.4ms dt=    0.0ms tid=ThreadId(2) discovery_prefetch_done
+NETWORK t=    33.4ms dt=   31.0ms tid=main startup_phase recent_view_loaded ms=0.4
+STARTUP cold_start_ms=34 photos=194 displayed=100 folders=22 albums=0 scan=disabled rss_mb=61
+NETWORK t=    35.2ms dt=    1.8ms tid=main gallery_replace_start op=0 count=0 cache_scoped=true progressive=true
+NETWORK t=    35.2ms dt=    0.0ms tid=main gallery_replace_unchanged skip_rebuild
+NETWORK t=    40.6ms dt=    5.4ms tid=main shares_refresh_start
+NETWORK t=    40.9ms dt=    0.3ms tid=main shares_refresh_done count=5
+NETWORK t=    58.6ms dt=   17.8ms tid=main startup_phase layout_built ms=19.7
+NETWORK t=    59.7ms dt=    1.1ms tid=main startup_phase gallery_and_actions_built ms=20.8
+NETWORK t=    62.0ms dt=    2.4ms tid=main recovery_scheduled photos=194
+NETWORK t=    62.3ms dt=    0.3ms tid=main startup_nfs_unavailable uri=nfs://DietPi.local/mnt/ (private transport not implemented)
+NETWORK t=    62.4ms dt=    0.0ms tid=main startup_nfs_unavailable uri=nfs://DietPi.local/mnt/4TBP/ (private transport not implemented)
+NETWORK t=    62.4ms dt=    0.0ms tid=main startup_nfs_unavailable uri=nfs://DietPi.local/mnt/4TBS/ (private transport not implemented)
+NETWORK t=    62.4ms dt=    0.0ms tid=main startup_smb_probe uri=smb://DietPi.local:445/4TBP/Work/Denver delay_ms=4300
+NETWORK t=    62.4ms dt=    0.0ms tid=main startup_smb_probe uri=smb://DietPi.local:445/4TBS/Sport/WrestleMania delay_ms=4900
+NETWORK t=    62.4ms dt=    0.0ms tid=main startup_phase build_done_pre_present ms=23.5
+NETWORK t=    63.0ms dt=    0.5ms tid=ThreadId(6) recovery_start total=0 offline=0
+NETWORK t=    63.0ms dt=    0.0ms tid=ThreadId(6) recovery_done created=0 failed=0 offline=0 cancelled=false
+WARNING: radv is not a conformant Vulkan implementation, testing use only.
+NETWORK t=   131.3ms dt=   68.3ms tid=main shares_counts_ready count=5
+NETWORK t=   154.9ms dt=   23.7ms tid=main startup_phase first_idle_batch ms=116.0
+NETWORK t=   155.0ms dt=    0.0ms tid=main gallery_replace_start op=0 count=100 cache_scoped=true progressive=true
+===== SCAN COMPLETE: imported=0 failed=0 | progressive gallery updates complete =====
+NETWORK t=  2135.8ms dt= 1980.9ms tid=main discovery_ui_started
+NETWORK t=  2135.9ms dt=    0.0ms tid=main discovery_cache_seeded count=2
+NETWORK t=  2135.9ms dt=    0.1ms tid=main dialog_opened
+NETWORK t=  2135.9ms dt=    0.0ms tid=ThreadId(15) discovery_started
+NETWORK t=  2136.0ms dt=    0.1ms tid=ThreadId(16) discovery_attempt attempt=1
+NETWORK t=  2137.5ms dt=    1.5ms tid=ThreadId(16) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t=  2137.5ms dt=    0.0ms tid=ThreadId(16) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t=  2137.5ms dt=    0.0ms tid=ThreadId(16) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t=  2137.6ms dt=    0.0ms tid=ThreadId(16) discovery_complete count=2
+NETWORK t=  2186.0ms dt=   48.4ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t=  2186.4ms dt=    0.4ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t=  2186.5ms dt=    0.1ms tid=main discovery_ui_done count=2 shown=2
+NETWORK t=  3614.0ms dt= 1427.4ms tid=main discovery_row_clicked name=NFS file sharing on DietPi uri=nfs://DietPi.local/mnt
+NETWORK t=  4014.3ms dt=  400.3ms tid=main nfs_lookup_started host=DietPi.local
+NETWORK t=  4144.6ms dt=  130.3ms tid=ThreadId(18) nfs_exports host=DietPi.local count=5
+NETWORK t=  4188.6ms dt=   43.9ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t=  4188.8ms dt=    0.2ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t=  4188.9ms dt=    0.1ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t=  4189.1ms dt=    0.1ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t=  4189.2ms dt=    0.1ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t=  4362.7ms dt=  173.6ms tid=ThreadId(19) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t=  4365.4ms dt=    2.7ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4366.5ms dt=    1.1ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4366.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4366.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4391.2ms dt=   24.7ms tid=pic-smb-transport smb_transport stat ms=24.7
+NETWORK t=  4391.6ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  4412.6ms dt=   21.0ms tid=main startup_smb_probe_done uri=smb://DietPi.local:445/4TBP/Work/Denver ok=true reason=ok
+NETWORK t=  4663.8ms dt=  251.2ms tid=ThreadId(21) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t=  4666.2ms dt=    2.4ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4666.8ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4666.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4666.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4695.5ms dt=   28.6ms tid=pic-smb-transport smb_transport stat ms=28.6
+NETWORK t=  4696.2ms dt=    0.7ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  4696.2ms dt=    0.0ms tid=ThreadId(21) smb_stat_start url=smb://DietPi.local/4TBS/Sport/WrestleMania lane=background
+NETWORK t=  4698.4ms dt=    2.2ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4699.1ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4699.1ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4699.1ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4715.7ms dt=   16.6ms tid=pic-smb-transport smb_transport stat ms=16.6
+NETWORK t=  4716.1ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  4763.6ms dt=   47.5ms tid=main shares_refresh_start
+NETWORK t=  4764.0ms dt=    0.5ms tid=main shares_refresh_done count=5
+NETWORK t=  4814.1ms dt=   50.1ms tid=main shares_counts_ready count=5
+NETWORK t=  4962.6ms dt=  148.4ms tid=ThreadId(25) smb_stat_start url=smb://DietPi.local/4TBS/Sport/WrestleMania lane=background
+NETWORK t=  4964.7ms dt=    2.2ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  4965.4ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  4965.4ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  4965.4ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  4982.4ms dt=   17.0ms tid=pic-smb-transport smb_transport stat ms=17.0
+NETWORK t=  4982.7ms dt=    0.3ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  5012.6ms dt=   29.8ms tid=main startup_smb_probe_done uri=smb://DietPi.local:445/4TBS/Sport/WrestleMania ok=true reason=ok
+NETWORK t=  6033.7ms dt= 1021.2ms tid=main dialog_connect_state server='DietPi.local' discovered=true protocol=1
+NETWORK t=  6033.8ms dt=    0.0ms tid=main dialog_connect_source=discovered uri=nfs://DietPi.local/mnt
+NETWORK t=  6033.8ms dt=    0.0ms tid=main dialog_accepted root=nfs://DietPi.local/mnt name=
+NETWORK t=  6033.8ms dt=    0.0ms tid=main connect_requested uri=nfs://DietPi.local/mnt
+NETWORK t=  6033.8ms dt=    0.0ms tid=main browse_root_in uri=nfs://DietPi.local/mnt
+NETWORK t=  6033.8ms dt=    0.0ms tid=main browse_root_out uri=nfs://DietPi.local/mnt/
+NETWORK t=  6033.8ms dt=    0.0ms tid=main connect_root normalized=nfs://DietPi.local/mnt/
+NETWORK t=  6035.5ms dt=    1.6ms tid=ThreadId(27) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t=  6037.8ms dt=    2.4ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  6038.5ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  6038.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  6038.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  6043.5ms dt=    5.0ms tid=main discovery_ui_closed_flag
+NETWORK t=  6043.5ms dt=    0.0ms tid=main dialog_closed
+NETWORK t=  6046.3ms dt=    2.8ms tid=main discovery_ui_stopped_closed
+NETWORK t=  6057.1ms dt=   10.8ms tid=pic-smb-transport smb_transport stat ms=18.6
+NETWORK t=  6057.5ms dt=    0.5ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  6057.6ms dt=    0.0ms tid=ThreadId(27) smb_stat_start url=smb://DietPi.local/4TBS/Sport/WrestleMania lane=background
+NETWORK t=  6059.5ms dt=    1.9ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  6060.1ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  6060.1ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  6060.2ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  6073.0ms dt=   12.8ms tid=pic-smb-transport smb_transport stat ms=12.8
+NETWORK t=  6073.3ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  6088.0ms dt=   14.7ms tid=main shares_refresh_start
+NETWORK t=  6088.4ms dt=    0.4ms tid=main shares_refresh_done count=5
+NETWORK t=  6140.7ms dt=   52.3ms tid=main shares_counts_ready count=5
+NETWORK t=  8335.9ms dt= 2195.2ms tid=main discovery_ui_started
+NETWORK t=  8335.9ms dt=    0.0ms tid=main discovery_cache_seeded count=7
+NETWORK t=  8336.0ms dt=    0.1ms tid=main dialog_opened
+NETWORK t=  8336.0ms dt=    0.0ms tid=ThreadId(31) discovery_started
+NETWORK t=  8336.1ms dt=    0.1ms tid=ThreadId(32) discovery_attempt attempt=1
+NETWORK t=  8337.6ms dt=    1.5ms tid=ThreadId(32) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t=  8337.6ms dt=    0.0ms tid=ThreadId(32) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t=  8337.7ms dt=    0.0ms tid=ThreadId(32) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t=  8337.7ms dt=    0.0ms tid=ThreadId(32) discovery_complete count=2
+NETWORK t=  8386.0ms dt=   48.4ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t=  8386.5ms dt=    0.4ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t=  8386.6ms dt=    0.1ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t=  8386.7ms dt=    0.1ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t=  8386.9ms dt=    0.1ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t=  8387.0ms dt=    0.1ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t=  8387.1ms dt=    0.1ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t=  8387.2ms dt=    0.1ms tid=main discovery_ui_done count=2 shown=7
+NETWORK t=  9663.9ms dt= 1276.7ms tid=ThreadId(34) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t=  9666.4ms dt=    2.5ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  9667.0ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  9667.0ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  9667.0ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  9685.1ms dt=   18.1ms tid=pic-smb-transport smb_transport stat ms=18.1
+NETWORK t=  9685.6ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  9685.6ms dt=    0.0ms tid=ThreadId(34) smb_stat_start url=smb://DietPi.local/4TBS/Sport/WrestleMania lane=background
+NETWORK t=  9687.9ms dt=    2.3ms tid=pic-smb-transport smb_client_new_start
+NETWORK t=  9688.5ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t=  9688.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t=  9688.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t=  9698.0ms dt=    9.5ms tid=main discovery_row_clicked name=mnt/4TBM uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t=  9701.9ms dt=    3.9ms tid=pic-smb-transport smb_transport stat ms=13.3
+NETWORK t=  9702.3ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t=  9713.4ms dt=   11.1ms tid=main shares_refresh_start
+NETWORK t=  9713.8ms dt=    0.4ms tid=main shares_refresh_done count=5
+NETWORK t=  9763.9ms dt=   50.1ms tid=main shares_counts_ready count=5
+NETWORK t= 10098.3ms dt=  334.3ms tid=main nfs_lookup_started host=DietPi.local
+NETWORK t= 10105.0ms dt=    6.8ms tid=ThreadId(38) nfs_exports host=DietPi.local count=5
+NETWORK t= 11041.7ms dt=  936.7ms tid=main dialog_connect_state server='DietPi.local' discovered=true protocol=1
+NETWORK t= 11041.8ms dt=    0.0ms tid=main dialog_connect_source=discovered uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 11041.8ms dt=    0.0ms tid=main dialog_accepted root=nfs://DietPi.local/mnt/4TBM name=
+NETWORK t= 11041.8ms dt=    0.0ms tid=main connect_requested uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 11041.8ms dt=    0.0ms tid=main browse_root_in uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 11041.8ms dt=    0.0ms tid=main browse_root_out uri=nfs://DietPi.local/mnt/4TBM/
+NETWORK t= 11041.9ms dt=    0.0ms tid=main connect_root normalized=nfs://DietPi.local/mnt/4TBM/
+NETWORK t= 11043.4ms dt=    1.5ms tid=ThreadId(39) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t= 11045.6ms dt=    2.2ms tid=main discovery_ui_closed_flag
+NETWORK t= 11045.6ms dt=    0.0ms tid=main dialog_closed
+NETWORK t= 11046.0ms dt=    0.3ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 11046.6ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 11046.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 11046.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 11064.8ms dt=   18.2ms tid=pic-smb-transport smb_transport stat ms=18.2
+NETWORK t= 11065.2ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 11065.3ms dt=    0.0ms tid=ThreadId(39) smb_stat_start url=smb://DietPi.local/4TBS/Sport/WrestleMania lane=background
+NETWORK t= 11067.3ms dt=    2.0ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 11067.8ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 11067.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 11067.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 11081.1ms dt=   13.2ms tid=pic-smb-transport smb_transport stat ms=13.2
+NETWORK t= 11081.5ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 11091.1ms dt=    9.6ms tid=main discovery_ui_stopped_closed
+NETWORK t= 11092.7ms dt=    1.5ms tid=main availability_apply no_updates
+NETWORK t= 11093.2ms dt=    0.6ms tid=main shares_refresh_start
+NETWORK t= 11093.7ms dt=    0.4ms tid=main shares_refresh_done count=6
+NETWORK t= 11149.2ms dt=   55.5ms tid=main shares_counts_ready count=6
+NETWORK t= 13175.5ms dt= 2026.4ms tid=main discovery_ui_started
+NETWORK t= 13175.6ms dt=    0.0ms tid=main discovery_cache_seeded count=7
+NETWORK t= 13175.6ms dt=    0.1ms tid=main dialog_opened
+NETWORK t= 13175.6ms dt=    0.0ms tid=ThreadId(43) discovery_started
+NETWORK t= 13175.8ms dt=    0.2ms tid=ThreadId(44) discovery_attempt attempt=1
+NETWORK t= 13177.2ms dt=    1.4ms tid=ThreadId(44) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t= 13177.3ms dt=    0.0ms tid=ThreadId(44) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t= 13177.3ms dt=    0.0ms tid=ThreadId(44) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t= 13177.3ms dt=    0.0ms tid=ThreadId(44) discovery_complete count=2
+NETWORK t= 13225.7ms dt=   48.4ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t= 13226.2ms dt=    0.5ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t= 13226.3ms dt=    0.1ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t= 13226.5ms dt=    0.1ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 13226.6ms dt=    0.1ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t= 13226.7ms dt=    0.1ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t= 13226.9ms dt=    0.1ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 13227.0ms dt=    0.1ms tid=main discovery_ui_done count=2 shown=7
+NETWORK t= 14477.7ms dt= 1250.7ms tid=main discovery_row_clicked name=NFS file sharing on DietPi uri=nfs://DietPi.local/mnt
+NETWORK t= 14878.0ms dt=  400.3ms tid=main nfs_lookup_started host=DietPi.local
+NETWORK t= 14885.5ms dt=    7.5ms tid=ThreadId(46) nfs_exports host=DietPi.local count=5
+NETWORK t= 15897.9ms dt= 1012.4ms tid=main dialog_connect_state server='DietPi.local' discovered=true protocol=1
+NETWORK t= 15897.9ms dt=    0.0ms tid=main dialog_connect_source=discovered uri=nfs://DietPi.local/mnt
+NETWORK t= 15898.0ms dt=    0.0ms tid=main dialog_accepted root=nfs://DietPi.local/mnt name=
+NETWORK t= 15898.0ms dt=    0.0ms tid=main connect_requested uri=nfs://DietPi.local/mnt
+NETWORK t= 15898.0ms dt=    0.0ms tid=main browse_root_in uri=nfs://DietPi.local/mnt
+NETWORK t= 15898.0ms dt=    0.0ms tid=main browse_root_out uri=nfs://DietPi.local/mnt/
+NETWORK t= 15898.0ms dt=    0.0ms tid=main connect_root normalized=nfs://DietPi.local/mnt/
+NETWORK t= 15899.5ms dt=    1.4ms tid=ThreadId(47) smb_stat_start url=smb://DietPi.local/4TBP/Work/Denver lane=background
+NETWORK t= 15901.7ms dt=    2.3ms tid=main discovery_ui_closed_flag
+NETWORK t= 15901.8ms dt=    0.0ms tid=main dialog_closed
+NETWORK t= 15902.0ms dt=    0.2ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 15902.6ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 15902.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 15902.6ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 15920.6ms dt=   17.9ms tid=pic-smb-transport smb_transport stat ms=17.9
+NETWORK t= 15920.9ms dt=    0.3ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 15920.9ms dt=    0.0ms tid=ThreadId(47) smb_stat_start url=smb://DietPi.local/4TBS/Sport/WrestleMania lane=background
+NETWORK t= 15923.2ms dt=    2.3ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 15923.8ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 15923.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 15923.9ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 15929.0ms dt=    5.1ms tid=main discovery_ui_stopped_closed
+NETWORK t= 15936.4ms dt=    7.4ms tid=pic-smb-transport smb_transport stat ms=12.5
+NETWORK t= 15936.8ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 15950.7ms dt=   13.9ms tid=main shares_refresh_start
+NETWORK t= 15951.1ms dt=    0.4ms tid=main shares_refresh_done count=6
+NETWORK t= 16001.2ms dt=   50.1ms tid=main shares_counts_ready count=6
+NETWORK t= 19047.6ms dt= 3046.4ms tid=main discovery_ui_started
+NETWORK t= 19047.6ms dt=    0.0ms tid=main discovery_cache_seeded count=7
+NETWORK t= 19047.7ms dt=    0.1ms tid=main dialog_opened
+NETWORK t= 19047.7ms dt=    0.0ms tid=ThreadId(51) discovery_started
+NETWORK t= 19047.8ms dt=    0.1ms tid=ThreadId(52) discovery_attempt attempt=1
+NETWORK t= 19049.2ms dt=    1.4ms tid=ThreadId(52) discovery_result attempt=1 uri=smb://DietPi.local:445/
+NETWORK t= 19049.2ms dt=    0.0ms tid=ThreadId(52) discovery_result attempt=1 uri=nfs://DietPi.local/mnt
+NETWORK t= 19049.3ms dt=    0.0ms tid=ThreadId(52) discovery_pass_done attempt=1 found=2 total=2 errored=false
+NETWORK t= 19049.3ms dt=    0.0ms tid=ThreadId(52) discovery_complete count=2
+NETWORK t= 19097.8ms dt=   48.5ms tid=main discovery_ui_item n=1 uri=smb://DietPi.local:445/
+NETWORK t= 19098.2ms dt=    0.5ms tid=main discovery_ui_item n=2 uri=nfs://DietPi.local/mnt
+NETWORK t= 19098.4ms dt=    0.1ms tid=main discovery_ui_item n=3 uri=nfs://DietPi.local/exports/Work
+NETWORK t= 19098.5ms dt=    0.1ms tid=main discovery_ui_item n=4 uri=nfs://DietPi.local/mnt/4TBM
+NETWORK t= 19098.6ms dt=    0.1ms tid=main discovery_ui_item n=5 uri=nfs://DietPi.local/mnt/4TBP
+NETWORK t= 19098.8ms dt=    0.1ms tid=main discovery_ui_item n=6 uri=nfs://DietPi.local/mnt/4TBS
+NETWORK t= 19098.9ms dt=    0.1ms tid=main discovery_ui_item n=7 uri=nfs://DietPi.local/mnt/dietpi_userdata
+NETWORK t= 19099.0ms dt=    0.1ms tid=main discovery_ui_done count=2 shown=7
+NETWORK t= 20150.0ms dt= 1050.9ms tid=main discovery_row_clicked name=DIETPI uri=smb://DietPi.local:445/
+NETWORK t= 20965.8ms dt=  815.8ms tid=main dialog_connect_state server='DietPi.local:445' discovered=true protocol=0
+NETWORK t= 20965.8ms dt=    0.0ms tid=main dialog_connect_source=discovered uri=smb://DietPi.local:445/
+NETWORK t= 20965.8ms dt=    0.0ms tid=main dialog_accepted root=smb://DietPi.local:445/ name=
+NETWORK t= 20965.8ms dt=    0.0ms tid=main connect_requested uri=smb://DietPi.local:445/
+NETWORK t= 20965.9ms dt=    0.0ms tid=main browse_root_in uri=smb://DietPi.local:445/
+NETWORK t= 20965.9ms dt=    0.0ms tid=main browse_root_out uri=smb://DietPi.local:445/
+NETWORK t= 20965.9ms dt=    0.0ms tid=main connect_root normalized=smb://DietPi.local:445/
+NETWORK t= 20966.0ms dt=    0.1ms tid=main discovery_ui_closed_flag
+NETWORK t= 20966.0ms dt=    0.0ms tid=main dialog_closed
+NETWORK t= 20967.4ms dt=    1.5ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 20968.1ms dt=    0.6ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 20968.1ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 20968.1ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 20968.1ms dt=    0.0ms tid=pic-smb-transport smb_opendir_call url=smb://DietPi.local/
+NETWORK t= 20999.9ms dt=   31.8ms tid=main discovery_ui_stopped_closed
+NETWORK t= 21188.9ms dt=  189.0ms tid=pic-smb-transport smb_opendir_return url=smb://DietPi.local/ ok=true
+NETWORK t= 21188.9ms dt=    0.0ms tid=pic-smb-transport smb_transport stat_server_root ms=220.8
+NETWORK t= 21189.3ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 21216.2ms dt=   26.9ms tid=main connect_smb_ok uri=smb://DietPi.local:445/
+NETWORK t= 21216.3ms dt=    0.0ms tid=main browse_root uri=smb://DietPi.local:445/
+NETWORK t= 21217.2ms dt=    0.9ms tid=ThreadId(56) smb_list_shares url=smb://DietPi.local/
+NETWORK t= 21218.8ms dt=    1.6ms tid=pic-smb-transport smb_client_new_start
+NETWORK t= 21219.5ms dt=    0.7ms tid=pic-smb-transport smb_client_context_created
+NETWORK t= 21219.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_start
+NETWORK t= 21219.5ms dt=    0.0ms tid=pic-smb-transport smb_client_init_done
+NETWORK t= 21219.5ms dt=    0.0ms tid=pic-smb-transport smb_opendir_call url=smb://DietPi.local/
+NETWORK t= 21231.2ms dt=   11.7ms tid=pic-smb-transport smb_opendir_return url=smb://DietPi.local/ ok=true
+NETWORK t= 21231.2ms dt=    0.0ms tid=pic-smb-transport smb_transport list_shares ms=11.7
+NETWORK t= 21231.6ms dt=    0.4ms tid=pic-smb-transport smb_client_context_freed
+NETWORK t= 21231.6ms dt=    0.0ms tid=ThreadId(56) browse_enumerate uri=smb://DietPi.local:445/ count=5 ms=14.4
+NETWORK t= 21267.4ms dt=   35.8ms tid=main browse_list uri=smb://DietPi.local:445/ count=5
+NETWORK t= 22481.8ms dt= 1214.4ms tid=main browse_cancelled
+NETWORK t= 22481.9ms dt=    0.0ms tid=main browse_closed

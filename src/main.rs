@@ -8,16 +8,20 @@ mod grid;
 mod image_format;
 mod infobar;
 mod lightbox;
-#[cfg(target_os = "linux")]
-mod nfs_transport;
+#[cfg(target_os="linux")]
+mod private_smb;
+#[cfg(target_os="linux")]
+mod private_nfs;
+#[cfg(target_os="linux")]
+mod network_shares;
+#[cfg(target_os="linux")]
+mod network_picker;
 mod photo_object;
 mod photo_texture;
 mod platform;
 mod scanner;
 mod settings;
 mod sidebar;
-#[cfg(target_os = "linux")]
-mod smb_transport;
 mod source;
 mod thumbnail;
 mod thumbnail_display;

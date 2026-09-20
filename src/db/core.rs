@@ -12,19 +12,6 @@ pub fn open_default() -> Result<Connection> {
     open(&path)
 }
 
-/// Open the initialized database without running migrations on grid refresh.
-/// A short busy timeout also allows WAL readers to wait out brief contention.
-pub fn open_default_read_only() -> Result<Connection> {
-    let path = database_path()?;
-    let connection = Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .with_context(|| format!("could not open read-only database {}", path.display()))?;
-    connection.busy_timeout(std::time::Duration::from_secs(3))?;
-    Ok(connection)
-}
-
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -38,13 +25,6 @@ pub fn open(path: &Path) -> Result<Connection> {
     migrate_photo_schema(&connection)?;
     migrate_folder_schema(&connection)?;
     migrate_album_schema(&connection)?;
-    // Best-effort: a failed gvfs-path rewrite (e.g. a folder/path collision
-    // with an existing canonical row) must never keep the library from
-    // opening. The migration is transactional, so a failure leaves every
-    // path exactly as it was; the legacy paths keep working.
-    if let Err(error) = migrate_gvfs_paths(&connection) {
-        eprintln!("gvfs path migration skipped: {error:#}");
-    }
     Ok(connection)
 }
 

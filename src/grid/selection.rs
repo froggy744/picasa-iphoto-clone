@@ -700,10 +700,6 @@ fn install_folder_root_input(
             selection_for_left.select_item(position, true);
             let photos = current_photos_for_left.borrow().clone();
             if let Some(index) = photos.iter().position(|item| item.id() == photo.id()) {
-                crate::source::net_trace(format!(
-                    "tile_activated photo_id={} index={index}",
-                    photo.id()
-                ));
                 (activate_for_left)(photos, index);
             }
             anchor_for_left.set(Some(position));

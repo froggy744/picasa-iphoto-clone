@@ -326,10 +326,9 @@ mod tests {
         write(&root.join("plain/plain.css"), ".plain {}");
 
         let themes = discover(&root);
-        assert_eq!(
-            themes.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
-            ["aqua", "plain", "zebra"]
-        );
+        assert_eq!(themes.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), [
+            "aqua", "plain", "zebra"
+        ]);
         assert_eq!(themes[0].name, "Aqua");
         assert_eq!(themes[1].id, "plain");
         assert_eq!(themes[1].name, "Plain");
@@ -383,25 +382,31 @@ mod tests {
 
     #[test]
     fn window_controls_metadata_opts_into_traffic_lights() {
-        let traffic =
-            metadata_from_css("/* picasa-theme\n   window-controls: traffic-light\n*/\n.x {}");
+        let traffic = metadata_from_css(
+            "/* picasa-theme\n   window-controls: traffic-light\n*/\n.x {}",
+        );
         assert_eq!(traffic.window_controls, WindowControls::TrafficLight);
 
         // Missing key and explicit native both stay native.
         let bare = metadata_from_css(".x {}");
         assert_eq!(bare.window_controls, WindowControls::Native);
-        let native = metadata_from_css("/* picasa-theme\n   window-controls: native\n*/\n.x {}");
+        let native = metadata_from_css(
+            "/* picasa-theme\n   window-controls: native\n*/\n.x {}",
+        );
         assert_eq!(native.window_controls, WindowControls::Native);
 
         // Unrecognized values fall back to native instead of breaking.
-        let junk = metadata_from_css("/* picasa-theme\n   window-controls: holograms\n*/\n.x {}");
+        let junk = metadata_from_css(
+            "/* picasa-theme\n   window-controls: holograms\n*/\n.x {}",
+        );
         assert_eq!(junk.window_controls, WindowControls::Native);
     }
 
     #[test]
     fn invalid_dark_and_mode_values_are_rejected_with_a_fallback() {
-        let metadata =
-            metadata_from_css("/* picasa-theme\n   dark: maybe\n   mode: basse\n*/\n.x {}");
+        let metadata = metadata_from_css(
+            "/* picasa-theme\n   dark: maybe\n   mode: basse\n*/\n.x {}",
+        );
         assert!(!metadata.dark);
         assert!(!metadata.is_base);
 
@@ -459,22 +464,15 @@ mod tests {
         let themes = [theme("superman"), theme("standard"), theme("teal")];
 
         // Saved theme still exists.
-        assert_eq!(
-            resolve_active(&themes, "teal", "standard").unwrap().id,
-            "teal"
-        );
+        assert_eq!(resolve_active(&themes, "teal", "standard").unwrap().id, "teal");
         // Saved theme deleted: fall back to the default id.
         assert_eq!(
-            resolve_active(&themes, "deleted-theme", "standard")
-                .unwrap()
-                .id,
+            resolve_active(&themes, "deleted-theme", "standard").unwrap().id,
             "standard"
         );
         // Default missing too: first discovered theme.
         assert_eq!(
-            resolve_active(&themes, "deleted-theme", "missing")
-                .unwrap()
-                .id,
+            resolve_active(&themes, "deleted-theme", "missing").unwrap().id,
             "superman"
         );
         // No themes at all: no activation, stock GTK look.
@@ -509,8 +507,8 @@ mod tests {
     #[test]
     fn the_community_theme_template_is_a_valid_theme() {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/theme-template/theme.css");
-        let css =
-            std::fs::read_to_string(&source).expect("docs/theme-template/theme.css must exist");
+        let css = std::fs::read_to_string(&source)
+            .expect("docs/theme-template/theme.css must exist");
 
         let root = unique_temp_dir("community-template");
         write(&root.join("my-theme/theme.css"), &css);

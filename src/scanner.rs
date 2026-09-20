@@ -85,11 +85,6 @@ fn scan_with_control(
     events: Option<&Sender<ScanEvent>>,
     control: &ScanControl,
 ) -> Result<usize> {
-    let normalized_root = crate::source::normalize_import_reference(root);
-    let root = normalized_root.as_str();
-    if root.starts_with("nfs://") && !crate::source::NFS_EXPERIMENTAL {
-        anyhow::bail!(crate::source::NFS_UNAVAILABLE);
-    }
     if !root_is_available(root) {
         anyhow::bail!("scan root is unavailable: {root}");
     }
@@ -103,13 +98,7 @@ fn scan_with_control(
     }
     let indexed = db::photo_fingerprints(&connection)?;
     let root_file = crate::source::file(root);
-    let (files, discovered_folders) = if root.starts_with("smb://") {
-        collect_smb_files(root, control)?
-    } else if root.starts_with("nfs://") {
-        collect_nfs_files(root, control)?
-    } else {
-        collect_files(&root_file, control)?
-    };
+    let (files, discovered_folders) = collect_files(&root_file, control)?;
     if control.is_cancelled() {
         send(events, ScanEvent::Cancelled { imported: 0 });
         return Ok(0);
@@ -179,6 +168,7 @@ fn scan_with_control(
         let fingerprint_matches =
             existing.is_some_and(|(mtime, size, _, _)| (*mtime, *size) == fingerprint);
         let missing_raw_dimensions = is_raw(&path)
+            && !remote_raw_thumbnail_unsupported(&path)
             && existing.is_some_and(|(_, _, width, height)| {
                 width.unwrap_or_default() <= 0 || height.unwrap_or_default() <= 0
             });
@@ -189,6 +179,7 @@ fn scan_with_control(
                 .flatten()
                 .is_none();
         let missing_raw_thumbnail = is_raw(&path)
+            && !remote_raw_thumbnail_unsupported(&path)
             && existing.is_some()
             && thumbnail::existing_cache_path(&path, fingerprint.0, fingerprint.1)
                 .ok()
@@ -216,7 +207,8 @@ fn scan_with_control(
                     .context("indexed photo disappeared")?;
                 imported += 1;
                 // A metadata-only repair does not invalidate the thumbnail.
-                if !fingerprint_matches || missing_heif_thumbnail {
+                if (!fingerprint_matches || missing_heif_thumbnail)
+                    && !remote_raw_thumbnail_unsupported(&path) {
                     thumbnails.push((
                         path.clone(),
                         photo_metadata.mtime,
@@ -261,14 +253,6 @@ fn scan_with_control(
         return Ok(imported);
     }
     send(events, ScanEvent::IndexingFinished { imported });
-    // Prioritize quick previews over large RAW downloads on NFS.
-    // Preserve this order for the result zip below.
-    if root.starts_with("nfs://") {
-        thumbnails.sort_by_key(|(path, _, size)| {
-            let raw = is_raw(path);
-            (raw, size.unwrap_or(i64::MAX))
-        });
-    }
     send(
         events,
         ScanEvent::ThumbnailsStarted {
@@ -318,137 +302,15 @@ fn scan_with_control(
 }
 
 fn root_is_available(root: &str) -> bool {
-    crate::source::probe_source_available(root)
-}
-
-/// Enumerate an SMB tree through the direct transport. Children are wrapped
-/// in synthetic gio::FileInfo objects so the downstream metadata pipeline
-/// (fingerprints, source::read / materialize) works unchanged.
-fn collect_smb_files(
-    root_path: &str,
-    control: &ScanControl,
-) -> Result<(
-    Vec<(gio::File, gio::FileInfo, String)>,
-    Vec<(String, Option<String>)>,
-)> {
-    let mut pending = vec![(root_path.trim_end_matches('/').to_string(), None)];
-    let mut files = Vec::new();
-    let mut folders = Vec::new();
-    let mut visited = 0usize;
-    while let Some((directory, parent_path)) = pending.pop() {
-        if control.is_cancelled() {
-            break;
-        }
-        visited += 1;
-        if visited > 20_000 {
-            anyhow::bail!("SMB scan runaway: more than 20000 directories under {root_path}");
-        }
-        // A trailing slash is needed for the transport request, but is NOT
-        // part of the database folder key. The registered share has no final
-        // slash; inserting a second row for "share/" strands its photos outside
-        // that share's folder-ID subtree after parent-link repair.
-        let dir_uri = format!("{directory}/");
-        folders.push((directory.clone(), parent_path));
-        let entries = crate::smb_transport::list_dir(&dir_uri)
-            .map_err(|error| anyhow::anyhow!("could not list {dir_uri}: {error}"))?;
-        for entry in entries {
-            if control.is_cancelled() {
-                break;
-            }
-            let child_uri = format!(
-                "{dir_uri}{}",
-                crate::smb_transport::percent_encode_segment(&entry.name)
-            );
-            if entry.is_dir {
-                // Same Lightroom-artifact skip as the gvfs walk.
-                let name = entry.name.to_ascii_lowercase();
-                if !name.ends_with(".lrdata") && name != "previews" && name != "cache" {
-                    pending.push((child_uri, Some(directory.clone())));
-                }
-                continue;
-            }
-            if !supported(Path::new(&entry.name)) {
-                continue;
-            }
-            // Fingerprint attributes come from a stat (size + mtime).
-            let meta =
-                crate::smb_transport::stat_in_lane(&child_uri, crate::smb_transport::SmbLane::User)
-                    .map_err(anyhow::Error::msg)
-                    .with_context(|| format!("could not stat {child_uri}; scan is incomplete"))?;
-            let info = gio::FileInfo::new();
-            info.set_name(&entry.name);
-            info.set_file_type(gio::FileType::Regular);
-            info.set_size(meta.size as i64);
-            if let Some(mtime) = meta.mtime {
-                if let Ok(date_time) = glib::DateTime::from_unix_utc(mtime) {
-                    info.set_modification_date_time(&date_time);
-                }
-            }
-            files.push((gio::File::for_uri(&child_uri), info, directory.clone()));
-        }
+    #[cfg(target_os = "linux")]
+    if crate::network_shares::private(root) {
+        return crate::network_shares::stat(root).map(|m|m.is_dir).unwrap_or(false);
     }
-    Ok((files, folders))
-}
-
-fn collect_nfs_files(
-    root_path: &str,
-    control: &ScanControl,
-) -> Result<(
-    Vec<(gio::File, gio::FileInfo, String)>,
-    Vec<(String, Option<String>)>,
-)> {
-    let mut pending = vec![(root_path.trim_end_matches('/').to_string(), None)];
-    let mut files = Vec::new();
-    let mut folders = Vec::new();
-    let mut visited = 0usize;
-    while let Some((directory, parent_path)) = pending.pop() {
-        if control.is_cancelled() {
-            break;
-        }
-        visited += 1;
-        if visited > 20_000 {
-            anyhow::bail!("NFS scan runaway: more than 20000 directories under {root_path}");
-        }
-        // A trailing slash is needed for the transport request, but is NOT
-        // part of the database folder key. The registered share has no final
-        // slash; inserting a second row for "share/" strands its photos outside
-        // that share's folder-ID subtree after parent-link repair.
-        let dir_uri = format!("{directory}/");
-        folders.push((directory.clone(), parent_path));
-        let entries = crate::nfs_transport::list_dir(&dir_uri)
-            .map_err(|error| anyhow::anyhow!("could not list {dir_uri}: {error}"))?;
-        for entry in entries {
-            if control.is_cancelled() {
-                break;
-            }
-            let child_uri = format!(
-                "{dir_uri}{}",
-                crate::smb_transport::percent_encode_segment(&entry.name)
-            );
-            if entry.is_dir {
-                let name = entry.name.to_ascii_lowercase();
-                if !name.ends_with(".lrdata") && name != "previews" && name != "cache" {
-                    pending.push((child_uri, Some(directory.clone())));
-                }
-                continue;
-            }
-            if !supported(Path::new(&entry.name)) {
-                continue;
-            }
-            let meta = crate::nfs_transport::stat(&child_uri)
-                .map_err(anyhow::Error::msg)
-                .with_context(|| format!("could not stat {child_uri}; scan is incomplete"))?;
-            let info = gio::FileInfo::new();
-            info.set_name(&entry.name);
-            info.set_file_type(gio::FileType::Regular);
-            info.set_size(meta.size as i64);
-            if let Ok(date_time) = glib::DateTime::from_unix_utc(meta.mtime) {
-                info.set_modification_date_time(&date_time);
-            }
-            files.push((gio::File::for_uri(&child_uri), info, directory.clone()));
-        }
+    if root.contains("://") {
+        crate::source::file(root).query_exists(gio::Cancellable::NONE)
+    } else {
+        Path::new(root).is_dir()
     }
-    Ok((files, folders))
 }
 
 pub fn spawn_scan(root: String, events: Sender<ScanEvent>) -> ScanControl {
@@ -499,6 +361,28 @@ fn collect_files(
         }
 
         folders.push((folder_path.clone(), parent_path));
+        #[cfg(target_os = "linux")]
+        if crate::network_shares::private(&folder_path) {
+            for item in crate::network_shares::list(&folder_path)
+                .with_context(|| format!("could not list {folder_path}"))? {
+                if control.is_cancelled() {break;}
+                if item.is_dir {
+                    let name=item.name.to_ascii_lowercase();
+                    if !name.ends_with(".lrdata") && name!="previews" && name!="cache" {
+                        let child=crate::source::file(&item.uri);
+                        pending.push((child,item.uri,Some(folder_path.clone())));
+                    }
+                } else if supported(Path::new(&item.name)) {
+                    let child=crate::source::file(&item.uri);
+                    // Metadata is requested explicitly in the scanner; no originals
+                    // are ever written to cache/source by a network scan.
+                    let info=crate::network_shares::info(&item.uri)
+                        .with_context(|| format!("could not stat {}",item.uri))?;
+                    files.push((child,info,folder_path.clone()));
+                }
+            }
+            continue;
+        }
         let enumerator = directory
             .enumerate_children(
                 "standard::name,standard::type,time::modified,standard::size",
@@ -540,6 +424,17 @@ fn read_metadata(path: &str, attributes: &gio::FileInfo) -> Result<PhotoMetadata
     let mtime = attributes
         .modification_date_time()
         .map(|time| time.to_unix());
+    // Index network originals using directory/stat metadata only, without
+    // eager full-size photo reads. Their thumbnails fetch bytes separately
+    // using the bounded background queue. RAW stays metadata-only for now:
+    // its path-only decoder must never trigger persistent original copying.
+    #[cfg(target_os = "linux")]
+    if crate::network_shares::private(path) {
+        let taken_at=mtime.and_then(|seconds|Local.timestamp_opt(seconds,0).single()
+            .map(|date|date.to_rfc3339()));
+        return Ok(PhotoMetadata{taken_at,camera:None,width:None,height:None,
+            size_bytes:Some(attributes.size()),mtime});
+    }
     let (width, height, exif) = if is_raw(path) {
         // Prefer the cheap EXIF dimensions, then ask the RAW decoder for its
         // metadata-only image geometry. PixelX/YDimension are missing from
@@ -635,6 +530,13 @@ fn exif_u32(exif: &exif::Exif, tag: Tag) -> Option<u32> {
             Value::Short(values) => values.first().copied().map(u32::from),
             _ => None,
         })
+}
+
+fn remote_raw_thumbnail_unsupported(path: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {return is_raw(path) && crate::network_shares::private(path);}
+    #[cfg(not(target_os = "linux"))]
+    {let _=path;false}
 }
 
 fn is_raw(path: &str) -> bool {

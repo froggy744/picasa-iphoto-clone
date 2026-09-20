@@ -5,6 +5,12 @@ pub fn recovery_items(items: Vec<RecoveryItem>) -> (Vec<RecoveryItem>, usize) {
     let mut ready = Vec::new();
     let mut offline = 0;
     for item in items {
+        #[cfg(target_os="linux")]
+        if crate::network_shares::private(&item.0)
+            && crate::image_format::uses(&item.0,crate::image_format::DecoderKind::Raw) {
+            // No eager/automatic download of a full network RAW original.
+            continue;
+        }
         let Ok(destination) = cache_path(&item.0, item.1, item.2) else {
             continue;
         };
@@ -47,9 +53,6 @@ mod recovery_tests {
                 path.to_string_lossy().into_owned()
             };
             let destination = cache_path(&reference, Some(123), Some(456)).unwrap();
-            // The sharded destination may not exist until a thumbnail is
-            // created; tests that pre-seed markers need the shard directory.
-            fs::create_dir_all(destination.parent().unwrap()).unwrap();
             Self {
                 directory,
                 item: (reference, Some(123), Some(456)),
