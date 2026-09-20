@@ -1,87 +1,156 @@
-# Direct SMB/NFS on clean Picasa main — experimental Fedora source
+## Picasa Clone — new direct network-share system
 
-This package is based on the **user-supplied `picasa-main-clean.zip`**, not the
-previous network-share branch. Local import, library, sidebar, grid, SQLite,
-and thumbnail code remain the clean-main implementations.
+20 Sep 2026 - 22:56
 
-## Design boundary (no original-copy import)
+We changed Picasa Clone so it can browse photos on SMB and NFS shares directly, without requiring the user to mount the share in Linux first.
 
-- SMB uses `libsmbclient`, NFS uses `libnfs` and explicit v3-then-v4 session setup.
-- `network:///` is used for **discovery only**. The app never asks GIO to mount
-  `smb://` or `nfs://` for network browsing, scanning, stat, or image reads.
-- The Add Folder choice offers **Local folder** or **Network shares**. In the
-  network picker, double-click directories, then Import selected folder.
-- Store canonical remote URIs and file fingerprints in the existing SQLite
-  library. Network image reads happen on demand into memory for thumbnails,
-  NOT `~/.cache/picasa-rs/source/`. Existing cached thumbnail JPGs remain local.
-- Indexing network files uses stat/mtime/size (not eager full image reads).
-  Four workers at most decode network thumbnails; Picasa's existing
-  in-flight cache guard avoids duplicate output-cache work.
-- Network RAW (NEF/DNG/etc.) is **indexed metadata-only, without a thumbnail
-  in this experimental build**. A path-only RAW decoder cannot be allowed to
-  bulk-download files. Future implementation needs bounded/ranged embedded
-  preview extraction or explicitly scoped on-demand temporary decoding.
-- Previously materialized originals from OLD Picasa installations are not
-  deleted automatically; review them separately.
-- Write operations, opening a network source in an external desktop app, and
-  GIO monitoring for network sources are not part of this direct transport.
+The intended experience is: add a network folder, browse its subfolders, index its photos, generate local thumbnails, and open the full-quality originals directly from the network. The originals must remain on the NAS.
 
-## Build (Fedora)
+This is separate from the lightbox optimization work. The direct network access works, but we still have network-performance work to finish.
+
+
+## How we implemented the new network system
+
+The new system uses direct SMB and NFS access in Picasa Clone, rather than relying on Nautilus or manually mounted folders.
+
+The working design is:
 
 ```
-sudo dnf install gcc pkgconf-pkg-config libsmbclient-devel libnfs-devel gtk4-devel libadwaita-devel
-cargo build --release
-PICASA_TRACE=1 target/release/pic-rs 2>picasa-direct-shares.log
+Add Network Share
+       ↓
+Discover SMB / NFS shares
+       ↓
+Browse folders on DietPi
+       ↓
+Select a folder to import
+       ↓
+Store network URI in SQLite
+       ↓
+Scan photo metadata
+       ↓
+Generate local thumbnail cache
+       ↓
+Grid / Albums / Search / Viewer / Editor
+       ↓
+Read original directly from NAS when needed
 ```
 
-Then Add Folder -> Network shares -> NFS file sharing on DietPi -> 4TBS ->
-pics-sport -> choose a JPEG folder. Repeat SMB after the NFS test. Test on a
-new/different library first, rather than your regular library, to avoid
-mixing database changes during proof-of-concept tests.
+For example, a photo can retain a reference such as:
 
-## Current verification status
+```
+nfs://DietPi.local/mnt/4TBS/Spar%20Ladies%202025/10km/DSC_6656.jpg
+```
 
-This code was inspected and packaged, but **Cargo, GTK development libraries,
-Samba headers and libnfs are absent in the build environment here**. No
-successful build or live DietPi test is claimed. The original clean ZIP has
-not been modified. This package is for a Fedora build/test and may still need
-compile/API fixes. Do not merge it to main before validation.
+The important design rule: originals remain on DietPi. We cache thumbnails and library metadata locally, but do not download the entire photo collection or create persistent original-image copies under `~/.cache/picasa-rs/source/`.
 
-Known limitation: SMB auth callback is guest-only as in the successful
-standalone DietPi test. No credentials manager in this phase. v0.7.4's
-standalone thumbnail UI queue is NOT pasted into Picasa; Picasa's existing
-bounded Rayon worker pool and cache in-flight deduplication are used instead.
+### What we have already achieved
 
+|
+Component
 
-## Read-session optimization (preview 2)
+|
 
-`pic_nfs_read` reuses one userspace NFS context per worker thread and exact host/export.
-It does not retain full originals or create system/GVfs mounts. A transport error
-invalidates the affected thread's session so the next read reconnects.
-Watch `PIC_NFS_CONNECT reuse` versus `PIC_NFS_CONNECT start`; a fresh process or
-new worker thread still needs its first connection. The NFS permission errors on
-4TBP/4TBM are unchanged.
+Status
 
-This is a transport-only improvement; viewer repeated reads or thumbnail decoding
-are not changed in this package. Test builds and live DietPi measurements on Fedora.
+|
+| --- | --- |
+|
 
-## Preview 3: lightbox adjacent-photo prefetch
+Direct SMB access through `libsmbclient`
 
-After 250 ms on a photo, the lightbox warms both immediate neighboring display
-textures in its existing RAM-only, count/byte-bounded cache; the direction of
-travel is scheduled first. Navigation cancels stale speculative work; the
-existing viewer decode gate still bounds concurrent decodes. This does not add
-a disk cache, mounts, or writes to `source/`. The current image remains visible
-while an uncached next image loads. Network RAW limitations remain unchanged.
+|
 
-On Fedora: `cargo build --release`, then test Arrow Left/Right, fast key repeat,
-close/reopen, and confirm the source cache remains empty. Full Rust/GTK and
-live DietPi checks were not available in the packaging environment.
+Implemented
 
-## Preview 4: no thumbnail flash in lightbox
+|
+|
 
-On initial open the full-size viewer has a neutral background until a display-quality
-photo is available (or uses a RAM-cached display texture). During photo navigation
-it retains the previous full-quality image on cache misses and swaps directly to
-the newly decoded full-quality image. The grid still uses cached thumbnails.
-Direct SMB/NFS, bounded prefetch and the no-copy `source/` guard are unchanged.
+Direct NFS access through the private NFS client
+
+|
+
+Implemented
+
+|
+|
+
+NFS export and subfolder discovery
+
+|
+
+Working
+
+|
+|
+
+Network folder registration in the sidebar
+
+|
+
+Working
+
+|
+|
+
+SQLite library references to network originals
+
+|
+
+Working
+
+|
+|
+
+Local thumbnail caching
+
+|
+
+Working for supported formats
+
+|
+|
+
+Opening full-resolution photos directly from NAS
+
+|
+
+Working
+
+|
+|
+
+Blurry thumbnail flash in lightbox
+
+|
+
+Fixed in Preview 4
+
+|
+|
+
+Fast lightbox navigation
+
+|
+
+Still being optimized
+
+|
+
+### What we still need to finish
+
+1. Reuse network connections. The logs repeatedly show `PIC_NFS_CONNECT start` and `ok` for individual photo reads. Earlier we had made progress on per-thread NFS session reuse, but the current viewer logs still show connection activity associated with each read. We need to check whether the sessions are actually being reused across operations.
+
+picasa-preview6.log
+
+2. Eliminate duplicate reads. The viewer sometimes fetches the same JPEG again while moving forward and backward, including overlapping foreground and prefetch requests. The next optimization needs to coordinate in-flight image requests and improve effective RAM-cache reuse.
+
+picasa-preview6.log
+
+3. Improve initial network thumbnail generation. Large folders, particularly those containing Nikon NEF/RAW files, still need more efficient scanning and thumbnail generation. We should avoid unnecessary repeated full-file reads and prioritize visible thumbnails.
+
+4. Finish network-share verification. The NFS exports `/mnt/4TBP` and `/mnt/4TBM` previously had permission/access issues that still needed checking. We also need to preserve reliable offline behavior, folder navigation, cancellation, and reconnection.
+
+5. Keep the normal photo pipeline. The network transport should supply image data to the existing scanner, thumbnails, viewer, and editor—not create a second, separate network-only photo-processing system.
+
+Current checkpoint: `rc4` is our saved baseline, and `viewer-optimization` is the development branch. Preview 6 is an experiment in viewer request priority, not a completed network-performance fix.
+

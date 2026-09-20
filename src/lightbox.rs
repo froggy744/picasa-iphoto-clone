@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Condvar, Mutex, OnceLock,
 };
 use std::task::{Context, Poll, Waker};
@@ -73,6 +73,9 @@ impl Drop for DecodePermit<'_> {
 const MAX_CONCURRENT_VIEWER_DECODES: usize = 3;
 const VIEWER_PADDING: i32 = 0;
 static VIEWER_DECODE_GATE: OnceLock<DecodeSemaphore> = OnceLock::new();
+// Nonzero while the selected photo has a foreground decode outstanding.
+// Prefetch must not use decode slots while the user is waiting for a photo.
+static VIEWER_FOREGROUND_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 type PhotoChangedHandler = Rc<RefCell<Option<Box<dyn Fn(PhotoObject)>>>>;
 type OneToOneSyncHandler = Rc<RefCell<Option<Box<dyn Fn(bool)>>>>;

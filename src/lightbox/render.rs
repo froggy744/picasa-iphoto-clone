@@ -26,6 +26,8 @@ fn show_photo(
         return;
     };
 
+    // Stop speculative work BEFORE the foreground decode asks for a slot.
+    cancel_lightbox_prefetch();
     // Decode a display-quality image off the GTK thread. Never display a
     // thumbnail in the lightbox; keep the previous full-size image during
     // navigation and show a neutral backdrop on initial open.
@@ -34,9 +36,10 @@ fn show_photo(
         previous.store(true, Ordering::Release);
     }
     if cache_hit {
-
+        VIEWER_FOREGROUND_GENERATION.store(0, Ordering::Release);
         return;
     }
+    VIEWER_FOREGROUND_GENERATION.store(expected_generation, Ordering::Release);
     let cancelled = Arc::new(AtomicBool::new(false));
     *decode_cancel.borrow_mut() = Some(cancelled.clone());
     let cancelled_for_thread = cancelled.clone();
@@ -53,6 +56,9 @@ fn show_photo(
         .name("lightbox-decode".to_string())
         .spawn(move || {
             if cancelled_for_thread.load(Ordering::Acquire) {
+                let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
+                    expected_generation, 0, Ordering::AcqRel, Ordering::Acquire
+                );
                 result_slot_for_worker.send(Err(anyhow::anyhow!("cancelled before decode")));
                 return;
             }
@@ -60,6 +66,9 @@ fn show_photo(
                 .get_or_init(|| DecodeSemaphore::new(MAX_CONCURRENT_VIEWER_DECODES));
             let Some(_permit) = gate.acquire_cancelled(&cancelled_for_thread) else {
 
+                let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
+                    expected_generation, 0, Ordering::AcqRel, Ordering::Acquire
+                );
                 result_slot_for_worker.send(Err(anyhow::anyhow!("cancelled at decode gate")));
                 return;
             };
@@ -79,10 +88,16 @@ fn show_photo(
 
                 Ok((image.width(), image.height(), image.into_raw()))
             })();
+            let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
+                expected_generation, 0, Ordering::AcqRel, Ordering::Acquire
+            );
             result_slot_for_worker.send(result);
         })
         .is_err() {
         result_slot.send(Err(anyhow::anyhow!("could not start lightbox decode thread")));
+        let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
+            expected_generation, 0, Ordering::AcqRel, Ordering::Acquire
+        );
     }
 
     let picture = picture.clone();
@@ -275,12 +290,17 @@ fn schedule_lightbox_prefetch(
     }
     let expected_generation = generation.get();
     let source = glib::timeout_add_local(Duration::from_millis(250), move || {
-        PREFETCH_SOURCE.with(|slot| {
-            slot.borrow_mut().take();
-        });
         if !root.is_visible() || generation.get() != expected_generation {
+            PREFETCH_SOURCE.with(|slot| { slot.borrow_mut().take(); });
             return glib::ControlFlow::Break;
         }
+        // Do not launch either neighbor until the requested photo has
+        // completed its foreground decode. This timer is NOT a navigation
+        // delay: show_photo() started the selected decode immediately.
+        if VIEWER_FOREGROUND_GENERATION.load(Ordering::Acquire) != 0 {
+            return glib::ControlFlow::Continue;
+        }
+        PREFETCH_SOURCE.with(|slot| { slot.borrow_mut().take(); });
         let len = photos.borrow().len();
         let previous = current.checked_sub(1);
         let next = current.checked_add(1).filter(|&index| index < len);
@@ -365,6 +385,12 @@ fn prefetch_display_texture(
                 result_slot_for_worker.send(Err(aborted()));
                 return;
             };
+            // A new foreground request may have arrived while we queued
+            // at the gate; release this speculative permit immediately.
+            if VIEWER_FOREGROUND_GENERATION.load(Ordering::Acquire) != 0 {
+                result_slot_for_worker.send(Err(aborted()));
+                return;
+            }
             let result = (|| -> anyhow::Result<(u32, u32, Vec<u8>)> {
                 let image = crate::thumbnail::decode_for_viewer_with_cancel(
                     &decode_path,
