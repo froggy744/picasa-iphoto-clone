@@ -12,6 +12,10 @@
 #include <limits.h>
 
 typedef int (*pic_entry_cb)(void *, const char *, unsigned int);
+static int trace_enabled(void) {
+    const char *value = getenv("PICASA_TRACE");
+    return value && *value;
+}
 static void err(char *dst, size_t cap, const char *op, struct nfs_context *nfs) {
     const char *detail = nfs ? nfs_get_error(nfs) : NULL;
     snprintf(dst, cap, "%s: %s", op,
@@ -37,12 +41,12 @@ static struct nfs_context *open_session(const char *host, const char *export_pat
         }
         /* Disable endless reconnection during the initial connection probe. */
         nfs_set_autoreconnect(nfs, 0);
-        fprintf(stderr, "PIC_NFS_CONNECT start host=%s export=%s version=%d\n",
-                host, export_path, version);
+        if (trace_enabled()) fprintf(stderr, "PIC_NFS_CONNECT create_start host=%s export=%s version=%d\n",
+                                     host, export_path, version);
         int status = nfs_mount(nfs, host, export_path);
         if (status == 0) {
-            fprintf(stderr, "PIC_NFS_CONNECT ok host=%s export=%s version=%d\n",
-                    host, export_path, version);
+            if (trace_enabled()) fprintf(stderr, "PIC_NFS_CONNECT create_ok host=%s export=%s version=%d\n",
+                                         host, export_path, version);
             return nfs;
         }
         const char *detail = nfs_get_error(nfs);
@@ -54,8 +58,8 @@ static struct nfs_context *open_session(const char *host, const char *export_pat
         size_t used = strlen(attempts);
         if (used < sizeof(attempts) - 1)
             snprintf(attempts + used, sizeof(attempts) - used, "%s", line);
-        fprintf(stderr, "PIC_NFS_CONNECT failed host=%s export=%s %s\n",
-                host, export_path, line);
+        if (trace_enabled()) fprintf(stderr, "PIC_NFS_CONNECT create_failed host=%s export=%s %s\n",
+                                     host, export_path, line);
         nfs_destroy_context(nfs);
     }
     snprintf(error, cap, "NFS session failed host=%s export=%s; %.370s",
@@ -123,7 +127,7 @@ static struct nfs_context *get_read_session(const char *host, const char *export
         snprintf(read_host,sizeof read_host,"%s",host);
         snprintf(read_export,sizeof read_export,"%s",export_path);
     } else {
-        fprintf(stderr,"PIC_NFS_CONNECT reuse host=%s export=%s\n",host,export_path);
+        if (trace_enabled()) fprintf(stderr,"PIC_NFS_CONNECT reuse host=%s export=%s\n",host,export_path);
     }
     return read_session;
 }

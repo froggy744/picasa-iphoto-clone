@@ -139,7 +139,7 @@ impl Lightbox {
         let zoom = Rc::new(Cell::new(0.0)); // 0 means fit-to-window
         let zoom_before_one_to_one = Rc::new(Cell::new(0.0));
         let load_generation = Rc::new(Cell::new(0u64));
-        let decode_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>> = Rc::new(RefCell::new(None));
+        let decode_cancel: Rc<RefCell<Option<Arc<ViewerRequestLease>>>> = Rc::new(RefCell::new(None));
         let photo_changed: PhotoChangedHandler = Rc::new(RefCell::new(None));
         let one_to_one_sync: OneToOneSyncHandler = Rc::new(RefCell::new(None));
         let context_menu: ContextMenuHandler = Rc::new(RefCell::new(None));
@@ -154,7 +154,7 @@ impl Lightbox {
             if n_press == 2 {
                 generation_for_double.set(generation_for_double.get().wrapping_add(1));
                 if let Some(active) = cancel_for_double.borrow_mut().take() {
-                    active.store(true, Ordering::Release);
+                    active.cancel();
                 }
                 root_for_double.set_visible(false);
                 gesture.set_state(gtk::EventSequenceState::Claimed);
@@ -993,7 +993,7 @@ impl Lightbox {
         self.load_generation
             .set(self.load_generation.get().wrapping_add(1));
         if let Some(active) = self.decode_cancel.borrow_mut().take() {
-            active.store(true, Ordering::Release);
+            active.cancel();
         }
         self.one_to_one_active.set(false);
         self.zoom.set(0.0);
