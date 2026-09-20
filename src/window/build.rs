@@ -3293,6 +3293,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             &gallery_for_events,
                         );
                     }
+                    // Photos are committed at this point, so sidebar folder
+                    // counts are final even though the thumbnail pass is still
+                    // running in the background.
+                    availability_refresh_for_events();
                     let text = format!("Indexed {imported} photos");
                     refresh_status_label_for_events.set_text(&text);
                     refresh_status_box_for_events.set_visible(true);
@@ -3480,8 +3484,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     };
                     if *imported > 0 {
                         gallery_for_events.invalidate_folder_cache();
+                        // An import stopped during its thumbnail pass still
+                        // committed indexed photos: refresh the sidebar counts.
+                        availability_refresh_for_events();
                     }
-                    
+
                     refresh_status_label_for_events.set_text(&message);
                     refresh_status_box_for_events.set_visible(true);
                     let panel = refresh_status_box_for_events.clone();
