@@ -535,8 +535,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     configure_infobar_album_menu(&info.add_to_album, action_context.clone());
 
     // Destructive maintenance actions for the Settings → Library page. The
-    // settings window owns the buttons and confirmation dialogs; the actual
+    // settings window owns only the buttons and confirmations; the actual
     // behaviour stays here where the gallery and refresh context live.
+    // Requesting a thumbnail recovery pass is shared with layout.rs (included
+    // below): the scan-event poll consumes the flag once no scan is running.
+    let thumbnail_recovery_requested = Rc::new(Cell::new(true));
     let settings_maintenance = crate::settings::LibraryMaintenance {
         clear_thumbnails: {
             let connection = connection.clone();
@@ -545,10 +548,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let search = search_text.clone();
             let sort = sort.clone();
             let availability_refresh = availability_refresh.clone();
+            let recovery_requested = thumbnail_recovery_requested.clone();
             Rc::new(move || {
+                crate::source::net_trace("maintenance_clear_thumbnails");
                 if let Err(error) = crate::thumbnail::clear_cache() {
                     eprintln!("Could not clear thumbnails: {error}");
                 }
+                // The cache is empty now: schedule a recovery pass so every
+                // photo's thumbnail is rebuilt automatically (deferred while
+                // another scan runs).
+                recovery_requested.set(true);
                 refresh_grid(
                     &connection,
                     filter.get(),
@@ -567,6 +576,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let sort = sort.clone();
             let availability_refresh = availability_refresh.clone();
             Rc::new(move || {
+                crate::source::net_trace("maintenance_clear_database");
                 if let Err(error) = db::clear_photos(&connection.borrow()) {
                     eprintln!("Could not clear database: {error}");
                 }
@@ -588,6 +598,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let sort = sort.clone();
             let availability_refresh = availability_refresh.clone();
             Rc::new(move || {
+                crate::source::net_trace("maintenance_clear_all");
                 if let Err(error) = db::clear_all(&connection.borrow()) {
                     eprintln!("Could not clear database: {error}");
                 }
@@ -2763,6 +2774,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if photos.is_empty() {
                 return;
             }
+            crate::source::net_trace(format!(
+                "recovery_scheduled photos={}",
+                photos.len()
+            ));
             let mut job = scan_job.borrow_mut();
             job.generation = job.generation.wrapping_add(1);
             job.kind = Some(ScanJobKind::Maintenance);
@@ -2959,7 +2974,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             == Some(ScanJobKind::Maintenance);
         if maintenance_was_active {
             scan_job_for_refresh.borrow_mut().preempt_maintenance();
-            
+            // A preempted thumbnail recovery resumes after this refresh:
+            // re-arm it so the idle poll restarts the pass when the scan ends.
+            recovery_requested_for_refresh.set(true);
         } else if scan_job_for_refresh.borrow().kind.is_some() {
             
             refresh_status_label_for_click.set_text("Refresh already running…");
@@ -2969,11 +2986,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             return;
         }
         button.set_sensitive(false);
-        // Do not request a full post-refresh thumbnail recovery pass here.
-        // Refresh scans already create thumbnails for changed items; a recovery
-        // pass over the entire 66k-photo library immediately after repeated
-        // refreshes can monopolize the app. Startup/mount recovery remains.
-        recovery_requested_for_refresh.set(false);
+        // Refresh itself never requests a recovery pass: refresh scans create
+        // thumbnails for changed items, and a full pass after repeated
+        // refreshes can monopolize the app. A pass requested elsewhere (Clear
+        // thumbnails, startup, source reconnects) stays pending - the event
+        // poll defers it while this scan runs and starts it when idle.
         refresh_status_label_for_click.set_text("Refreshing library…");
         refresh_status_spinner_for_click.set_spinning(true);
         refresh_status_box_for_click.set_visible(true);

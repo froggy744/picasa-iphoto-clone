@@ -580,7 +580,8 @@
     install_thumbnail_sidebar_focus(gallery.folder_root.upcast_ref());
 
     // Reconnecting sources also resumes previews for already indexed photos.
-    let thumbnail_recovery_requested = Rc::new(Cell::new(true));
+    // `thumbnail_recovery_requested` is created in build() before this block so
+    // the maintenance actions can request a pass too.
     let thumbnail_recovery_deferred = Rc::new(Cell::new(false));
     let reconnected_sources = Rc::new(RefCell::new(ReconnectedSources {
         mounted: mounted_source_roots(),
