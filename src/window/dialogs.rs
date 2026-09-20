@@ -907,6 +907,9 @@ pub fn show_network_folder_browser(
                         Err(error) => failure = Some(error.to_string()),
                     }
                 } else if direct_nfs {
+                    if !crate::source::NFS_EXPERIMENTAL {
+                        failure = Some(crate::source::NFS_UNAVAILABLE.to_string());
+                    } else {
                     let rest = uri_for_worker
                         .strip_prefix("nfs://")
                         .unwrap_or_default()
@@ -939,6 +942,7 @@ pub fn show_network_folder_browser(
                         }
                     }) {
                         failure = Some(error);
+                    }
                     }
                 } else {
                     failure = Some("No private transport for this network location".to_string());

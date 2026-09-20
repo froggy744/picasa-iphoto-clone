@@ -87,6 +87,9 @@ fn scan_with_control(
 ) -> Result<usize> {
     let normalized_root = crate::source::normalize_import_reference(root);
     let root = normalized_root.as_str();
+    if root.starts_with("nfs://") && !crate::source::NFS_EXPERIMENTAL {
+        anyhow::bail!(crate::source::NFS_UNAVAILABLE);
+    }
     if !root_is_available(root) {
         anyhow::bail!("scan root is unavailable: {root}");
     }

@@ -2847,6 +2847,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let sidebar_refresh = sidebar_refresh.clone();
             let parent_window = parent_window.clone();
             if chooser_root.starts_with("nfs://") {
+                if !crate::source::NFS_EXPERIMENTAL {
+                    crate::source::net_trace(format!(
+                        "nfs_ui_error uri={chooser_root} message={}",
+                        crate::source::NFS_UNAVAILABLE
+                    ));
+                    show_error(&parent, "NFS experimental", crate::source::NFS_UNAVAILABLE);
+                    return;
+                }
                 let root = chooser_root.clone();
                 let open_browser: Rc<dyn Fn()> = Rc::new({
                     let connection = connection.clone();
@@ -3594,6 +3602,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let coalesced_refresh = CoalescedAvailabilityRefresh::new(availability_refresh.clone());
         for (index, root) in roots.into_iter().enumerate() {
             if root.starts_with("nfs://") {
+                if !crate::source::NFS_EXPERIMENTAL {
+                    crate::source::net_trace(format!(
+                        "startup_nfs_experimental_unavailable uri={root}"
+                    ));
+                    continue;
+                }
                 schedule_startup_nfs_probe(root, startup_remount_delay(0, index), coalesced_refresh.clone());
                 continue;
             }

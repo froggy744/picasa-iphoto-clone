@@ -34,6 +34,7 @@ pub fn folder_available(folder_id: Option<i64>) -> bool {
 
 pub const NFS_UNAVAILABLE: &str =
     "NFS private transport is unavailable; no desktop mount will be created.";
+pub const NFS_EXPERIMENTAL: bool = false;
 
 fn query_exists(reference: &str, directory: bool, lane: crate::smb_transport::SmbLane) -> bool {
     let reference = normalize_import_reference(reference);
@@ -43,6 +44,9 @@ fn query_exists(reference: &str, directory: bool, lane: crate::smb_transport::Sm
             .unwrap_or(false);
     }
     if reference.starts_with("nfs://") {
+        if !NFS_EXPERIMENTAL {
+            return false;
+        }
         return crate::nfs_transport::stat(&reference)
             .map(|meta| meta.is_dir == directory)
             .unwrap_or(false);
@@ -164,6 +168,9 @@ pub fn cached_source_available(reference: &str) -> bool {
     if normalized.starts_with("nfs://") && !crate::nfs_transport::direct_available() {
         return false;
     }
+    if normalized.starts_with("nfs://") && !NFS_EXPERIMENTAL {
+        return false;
+    }
     if normalized.starts_with("smb://") && !crate::smb_transport::direct_available() {
         return false;
     }
@@ -188,6 +195,9 @@ pub fn cached_source_available(reference: &str) -> bool {
 pub fn cached_file_available(reference: &str) -> bool {
     let normalized = normalize_import_reference(reference);
     if normalized.starts_with("nfs://") && !crate::nfs_transport::direct_available() {
+        return false;
+    }
+    if normalized.starts_with("nfs://") && !NFS_EXPERIMENTAL {
         return false;
     }
     if normalized.starts_with("smb://") && !crate::smb_transport::direct_available() {
@@ -775,6 +785,9 @@ pub fn read(reference: &str) -> Result<Vec<u8>> {
     let loaded = if reference.starts_with("smb://") {
         crate::smb_transport::read_file(&reference).map_err(anyhow::Error::msg)
     } else if reference.starts_with("nfs://") {
+        if !NFS_EXPERIMENTAL {
+            return Err(anyhow::anyhow!(NFS_UNAVAILABLE));
+        }
         crate::nfs_transport::read_file(&reference).map_err(anyhow::Error::msg)
     } else if is_network_location(&reference) {
         Err(anyhow::anyhow!(
