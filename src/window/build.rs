@@ -2853,61 +2853,105 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if chooser_root.starts_with("smb://") && crate::smb_transport::direct_available() {
                 // Direct SMB browse: listing runs through libsmbclient, so no
                 // gvfs mount is created (every gvfs mount PIC creates shows
-                // up in Nautilus).
-                crate::source::net_trace(format!(
-                    "connect_direct uri={chooser_root}"
-                ));
-                show_network_folder_browser(parent_widget, chooser_root, Rc::new(
-                    move |selected_uri: String| {
-                        register_selected_network_share(
-                            &connection,
-                            &parent,
-                            &scan_job,
-                            &start_next_scan,
-                            &sidebar_refresh,
-                            selected_uri,
-                            name.clone(),
-                        );
-                    },
-                ));
+                // up in Nautilus). Pre-flight the share listing first: some
+                // Samba servers hide their share list from anonymous
+                // sessions (the listing succeeds but is empty, observed on
+                // DietPi) while the shares themselves are readable. An empty
+                // listing falls back to the gvfs path, whose mount dialog
+                // collects credentials gvfs can enumerate with.
+                crate::source::net_trace(format!("connect_direct uri={chooser_root}"));
+                let (probe_sender, probe_receiver) = std::sync::mpsc::channel::<usize>();
+                let root_for_probe = chooser_root.clone();
+                std::thread::spawn(move || {
+                    let _ = probe_sender.send(
+                        crate::smb_transport::list_shares(&root_for_probe)
+                            .map(|shares| shares.len())
+                            .unwrap_or(0),
+                    );
+                });
+                // Clone set for the direct browser.
+                let connection_a = connection.clone();
+                let scan_job_a = scan_job.clone();
+                let start_next_scan_a = start_next_scan.clone();
+                let sidebar_refresh_a = sidebar_refresh.clone();
+                let parent_a = parent.clone();
+                let chooser_root_a = chooser_root.clone();
+                let name_a = name.clone();
+                let parent_widget_a = parent_window.clone().upcast::<gtk::Widget>();
+                // Clone set for the gvfs fallback.
+                let connection_b = connection.clone();
+                let scan_job_b = scan_job.clone();
+                let start_next_scan_b = start_next_scan.clone();
+                let sidebar_refresh_b = sidebar_refresh.clone();
+                let parent_b = parent.clone();
+                let parent_window_b = parent_window.clone();
+                let chooser_root_b = chooser_root.clone();
+                let name_b = name.clone();
+                glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+                    match probe_receiver.try_recv() {
+                        Ok(share_count) => {
+                            if share_count > 0 {
+                                crate::source::net_trace(format!(
+                                    "connect_direct_shares uri={chooser_root_a} count={share_count}"
+                                ));
+                                show_network_folder_browser(
+                                    parent_widget_a.clone(),
+                                    chooser_root_a.clone(),
+                                    Rc::new({
+                                        let connection_a = connection_a.clone();
+                                        let parent_a = parent_a.clone();
+                                        let scan_job_a = scan_job_a.clone();
+                                        let start_next_scan_a = start_next_scan_a.clone();
+                                        let sidebar_refresh_a = sidebar_refresh_a.clone();
+                                        let name_a = name_a.clone();
+                                        move |selected_uri: String| {
+                                            register_selected_network_share(
+                                                &connection_a,
+                                                &parent_a,
+                                                &scan_job_a,
+                                                &start_next_scan_a,
+                                                &sidebar_refresh_a,
+                                                selected_uri,
+                                                name_a.clone(),
+                                            );
+                                        }
+                                    }),
+                                );
+                            } else {
+                                crate::source::net_trace(
+                                    "connect_direct_no_shares - gvfs fallback (anonymous share listing is restricted on this server)",
+                                );
+                                open_gvfs_browser_for_connect(
+                                    chooser_root_b.clone(),
+                                    name_b.clone(),
+                                    connection_b.clone(),
+                                    scan_job_b.clone(),
+                                    start_next_scan_b.clone(),
+                                    sidebar_refresh_b.clone(),
+                                    parent_window_b.clone().upcast::<gtk::Window>(),
+                                    parent_b.clone(),
+                                );
+                            }
+                            glib::ControlFlow::Break
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            glib::ControlFlow::Break
+                        }
+                    }
+                });
                 return;
             }
-            crate::source::mount_share_async(&root_for_mount, Some(&mount_parent), move |result| {
-                if let Err(message) = result {
-                    // The real GIO/GVfs error text is included in `message`, so
-                    // a failed NFS mount shows why instead of silently falling
-                    // through to an empty browser.
-                    show_error(&parent_for_mount_error, "Could not connect to network share", &message);
-                    sidebar_refresh();
-                    return;
-                }
-                crate::source::net_trace(format!("browse_opened root={chooser_root}"));
-
-                // Browse the mounted server (shares first, then folders) with
-                // the in-app GIO browser and register only the folder the user
-                // actually picks. The GTK file chooser cannot display remote
-                // gvfs locations (it falls back to $HOME).
-                let connection = connection.clone();
-                let scan_job = scan_job.clone();
-                let start_next_scan = start_next_scan.clone();
-                let sidebar_refresh = sidebar_refresh.clone();
-                let parent = parent_for_register.clone();
-                show_network_folder_browser(
-                    parent_widget,
-                    chooser_root,
-                    Rc::new(move |selected_uri: String| {
-                        register_selected_network_share(
-                            &connection,
-                            &parent,
-                            &scan_job,
-                            &start_next_scan,
-                            &sidebar_refresh,
-                            selected_uri,
-                            name.clone(),
-                        );
-                    }),
-                );
-            });
+            open_gvfs_browser_for_connect(
+                chooser_root,
+                name,
+                connection,
+                scan_job,
+                start_next_scan,
+                sidebar_refresh,
+                parent_window.upcast::<gtk::Window>(),
+                parent,
+            );
         });
         show_add_network_share_dialog(parent_for_dialog.upcast::<gtk::Widget>(), on_connect);
     })));
@@ -3707,6 +3751,56 @@ impl CoalescedAvailabilityRefresh {
             refresh();
         });
     }
+}
+
+/// Open the folder browser behind a gvfs mount (auth dialog if the server
+/// demands credentials). Fallback for servers whose share listing is
+/// hidden from anonymous sessions: gvfs keeps its own credential context,
+/// so its enumeration still sees the shares the direct transport cannot.
+fn open_gvfs_browser_for_connect(
+    chooser_root: String,
+    name: String,
+    connection: Rc<RefCell<Connection>>,
+    scan_job: Rc<RefCell<ScanJobState>>,
+    start_next_scan: Rc<dyn Fn()>,
+    sidebar_refresh: Rc<dyn Fn()>,
+    parent_window: gtk::Window,
+    parent: gtk::Widget,
+) {
+    let mount_parent = parent_window.clone().upcast::<gtk::Window>();
+    let parent_for_mount_error = parent.clone();
+    let parent_widget = parent_window.clone().upcast::<gtk::Widget>();
+    let chooser_root_for_callback = chooser_root.clone();
+    crate::source::mount_share_async(&chooser_root, Some(&mount_parent), move |result| {
+        if let Err(message) = result {
+            // The real GIO/GVfs error text is included in `message`, so a
+            // failed NFS mount shows why instead of silently falling through
+            // to an empty browser.
+            show_error(
+                &parent_for_mount_error,
+                "Could not connect to network share",
+                &message,
+            );
+            sidebar_refresh();
+            return;
+        }
+        crate::source::net_trace(format!("browse_opened root={chooser_root_for_callback}"));
+        show_network_folder_browser(
+            parent_widget,
+            chooser_root_for_callback,
+            Rc::new(move |selected_uri: String| {
+                register_selected_network_share(
+                    &connection,
+                    &parent,
+                    &scan_job,
+                    &start_next_scan,
+                    &sidebar_refresh,
+                    selected_uri,
+                    name.clone(),
+                );
+            }),
+        );
+    });
 }
 
 /// Register the folder the user picked in the network browser as a share,

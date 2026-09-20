@@ -98,13 +98,12 @@ fn scan_with_control(
     }
     let indexed = db::photo_fingerprints(&connection)?;
     let root_file = crate::source::file(root);
-    let (files, discovered_folders) = if root.starts_with("smb://")
-        && crate::smb_transport::direct_available()
-    {
-        collect_smb_files(root, control)?
-    } else {
-        collect_files(&root_file, control)?
-    };
+    let (files, discovered_folders) =
+        if root.starts_with("smb://") && crate::smb_transport::direct_available() {
+            collect_smb_files(root, control)?
+        } else {
+            collect_files(&root_file, control)?
+        };
     if control.is_cancelled() {
         send(events, ScanEvent::Cancelled { imported: 0 });
         return Ok(0);

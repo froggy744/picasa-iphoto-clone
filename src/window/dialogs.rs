@@ -911,7 +911,20 @@ pub fn show_network_folder_browser(
                         }
                         Err(error) => failure = Some(error.to_string()),
                     }
-                } else if let Ok(enumerator) = gio::File::for_uri(&uri_for_worker).enumerate_children(
+                    // Some Samba servers hide their share list from anonymous
+                    // sessions (restrict anonymous): the listing succeeds but
+                    // is empty, while the shares themselves are readable.
+                    // gvfs runs in its own credential context and may still
+                    // see the shares, so an empty direct listing retries
+                    // through gvfs before giving up.
+                    if directories.is_empty() && failure.is_none() {
+                        crate::source::net_trace(format!(
+                            "browse_direct_empty uri={uri_for_worker} - retrying with gvfs"
+                        ));
+                    }
+                }
+                if directories.is_empty() && failure.is_none() {
+                    if let Ok(enumerator) = gio::File::for_uri(&uri_for_worker).enumerate_children(
                     "standard::name,standard::type,standard::is-hidden",
                     gio::FileQueryInfoFlags::NONE,
                     Some(&fresh_cancellable),
@@ -975,6 +988,7 @@ pub fn show_network_folder_browser(
                                 break;
                             }
                         }
+                    }
                     }
                 }
                 match failure {

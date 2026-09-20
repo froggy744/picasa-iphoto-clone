@@ -374,3 +374,35 @@ the window between an NFS operation and that unmount the share CAN appear
 in Nautilus. This does not fully meet the no-visible-mount requirement
 and is accepted as a known limitation; a full fix would require an NFS
 client library (e.g. libnfs) so gvfs is never needed.
+
+---
+
+## Known issue: SMB share listing hidden from anonymous sessions (diagnosed, mitigated)
+
+Symptom (log v8, DietPi NAS): Add Network Share → Connect opens the folder
+browser with an empty list. Trace shows `smb_list_shares` succeeding but
+returning 0 shares, then `browse_enumerate count=0`.
+
+Root cause: Samba's `restrict anonymous` hides the server's share list from
+anonymous sessions. The direct libsmbclient ladder (guest, then stored PIC
+credentials) therefore gets an EMPTY share list, while guest access to the
+shares themselves still works (live tests list/read `smb://dietpi.local/4tbs/`
+fine). The pre-redesign gvfs flow did not hit this because gvfs's mount
+dialog collected credentials into gvfs's own store, which its enumeration
+then used.
+
+Mitigation (implemented):
+
+- The connect flow pre-flights `list_shares`; a non-empty listing opens the
+  direct (no-mount) browser as designed (`connect_direct_shares`).
+- An empty listing falls back to the gvfs mount path
+  (`connect_direct_no_shares`), whose auth dialog collects credentials into
+  gvfs's context, and the folder browser retries its listing through gvfs
+  (`browse_direct_empty - retrying with gvfs`).
+- The gvfs mount created by that fallback is PIC-owned and reclaimed by the
+  5-minute idle unmount, as with NFS.
+
+Residual gap: on such servers the SMB add flow briefly mounts through gvfs
+(visible in Nautilus until reclaimed) - the no-visible-mount requirement is
+weakened to "no persistent mount" for these servers. A typed share name in
+the Add dialog (server + share fields) avoids the share listing entirely.

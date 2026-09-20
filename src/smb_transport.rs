@@ -500,10 +500,7 @@ impl SmbClient {
                             if let Some(ctx) = unfreed.take() {
                                 (api.free_context)(ctx, 1);
                             }
-                            return Err(format!(
-                                "libsmbclient context is missing {}",
-                                $name
-                            ));
+                            return Err(format!("libsmbclient context is missing {}", $name));
                         }
                     }
                 };

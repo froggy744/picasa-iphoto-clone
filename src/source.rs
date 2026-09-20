@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
@@ -74,7 +75,8 @@ fn query_exists(reference: &str, directory: bool, lane: crate::smb_transport::Sm
 const NFS_IDLE_UNMOUNT_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
 
 static NFS_LAST_ACTIVITY: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
-static NFS_UNMOUNT_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NFS_UNMOUNT_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn nfs_last_activity() -> &'static Mutex<Option<Instant>> {
     NFS_LAST_ACTIVITY.get_or_init(|| Mutex::new(None))
@@ -88,10 +90,11 @@ pub fn nfs_note_activity() {
     }
 }
 
-/// NFS gvfs mounts PIC itself created this session (Add-share connect,
-/// Retry Connection, on-demand reads) and may therefore reclaim. Only a
+/// gvfs mounts PIC itself created this session (Add-share connect, Retry
+/// Connection, on-demand NFS reads) and may therefore reclaim. Only a
 /// mount PIC actually performed is recorded - an "already mounted" hit
-/// usually means the user mounted it in Nautilus and is never recorded. The
+/// usually means the user mounted it in Nautilus and is never recorded.
+/// Covers NFS and, since the anonymous-share-listing fallback, SMB; the
 /// explicit "Open in file manager" flow deliberately stays outside this
 /// set: its mount exists FOR Nautilus.
 static NFS_PIC_MOUNTS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
@@ -101,12 +104,16 @@ fn nfs_pic_mounts() -> &'static Mutex<std::collections::HashSet<String>> {
 }
 
 fn nfs_note_pic_mount(reference: &str) {
-    if !reference.starts_with("nfs://") {
+    if !reference.contains("://") {
         return;
     }
     nfs_note_activity();
     if let Ok(mut mounts) = nfs_pic_mounts().lock() {
-        mounts.insert(normalize_nfs_uri(reference));
+        if reference.starts_with("nfs://") {
+            mounts.insert(normalize_nfs_uri(reference));
+        } else {
+            mounts.insert(reference.trim_end_matches('/').to_string());
+        }
     }
 }
 
@@ -174,10 +181,7 @@ fn nfs_idle_unmount_pass() -> Result<()> {
     let monitor = gio::VolumeMonitor::get();
     for mount in monitor.mounts() {
         let uri = mount.root().uri();
-        if !owned
-            .iter()
-            .any(|owned| nfs_same_location(owned, &uri))
-        {
+        if !owned.iter().any(|owned| nfs_same_location(owned, &uri)) {
             continue;
         }
         net_trace(format!("gvfs_idle_unmount_start uri={uri}"));
@@ -195,14 +199,14 @@ fn nfs_idle_unmount_pass() -> Result<()> {
 /// path a prefix of the other). GVfs mounts exports at their root, while a
 /// registered share can be a subfolder of an export.
 fn nfs_same_location(left: &str, right: &str) -> bool {
-    let (left, right) = (
-        left.trim_end_matches('/'),
-        right.trim_end_matches('/'),
-    );
+    let (left, right) = (left.trim_end_matches('/'), right.trim_end_matches('/'));
     let left_file = file(&normalize_nfs_uri(left));
     let right_file = file(&normalize_nfs_uri(right));
     let (left_host, right_host) = match (left_file.uri(), right_file.uri()) {
-        (left, right) => match (glib::Uri::parse(&left, glib::UriFlags::NONE), glib::Uri::parse(&right, glib::UriFlags::NONE)) {
+        (left, right) => match (
+            glib::Uri::parse(&left, glib::UriFlags::NONE),
+            glib::Uri::parse(&right, glib::UriFlags::NONE),
+        ) {
             (Ok(left), Ok(right)) => (
                 left.host().unwrap_or_default().to_lowercase(),
                 right.host().unwrap_or_default().to_lowercase(),
@@ -286,9 +290,7 @@ pub fn ensure_nfs_mounted_blocking(reference: &str) -> Result<(), String> {
             move |result| {
                 *outcome_for_callback.borrow_mut() = Some(match result {
                     Ok(()) => Ok(()),
-                    Err(ref error)
-                        if error.kind() == Some(gio::IOErrorEnum::AlreadyMounted) =>
-                    {
+                    Err(ref error) if error.kind() == Some(gio::IOErrorEnum::AlreadyMounted) => {
                         Ok(())
                     }
                     Err(error) => Err(describe_mount_error(&reference_for_callback, &error)),
@@ -313,10 +315,27 @@ pub fn ensure_nfs_mounted_blocking(reference: &str) -> Result<(), String> {
     outcome
 }
 
-/// Cheap NFS availability probe: a bounded TCP connect to the server's NFS
-/// port. Never mounts anything. BLOCKING, worker threads only.
+/// Cheap NFS availability probe. Order of evidence:
+/// 1. a mounted export is probed through gvfs (authoritative);
+/// 2. an unmounted export gets a bounded TCP connect to the server's NFS
+///    port - never a mount;
+/// 3. a host std's resolver cannot resolve at all (mDNS `.local` names are
+///    invisible to getaddrinfo on some setups, while gvfs reaches them
+///    fine) reads as ONLINE: claiming offline would stamp every tile with
+///    an unavailable badge although reads through gvfs work. Real outages
+///    surface at read time with proper errors.
+/// BLOCKING, worker threads only.
 fn nfs_online(reference: &str) -> bool {
-    let uri = file(&normalize_nfs_uri(reference)).uri();
+    let reference = normalize_nfs_uri(reference);
+    let file = file(&reference);
+    if file.find_enclosing_mount(gio::Cancellable::NONE).is_ok() {
+        let online = uri_query_exists(&file);
+        net_trace(format!(
+            "nfs_online uri={reference} online={online} source=mounted"
+        ));
+        return online;
+    }
+    let uri = file.uri();
     let parsed = match glib::Uri::parse(&uri, glib::UriFlags::NONE) {
         Ok(parsed) => parsed,
         Err(_) => return false,
@@ -325,18 +344,29 @@ fn nfs_online(reference: &str) -> bool {
     if host.is_empty() {
         return false;
     }
-    let port = if parsed.port() > 0 { parsed.port() as u16 } else { 2049 };
+    let port = if parsed.port() > 0 {
+        parsed.port() as u16
+    } else {
+        2049
+    };
     let started = Instant::now();
-    // IPv6 hosts need the bracket form; anything unparseable reads as offline.
-    let address = format!("{host}:{port}")
-        .parse()
-        .or_else(|_| format!("[{host}]:{port}").parse());
-    let online = match address {
-        Ok(address) => std::net::TcpStream::connect_timeout(&address, URI_PROBE_TIMEOUT).is_ok(),
-        Err(_) => false,
+    // IPv6 hosts need the bracket form.
+    let addresses = format!("{host}:{port}")
+        .to_socket_addrs()
+        .or_else(|_| format!("[{host}]:{port}").to_socket_addrs());
+    let online = match addresses {
+        Ok(mut addresses) => addresses.any(|address| {
+            std::net::TcpStream::connect_timeout(&address, URI_PROBE_TIMEOUT).is_ok()
+        }),
+        Err(_) => {
+            net_trace(format!(
+                "nfs_online uri={reference} online=true source=unresolvable-host"
+            ));
+            return true;
+        }
     };
     net_trace(format!(
-        "nfs_online uri={reference} online={online} ms={:.1}",
+        "nfs_online uri={reference} online={online} source=tcp ms={:.1}",
         started.elapsed().as_secs_f64() * 1000.0
     ));
     online
