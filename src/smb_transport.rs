@@ -490,10 +490,22 @@ impl SmbClient {
             }
             // Resolve the real callables from the initialized context. Each
             // getter returns None only when the context was not initialized.
+            // On a resolution failure the context is freed before returning.
+            let mut unfreed = Some(initialized);
             macro_rules! resolve_fn {
                 ($getter:expr, $name:literal) => {
-                    ($getter)(initialized)
-                        .ok_or_else(|| format!("libsmbclient context is missing {}", $name))?
+                    match ($getter)(initialized) {
+                        Some(function) => function,
+                        None => {
+                            if let Some(ctx) = unfreed.take() {
+                                (api.free_context)(ctx, 1);
+                            }
+                            return Err(format!(
+                                "libsmbclient context is missing {}",
+                                $name
+                            ));
+                        }
+                    }
                 };
             }
             Ok(Self {
@@ -616,6 +628,19 @@ impl SmbClient {
             }
             (self.close)(self.ctx, file);
             Ok(data)
+        }
+    }
+}
+
+impl Drop for SmbClient {
+    /// Free the Samba context (closing its cached connections and files).
+    /// Without this, every operation leaks a full SMBCCTX with its sockets
+    /// and krb5 state, and long sessions die with "Too many open files".
+    /// Runs on the creating worker thread, as required by SMBCCTX.
+    fn drop(&mut self) {
+        if let Ok(api) = api() {
+            unsafe { (api.free_context)(self.ctx, 1) };
+            crate::source::net_trace("smb_client_context_freed");
         }
     }
 }
