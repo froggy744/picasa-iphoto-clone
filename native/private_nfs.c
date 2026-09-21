@@ -1,5 +1,6 @@
 /* Direct userspace NFS backend. nfs_mount is libnfs's session setup,
  * NOT a Linux kernel mount nor a GVfs mount. Read-only operations only. */
+#include <stddef.h>
 #include <nfsc/libnfs.h>
 #include <nfsc/libnfs-raw.h>
 #include <nfsc/libnfs-raw-mount.h>

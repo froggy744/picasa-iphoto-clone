@@ -22,7 +22,6 @@ PROJECT_DIR=""
 BRANCH="$DEFAULT_BRANCH"
 ONLINE=0
 SKIP_TESTS="${PIC_SKIP_TESTS:-0}"
-STRICT_TESTS="${PIC_STRICT_TESTS:-1}"
 BUILD_TARGET="${PIC_BUILD_TARGET:-}"
 LOG_DIR="${PIC_BUILD_LOG_DIR:-$SCRIPT_DIR/build-logs}"
 LOG_FILE=""
@@ -69,13 +68,12 @@ Options:
   --target TARGET     both, appimage, or flatpak (default: both)
   --appimage-only     build only the AppImage
   --flatpak-only      build only the Flatpak bundle
-  --strict-tests      stop packaging if cargo test fails
+  --strict-tests      accepted for compatibility; release tests are always fatal
   --skip-tests        do not run cargo test
   -h, --help          show this help
 
 Useful environment overrides:
   PIC_SKIP_TESTS=1             skip cargo test
-  PIC_STRICT_TESTS=1           make test failures fatal
   PIC_GNOME_RUNTIME=50         Flatpak GNOME runtime branch
   PIC_FDO_RUST_RUNTIME=25.08   Flatpak Rust SDK-extension branch
   PIC_APP_ID=...               application/Flatpak ID
@@ -121,7 +119,7 @@ while (($#)); do
             [[ -z "$BUILD_TARGET" ]] || die "Build target specified more than once."
             BUILD_TARGET=flatpak; shift ;;
         --strict-tests)
-            STRICT_TESTS=1; shift ;;
+            shift ;;
         --skip-tests)
             SKIP_TESTS=1; shift ;;
         -h|--help)
@@ -538,6 +536,14 @@ write_runtime_launcher() {
 #!/bin/sh
 set -eu
 
+# PIC predates its Flatpak package and must continue to use the existing native
+# library and thumbnail cache. The host filesystem grant makes these available;
+# keep dirs(3) pointed at their established host XDG locations.
+if [ -n "\${FLATPAK_ID:-}" ]; then
+    export XDG_DATA_HOME="\${PIC_XDG_DATA_HOME:-\$HOME/.local/share}"
+    export XDG_CACHE_HOME="\${PIC_XDG_CACHE_HOME:-\$HOME/.cache}"
+fi
+
 # AppImage launches this script through the top-level AppRun symlink. In that
 # case \$0 points at AppRun, not usr/bin/$BIN_NAME, so derive the prefix from
 # APPDIR (set by the AppImage runtime). Flatpak launches /app/bin/$BIN_NAME
@@ -557,23 +563,25 @@ EOF_LAUNCHER
 
 copy_runtime_resources() {
     local resource_root="$1"
-    if [[ ! -d "$SOURCE_DIR/images" ]]; then
-        warn "Runtime images folder not found: $SOURCE_DIR/images"
-    else
-        mkdir -p "$resource_root"
-        rm -rf "$resource_root/images"
-        cp -a "$SOURCE_DIR/images" "$resource_root/images"
-        ok "Bundled runtime images: $resource_root/images"
-    fi
-    # Appearance themes: the app discovers themes/<name>/theme.css at
-    # runtime, and users can drop extra theme folders in here.
-    if [[ ! -d "$SOURCE_DIR/themes" ]]; then
-        warn "Runtime themes folder not found: $SOURCE_DIR/themes"
-    else
-        rm -rf "$resource_root/themes"
-        cp -a "$SOURCE_DIR/themes" "$resource_root/themes"
-        ok "Bundled runtime themes: $resource_root/themes"
-    fi
+    local folder
+    mkdir -p "$resource_root"
+    for folder in images themes resources; do
+        [[ -d "$SOURCE_DIR/$folder" ]] || die "Required runtime resource folder missing: $SOURCE_DIR/$folder"
+        [[ -n "$(find "$SOURCE_DIR/$folder" -type f -print -quit)" ]] || die \
+            "Required runtime resource folder is empty: $SOURCE_DIR/$folder"
+        rm -rf "$resource_root/$folder"
+        cp -a "$SOURCE_DIR/$folder" "$resource_root/$folder"
+        ok "Bundled runtime resources: $resource_root/$folder"
+    done
+}
+
+validate_packaging_resources() {
+    local required
+    for required in images themes resources resources/icons.gresource; do
+        [[ -e "$SOURCE_DIR/$required" ]] || die "Required application resource missing: $SOURCE_DIR/$required"
+    done
+    find "$SOURCE_DIR/icon" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.svg' \) \
+        -print -quit 2>/dev/null | grep -q . || die "Required application icon missing from $SOURCE_DIR/icon"
 }
 
 write_desktop_file() {
@@ -600,19 +608,18 @@ copy_source_tree() {
         --exclude='./.git' \
         --exclude='./target' \
         --exclude='./dist' \
+        --exclude='./build-logs' \
         --exclude='./.flatpak-builder' \
+        --exclude='./*.log' \
+        --exclude='./*.zip' \
         -cf - .) | (cd "$dest" && tar -xf -)
 }
 
 build_native() {
     log "Testing/building Rust release binary OFFLINE"
     if [[ "$SKIP_TESTS" != 1 ]]; then
-        if ! (cd "$SOURCE_DIR" && cargo test --locked --offline); then
-            if [[ "$STRICT_TESTS" == 1 ]]; then
-                die "cargo test failed and strict test mode is enabled."
-            fi
-            warn "cargo test failed. Packaging will continue; use --strict-tests if you want test failures to stop the build."
-        fi
+        (cd "$SOURCE_DIR" && cargo test --release --locked --offline) || \
+            die "cargo test failed; refusing to create a release package."
     else
         warn "Tests skipped (--skip-tests / PIC_SKIP_TESTS=1)."
     fi
@@ -742,6 +749,8 @@ directory = "vendor"
 offline = true
 EOF_CARGO
 
+    local flatpak_test_command="cargo test --release --locked --offline"
+    [[ "$SKIP_TESTS" != 1 ]] || flatpak_test_command="true"
     cat > "$manifest" <<EOF_MANIFEST
 {
   "app-id": "$APP_ID",
@@ -757,6 +766,10 @@ EOF_CARGO
     "--device=dri",
     "--share=network",
     "--filesystem=host",
+    "--filesystem=xdg-data/picasa-rs:create",
+    "--filesystem=xdg-cache/picasa-rs:create",
+    "--filesystem=xdg-run/gvfsd",
+    "--filesystem=xdg-run/gvfs",
     "--talk-name=org.gtk.vfs.*"
   ],
   "build-options": {
@@ -765,15 +778,55 @@ EOF_CARGO
   },
   "modules": [
     {
+      "name": "libnfs",
+      "buildsystem": "cmake-ninja",
+      "config-opts": ["-DCMAKE_BUILD_TYPE=Release"],
+      "cleanup": ["/include", "/bin", "/lib/pkgconfig", "/lib/*.a", "/lib/*.so"],
+      "sources": [{
+        "type": "archive",
+        "url": "https://github.com/sahlberg/libnfs/archive/libnfs-6.0.2.tar.gz",
+        "sha256": "4e5459cc3e0242447879004e9ad28286d4d27daa42cbdcde423248fad911e747"
+      }]
+    },
+    {
+      "name": "samba",
+      "buildsystem": "autotools",
+      "config-opts": [
+        "--prefix=/app", "--libdir=/app/lib", "--disable-rpath",
+        "--disable-python", "--without-ads", "--without-ldap", "--without-pam",
+        "--without-acl-support", "--without-systemd", "--without-ad-dc",
+        "--without-json", "--disable-cups", "--disable-iprint", "--without-ldb-lmdb"
+      ],
+      "build-options": { "env": { "PERL5LIB": "/app/lib/perl5" } },
+      "cleanup": ["/bin", "/sbin", "/libexec", "/share", "/include", "/lib/pkgconfig", "/lib/*.so", "/lib/perl5"],
+      "sources": [{
+        "type": "archive",
+        "url": "https://download.samba.org/pub/samba/stable/samba-4.24.7.tar.gz",
+        "sha256": "45b7747a47452eff2b2159a44cc63eb43690d339fd1069088e023a015fed06c7"
+      }],
+      "modules": [{
+        "name": "parse-yapp",
+        "buildsystem": "simple",
+        "build-commands": ["perl Makefile.PL PREFIX=/app LIB=/app/lib/perl5", "make", "make install"],
+        "sources": [{
+          "type": "archive",
+          "url": "https://cpan.metacpan.org/authors/id/W/WB/WBRASWELL/Parse-Yapp-1.21.tar.gz",
+          "sha256": "3810e998308fba2e0f4f26043035032b027ce51ce5c8a52a8b8e340ca65f13e5"
+        }]
+      }]
+    },
+    {
       "name": "picasa-rs",
       "buildsystem": "simple",
       "build-commands": [
+        "$flatpak_test_command",
         "cargo build --release --locked --offline",
         "install -Dm755 target/release/$BIN_NAME /app/libexec/$BIN_NAME",
         "install -Dm755 $launcher_rel /app/bin/$BIN_NAME",
         "install -d /app/share/$BIN_NAME",
         "cp -a images /app/share/$BIN_NAME/",
         "cp -a themes /app/share/$BIN_NAME/",
+        "cp -a resources /app/share/$BIN_NAME/",
         "install -Dm644 $desktop_rel /app/share/applications/$APP_ID.desktop",
         "install -Dm644 $icon_rel $FLATPAK_ICON_DEST"
       ],
@@ -785,16 +838,22 @@ EOF_CARGO
 }
 EOF_MANIFEST
 
-    log "Building Flatpak inside GNOME SDK (downloads disabled)"
+    local download_args=()
+    if ((ONLINE)); then
+        log "Building Flatpak inside GNOME SDK (dependency downloads allowed)"
+    else
+        log "Building Flatpak inside GNOME SDK (downloads disabled)"
+        download_args+=(--disable-download)
+    fi
     flatpak-builder \
         --force-clean \
-        --disable-download \
+        "${download_args[@]}" \
         --repo="$fp_repo" \
-        "$fp_build" "$manifest"
+        "$fp_build" "$manifest" || return 1
 
     bundle_name="PIC-${BUILD_LABEL}-${ARCH_NAME}.flatpak"
     rm -f "$DIST_DIR/$bundle_name"
-    flatpak build-bundle "$fp_repo" "$DIST_DIR/$bundle_name" "$APP_ID"
+    flatpak build-bundle "$fp_repo" "$DIST_DIR/$bundle_name" "$APP_ID" || return 1
     [[ -s "$DIST_DIR/$bundle_name" ]] || return 1
     FLATPAK_OUTPUT="$DIST_DIR/$bundle_name"
     ok "Flatpak bundle created: $FLATPAK_OUTPUT"
@@ -809,6 +868,7 @@ else
 fi
 
 BIN_NAME="${BIN_NAME_OVERRIDE:-$(project_binary_name)}"
+validate_packaging_resources
 VERSION="$(project_version)"
 VERSION="${VERSION:-0.0.0}"
 REVISION="$(project_revision)"
@@ -835,7 +895,9 @@ if [[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == flatpak ]]; then
     printf 'Flatpak:    GNOME %s + Rust extension %s\n' "$GNOME_RUNTIME" "$FDO_RUST_RUNTIME"
 fi
 
-build_native
+if [[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == appimage ]]; then
+    build_native
+fi
 
 appimage_ok=0
 flatpak_ok=0
