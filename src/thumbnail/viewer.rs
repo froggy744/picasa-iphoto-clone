@@ -253,6 +253,10 @@ where
             (image, target_width, target_height)
         }
     } else if is_jpeg(reference) {
+        // A network read is synchronous and the SMB/NFS backends serialize
+        // their sessions. Bail out before entering that lock when navigation
+        // has already made this request obsolete.
+        check_viewer_cancelled(&cancelled, "before_source_read")?;
         let bytes = crate::source::read(reference)?;
         let (source_width, source_height) = jpeg_dimensions(&bytes)?;
         let (target_width, target_height) = viewer_target_dimensions(
@@ -275,6 +279,7 @@ where
             target_height,
         )
     } else if is_heif(reference) {
+        check_viewer_cancelled(&cancelled, "before_source_read")?;
         let bytes = crate::source::read(reference)?;
         check_viewer_cancelled(&cancelled, "before_heif_decode")?;
         let decoded = decode_heif(&bytes)?;
@@ -291,6 +296,7 @@ where
         );
         (image, target_width, target_height)
     } else {
+        check_viewer_cancelled(&cancelled, "before_source_read")?;
         let bytes = crate::source::read(reference)?;
         let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
         check_viewer_cancelled(&cancelled, "before_generic_decode")?;
@@ -446,6 +452,30 @@ pub fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage 
         )),
         8 => DynamicImage::ImageRgba8(image::imageops::rotate270(&image.to_rgba8())),
         _ => image,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn cancelled_remote_jpeg_stops_before_source_read() {
+        let checks = Cell::new(0);
+        let error = decode_for_viewer_with_cancel(
+            "smb://example.invalid/share/photo.jpg",
+            1124,
+            794,
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                next >= 3
+            },
+        )
+        .expect_err("cancelled request must not attempt a network read");
+        assert!(error.to_string().contains("cancelled at before_source_read"));
+        assert_eq!(checks.get(), 3);
     }
 }
 
