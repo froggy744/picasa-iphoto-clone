@@ -101,10 +101,20 @@ fn read_nef_jpeg(path: &std::path::Path, largest: bool) -> Result<Option<Vec<u8>
     file.read_exact(&mut bytes)?;
     Ok((bytes.starts_with(&[0xff, 0xd8])).then_some(bytes))
 }
+const REMOTE_NEF_METADATA_READ_AHEAD:usize=4096;
+struct RemoteNefReader<'a>{reference:&'a str,position:u64,size:u64,cache_offset:u64,cache:Vec<u8>,metadata_reads:usize,metadata_bytes:usize,metadata_started:std::time::Instant}
+impl<'a> RemoteNefReader<'a>{fn open(reference:&'a str)->Result<Self>{Ok(Self{reference,position:0,size:crate::network_shares::stat(reference)?.size,cache_offset:0,cache:Vec::new(),metadata_reads:0,metadata_bytes:0,metadata_started:std::time::Instant::now()})}
+fn cached(&self)->bool{self.position>=self.cache_offset&&self.position<self.cache_offset+self.cache.len() as u64}
+fn read_metadata_block(&mut self)->std::io::Result<()> {let length=REMOTE_NEF_METADATA_READ_AHEAD.min((self.size-self.position)as usize);self.cache=crate::source::read_range(self.reference,self.position,length).map_err(std::io::Error::other)?;self.cache_offset=self.position;self.metadata_reads+=1;self.metadata_bytes+=self.cache.len();Ok(())}}
+impl std::io::Read for RemoteNefReader<'_>{fn read(&mut self,buffer:&mut[u8])->std::io::Result<usize>{if self.position>=self.size||buffer.is_empty(){return Ok(0)}if buffer.len()>REMOTE_NEF_METADATA_READ_AHEAD{let requested=buffer.len().min((self.size-self.position)as usize);let bytes=crate::source::read_range(self.reference,self.position,requested).map_err(std::io::Error::other)?;let received=bytes.len();buffer[..received].copy_from_slice(&bytes);self.position+=received as u64;return Ok(received)}if !self.cached(){self.read_metadata_block()?}let start=(self.position-self.cache_offset)as usize;let received=buffer.len().min(self.cache.len()-start);buffer[..received].copy_from_slice(&self.cache[start..start+received]);self.position+=received as u64;Ok(received)}}
+impl std::io::Seek for RemoteNefReader<'_>{fn seek(&mut self,from:SeekFrom)->std::io::Result<u64>{let next=match from{SeekFrom::Start(v)=>v as i128,SeekFrom::Current(v)=>self.position as i128+v as i128,SeekFrom::End(v)=>self.size as i128+v as i128};if next<0||next>self.size as i128{return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,"NEF seek outside file"))}self.position=next as u64;Ok(self.position)}}
+fn remote_nef_embedded_jpeg(reference:&str,largest:bool)->Result<Option<Vec<u8>>>{let mut file=RemoteNefReader::open(reference)?;let Some((offset,length))=nef_jpeg_stream(&mut file,largest)?else{return Ok(None)};if length==0||length>100*1024*1024||u64::from(offset)+u64::from(length)>file.size{return Ok(None)}file.seek(SeekFrom::Start(u64::from(offset)))?;let mut bytes=vec![0;length as usize];let preview_started=std::time::Instant::now();file.read_exact(&mut bytes)?;crate::network_shares::trace("REMOTE_RAW",format!("operation={} extension=nef metadata_reads={} metadata_bytes={} metadata_ms={} preview_offset={offset} preview_length={length} preview_ms={}",if largest{"lightbox"}else{"thumbnail"},file.metadata_reads,file.metadata_bytes,file.metadata_started.elapsed().as_millis(),preview_started.elapsed().as_millis()));Ok((bytes.starts_with(&[0xff,0xd8])).then_some(bytes))}
+
+fn remote_nef_orientation(reference:&str)->Option<u16>{let mut file=RemoteNefReader::open(reference).ok()?;let mut header=[0;8];file.read_exact(&mut header).ok()?;let little=match &header[..2]{b"II"=>true,b"MM"=>false,_=>return None};if tiff_u16(&header[2..4],little)!=42{return None}file.seek(SeekFrom::Start(u64::from(tiff_u32(&header[4..8],little)))).ok()?;let count=read_tiff_u16(&mut file,little).ok()? as usize;if count>1024{return None}for _ in 0..count{let mut entry=[0;12];file.read_exact(&mut entry).ok()?;if tiff_u16(&entry[..2],little)==0x0112&&tiff_u32(&entry[4..8],little)==1{let value=match tiff_u16(&entry[2..4],little){3=>tiff_u16(&entry[8..10],little),4=>tiff_u32(&entry[8..12],little)as u16,_=>return None};return (1..=8).contains(&value).then_some(value)}}None}
 
 /// Locate JPEGInterchangeFormat streams in classic TIFF IFDs, including the
 /// Nikon SubIFDs that kamadak-exif deliberately does not expose as IFD1.
-fn nef_jpeg_stream(file: &mut fs::File, largest: bool) -> Result<Option<(u32, u32)>> {
+fn nef_jpeg_stream(file: &mut (impl Read+Seek), largest: bool) -> Result<Option<(u32, u32)>> {
     let mut header = [0; 8];
     file.read_exact(&mut header)?;
     let little_endian = match &header[..2] {
@@ -177,13 +187,13 @@ fn nef_jpeg_stream(file: &mut fs::File, largest: bool) -> Result<Option<(u32, u3
     })
 }
 
-fn read_tiff_u16(file: &mut fs::File, little_endian: bool) -> Result<u16> {
+fn read_tiff_u16(file: &mut impl Read, little_endian: bool) -> Result<u16> {
     let mut bytes = [0; 2];
     file.read_exact(&mut bytes)?;
     Ok(tiff_u16(&bytes, little_endian))
 }
 
-fn read_tiff_u32(file: &mut fs::File, little_endian: bool) -> Result<u32> {
+fn read_tiff_u32(file: &mut impl Read, little_endian: bool) -> Result<u32> {
     let mut bytes = [0; 4];
     file.read_exact(&mut bytes)?;
     Ok(tiff_u32(&bytes, little_endian))

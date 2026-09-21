@@ -28,6 +28,12 @@ pub fn read(uri: &str) -> Result<Vec<u8>> {
     if uri.starts_with("smb://") {return crate::private_smb::read(uri)}
     anyhow::bail!("Not a direct SMB/NFS URI: {uri}")
 }
+/// Bounded offset read for embedded remote RAW previews.
+pub fn read_range(uri:&str,offset:u64,length:usize)->Result<Vec<u8>> {
+    if uri.starts_with("nfs://") {return crate::private_nfs::read_range(uri,offset,length)}
+    if uri.starts_with("smb://") {return crate::private_smb::read_range(uri,offset,length)}
+    anyhow::bail!("Not a direct SMB/NFS URI: {uri}")
+}
 pub fn stat(uri: &str) -> Result<Metadata> {
     if uri.starts_with("nfs://") {return crate::private_nfs::stat(uri)}
     if uri.starts_with("smb://") {return crate::private_smb::stat(uri)}

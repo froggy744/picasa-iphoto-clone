@@ -11,6 +11,7 @@ unsafe extern "C" {
         cb:Callback,ctx:*mut c_void,error:*mut c_char,cap:usize)->c_int;
     fn pic_nfs_read(host:*const c_char, export_path:*const c_char, relative:*const c_char,
         out:*mut *mut u8,length:*mut usize,max_bytes:usize,error:*mut c_char,cap:usize)->c_int;
+    fn pic_nfs_read_range(host:*const c_char,export_path:*const c_char,relative:*const c_char,offset:u64,requested:usize,out:*mut *mut u8,length:*mut usize,error:*mut c_char,cap:usize)->c_int;
     fn pic_nfs_stat(host:*const c_char, export_path:*const c_char, relative:*const c_char,
         size:*mut u64,mtime:*mut i64,is_dir:*mut c_int,error:*mut c_char,cap:usize)->c_int;
     fn pic_smb_free(data:*mut c_void);
@@ -129,6 +130,14 @@ pub fn read(uri:&str)->anyhow::Result<Vec<u8>>{
     unsafe{pic_smb_free(bytes as *mut c_void)};
     crate::network_shares::trace("PRIVATE_NFS",format!("read_done bytes={} elapsed_ms={} uri={uri}",result.len(),start.elapsed().as_millis()));
     Ok(result)
+}
+pub fn read_range(uri:&str,offset:u64,requested:usize)->anyhow::Result<Vec<u8>>{
+    anyhow::ensure!(requested<=100*1024*1024,"NFS range exceeds preview safety limit");
+    let(host,path)=parsed(uri)?;let(export,relative)=resolve(&host,&path)?;let(h,e,r)=(CString::new(host)?,CString::new(export)?,CString::new(relative)?);
+    let mut error=[0 as c_char;512];let mut bytes=std::ptr::null_mut();let mut len=0usize;
+    if unsafe{pic_nfs_read_range(h.as_ptr(),e.as_ptr(),r.as_ptr(),offset,requested,&mut bytes,&mut len,error.as_mut_ptr(),error.len())}<0 {anyhow::bail!("{}",err(&error));}
+    let result=if len==0{Vec::new()}else{unsafe{std::slice::from_raw_parts(bytes,len).to_vec()}};unsafe{pic_smb_free(bytes as *mut c_void)};
+    crate::network_shares::trace("PRIVATE_NFS",format!("range offset={offset} requested={requested} received={}",result.len()));Ok(result)
 }
 #[cfg(test)]mod tests{use super::*;
     #[test]fn uri_encoding(){assert_eq!(parsed("nfs://DietPi.local:2049/mnt/4TBP/Some%20Photos").unwrap(),("DietPi.local".into(),"/mnt/4TBP/Some Photos".into()));}

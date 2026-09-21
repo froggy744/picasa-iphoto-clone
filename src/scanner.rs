@@ -534,7 +534,7 @@ fn exif_u32(exif: &exif::Exif, tag: Tag) -> Option<u32> {
 
 fn remote_raw_thumbnail_unsupported(path: &str) -> bool {
     #[cfg(target_os = "linux")]
-    {return is_raw(path) && crate::network_shares::private(path);}
+    {return is_raw(path) && crate::network_shares::private(path) && !crate::image_format::for_path(path).is_some_and(|format|format.id=="nikon_raw");}
     #[cfg(not(target_os = "linux"))]
     {let _=path;false}
 }

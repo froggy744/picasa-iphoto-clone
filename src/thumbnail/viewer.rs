@@ -45,6 +45,8 @@ fn decode_raw_thumbnail(reference: &str) -> Result<DecodedThumbnailSource> {
 }
 
 fn decode_raw_thumbnail_inner(reference: &str) -> Result<DecodedThumbnailSource> {
+    #[cfg(target_os="linux")]
+    if crate::network_shares::private(reference){anyhow::ensure!(is_nikon_raw(reference),"Remote RAW preview is unsupported for this format; original was not downloaded");let bytes=remote_nef_embedded_jpeg(reference,false)?.ok_or_else(||anyhow::anyhow!("Remote NEF has no embedded JPEG thumbnail; original was not downloaded"))?;return decode_jpeg_turbo(&bytes).or_else(|_|decode_with_image(&bytes));}
     let local_path = crate::source::materialize(reference)?;
     let mut failures = Vec::new();
 
@@ -197,6 +199,8 @@ where
     check_viewer_cancelled(&cancelled, "after_orientation_metadata")?;
 
     let (image, target_width, target_height) = if is_raw(reference) {
+        #[cfg(target_os="linux")]
+        if crate::network_shares::private(reference){anyhow::ensure!(is_nikon_raw(reference),"Remote RAW preview is unsupported for this format; original was not downloaded");check_viewer_cancelled(&cancelled,"before_remote_embedded_preview")?;let bytes=remote_nef_embedded_jpeg(reference,true)?.ok_or_else(||anyhow::anyhow!("Remote NEF has no embedded JPEG preview; original was not downloaded"))?;check_viewer_cancelled(&cancelled,"after_remote_embedded_preview")?;let(source_width,source_height)=jpeg_dimensions(&bytes)?;let(target_width,target_height)=viewer_target_dimensions(source_width,source_height,orientation,viewport_width,viewport_height);let decoded=decode_jpeg_turbo_with_target(&bytes,target_width,target_height).or_else(|_|decode_with_image(&bytes))?;(DynamicImage::ImageRgb8(decoded.image),target_width,target_height)}else {
         let local_path = crate::source::materialize(reference)?;
         check_viewer_cancelled(&cancelled, "after_materialize")?;
 
@@ -254,7 +258,7 @@ where
                 viewport_height,
             );
             (image, target_width, target_height)
-        }
+        }}
     } else if is_jpeg(reference) {
         // A network read is synchronous and the SMB/NFS backends serialize
         // their sessions. Bail out before entering that lock when navigation
@@ -434,6 +438,10 @@ fn resize_viewer_rgba(
 }
 
 pub fn exif_orientation(reference: &str) -> u16 {
+    #[cfg(target_os="linux")]
+    if crate::network_shares::private(reference) && is_nikon_raw(reference) {
+        return remote_nef_orientation(reference).unwrap_or(1);
+    }
     let local = match crate::source::materialize(reference) {
         Ok(path) => path,
         Err(_) => return 1,

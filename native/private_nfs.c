@@ -257,6 +257,32 @@ int pic_nfs_read(const char *host, const char *export_path, const char *relative
     *out=bytes;*length=used;pthread_mutex_unlock(&read_session_lock);return 0;
 }
 
+int pic_nfs_read_range(const char *host, const char *export_path, const char *relative,
+                       uint64_t offset, size_t requested, unsigned char **out, size_t *length,
+                       char *error, size_t cap) {
+    *out=NULL; *length=0;
+    pthread_mutex_lock(&read_session_lock);
+    struct nfs_context *nfs=get_read_session(host,export_path,error,cap);
+    if (!nfs) { pthread_mutex_unlock(&read_session_lock); return -1; }
+    struct nfsfh *fh=NULL;
+    if (nfs_open(nfs,relative,O_RDONLY,&fh)!=0) { err(error,cap,"nfs_open",nfs); invalidate_read_session(); pthread_mutex_unlock(&read_session_lock); return -1; }
+    uint64_t position=0;
+    if (nfs_lseek(nfs,fh,(int64_t)offset,SEEK_SET,&position)!=0) { err(error,cap,"nfs_lseek",nfs); nfs_close(nfs,fh); invalidate_read_session(); pthread_mutex_unlock(&read_session_lock); return -1; }
+    unsigned char *bytes=malloc(requested ? requested : 1);
+    if (!bytes) { snprintf(error,cap,"NFS out of memory"); nfs_close(nfs,fh); pthread_mutex_unlock(&read_session_lock); return -1; }
+    size_t used=0;
+    while (used < requested) {
+        int got=nfs_read(nfs,fh,bytes+used,requested-used);
+        if (got < 0) { err(error,cap,"nfs_read",nfs); free(bytes); nfs_close(nfs,fh); invalidate_read_session(); pthread_mutex_unlock(&read_session_lock); return -1; }
+        if (got == 0) break;
+        used+=(size_t)got;
+    }
+    nfs_close(nfs,fh); pthread_mutex_unlock(&read_session_lock);
+    *out=bytes; *length=used;
+    if (trace_enabled()) fprintf(stderr,"PIC_NFS_RANGE offset=%llu requested=%zu received=%zu host=%s relative=%s\n",(unsigned long long)offset,requested,used,host,relative);
+    return 0;
+}
+
 /* Scanner calls stat repeatedly on one worker thread. Reuse the libnfs
  * userspace session per worker, not one TCP session per photo. Never shared
  * across threads. An NFS error invalidates this cached context. */

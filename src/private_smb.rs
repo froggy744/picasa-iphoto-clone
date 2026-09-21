@@ -7,6 +7,7 @@ unsafe extern "C" {
         ctx: *mut c_void, error: *mut c_char, capacity: usize) -> c_int;
     fn pic_smb_read(uri: *const c_char, out: *mut *mut u8, length: *mut usize,
         max_bytes: usize, error: *mut c_char, capacity: usize) -> c_int;
+    fn pic_smb_read_range(uri:*const c_char,offset:u64,requested:usize,out:*mut *mut u8,length:*mut usize,error:*mut c_char,capacity:usize)->c_int;
     fn pic_smb_stat(uri:*const c_char,size:*mut u64,mtime:*mut i64,
         is_dir:*mut c_int,error:*mut c_char,cap:usize)->c_int;
     fn pic_smb_free(bytes: *mut c_void);
@@ -56,6 +57,14 @@ pub fn read(uri:&str)->anyhow::Result<Vec<u8>> {
     let bytes=unsafe {std::slice::from_raw_parts(data,length).to_vec()};
     unsafe {pic_smb_free(data as *mut c_void)};
     Ok(bytes)
+}
+pub fn read_range(uri:&str,offset:u64,requested:usize)->anyhow::Result<Vec<u8>> {
+    anyhow::ensure!(requested<=100*1024*1024,"SMB range exceeds preview safety limit");
+    let uri=CString::new(uri)?;let mut data=std::ptr::null_mut();let mut length=0usize;let mut error=[0 as c_char;512];
+    if unsafe{pic_smb_read_range(uri.as_ptr(),offset,requested,&mut data,&mut length,error.as_mut_ptr(),error.len())}<0 {anyhow::bail!("{}",c_error(&error));}
+    let bytes=if length==0{Vec::new()}else{unsafe{std::slice::from_raw_parts(data,length).to_vec()}};
+    unsafe{pic_smb_free(data as *mut c_void)};
+    crate::network_shares::trace("PRIVATE_SMB",format!("range offset={offset} requested={requested} received={}",bytes.len()));Ok(bytes)
 }
 #[cfg(test)] mod tests { use super::*; #[test] fn safe_segment() {
     assert_eq!(encoded_segment("Home Movies"),"Home%20Movies");

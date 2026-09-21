@@ -391,6 +391,12 @@ pub fn read(reference: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("could not read {reference}"))?;
     Ok(contents.as_ref().to_vec())
 }
+pub fn read_range(reference:&str,offset:u64,length:usize)->Result<Vec<u8>>{
+    #[cfg(target_os="linux")]
+    if crate::network_shares::private(reference){return crate::network_shares::read_range(reference,offset,length)}
+    use std::io::{Read,Seek,SeekFrom};let mut file=std::fs::File::open(reference)?;file.seek(SeekFrom::Start(offset))?;
+    let mut bytes=vec![0;length];let read=file.read(&mut bytes)?;bytes.truncate(read);Ok(bytes)
+}
 
 fn trace_reference(reference: &str) -> String {
     let Some((scheme, rest)) = reference.split_once("://") else {

@@ -97,6 +97,29 @@ int pic_smb_read(const char *uri, unsigned char **out, size_t *length, size_t ma
 }
 void pic_smb_free(void *bytes) { free(bytes); }
 
+int pic_smb_read_range(const char *uri, uint64_t offset, size_t requested,
+                       unsigned char **out, size_t *length, char *error, size_t cap) {
+    *out=NULL; *length=0;
+    pthread_mutex_lock(&lock);
+    if (init_smb(error,cap)) { pthread_mutex_unlock(&lock); return -1; }
+    int fd=smbc_open(uri,O_RDONLY,0);
+    if (fd < 0) { fail(error,cap,"smbc_open"); pthread_mutex_unlock(&lock); return -1; }
+    if (smbc_lseek(fd,(off_t)offset,SEEK_SET) < 0) { fail(error,cap,"smbc_lseek"); smbc_close(fd); pthread_mutex_unlock(&lock); return -1; }
+    unsigned char *bytes=malloc(requested ? requested : 1);
+    if (!bytes) { snprintf(error,cap,"Out of memory"); smbc_close(fd); pthread_mutex_unlock(&lock); return -1; }
+    size_t used=0;
+    while (used < requested) {
+        ssize_t got=smbc_read(fd,bytes+used,requested-used);
+        if (got < 0) { fail(error,cap,"smbc_read"); free(bytes); smbc_close(fd); pthread_mutex_unlock(&lock); return -1; }
+        if (got == 0) break;
+        used+=(size_t)got;
+    }
+    smbc_close(fd); pthread_mutex_unlock(&lock);
+    *out=bytes; *length=used;
+    if (trace_enabled()) fprintf(stderr,"PIC_SMB_RANGE offset=%llu requested=%zu received=%zu\n",(unsigned long long)offset,requested,used);
+    return 0;
+}
+
 int pic_smb_stat(const char *uri, uint64_t *size, int64_t *mtime,
                  int *is_dir, char *error, size_t cap) {
     pthread_mutex_lock(&lock);
