@@ -1,0 +1,906 @@
+warning: pic-rs@1.0.0: native/private_smb.c: In function 'init_smb':
+warning: pic-rs@1.0.0: native/private_smb.c:31:9: warning: 'smbc_init' is deprecated [-Wdeprecated-declarations]
+warning: pic-rs@1.0.0:    31 |         if (smbc_init(guest_auth, 0) != 0) {
+warning: pic-rs@1.0.0:       |         ^~
+warning: pic-rs@1.0.0: In file included from native/private_smb.c:2:
+warning: pic-rs@1.0.0: /usr/include/samba-4.0/libsmbclient.h:1301:5: note: declared here
+warning: pic-rs@1.0.0:  1301 | int smbc_init(smbc_get_auth_data_fn fn, int debug);
+warning: pic-rs@1.0.0:       |     ^~~~~~~~~
+warning: unused import: `Instant`
+ --> src/edit/editor.rs:4:27
+  |
+4 | use std::time::{Duration, Instant};
+  |                           ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of deprecated struct `gtk4::MessageDialog`: Since 4.10
+  --> src/main.rs:74:35
+   |
+74 |                 let dialog = gtk::MessageDialog::builder()
+   |                                   ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+    --> src/collage/editor.rs:1344:23
+     |
+1344 |     let dialog = gtk::Dialog::new();
+     |                       ^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/collage/editor.rs:1462:23
+     |
+1462 |     let dialog = gtk::FileChooserNative::new(
+     |                       ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+  --> src/edit/export.rs:11:27
+   |
+11 |         let dialog = gtk::FileChooserNative::new(
+   |                           ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+  --> src/network_picker.rs:12:21
+   |
+12 |     let dialog=gtk::Dialog::with_buttons(
+   |                     ^^^^^^
+
+warning: use of deprecated struct `gtk4::MessageDialog`: Since 4.10
+   --> src/settings.rs:604:23
+    |
+604 |     let dialog = gtk::MessageDialog::builder()
+    |                       ^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/window/build.rs:2354:27
+     |
+2354 |         let dialog = gtk::FileChooserNative::new(
+     |                           ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
+    --> src/window/build.rs:2777:25
+     |
+2777 |         let dialog=gtk::FileChooserNative::new(
+     |                         ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::style_context`: Since 4.10
+  --> src/albums/view.rs:20:10
+   |
+20 |         .style_context()
+   |          ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::StyleContextExt::add_provider`: Since 4.10
+  --> src/albums/view.rs:21:10
+   |
+21 |         .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+   |          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::style_context`: Since 4.10
+  --> src/albums/view.rs:92:10
+   |
+92 |         .style_context()
+   |          ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::StyleContextExt::add_provider`: Since 4.10
+  --> src/albums/view.rs:93:10
+   |
+93 |         .add_provider(&background, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+   |          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+   --> src/collage/editor.rs:175:13
+    |
+175 |         css.load_from_data(&css_data);
+    |             ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
+    --> src/collage/editor.rs:1344:31
+     |
+1344 |     let dialog = gtk::Dialog::new();
+     |                               ^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+    --> src/collage/editor.rs:1348:12
+     |
+1348 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+     |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+    --> src/collage/editor.rs:1349:32
+     |
+1349 |     let export_button = dialog.add_button("Export", gtk::ResponseType::Ok);
+     |                                ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+    --> src/collage/editor.rs:1351:12
+     |
+1351 |     dialog.set_default_response(gtk::ResponseType::Ok);
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+    --> src/collage/editor.rs:1353:26
+     |
+1353 |     let content = dialog.content_area();
+     |                          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+    --> src/collage/editor.rs:1427:16
+     |
+1427 |         dialog.connect_response(move |_, response| {
+     |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::show`: Since 4.10
+    --> src/collage/editor.rs:1450:12
+     |
+1450 |     dialog.show();
+     |            ^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/collage/editor.rs:1462:42
+     |
+1462 |     let dialog = gtk::FileChooserNative::new(
+     |                                          ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+    --> src/collage/editor.rs:1469:12
+     |
+1469 |     dialog.set_current_name(&format!("collage.{extension}"));
+     |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::add_filter`: Since 4.10
+    --> src/collage/editor.rs:1476:12
+     |
+1476 |     dialog.add_filter(&filter);
+     |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/collage/editor.rs:1482:33
+     |
+1482 |         let Some(path) = dialog.file().and_then(|file| file.path()) else {
+     |                                 ^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/css/mod.rs:46:10
+   |
+46 |     base.load_from_data(BASE);
+   |          ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/css/mod.rs:54:14
+   |
+54 |     platform.load_from_data(PLATFORM);
+   |              ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/css/mod.rs:65:20
+   |
+65 |     square_corners.load_from_data(SQUARE_CORNERS);
+   |                    ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+  --> src/edit/export.rs:11:46
+   |
+11 |         let dialog = gtk::FileChooserNative::new(
+   |                                              ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+  --> src/edit/export.rs:23:16
+   |
+23 |         dialog.set_current_name(&filename);
+   |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+  --> src/edit/export.rs:32:51
+   |
+32 |                 if let Some(destination) = dialog.file().and_then(|file| file.path()) {
+   |                                                   ^^^^
+
+warning: use of deprecated associated function `gtk4::dialog::<impl gtk4::Dialog>::with_buttons`: Since 4.10
+  --> src/network_picker.rs:12:29
+   |
+12 |     let dialog=gtk::Dialog::with_buttons(
+   |                             ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+  --> src/network_picker.rs:18:12
+   |
+18 |     dialog.set_default_response(gtk::ResponseType::Accept);
+   |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+  --> src/network_picker.rs:19:24
+   |
+19 |     let content=dialog.content_area();
+   |                        ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+   --> src/network_picker.rs:139:12
+    |
+139 |     dialog.connect_response(move |dlg,reply|{
+    |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::hide`: Since 4.10
+  --> src/settings.rs:67:24
+   |
+67 |                 window.hide();
+   |                        ^^^^
+
+warning: use of deprecated associated function `gtk4::MessageDialog::builder`: Since 4.10
+   --> src/settings.rs:604:38
+    |
+604 |     let dialog = gtk::MessageDialog::builder()
+    |                                      ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::transient_for`: Since 4.10
+   --> src/settings.rs:605:10
+    |
+605 |         .transient_for(parent)
+    |          ^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::modal`: Since 4.10
+   --> src/settings.rs:606:10
+    |
+606 |         .modal(true)
+    |          ^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::message_type`: Since 4.10
+   --> src/settings.rs:607:10
+    |
+607 |         .message_type(gtk::MessageType::Warning)
+    |          ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::buttons`: Since 4.10
+   --> src/settings.rs:608:10
+    |
+608 |         .buttons(gtk::ButtonsType::Cancel)
+    |          ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::text`: Since 4.10
+   --> src/settings.rs:609:10
+    |
+609 |         .text(title)
+    |          ^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::secondary_text`: Since 4.10
+   --> src/settings.rs:610:10
+    |
+610 |         .secondary_text(message)
+    |          ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::build`: Since 4.10
+   --> src/settings.rs:611:10
+    |
+611 |         .build();
+    |          ^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
+   --> src/settings.rs:612:12
+    |
+612 |     dialog.add_button("Continue", gtk::ResponseType::Accept);
+    |            ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+   --> src/settings.rs:613:12
+    |
+613 |     dialog.connect_response(move |dialog, response| {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
+    --> src/sidebar.rs:1748:58
+     |
+1748 |                         .unwrap_or_else(|| f64::from(row.allocation().y()));
+     |                                                          ^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+   --> src/window/theme.rs:151:22
+    |
+151 |             provider.load_from_data(base.css.as_str());
+    |                      ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+   --> src/window/theme.rs:204:22
+    |
+204 |             provider.load_from_data(theme.css.as_str());
+    |                      ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/window/build.rs:2354:46
+     |
+2354 |         let dialog = gtk::FileChooserNative::new(
+     |                                              ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
+    --> src/window/build.rs:2367:16
+     |
+2367 |         dialog.set_current_name(&filename);
+     |                ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/window/build.rs:2371:44
+     |
+2371 |                 if let Some(file) = dialog.file() {
+     |                                            ^^^^
+
+warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
+    --> src/window/build.rs:2777:44
+     |
+2777 |         let dialog=gtk::FileChooserNative::new(
+     |                                            ^^^
+
+warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
+    --> src/window/build.rs:2782:39
+     |
+2782 |                 if let Some(file)=dlg.file(){ selected_for_local(crate::source::reference(&file)); }
+     |                                       ^^^^
+
+warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
+  --> src/window/photo_actions.rs:16:9
+   |
+16 |     css.load_from_data(crate::css::PHOTO_CONTEXT_MENU);
+   |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `gtk4::MessageDialog::builder`: Since 4.10
+  --> src/main.rs:74:50
+   |
+74 |                 let dialog = gtk::MessageDialog::builder()
+   |                                                  ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::message_type`: Since 4.10
+  --> src/main.rs:75:22
+   |
+75 |                     .message_type(gtk::MessageType::Error)
+   |                      ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::buttons`: Since 4.10
+  --> src/main.rs:76:22
+   |
+76 |                     .buttons(gtk::ButtonsType::Close)
+   |                      ^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::text`: Since 4.10
+  --> src/main.rs:77:22
+   |
+77 |                     .text("Could not open the photo library")
+   |                      ^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::secondary_text`: Since 4.10
+  --> src/main.rs:78:22
+   |
+78 |                     .secondary_text(error.to_string())
+   |                      ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::build`: Since 4.10
+  --> src/main.rs:79:22
+   |
+79 |                     .build();
+   |                      ^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+  --> src/main.rs:80:24
+   |
+80 |                 dialog.connect_response(|dialog, _| dialog.close());
+   |                        ^^^^^^^^^^^^^^^^
+
+warning: unused import: `gtk::prelude`
+ --> src/css/mod.rs:3:5
+  |
+3 | use gtk::prelude::*;
+  |     ^^^^^^^^^^^^
+
+warning: unreachable pattern
+   --> src/css/theme_discovery.rs:200:39
+    |
+200 |                     "traffic-light" | "traffic-light" | "trafficlights" => {
+    |                     ---------------   ^^^^^^^^^^^^^^^ no value can reach this
+    |                     |
+    |                     matches all the relevant values
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `window_for_close`
+  --> src/settings.rs:64:17
+   |
+64 |             let window_for_close = window.clone();
+   |                 ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_window_for_close`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `set_expanded`
+   --> src/sidebar.rs:710:13
+    |
+710 |         let set_expanded = set_folders_expanded.clone();
+    |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_set_expanded`
+
+warning: unused variable: `error`
+   --> src/thumbnail_display.rs:374:13
+    |
+374 |         Err(error) => {
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_error`
+
+warning: unused variable: `path`
+    --> src/window/build.rs:3093:21
+     |
+3093 |                     path,
+     |                     ^^^^ help: try ignoring the field: `path: _`
+
+warning: unused variable: `count`
+    --> src/window/build.rs:2863:17
+     |
+2863 |             let count = roots.as_ref().map(|roots| roots.len()).unwrap_or(0);
+     |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_count`
+
+warning: unused variable: `kind`
+    --> src/window/build.rs:2562:41
+     |
+2562 |             let Some((root, generation, kind)) = next else {
+     |                                         ^^^^ help: if this is intentional, prefix it with an underscore: `_kind`
+
+warning: unused variable: `mount`
+   --> src/window/layout.rs:479:51
+    |
+479 |     volume_monitor.connect_mount_changed(move |_, mount| {
+    |                                                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
+
+warning: unused variable: `mount`
+   --> src/window/layout.rs:474:51
+    |
+474 |     volume_monitor.connect_mount_removed(move |_, mount| {
+    |                                                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
+
+warning: unused variable: `mount`
+   --> src/window/layout.rs:469:49
+    |
+469 |     volume_monitor.connect_mount_added(move |_, mount| {
+    |                                                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
+
+warning: unused variable: `changed`
+   --> src/window/layout.rs:296:24
+    |
+296 |                     Ok(changed) => {
+    |                        ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_changed`
+
+warning: unused variable: `file`
+   --> src/window/build.rs:218:50
+    |
+218 |                 monitor.connect_changed(move |_, file, other_file, event| {
+    |                                                  ^^^^ help: if this is intentional, prefix it with an underscore: `_file`
+
+warning: unused variable: `other_file`
+   --> src/window/build.rs:218:56
+    |
+218 |                 monitor.connect_changed(move |_, file, other_file, event| {
+    |                                                        ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_other_file`
+
+warning: unused variable: `search`
+    --> src/window/build.rs:2453:9
+     |
+2453 |         search,
+     |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_search`
+
+warning: unused variable: `search`
+   --> src/window/search.rs:207:22
+    |
+207 |         if let (Some(search), Some(popup)) = (search_weak.upgrade(), popup_weak.upgrade()) {
+    |                      ^^^^^^ help: if this is intentional, prefix it with an underscore: `_search`
+
+warning: function `bookshelf_background_path` is never used
+   --> src/albums/bookshelf.rs:135:4
+    |
+135 | fn bookshelf_background_path(directory: &Path, index: usize) -> Option<PathBuf> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `add_photos` is never used
+   --> src/collage/editor.rs:136:12
+    |
+126 | impl CollageEditor {
+    | ------------------ method in this implementation
+...
+136 |     pub fn add_photos(&self, photos: Vec<crate::photo_object::PhotoObject>) {
+    |            ^^^^^^^^^^
+
+warning: method `add_photos` is never used
+   --> src/collage/model.rs:153:12
+    |
+102 | impl CollageProject {
+    | ------------------- method in this implementation
+...
+153 |     pub fn add_photos(&mut self, photos: Vec<PhotoObject>) {
+    |            ^^^^^^^^^^
+
+warning: function `folder_path_by_id` is never used
+   --> src/db/photos.rs:265:8
+    |
+265 | pub fn folder_path_by_id(connection: &Connection, folder_id: i64) -> Result<Option<String>> {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: field `interactive` is never read
+  --> src/edit/preview.rs:94:5
+   |
+84 | struct PreviewJob {
+   |        ---------- field in this struct
+...
+94 |     interactive: bool,
+   |     ^^^^^^^^^^^
+
+warning: function `pointer_over_content` is never used
+  --> src/edit/zoom.rs:54:4
+   |
+54 | fn pointer_over_content(pointer: f64, viewport: f64, content: f64) -> bool {
+   |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `apply_recipe_without_crop` is never used
+  --> src/edit/render.rs:31:8
+   |
+31 | pub fn apply_recipe_without_crop(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `clear_photo` is never used
+   --> src/grid/tile.rs:656:8
+    |
+164 | impl SquareTile {
+    | --------------- method in this implementation
+...
+656 |     fn clear_photo(&self) {
+    |        ^^^^^^^^^^^
+
+warning: method `visible_folder_id` is never used
+   --> src/grid/grouping.rs:269:12
+    |
+ 27 | impl Gallery {
+    | ------------ method in this implementation
+...
+269 |     pub fn visible_folder_id(&self) -> Option<i64> {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: function `folder_row_offset` is never used
+  --> src/grid/virtualization.rs:60:4
+   |
+60 | fn folder_row_offset(rows: &[FolderVirtualRow], target_row: usize, tile_height: i32) -> f64 {
+   |    ^^^^^^^^^^^^^^^^^
+
+warning: struct `FolderVirtualRow` is never constructed
+  --> src/grid/virtualization.rs:83:8
+   |
+83 | struct FolderVirtualRow {
+   |        ^^^^^^^^^^^^^^^^
+
+warning: function `folder_virtual_rows` is never used
+  --> src/grid/virtualization.rs:92:4
+   |
+92 | fn folder_virtual_rows(ranges: &[GroupRange], chunk_size: usize) -> Vec<FolderVirtualRow> {
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: method `refresh_availability` is never used
+    --> src/grid/virtualization.rs:1183:12
+     |
+ 209 | impl Gallery {
+     | ------------ method in this implementation
+...
+1183 |     pub fn refresh_availability(&self) {
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `selected_position` and `is_at_vertical_boundary` are never used
+   --> src/grid/selection.rs:30:12
+    |
+ 26 | impl Gallery {
+    | ------------ methods in this implementation
+...
+ 30 |     pub fn selected_position(&self) -> Option<usize> {
+    |            ^^^^^^^^^^^^^^^^^
+...
+173 |     pub fn is_at_vertical_boundary(&self, direction: i32) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `folder_id_from_named_ancestor` is never used
+   --> src/grid/selection.rs:950:4
+    |
+950 | fn folder_id_from_named_ancestor(widget: &gtk::Widget) -> Option<i64> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `grid_zoom_menu` is never read
+  --> src/infobar.rs:24:9
+   |
+10 | pub struct InfoBar {
+   |            ------- field in this struct
+...
+24 |     pub grid_zoom_menu: gtk::MenuButton,
+   |         ^^^^^^^^^^^^^^
+
+warning: function `rotated_thumbnail` is never used
+  --> src/photo_texture.rs:52:8
+   |
+52 | pub fn rotated_thumbnail(path: &str, rotation: i32) -> Option<gtk::gdk::Paintable> {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: field `id` is never read
+  --> src/scanner.rs:27:9
+   |
+25 |     PhotoIndexed {
+   |     ------------ field in this variant
+26 |         path: PathBuf,
+27 |         id: i64,
+   |         ^^
+   |
+   = note: `ScanEvent` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `scan` is never used
+  --> src/scanner.rs:79:8
+   |
+79 | pub fn scan(root: &str, events: Option<&Sender<ScanEvent>>) -> Result<usize> {
+   |        ^^^^
+
+warning: function `wait_for_priority_requests` is never used
+   --> src/thumbnail.rs:182:8
+    |
+182 | pub fn wait_for_priority_requests() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `scale` is never read
+ --> src/thumbnail/viewer.rs:5:5
+  |
+1 | struct DecodedThumbnailSource {
+  |        ---------------------- field in this struct
+...
+5 |     scale: &'static str,
+  |     ^^^^^
+
+warning: function `create_many` is never used
+ --> src/thumbnail/batch.rs:1:8
+  |
+1 | pub fn create_many(
+  |        ^^^^^^^^^^^
+
+warning: constant `EDIT_PANEL_CSS` is never used
+  --> src/window.rs:24:18
+   |
+24 | pub(crate) const EDIT_PANEL_CSS: &str = crate::css::BASE;
+   |                  ^^^^^^^^^^^^^^
+
+warning: variants `FilesystemNotification` and `ProgrammaticSidebarSelection` are never constructed
+   --> src/window.rs:182:5
+    |
+178 | enum PhotoScanRequestReason {
+    |      ---------------------- variants in this enum
+...
+182 |     FilesystemNotification,
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+...
+185 |     ProgrammaticSidebarSelection,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `PhotoScanRequestReason` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `install_gallery_zoom_scroll` is never used
+   --> src/window/navigation.rs:506:4
+    |
+506 | fn install_gallery_zoom_scroll(scrolled: &gtk::ScrolledWindow, gallery: Rc<grid::Gallery>) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `mounted` is never read
+  --> src/window/availability.rs:24:5
+   |
+23 | struct ReconnectedSources {
+   |        ------------------ field in this struct
+24 |     mounted: std::collections::HashSet<String>,
+   |     ^^^^^^^
+
+warning: method `update` is never used
+  --> src/window/availability.rs:29:8
+   |
+28 | impl ReconnectedSources {
+   | ----------------------- method in this implementation
+29 |     fn update(&mut self, mounted: std::collections::HashSet<String>) {
+   |        ^^^^^^
+
+warning: method `active_window_controls` is never used
+   --> src/window/theme.rs:128:19
+    |
+ 55 | impl ThemeEngine {
+    | ---------------- method in this implementation
+...
+128 |     pub(crate) fn active_window_controls(&self) -> WindowControls {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `pic-rs` (bin "pic-rs") generated 106 warnings (run `cargo fix --bin "pic-rs" -p pic-rs` to apply 15 suggestions)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.12s
+     Running `target/debug/pic-rs`
+STARTUP cold_start_ms=18 photos=5538 displayed=10 folders=256 albums=3 scan=disabled rss_mb=65
+
+(pic-rs:506240): Gtk-WARNING **: 19:41:56.403: Theme parser error: <data>:26:1-2: Expected a valid selector
+WARNING: radv is not a conformant Vulkan implementation, testing use only.
+===== SCAN COMPLETE: imported=0 failed=0 | progressive gallery updates complete =====
+PIC_VIEWER t_ms=0 tid=ThreadId(1) show_photo_request generation=1 index=0 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF
+PIC_VIEWER t_ms=0 tid=ThreadId(1) request lane=foreground action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794
+PIC_VIEWER t_ms=0 tid=ThreadId(11) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=0 tid=ThreadId(11) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=1135 tid=ThreadId(1) wheel_event dy=1
+PIC_VIEWER t_ms=1135 tid=ThreadId(1) navigation_dispatch source=wheel from_index=0 to_index=1 direction=1
+PIC_VIEWER t_ms=1135 tid=ThreadId(1) infobar_update source=wheel index=1 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF
+PIC_VIEWER t_ms=1136 tid=ThreadId(1) show_photo_request generation=2 index=1 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF
+PIC_VIEWER t_ms=1136 tid=ThreadId(1) request lane=foreground action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794
+PIC_VIEWER t_ms=1136 tid=ThreadId(12) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=1136 tid=ThreadId(12) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=1183 tid=ThreadId(1) wheel_event dy=1
+PIC_VIEWER t_ms=1183 tid=ThreadId(1) navigation_dispatch source=wheel from_index=1 to_index=2 direction=1
+PIC_VIEWER t_ms=1183 tid=ThreadId(1) infobar_update source=wheel index=2 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF
+PIC_VIEWER t_ms=1183 tid=ThreadId(1) show_photo_request generation=3 index=2 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF
+PIC_VIEWER t_ms=1183 tid=ThreadId(1) request lane=foreground action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF variant=1124x794
+PIC_VIEWER t_ms=1184 tid=ThreadId(13) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=1184 tid=ThreadId(13) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=1434 tid=ThreadId(1) request lane=prefetch action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5882.NEF variant=1124x794
+PIC_VIEWER t_ms=1434 tid=ThreadId(1) request lane=prefetch action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794
+PIC_VIEWER t_ms=1434 tid=ThreadId(14) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5882.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=1434 tid=ThreadId(14) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5882.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=1434 tid=ThreadId(15) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=1434 tid=ThreadId(15) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=1583 tid=ThreadId(1) wheel_event dy=-1
+PIC_VIEWER t_ms=1583 tid=ThreadId(1) navigation_dispatch source=wheel from_index=2 to_index=1 direction=-1
+PIC_VIEWER t_ms=1583 tid=ThreadId(1) infobar_update source=wheel index=1 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF
+PIC_VIEWER t_ms=1584 tid=ThreadId(1) show_photo_request generation=4 index=1 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF
+PIC_VIEWER t_ms=1584 tid=ThreadId(1) request lane=foreground action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794
+PIC_VIEWER t_ms=1584 tid=ThreadId(16) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=1584 tid=ThreadId(16) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=1834 tid=ThreadId(1) request lane=prefetch action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794
+PIC_VIEWER t_ms=1834 tid=ThreadId(1) request lane=prefetch action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF variant=1124x794
+PIC_VIEWER t_ms=1834 tid=ThreadId(17) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=1834 tid=ThreadId(17) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=1834 tid=ThreadId(18) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=1834 tid=ThreadId(18) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=3558 tid=ThreadId(1) show_photo_request generation=5 index=0 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF
+PIC_VIEWER t_ms=3558 tid=ThreadId(1) request lane=foreground action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794
+PIC_VIEWER t_ms=3558 tid=ThreadId(19) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=3558 tid=ThreadId(19) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=4139 tid=ThreadId(1) wheel_event dy=1
+PIC_VIEWER t_ms=4139 tid=ThreadId(1) navigation_dispatch source=wheel from_index=0 to_index=1 direction=1
+PIC_VIEWER t_ms=4139 tid=ThreadId(1) infobar_update source=wheel index=1 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF
+PIC_VIEWER t_ms=4140 tid=ThreadId(1) show_photo_request generation=6 index=1 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF
+PIC_VIEWER t_ms=4140 tid=ThreadId(1) request lane=foreground action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794
+PIC_VIEWER t_ms=4140 tid=ThreadId(20) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=4140 tid=ThreadId(20) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=4171 tid=ThreadId(1) wheel_event dy=1
+PIC_VIEWER t_ms=4171 tid=ThreadId(1) navigation_dispatch source=wheel from_index=1 to_index=2 direction=1
+PIC_VIEWER t_ms=4171 tid=ThreadId(1) infobar_update source=wheel index=2 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF
+PIC_VIEWER t_ms=4171 tid=ThreadId(1) show_photo_request generation=7 index=2 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF
+PIC_VIEWER t_ms=4171 tid=ThreadId(1) request lane=foreground action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF variant=1124x794
+PIC_VIEWER t_ms=4172 tid=ThreadId(21) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=4172 tid=ThreadId(21) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5881.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=4422 tid=ThreadId(1) request lane=prefetch action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5882.NEF variant=1124x794
+PIC_VIEWER t_ms=4422 tid=ThreadId(1) request lane=prefetch action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794
+PIC_VIEWER t_ms=4422 tid=ThreadId(23) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=4422 tid=ThreadId(23) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=4422 tid=ThreadId(22) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5882.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=4422 tid=ThreadId(22) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5882.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=4539 tid=ThreadId(1) wheel_event dy=-1
+PIC_VIEWER t_ms=4539 tid=ThreadId(1) navigation_dispatch source=wheel from_index=2 to_index=1 direction=-1
+PIC_VIEWER t_ms=4539 tid=ThreadId(1) infobar_update source=wheel index=1 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF
+PIC_VIEWER t_ms=4539 tid=ThreadId(1) show_photo_request generation=8 index=1 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF
+PIC_VIEWER t_ms=4539 tid=ThreadId(1) request lane=foreground action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794
+PIC_VIEWER t_ms=4540 tid=ThreadId(24) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=4540 tid=ThreadId(24) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=4571 tid=ThreadId(1) wheel_event dy=-1
+PIC_VIEWER t_ms=4571 tid=ThreadId(1) navigation_dispatch source=wheel from_index=1 to_index=0 direction=-1
+PIC_VIEWER t_ms=4571 tid=ThreadId(1) infobar_update source=wheel index=0 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF
+PIC_VIEWER t_ms=4571 tid=ThreadId(1) show_photo_request generation=9 index=0 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF
+PIC_VIEWER t_ms=4571 tid=ThreadId(1) request lane=foreground action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794
+PIC_VIEWER t_ms=4572 tid=ThreadId(25) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=4572 tid=ThreadId(25) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=4603 tid=ThreadId(1) wheel_event dy=-1
+PIC_VIEWER t_ms=4822 tid=ThreadId(1) request lane=prefetch action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794
+PIC_VIEWER t_ms=4822 tid=ThreadId(26) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=4822 tid=ThreadId(26) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5880.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=9143 tid=ThreadId(1) show_photo_request generation=10 index=0 uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF
+PIC_VIEWER t_ms=9143 tid=ThreadId(1) request lane=foreground action=new uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794
+PIC_VIEWER t_ms=9143 tid=ThreadId(27) decode_start uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794 queue_ms=0
+PIC_VIEWER t_ms=9143 tid=ThreadId(27) decode_done uri=smb://dietpi.local/4tbp/mypics-2026/Tat%20Matric%20Farewell/DCIM/104NCZ_5/DSC_5879.NEF variant=1124x794 elapsed_ms=0 outcome=error
+PIC_VIEWER t_ms=15234 tid=ThreadId(1) show_photo_request generation=13 index=0 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=15234 tid=ThreadId(1) request lane=foreground action=new uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg variant=1124x794
+PIC_VIEWER t_ms=15234 tid=ThreadId(30) decode_start uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg variant=1124x794 queue_ms=0
+PIC_VIEWER source_cache lane=foreground action=miss uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER network_slot lane=foreground wait_ms=0 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_NETWORK tid=ThreadId(30) PRIVATE_NFS export_discovery_start host=DietPi.local
+PIC_NFS stage=hostname_resolution elapsed_ms=122 tid=140009652860608 host=DietPi.local export=- relative=- status=0 addresses=1
+PIC_NFS stage=export_discovery elapsed_ms=6 tid=140009652860608 host=DietPi.local export=- relative=- outcome=ok exports=5
+PIC_NETWORK tid=ThreadId(30) PRIVATE_NFS export_discovery_done host=DietPi.local count=5 elapsed_ms=128 paths=["/exports/Work", "/mnt/4TBM", "/mnt/4TBP", "/mnt/4TBS", "/mnt/dietpi_userdata"]
+PIC_NETWORK tid=ThreadId(30) PRIVATE_NFS read_start uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg max_bytes=134217728
+PIC_NFS stage=read_session_lock elapsed_ms=0 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1353_result.jpg outcome=acquired
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBS version=3 tid=140009652860608
+PIC_NFS stage=connection_establishment elapsed_ms=15 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=- version=3 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBS version=3
+PIC_NFS stage=file_open elapsed_ms=1 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1353_result.jpg outcome=ok
+PIC_VIEWER t_ms=16732 tid=ThreadId(1) wheel_event dy=1
+PIC_VIEWER t_ms=16732 tid=ThreadId(1) navigation_dispatch source=wheel from_index=0 to_index=1 direction=1
+PIC_VIEWER t_ms=16732 tid=ThreadId(1) infobar_update source=wheel index=1 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER t_ms=16732 tid=ThreadId(1) show_photo_request generation=14 index=1 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER t_ms=16732 tid=ThreadId(1) request lane=foreground action=new uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg variant=1124x794
+PIC_VIEWER t_ms=16732 tid=ThreadId(31) decode_start uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg variant=1124x794 queue_ms=0
+PIC_VIEWER source_cache lane=foreground action=miss uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER t_ms=16795 tid=ThreadId(1) wheel_event dy=1
+PIC_VIEWER t_ms=16795 tid=ThreadId(1) wheel_accumulate current_index=1 target_index=2 direction=1
+PIC_VIEWER t_ms=17356 tid=ThreadId(1) wheel_event dy=-1
+PIC_VIEWER t_ms=17356 tid=ThreadId(1) navigation_dispatch source=wheel_reversal from_index=1 to_index=0 direction=-1
+PIC_VIEWER t_ms=17356 tid=ThreadId(1) infobar_update source=wheel index=0 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=17356 tid=ThreadId(1) show_photo_request generation=15 index=0 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=17356 tid=ThreadId(1) request lane=foreground action=join uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg variant=1124x794
+PIC_VIEWER t_ms=17359 tid=ThreadId(31) decode_done uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg variant=1124x794 elapsed_ms=627 outcome=error
+PIC_VIEWER t_ms=17359 tid=ThreadId(1) display_discard lane=foreground uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg reason=stale
+PIC_VIEWER t_ms=19392 tid=ThreadId(1) show_photo_request generation=16 index=0 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=19392 tid=ThreadId(1) request lane=foreground action=join uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg variant=1124x794
+PIC_NFS stage=rpc_read elapsed_ms=4474 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1353_result.jpg iteration=1 outcome=ok bytes=65536 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=first_read elapsed_ms=4474 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1353_result.jpg outcome=ok bytes=65536
+PIC_NFS stage=rpc_read elapsed_ms=2 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1353_result.jpg iteration=2 outcome=ok bytes=65536 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=3 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1353_result.jpg iteration=3 outcome=ok bytes=131072 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=4 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1353_result.jpg iteration=4 outcome=ok bytes=262144 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=6 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1353_result.jpg iteration=5 outcome=ok bytes=433410 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=1 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1353_result.jpg iteration=6 outcome=ok bytes=0 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=file_read_complete elapsed_ms=4490 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1353_result.jpg outcome=ok bytes=957698 calls=6
+PIC_NETWORK tid=ThreadId(30) PRIVATE_NFS read_done bytes=957698 elapsed_ms=4506 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER source_cache action=insert bytes=957698 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER network_done lane=foreground read_ms=4634 bytes=957698 source=network outcome=ok uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER decode_stage source_ms=4634 cpu_ms=36 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=19908 tid=ThreadId(30) decode_done uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg variant=1124x794 elapsed_ms=4673 outcome=ok
+PIC_VIEWER t_ms=19908 tid=ThreadId(1) display_discard lane=foreground uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg reason=stale
+PIC_VIEWER t_ms=19908 tid=ThreadId(1) display_discard lane=foreground uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg reason=stale
+PIC_VIEWER t_ms=19910 tid=ThreadId(1) display_apply elapsed_ms=1 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=19910 tid=ThreadId(1) display_done lane=foreground source=decode navigation_ms=517 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=19912 tid=ThreadId(1) wheel_event dy=1
+PIC_VIEWER t_ms=19912 tid=ThreadId(1) navigation_dispatch source=wheel from_index=0 to_index=1 direction=1
+PIC_VIEWER t_ms=19912 tid=ThreadId(1) infobar_update source=wheel index=1 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER t_ms=19912 tid=ThreadId(1) show_photo_request generation=17 index=1 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER t_ms=19912 tid=ThreadId(1) request lane=foreground action=new uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg variant=1124x794
+PIC_VIEWER t_ms=19912 tid=ThreadId(44) decode_start uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg variant=1124x794 queue_ms=0
+PIC_VIEWER source_cache lane=foreground action=miss uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER network_slot lane=foreground wait_ms=0 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_NETWORK tid=ThreadId(44) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(44) PRIVATE_NFS read_start uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg max_bytes=134217728
+PIC_NFS stage=read_session_lock elapsed_ms=0 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1354_result.jpg outcome=acquired
+PIC_NFS_CONNECT reuse host=DietPi.local export=/mnt/4TBS
+PIC_NFS stage=file_open elapsed_ms=3 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1354_result.jpg outcome=ok
+PIC_NFS stage=rpc_read elapsed_ms=1 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1354_result.jpg iteration=1 outcome=ok bytes=65536 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=first_read elapsed_ms=1 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1354_result.jpg outcome=ok bytes=65536
+PIC_NFS stage=rpc_read elapsed_ms=2 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1354_result.jpg iteration=2 outcome=ok bytes=65536 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=2 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1354_result.jpg iteration=3 outcome=ok bytes=131072 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=3 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1354_result.jpg iteration=4 outcome=ok bytes=262144 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=2 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1354_result.jpg iteration=5 outcome=ok bytes=85729 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=0 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1354_result.jpg iteration=6 outcome=ok bytes=0 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=file_read_complete elapsed_ms=10 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1354_result.jpg outcome=ok bytes=610017 calls=6
+PIC_NETWORK tid=ThreadId(44) PRIVATE_NFS read_done bytes=610017 elapsed_ms=12 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER source_cache action=insert bytes=610017 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER network_done lane=foreground read_ms=13 bytes=610017 source=network outcome=ok uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER decode_stage source_ms=13 cpu_ms=29 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER t_ms=19959 tid=ThreadId(44) decode_done uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg variant=1124x794 elapsed_ms=46 outcome=ok
+PIC_VIEWER t_ms=19960 tid=ThreadId(1) display_apply elapsed_ms=1 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER t_ms=19960 tid=ThreadId(1) display_done lane=foreground source=decode navigation_ms=48 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg
+PIC_VIEWER t_ms=20163 tid=ThreadId(1) request lane=prefetch action=new uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1356_result.jpg variant=1124x794
+PIC_VIEWER t_ms=20163 tid=ThreadId(1) cache_hit lane=prefetch uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=20163 tid=ThreadId(45) decode_start uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1356_result.jpg variant=1124x794 queue_ms=0
+PIC_VIEWER source_cache lane=prefetch action=miss uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1356_result.jpg
+PIC_VIEWER network_slot lane=prefetch wait_ms=0 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1356_result.jpg
+PIC_NETWORK tid=ThreadId(45) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(45) PRIVATE_NFS read_start uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1356_result.jpg max_bytes=134217728
+PIC_NFS stage=read_session_lock elapsed_ms=0 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1356_result.jpg outcome=acquired
+PIC_NFS_CONNECT reuse host=DietPi.local export=/mnt/4TBS
+PIC_NFS stage=file_open elapsed_ms=2 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1356_result.jpg outcome=ok
+PIC_NFS stage=rpc_read elapsed_ms=2 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1356_result.jpg iteration=1 outcome=ok bytes=65536 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=first_read elapsed_ms=2 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1356_result.jpg outcome=ok bytes=65536
+PIC_NFS stage=rpc_read elapsed_ms=1 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1356_result.jpg iteration=2 outcome=ok bytes=65536 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=2 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1356_result.jpg iteration=3 outcome=ok bytes=131072 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=4 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1356_result.jpg iteration=4 outcome=ok bytes=262144 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=2 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1356_result.jpg iteration=5 outcome=ok bytes=55204 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=rpc_read elapsed_ms=0 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1356_result.jpg iteration=6 outcome=ok bytes=0 timedout_delta=0 retransmitted_delta=0 reconnects_delta=0
+PIC_NFS stage=file_read_complete elapsed_ms=11 tid=140009652860608 host=DietPi.local export=/mnt/4TBS relative=/pics-sport/local choice/FB-Timestamp-JPG Upates/DSC_1356_result.jpg outcome=ok bytes=579492 calls=6
+PIC_NETWORK tid=ThreadId(45) PRIVATE_NFS read_done bytes=579492 elapsed_ms=13 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1356_result.jpg
+PIC_VIEWER source_cache action=insert bytes=579492 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1356_result.jpg
+PIC_VIEWER network_done lane=prefetch read_ms=13 bytes=579492 source=network outcome=ok uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1356_result.jpg
+PIC_VIEWER t_ms=20184 tid=ThreadId(1) wheel_event dy=-1
+PIC_VIEWER t_ms=20184 tid=ThreadId(1) navigation_dispatch source=wheel from_index=1 to_index=0 direction=-1
+PIC_VIEWER t_ms=20184 tid=ThreadId(1) infobar_update source=wheel index=0 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=20184 tid=ThreadId(1) show_photo_request generation=18 index=0 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=20186 tid=ThreadId(1) cache_hit lane=foreground uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=20186 tid=ThreadId(1) display_done lane=foreground source=texture_cache navigation_ms=1 uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1353_result.jpg
+PIC_VIEWER t_ms=20192 tid=ThreadId(45) decode_done uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1356_result.jpg variant=1124x794 elapsed_ms=29 outcome=error
+PIC_VIEWER t_ms=20192 tid=ThreadId(1) display_discard lane=prefetch uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1356_result.jpg reason=cancelled
+PIC_VIEWER t_ms=20436 tid=ThreadId(1) cache_hit lane=prefetch uri=nfs://DietPi.local/mnt/4TBS/pics-sport/local%20choice/FB-Timestamp-JPG%20Upates/DSC_1354_result.jpg

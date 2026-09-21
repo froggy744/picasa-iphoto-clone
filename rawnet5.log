@@ -1,3 +1,11 @@
+warning: pic-rs@1.0.0: native/private_smb.c: In function 'init_smb':
+warning: pic-rs@1.0.0: native/private_smb.c:31:9: warning: 'smbc_init' is deprecated [-Wdeprecated-declarations]
+warning: pic-rs@1.0.0:    31 |         if (smbc_init(guest_auth, 0) != 0) {
+warning: pic-rs@1.0.0:       |         ^~
+warning: pic-rs@1.0.0: In file included from native/private_smb.c:2:
+warning: pic-rs@1.0.0: /usr/include/samba-4.0/libsmbclient.h:1301:5: note: declared here
+warning: pic-rs@1.0.0:  1301 | int smbc_init(smbc_get_auth_data_fn fn, int debug);
+warning: pic-rs@1.0.0:       |     ^~~~~~~~~
 warning: unused import: `Instant`
  --> src/edit/editor.rs:4:27
   |
@@ -7,9 +15,9 @@ warning: unused import: `Instant`
   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
 
 warning: use of deprecated struct `gtk4::MessageDialog`: Since 4.10
-  --> src/main.rs:66:35
+  --> src/main.rs:74:35
    |
-66 |                 let dialog = gtk::MessageDialog::builder()
+74 |                 let dialog = gtk::MessageDialog::builder()
    |                                   ^^^^^^^^^^^^^
    |
    = note: `#[warn(deprecated)]` on by default
@@ -32,41 +40,29 @@ warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
 11 |         let dialog = gtk::FileChooserNative::new(
    |                           ^^^^^^^^^^^^^^^^^
 
+warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
+  --> src/network_picker.rs:12:21
+   |
+12 |     let dialog=gtk::Dialog::with_buttons(
+   |                     ^^^^^^
+
 warning: use of deprecated struct `gtk4::MessageDialog`: Since 4.10
    --> src/settings.rs:604:23
     |
 604 |     let dialog = gtk::MessageDialog::builder()
     |                       ^^^^^^^^^^^^^
 
-warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
-   --> src/window/dialogs.rs:121:23
-    |
-121 |     let dialog = gtk::Dialog::new();
-    |                       ^^^^^^
-
-warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
-   --> src/window/dialogs.rs:411:37
-    |
-411 | fn key_controller_log(dialog: &gtk::Dialog, controller: gtk::EventControllerKey) {
-    |                                     ^^^^^^
-
-warning: use of deprecated struct `gtk4::Dialog`: Since 4.10
-   --> src/window/dialogs.rs:464:23
-    |
-464 |     let dialog = gtk::Dialog::new();
-    |                       ^^^^^^
-
 warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
-    --> src/window/build.rs:2368:27
+    --> src/window/build.rs:2354:27
      |
-2368 |         let dialog = gtk::FileChooserNative::new(
+2354 |         let dialog = gtk::FileChooserNative::new(
      |                           ^^^^^^^^^^^^^^^^^
 
 warning: use of deprecated struct `gtk4::FileChooserNative`: Since 4.10
-    --> src/window/build.rs:2873:27
+    --> src/window/build.rs:2777:25
      |
-2873 |         let dialog = gtk::FileChooserNative::new(
-     |                           ^^^^^^^^^^^^^^^^^
+2777 |         let dialog=gtk::FileChooserNative::new(
+     |                         ^^^^^^^^^^^^^^^^^
 
 warning: use of deprecated method `gtk4::prelude::WidgetExt::style_context`: Since 4.10
   --> src/albums/view.rs:20:10
@@ -200,6 +196,30 @@ warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4
 32 |                 if let Some(destination) = dialog.file().and_then(|file| file.path()) {
    |                                                   ^^^^
 
+warning: use of deprecated associated function `gtk4::dialog::<impl gtk4::Dialog>::with_buttons`: Since 4.10
+  --> src/network_picker.rs:12:29
+   |
+12 |     let dialog=gtk::Dialog::with_buttons(
+   |                             ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
+  --> src/network_picker.rs:18:12
+   |
+18 |     dialog.set_default_response(gtk::ResponseType::Accept);
+   |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
+  --> src/network_picker.rs:19:24
+   |
+19 |     let content=dialog.content_area();
+   |                        ^^^^^^^^^^^^
+
+warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
+   --> src/network_picker.rs:139:12
+    |
+139 |     dialog.connect_response(move |dlg,reply|{
+    |            ^^^^^^^^^^^^^^^^
+
 warning: use of deprecated method `gtk4::prelude::WidgetExt::hide`: Since 4.10
   --> src/settings.rs:67:24
    |
@@ -267,9 +287,9 @@ warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: 
     |            ^^^^^^^^^^^^^^^^
 
 warning: use of deprecated method `gtk4::prelude::WidgetExt::allocation`: Since 4.12
-    --> src/sidebar.rs:1389:58
+    --> src/sidebar.rs:1748:58
      |
-1389 |                         .unwrap_or_else(|| f64::from(row.allocation().y()));
+1748 |                         .unwrap_or_else(|| f64::from(row.allocation().y()));
      |                                                          ^^^^^^^^^^
 
 warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
@@ -279,106 +299,40 @@ warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.1
     |                      ^^^^^^^^^^^^^^
 
 warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
-   --> src/window/theme.rs:207:22
+   --> src/window/theme.rs:204:22
     |
-207 |             provider.load_from_data(theme.css.as_str());
+204 |             provider.load_from_data(theme.css.as_str());
     |                      ^^^^^^^^^^^^^^
 
-warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
-   --> src/window/dialogs.rs:121:31
-    |
-121 |     let dialog = gtk::Dialog::new();
-    |                               ^^^
-
-warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
-   --> src/window/dialogs.rs:128:12
-    |
-128 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    |            ^^^^^^^^^^
-
-warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
-   --> src/window/dialogs.rs:129:33
-    |
-129 |     let connect_button = dialog.add_button("Connect", gtk::ResponseType::Accept);
-    |                                 ^^^^^^^^^^
-
-warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
-   --> src/window/dialogs.rs:130:12
-    |
-130 |     dialog.set_default_response(gtk::ResponseType::Accept);
-    |            ^^^^^^^^^^^^^^^^^^^^
-
-warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
-   --> src/window/dialogs.rs:132:26
-    |
-132 |     let content = dialog.content_area();
-    |                          ^^^^^^^^^^^^
-
-warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
-   --> src/window/dialogs.rs:347:12
-    |
-347 |     dialog.connect_response(move |dialog, response| {
-    |            ^^^^^^^^^^^^^^^^
-
-warning: use of deprecated associated function `gtk4::Dialog::new`: Since 4.10
-   --> src/window/dialogs.rs:464:31
-    |
-464 |     let dialog = gtk::Dialog::new();
-    |                               ^^^
-
-warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
-   --> src/window/dialogs.rs:471:12
-    |
-471 |     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    |            ^^^^^^^^^^
-
-warning: use of deprecated method `gtk4::prelude::DialogExt::add_button`: Since 4.10
-   --> src/window/dialogs.rs:473:10
-    |
-473 |         .add_button("Select This Folder", gtk::ResponseType::Accept)
-    |          ^^^^^^^^^^
-
-warning: use of deprecated method `gtk4::prelude::DialogExt::set_default_response`: Since 4.10
-   --> src/window/dialogs.rs:476:12
-    |
-476 |     dialog.set_default_response(gtk::ResponseType::Accept);
-    |            ^^^^^^^^^^^^^^^^^^^^
-
-warning: use of deprecated method `gtk4::prelude::DialogExt::content_area`: Since 4.10
-   --> src/window/dialogs.rs:478:26
-    |
-478 |     let content = dialog.content_area();
-    |                          ^^^^^^^^^^^^
-
 warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
-    --> src/window/build.rs:2368:46
+    --> src/window/build.rs:2354:46
      |
-2368 |         let dialog = gtk::FileChooserNative::new(
+2354 |         let dialog = gtk::FileChooserNative::new(
      |                                              ^^^
 
 warning: use of deprecated method `gtk4::prelude::FileChooserExt::set_current_name`: Since 4.10
-    --> src/window/build.rs:2381:16
+    --> src/window/build.rs:2367:16
      |
-2381 |         dialog.set_current_name(&filename);
+2367 |         dialog.set_current_name(&filename);
      |                ^^^^^^^^^^^^^^^^
 
 warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
-    --> src/window/build.rs:2385:44
+    --> src/window/build.rs:2371:44
      |
-2385 |                 if let Some(file) = dialog.file() {
+2371 |                 if let Some(file) = dialog.file() {
      |                                            ^^^^
 
 warning: use of deprecated associated function `gtk4::FileChooserNative::new`: Since 4.10
-    --> src/window/build.rs:2873:46
+    --> src/window/build.rs:2777:44
      |
-2873 |         let dialog = gtk::FileChooserNative::new(
-     |                                              ^^^
+2777 |         let dialog=gtk::FileChooserNative::new(
+     |                                            ^^^
 
 warning: use of deprecated method `gtk4::prelude::FileChooserExt::file`: Since 4.10
-    --> src/window/build.rs:2883:44
+    --> src/window/build.rs:2782:39
      |
-2883 |                 if let Some(file) = dialog.file() {
-     |                                            ^^^^
+2782 |                 if let Some(file)=dlg.file(){ selected_for_local(crate::source::reference(&file)); }
+     |                                       ^^^^
 
 warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.12
   --> src/window/photo_actions.rs:16:9
@@ -387,45 +341,45 @@ warning: use of deprecated method `gtk4::CssProvider::load_from_data`: Since 4.1
    |         ^^^^^^^^^^^^^^
 
 warning: use of deprecated associated function `gtk4::MessageDialog::builder`: Since 4.10
-  --> src/main.rs:66:50
+  --> src/main.rs:74:50
    |
-66 |                 let dialog = gtk::MessageDialog::builder()
+74 |                 let dialog = gtk::MessageDialog::builder()
    |                                                  ^^^^^^^
 
 warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::message_type`: Since 4.10
-  --> src/main.rs:67:22
+  --> src/main.rs:75:22
    |
-67 |                     .message_type(gtk::MessageType::Error)
+75 |                     .message_type(gtk::MessageType::Error)
    |                      ^^^^^^^^^^^^
 
 warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::buttons`: Since 4.10
-  --> src/main.rs:68:22
+  --> src/main.rs:76:22
    |
-68 |                     .buttons(gtk::ButtonsType::Close)
+76 |                     .buttons(gtk::ButtonsType::Close)
    |                      ^^^^^^^
 
 warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::text`: Since 4.10
-  --> src/main.rs:69:22
+  --> src/main.rs:77:22
    |
-69 |                     .text("Could not open the photo library")
+77 |                     .text("Could not open the photo library")
    |                      ^^^^
 
 warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::secondary_text`: Since 4.10
-  --> src/main.rs:70:22
+  --> src/main.rs:78:22
    |
-70 |                     .secondary_text(error.to_string())
+78 |                     .secondary_text(error.to_string())
    |                      ^^^^^^^^^^^^^^
 
 warning: use of deprecated method `gtk4::builders::MessageDialogBuilder::build`: Since 4.10
-  --> src/main.rs:71:22
+  --> src/main.rs:79:22
    |
-71 |                     .build();
+79 |                     .build();
    |                      ^^^^^
 
 warning: use of deprecated method `gtk4::prelude::DialogExt::connect_response`: Since 4.10
-  --> src/main.rs:72:24
+  --> src/main.rs:80:24
    |
-72 |                 dialog.connect_response(|dialog, _| dialog.close());
+80 |                 dialog.connect_response(|dialog, _| dialog.close());
    |                        ^^^^^^^^^^^^^^^^
 
 warning: unused import: `gtk::prelude`
@@ -452,6 +406,12 @@ warning: unused variable: `window_for_close`
    |
    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
+warning: unused variable: `set_expanded`
+   --> src/sidebar.rs:710:13
+    |
+710 |         let set_expanded = set_folders_expanded.clone();
+    |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_set_expanded`
+
 warning: unused variable: `error`
    --> src/thumbnail_display.rs:374:13
     |
@@ -459,70 +419,64 @@ warning: unused variable: `error`
     |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_error`
 
 warning: unused variable: `path`
-    --> src/window/build.rs:3190:21
+    --> src/window/build.rs:3093:21
      |
-3190 |                     path,
+3093 |                     path,
      |                     ^^^^ help: try ignoring the field: `path: _`
 
 warning: unused variable: `count`
-    --> src/window/build.rs:2960:17
+    --> src/window/build.rs:2863:17
      |
-2960 |             let count = roots.as_ref().map(|roots| roots.len()).unwrap_or(0);
+2863 |             let count = roots.as_ref().map(|roots| roots.len()).unwrap_or(0);
      |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_count`
 
 warning: unused variable: `kind`
-    --> src/window/build.rs:2576:41
+    --> src/window/build.rs:2562:41
      |
-2576 |             let Some((root, generation, kind)) = next else {
+2562 |             let Some((root, generation, kind)) = next else {
      |                                         ^^^^ help: if this is intentional, prefix it with an underscore: `_kind`
 
 warning: unused variable: `mount`
-   --> src/window/layout.rs:553:51
+   --> src/window/layout.rs:479:51
     |
-553 |     volume_monitor.connect_mount_changed(move |_, mount| {
+479 |     volume_monitor.connect_mount_changed(move |_, mount| {
     |                                                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
 
 warning: unused variable: `mount`
-   --> src/window/layout.rs:548:51
+   --> src/window/layout.rs:474:51
     |
-548 |     volume_monitor.connect_mount_removed(move |_, mount| {
+474 |     volume_monitor.connect_mount_removed(move |_, mount| {
     |                                                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
 
 warning: unused variable: `mount`
-   --> src/window/layout.rs:543:49
+   --> src/window/layout.rs:469:49
     |
-543 |     volume_monitor.connect_mount_added(move |_, mount| {
+469 |     volume_monitor.connect_mount_added(move |_, mount| {
     |                                                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_mount`
 
 warning: unused variable: `changed`
-   --> src/window/layout.rs:293:24
+   --> src/window/layout.rs:296:24
     |
-293 |                     Ok(changed) => {
+296 |                     Ok(changed) => {
     |                        ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_changed`
 
 warning: unused variable: `file`
-   --> src/window/build.rs:217:50
+   --> src/window/build.rs:218:50
     |
-217 |                 monitor.connect_changed(move |_, file, other_file, event| {
+218 |                 monitor.connect_changed(move |_, file, other_file, event| {
     |                                                  ^^^^ help: if this is intentional, prefix it with an underscore: `_file`
 
 warning: unused variable: `other_file`
-   --> src/window/build.rs:217:56
+   --> src/window/build.rs:218:56
     |
-217 |                 monitor.connect_changed(move |_, file, other_file, event| {
+218 |                 monitor.connect_changed(move |_, file, other_file, event| {
     |                                                        ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_other_file`
 
 warning: unused variable: `search`
-    --> src/window/build.rs:2467:9
+    --> src/window/build.rs:2453:9
      |
-2467 |         search,
+2453 |         search,
      |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_search`
-
-warning: unused variable: `add_network_share_slot_for_import`
-    --> src/window/build.rs:2770:9
-     |
-2770 |     let add_network_share_slot_for_import = add_network_share_slot.clone();
-     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_add_network_share_slot_for_import`
 
 warning: unused variable: `search`
    --> src/window/search.rs:207:22
@@ -556,11 +510,11 @@ warning: method `add_photos` is never used
 153 |     pub fn add_photos(&mut self, photos: Vec<PhotoObject>) {
     |            ^^^^^^^^^^
 
-warning: function `network_shares` is never used
-   --> src/db/photos.rs:209:8
+warning: function `folder_path_by_id` is never used
+   --> src/db/photos.rs:265:8
     |
-209 | pub fn network_shares(connection: &Connection) -> Result<Vec<Folder>> {
-    |        ^^^^^^^^^^^^^^
+265 | pub fn folder_path_by_id(connection: &Connection, folder_id: i64) -> Result<Option<String>> {
+    |        ^^^^^^^^^^^^^^^^^
 
 warning: field `interactive` is never read
   --> src/edit/preview.rs:94:5
@@ -593,68 +547,57 @@ warning: method `clear_photo` is never used
     |        ^^^^^^^^^^^
 
 warning: method `visible_folder_id` is never used
-   --> src/grid/grouping.rs:268:12
+   --> src/grid/grouping.rs:269:12
     |
  27 | impl Gallery {
     | ------------ method in this implementation
 ...
-268 |     pub fn visible_folder_id(&self) -> Option<i64> {
+269 |     pub fn visible_folder_id(&self) -> Option<i64> {
     |            ^^^^^^^^^^^^^^^^^
 
 warning: function `folder_row_offset` is never used
-  --> src/grid/virtualization.rs:59:4
+  --> src/grid/virtualization.rs:60:4
    |
-59 | fn folder_row_offset(rows: &[FolderVirtualRow], target_row: usize, tile_height: i32) -> f64 {
+60 | fn folder_row_offset(rows: &[FolderVirtualRow], target_row: usize, tile_height: i32) -> f64 {
    |    ^^^^^^^^^^^^^^^^^
 
 warning: struct `FolderVirtualRow` is never constructed
-  --> src/grid/virtualization.rs:82:8
+  --> src/grid/virtualization.rs:83:8
    |
-82 | struct FolderVirtualRow {
+83 | struct FolderVirtualRow {
    |        ^^^^^^^^^^^^^^^^
 
 warning: function `folder_virtual_rows` is never used
-  --> src/grid/virtualization.rs:91:4
+  --> src/grid/virtualization.rs:92:4
    |
-91 | fn folder_virtual_rows(ranges: &[GroupRange], chunk_size: usize) -> Vec<FolderVirtualRow> {
+92 | fn folder_virtual_rows(ranges: &[GroupRange], chunk_size: usize) -> Vec<FolderVirtualRow> {
    |    ^^^^^^^^^^^^^^^^^^^
 
 warning: method `refresh_availability` is never used
-    --> src/grid/virtualization.rs:1182:12
+    --> src/grid/virtualization.rs:1183:12
      |
- 208 | impl Gallery {
+ 209 | impl Gallery {
      | ------------ method in this implementation
 ...
-1182 |     pub fn refresh_availability(&self) {
+1183 |     pub fn refresh_availability(&self) {
      |            ^^^^^^^^^^^^^^^^^^^^
 
-warning: fields `hover_select_source` and `pointer_pressed` are never read
-   --> src/grid/view.rs:132:5
-    |
- 52 | pub struct Gallery {
-    |            ------- fields in this struct
-...
-132 |     hover_select_source: Rc<RefCell<Option<glib::SourceId>>>,
-    |     ^^^^^^^^^^^^^^^^^^^
-133 |     pointer_pressed: Rc<Cell<bool>>,
-    |     ^^^^^^^^^^^^^^^
-
 warning: methods `selected_position` and `is_at_vertical_boundary` are never used
-   --> src/grid/selection.rs:5:12
+   --> src/grid/selection.rs:30:12
     |
-  1 | impl Gallery {
+ 26 | impl Gallery {
     | ------------ methods in this implementation
 ...
-  5 |     pub fn selected_position(&self) -> Option<usize> {
+ 30 |     pub fn selected_position(&self) -> Option<usize> {
     |            ^^^^^^^^^^^^^^^^^
 ...
-148 |     pub fn is_at_vertical_boundary(&self, direction: i32) -> bool {
+173 |     pub fn is_at_vertical_boundary(&self, direction: i32) -> bool {
     |            ^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: function `folder_id_from_named_ancestor` is never used
-   --> src/grid/selection.rs:919:4
+   --> src/grid/selection.rs:950:4
     |
-919 | fn folder_id_from_named_ancestor(widget: &gtk::Widget) -> Option<i64> {
+950 | fn folder_id_from_named_ancestor(widget: &gtk::Widget) -> Option<i64> {
     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: field `grid_zoom_menu` is never read
@@ -689,31 +632,10 @@ warning: function `scan` is never used
 79 | pub fn scan(root: &str, events: Option<&Sender<ScanEvent>>) -> Result<usize> {
    |        ^^^^
 
-warning: function `is_network_location` is never used
-   --> src/source.rs:106:8
-    |
-106 | pub fn is_network_location(reference: &str) -> bool {
-    |        ^^^^^^^^^^^^^^^^^^^
-
-warning: field `0` is never read
-   --> src/source.rs:250:10
-    |
-250 |     Done(usize),
-    |     ---- ^^^^^
-    |     |
-    |     field in this variant
-    |
-    = note: `NetworkDiscoveryEvent` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
-help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
-    |
-250 -     Done(usize),
-250 +     Done(()),
-    |
-
 warning: function `wait_for_priority_requests` is never used
-   --> src/thumbnail.rs:182:8
+   --> src/thumbnail.rs:185:8
     |
-182 | pub fn wait_for_priority_requests() {
+185 | pub fn wait_for_priority_requests() {
     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: field `scale` is never read
@@ -751,16 +673,10 @@ warning: variants `FilesystemNotification` and `ProgrammaticSidebarSelection` ar
     |
     = note: `PhotoScanRequestReason` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
 
-warning: function `status_label_set` is never used
-   --> src/window/dialogs.rs:819:4
-    |
-819 | fn status_label_set(label: &gtk::Label, text: &str) {
-    |    ^^^^^^^^^^^^^^^^
-
 warning: function `install_gallery_zoom_scroll` is never used
-   --> src/window/navigation.rs:588:4
+   --> src/window/navigation.rs:506:4
     |
-588 | fn install_gallery_zoom_scroll(scrolled: &gtk::ScrolledWindow, gallery: Rc<grid::Gallery>) {
+506 | fn install_gallery_zoom_scroll(scrolled: &gtk::ScrolledWindow, gallery: Rc<grid::Gallery>) {
     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: field `mounted` is never read
@@ -788,11 +704,90 @@ warning: method `active_window_controls` is never used
 128 |     pub(crate) fn active_window_controls(&self) -> WindowControls {
     |                   ^^^^^^^^^^^^^^^^^^^^^^
 
-warning: `pic-rs` (bin "pic-rs") generated 119 warnings (run `cargo fix --bin "pic-rs" -p pic-rs` to apply 15 suggestions)
-    Finished `dev` profile [optimized + debuginfo] target(s) in 0.13s
+warning: `pic-rs` (bin "pic-rs") generated 106 warnings (run `cargo fix --bin "pic-rs" -p pic-rs` to apply 15 suggestions)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.12s
      Running `target/debug/pic-rs`
-STARTUP cold_start_ms=270 photos=70718 displayed=10 folders=647 albums=26 scan=disabled rss_mb=110
+STARTUP cold_start_ms=15 photos=5157 displayed=10 folders=249 albums=4 scan=disabled rss_mb=62
+
+(pic-rs:516251): Gtk-WARNING **: 20:14:32.724: Theme parser error: <data>:26:1-2: Expected a valid selector
 WARNING: radv is not a conformant Vulkan implementation, testing use only.
 ===== SCAN COMPLETE: imported=0 failed=0 | progressive gallery updates complete =====
-** Message: 23:44:25.560: Connecting to org.freedesktop.Tracker3.Miner.Files
-WARNING: radv is not a conformant Vulkan implementation, testing use only.
+PIC_NETWORK tid=ThreadId(12) PRIVATE_SMB list_start uri=smb://DietPi.local:445/
+PIC_SMB_CONNECT create_start
+PIC_SMB_CONNECT create_ok
+PIC_NETWORK tid=ThreadId(12) PRIVATE_SMB list_done count=6 displayed=5
+PIC_NETWORK tid=ThreadId(13) PRIVATE_SMB list_start uri=smb://DietPi.local:445/4TBP
+PIC_SMB_CONNECT reuse
+PIC_NETWORK tid=ThreadId(13) PRIVATE_SMB list_done count=11 displayed=11
+PIC_NETWORK tid=ThreadId(14) PRIVATE_SMB list_start uri=smb://DietPi.local:445
+PIC_SMB_CONNECT reuse
+PIC_NETWORK tid=ThreadId(14) PRIVATE_SMB list_done count=6 displayed=5
+PIC_NETWORK tid=ThreadId(16) PRIVATE_NFS export_discovery_start host=DietPi.local
+PIC_NFS stage=hostname_resolution elapsed_ms=3 tid=140375544989376 host=DietPi.local export=- relative=- status=0 addresses=1
+PIC_NFS stage=export_discovery elapsed_ms=6 tid=140375544989376 host=DietPi.local export=- relative=- outcome=ok exports=5
+PIC_NETWORK tid=ThreadId(16) PRIVATE_NFS export_discovery_done host=DietPi.local count=5 elapsed_ms=8 paths=["/exports/Work", "/mnt/4TBM", "/mnt/4TBP", "/mnt/4TBS", "/mnt/dietpi_userdata"]
+PIC_NETWORK tid=ThreadId(16) PRIVATE_NFS exports_display host=DietPi.local advertised_path=/mnt count=5
+PIC_NETWORK tid=ThreadId(17) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(17) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(17) PRIVATE_NFS list_start host=DietPi.local export=/mnt/4TBP relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140375544989376 host=DietPi.local export=/mnt/4TBP relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBP version=3 tid=140375544989376
+PIC_NFS stage=connection_establishment elapsed_ms=14 tid=140375544989376 host=DietPi.local export=/mnt/4TBP relative=- version=3 outcome=error status=-1
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/mnt/4TBP v3 status=-1 (Operation not permitted)
+PIC_NFS stage=context_creation elapsed_ms=1 tid=140375544989376 host=DietPi.local export=/mnt/4TBP relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBP version=4 tid=140375544989376
+PIC_NFS stage=connection_establishment elapsed_ms=3 tid=140375544989376 host=DietPi.local export=/mnt/4TBP relative=- version=4 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBP version=4
+PIC_NETWORK tid=ThreadId(18) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(18) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(18) PRIVATE_NFS list_start host=DietPi.local export=/mnt/4TBM relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140375544989376 host=DietPi.local export=/mnt/4TBM relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBM version=3 tid=140375544989376
+PIC_NFS stage=connection_establishment elapsed_ms=15 tid=140375544989376 host=DietPi.local export=/mnt/4TBM relative=- version=3 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBM version=3
+PIC_NETWORK tid=ThreadId(18) PRIVATE_NFS list_done raw=7 displayed=2
+PIC_NETWORK tid=ThreadId(19) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(19) PRIVATE_NFS exports_display host=DietPi.local advertised_path=/mnt count=5
+PIC_NETWORK tid=ThreadId(20) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(20) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(20) PRIVATE_NFS list_start host=DietPi.local export=/mnt/4TBS relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140375544989376 host=DietPi.local export=/mnt/4TBS relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBS version=3 tid=140375544989376
+PIC_NFS stage=connection_establishment elapsed_ms=16 tid=140375544989376 host=DietPi.local export=/mnt/4TBS relative=- version=3 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBS version=3
+PIC_NETWORK tid=ThreadId(20) PRIVATE_NFS list_done raw=9 displayed=9
+PIC_NETWORK tid=ThreadId(21) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(21) PRIVATE_NFS exports_display host=DietPi.local advertised_path=/mnt count=5
+PIC_NETWORK tid=ThreadId(22) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(22) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(22) PRIVATE_NFS list_start host=DietPi.local export=/mnt/dietpi_userdata relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140375024985792 host=DietPi.local export=/mnt/dietpi_userdata relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/dietpi_userdata version=3 tid=140375024985792
+PIC_NFS stage=connection_establishment elapsed_ms=6 tid=140375024985792 host=DietPi.local export=/mnt/dietpi_userdata relative=- version=3 outcome=error status=-13
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/mnt/dietpi_userdata v3 status=-13 (Permission denied)
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140375024985792 host=DietPi.local export=/mnt/dietpi_userdata relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/dietpi_userdata version=4 tid=140375024985792
+PIC_NFS stage=connection_establishment elapsed_ms=7 tid=140375024985792 host=DietPi.local export=/mnt/dietpi_userdata relative=- version=4 outcome=error status=-1
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/mnt/dietpi_userdata ; v4 status=-1 (Operation not permitted)
+PIC_NETWORK tid=ThreadId(23) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(23) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(23) PRIVATE_NFS list_start host=DietPi.local export=/exports/Work relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140375024985792 host=DietPi.local export=/exports/Work relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/exports/Work version=3 tid=140375024985792
+PIC_NFS stage=connection_establishment elapsed_ms=7 tid=140375024985792 host=DietPi.local export=/exports/Work relative=- version=3 outcome=error status=-13
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/exports/Work v3 status=-13 (Permission denied)
+PIC_NFS stage=context_creation elapsed_ms=1 tid=140375024985792 host=DietPi.local export=/exports/Work relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/exports/Work version=4 tid=140375024985792
+PIC_NFS stage=connection_establishment elapsed_ms=3 tid=140375024985792 host=DietPi.local export=/exports/Work relative=- version=4 outcome=error status=-1
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/exports/Work ; v4 status=-1 (Operation not permitted)
+PIC_NETWORK tid=ThreadId(24) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(24) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(24) PRIVATE_NFS list_start host=DietPi.local export=/mnt/4TBP relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140375024985792 host=DietPi.local export=/mnt/4TBP relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBP version=3 tid=140375024985792
+PIC_NFS stage=connection_establishment elapsed_ms=16 tid=140375024985792 host=DietPi.local export=/mnt/4TBP relative=- version=3 outcome=error status=-1
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/mnt/4TBP v3 status=-1 (Operation not permitted)
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140375024985792 host=DietPi.local export=/mnt/4TBP relative=- outcome=ok
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBP version=4 tid=140375024985792
+PIC_NFS stage=connection_establishment elapsed_ms=3 tid=140375024985792 host=DietPi.local export=/mnt/4TBP relative=- version=4 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBP version=4

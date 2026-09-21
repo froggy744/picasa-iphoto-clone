@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <netdb.h>
+#include <unistd.h>
 
 typedef int (*pic_entry_cb)(void *, const char *, unsigned int);
 static int trace_enabled(void) {
@@ -76,6 +77,12 @@ static struct nfs_context *open_session(const char *host, const char *export_pat
         }
         /* Disable endless reconnection during the initial connection probe. */
         nfs_set_autoreconnect(nfs, 0);
+        char session_detail[128];
+        snprintf(session_detail, sizeof session_detail,
+                 "version=%d uid=%ld gid=%ld source_port=libnfs_default",
+                 version, (long)geteuid(), (long)getegid());
+        trace_stage("session_configuration", context_started, host, export_path, NULL,
+                    session_detail);
         uint64_t connect_started = monotonic_ms();
         if (trace_enabled()) fprintf(stderr, "PIC_NFS_CONNECT create_start host=%s export=%s version=%d tid=%lu\n",
                                      host, export_path, version, (unsigned long)pthread_self());
@@ -132,8 +139,10 @@ int pic_nfs_list(const char *host, const char *export_path, const char *relative
     struct nfs_context *nfs=open_session(host,export_path,error,cap);
     if (!nfs) return -1;
     struct nfsdir *dir=NULL;
+    uint64_t open_started = monotonic_ms();
     if (nfs_opendir(nfs,relative,&dir)!=0) {
         err(error,cap,"nfs_opendir",nfs);
+        trace_stage("directory_open", open_started, host, export_path, relative, "outcome=error");
         if (strstr(error,"NFS4ERR_PERM") || strstr(error,"Permission denied")) {
             char detail[512];
             snprintf(detail,sizeof detail,"%s",error);
@@ -141,6 +150,7 @@ int pic_nfs_list(const char *host, const char *export_path, const char *relative
         }
         nfs_destroy_context(nfs);return -1;
     }
+    trace_stage("directory_open", open_started, host, export_path, relative, "outcome=ok");
     int count=0;
     struct nfsdirent *entry;
     while ((entry=nfs_readdir(nfs,dir))) {
@@ -151,6 +161,9 @@ int pic_nfs_list(const char *host, const char *export_path, const char *relative
         count++;
     }
     nfs_closedir(nfs,dir);
+    char detail[64];
+    snprintf(detail,sizeof detail,"outcome=ok entries=%d",count);
+    trace_stage("directory_list_complete", open_started, host, export_path, relative, detail);
     nfs_destroy_context(nfs);
     return count;
 }

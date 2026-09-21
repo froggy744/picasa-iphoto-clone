@@ -1,0 +1,128 @@
+STARTUP cold_start_ms=14 photos=5157 displayed=10 folders=249 albums=4 scan=disabled rss_mb=62
+
+(pic-rs:534941): Gtk-WARNING **: 20:40:14.440: Theme parser error: <data>:26:1-2: Expected a valid selector
+WARNING: radv is not a conformant Vulkan implementation, testing use only.
+===== SCAN COMPLETE: imported=0 failed=0 | progressive gallery updates complete =====
+PIC_NETWORK tid=ThreadId(12) PRIVATE_NFS export_discovery_start host=DietPi.local
+PIC_NFS stage=hostname_resolution elapsed_ms=2 tid=140405391750848 host=DietPi.local export=- relative=- status=0 addresses=1
+PIC_NFS stage=export_discovery elapsed_ms=20 tid=140405391750848 host=DietPi.local export=- relative=- outcome=ok exports=5
+PIC_NETWORK tid=ThreadId(12) PRIVATE_NFS export_discovery_done host=DietPi.local count=5 elapsed_ms=21 paths=["/exports/Work", "/mnt/4TBM", "/mnt/4TBP", "/mnt/4TBS", "/mnt/dietpi_userdata"]
+PIC_NETWORK tid=ThreadId(12) PRIVATE_NFS exports_display host=DietPi.local advertised_path=/mnt count=5
+PIC_NETWORK tid=ThreadId(13) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(13) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(13) PRIVATE_NFS list_start host=DietPi.local export=/mnt/4TBP relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- version=3 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBP version=3 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=18 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- version=3 outcome=error status=-1
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/mnt/4TBP v3 status=-1 (Operation not permitted)
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- version=4 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBP version=4 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=2 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- version=4 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBP version=4
+PIC_NFS stage=directory_open elapsed_ms=1 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=/ outcome=error
+PIC_NETWORK tid=ThreadId(14) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(14) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(14) PRIVATE_NFS list_start host=DietPi.local export=/mnt/4TBS relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBS relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBS relative=- version=3 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBS version=3 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=15 tid=140405391750848 host=DietPi.local export=/mnt/4TBS relative=- version=3 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBS version=3
+PIC_NFS stage=directory_open elapsed_ms=1 tid=140405391750848 host=DietPi.local export=/mnt/4TBS relative=/ outcome=ok
+PIC_NFS stage=directory_list_complete elapsed_ms=1 tid=140405391750848 host=DietPi.local export=/mnt/4TBS relative=/ outcome=ok entries=9
+PIC_NETWORK tid=ThreadId(14) PRIVATE_NFS list_done raw=9 displayed=9
+PIC_NETWORK tid=ThreadId(15) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(15) PRIVATE_NFS exports_display host=DietPi.local advertised_path=/mnt count=5
+PIC_NETWORK tid=ThreadId(16) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(16) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(16) PRIVATE_NFS list_start host=DietPi.local export=/mnt/4TBM relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBM relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBM relative=- version=3 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBM version=3 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=12 tid=140405391750848 host=DietPi.local export=/mnt/4TBM relative=- version=3 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBM version=3
+PIC_NFS stage=directory_open elapsed_ms=1 tid=140405391750848 host=DietPi.local export=/mnt/4TBM relative=/ outcome=ok
+PIC_NFS stage=directory_list_complete elapsed_ms=1 tid=140405391750848 host=DietPi.local export=/mnt/4TBM relative=/ outcome=ok entries=7
+PIC_NETWORK tid=ThreadId(16) PRIVATE_NFS list_done raw=7 displayed=2
+PIC_NETWORK tid=ThreadId(17) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(17) PRIVATE_NFS exports_display host=DietPi.local advertised_path=/mnt count=5
+PIC_NETWORK tid=ThreadId(18) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(18) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(18) PRIVATE_NFS list_start host=DietPi.local export=/exports/Work relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/exports/Work relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/exports/Work relative=- version=3 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/exports/Work version=3 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=7 tid=140405391750848 host=DietPi.local export=/exports/Work relative=- version=3 outcome=error status=-13
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/exports/Work v3 status=-13 (Permission denied)
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/exports/Work relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/exports/Work relative=- version=4 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/exports/Work version=4 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=4 tid=140405391750848 host=DietPi.local export=/exports/Work relative=- version=4 outcome=error status=-1
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/exports/Work ; v4 status=-1 (Operation not permitted)
+PIC_NETWORK tid=ThreadId(19) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(19) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(19) PRIVATE_NFS list_start host=DietPi.local export=/mnt/4TBS relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBS relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBS relative=- version=3 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBS version=3 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=16 tid=140405391750848 host=DietPi.local export=/mnt/4TBS relative=- version=3 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBS version=3
+PIC_NFS stage=directory_open elapsed_ms=1 tid=140405391750848 host=DietPi.local export=/mnt/4TBS relative=/ outcome=ok
+PIC_NFS stage=directory_list_complete elapsed_ms=1 tid=140405391750848 host=DietPi.local export=/mnt/4TBS relative=/ outcome=ok entries=9
+PIC_NETWORK tid=ThreadId(19) PRIVATE_NFS list_done raw=9 displayed=9
+PIC_NETWORK tid=ThreadId(20) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(20) PRIVATE_NFS exports_display host=DietPi.local advertised_path=/mnt count=5
+PIC_NETWORK tid=ThreadId(21) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(21) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(21) PRIVATE_NFS list_start host=DietPi.local export=/mnt/dietpi_userdata relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/dietpi_userdata relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/dietpi_userdata relative=- version=3 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/dietpi_userdata version=3 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=7 tid=140405391750848 host=DietPi.local export=/mnt/dietpi_userdata relative=- version=3 outcome=error status=-13
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/mnt/dietpi_userdata v3 status=-13 (Permission denied)
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/dietpi_userdata relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/dietpi_userdata relative=- version=4 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/dietpi_userdata version=4 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=3 tid=140405391750848 host=DietPi.local export=/mnt/dietpi_userdata relative=- version=4 outcome=error status=-1
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/mnt/dietpi_userdata ; v4 status=-1 (Operation not permitted)
+PIC_NETWORK tid=ThreadId(22) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(22) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(22) PRIVATE_NFS list_start host=DietPi.local export=/mnt/4TBP relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- version=3 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBP version=3 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=18 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- version=3 outcome=error status=-1
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/mnt/4TBP v3 status=-1 (Operation not permitted)
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- version=4 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBP version=4 tid=140405391750848
+PIC_NFS stage=connection_establishment elapsed_ms=4 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=- version=4 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBP version=4
+PIC_NFS stage=directory_open elapsed_ms=0 tid=140405391750848 host=DietPi.local export=/mnt/4TBP relative=/ outcome=error
+PIC_NETWORK tid=ThreadId(23) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(23) PRIVATE_NFS exports_display host=DietPi.local advertised_path=/ count=5
+PIC_NETWORK tid=ThreadId(25) PRIVATE_SMB list_start uri=smb://DietPi.local:445/
+PIC_SMB_CONNECT create_start
+PIC_SMB_CONNECT create_ok
+PIC_NETWORK tid=ThreadId(25) PRIVATE_SMB list_done count=6 displayed=5
+PIC_NETWORK tid=ThreadId(26) PRIVATE_SMB list_start uri=smb://DietPi.local:445/4TBP
+PIC_SMB_CONNECT reuse
+PIC_NETWORK tid=ThreadId(26) PRIVATE_SMB list_done count=11 displayed=11
+PIC_NETWORK tid=ThreadId(28) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(28) PRIVATE_NFS exports_display host=DietPi.local advertised_path=/mnt count=5
+PIC_NETWORK tid=ThreadId(29) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(29) PRIVATE_NFS export_cache_hit host=DietPi.local count=5
+PIC_NETWORK tid=ThreadId(29) PRIVATE_NFS list_start host=DietPi.local export=/mnt/4TBP relative=/
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405903455936 host=DietPi.local export=/mnt/4TBP relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405903455936 host=DietPi.local export=/mnt/4TBP relative=- version=3 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBP version=3 tid=140405903455936
+PIC_NFS stage=connection_establishment elapsed_ms=17 tid=140405903455936 host=DietPi.local export=/mnt/4TBP relative=- version=3 outcome=error status=-1
+PIC_NFS_CONNECT create_failed host=DietPi.local export=/mnt/4TBP v3 status=-1 (Operation not permitted)
+PIC_NFS stage=context_creation elapsed_ms=0 tid=140405903455936 host=DietPi.local export=/mnt/4TBP relative=- outcome=ok
+PIC_NFS stage=session_configuration elapsed_ms=0 tid=140405903455936 host=DietPi.local export=/mnt/4TBP relative=- version=4 uid=1000 gid=1000 source_port=libnfs_default
+PIC_NFS_CONNECT create_start host=DietPi.local export=/mnt/4TBP version=4 tid=140405903455936
+PIC_NFS stage=connection_establishment elapsed_ms=4 tid=140405903455936 host=DietPi.local export=/mnt/4TBP relative=- version=4 outcome=ok status=0
+PIC_NFS_CONNECT create_ok host=DietPi.local export=/mnt/4TBP version=4
+PIC_NFS stage=directory_open elapsed_ms=1 tid=140405903455936 host=DietPi.local export=/mnt/4TBP relative=/ outcome=error
