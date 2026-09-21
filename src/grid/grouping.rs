@@ -183,10 +183,20 @@ impl Gallery {
     /// cleared. The Folder rows reference the restored PhotoObjects by index and
     /// `selection` reads them through `store`, so both must be replaced.
     pub fn can_restore_folder_cache(&self) -> bool {
-        self.folder_cache.borrow().as_ref().is_some_and(|cache| {
-            cache.columns == self.current_columns.get()
-                && cache.order == *self.folder_order.borrow()
-        })
+        let Some(cache) = self.folder_cache.borrow().as_ref().cloned() else {
+            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=no_cached_rows"); }
+            return false;
+        };
+        if cache.columns != self.current_columns.get() {
+            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=current_columns_mismatch cached={} current={}", cache.columns, self.current_columns.get()); }
+            return false;
+        }
+        if cache.order != *self.folder_order.borrow() {
+            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=folder_order_mismatch"); }
+            return false;
+        }
+        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=hit"); }
+        true
     }
 
     pub fn set_pending_folder_target(&self, folder_id: i64, folder_path: String) {
@@ -239,6 +249,7 @@ impl Gallery {
     /// ordering metadata only: folders without direct photos must not become
     /// empty gallery sections.
     pub fn set_folder_catalog(&self, folders: &[Folder], folder_order: &[i64]) {
+        if std::env::var_os("PICASA_TRACE").is_some() && *self.folder_order.borrow() != folder_order { eprintln!("PIC_NAV folder_order_changed old_count={} new_count={}", self.folder_order.borrow().len(), folder_order.len()); }
         let catalog = folders
             .iter()
             .map(|folder| FolderCatalogEntry {

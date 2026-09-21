@@ -54,12 +54,16 @@ fn valid_cache_paths_in(directory: &Path, connection: &Connection) -> Result<Has
             row.get::<_, Option<i64>>(2)?,
         ))
     })?;
-    Ok(rows
-        .map(|row| {
-            let (path, mtime, size_bytes) = row?;
-            Ok(directory.join(cache_file_name(&path, mtime, size_bytes)))
-        })
-        .collect::<rusqlite::Result<HashSet<_>>>()?)
+    let mut valid = HashSet::new();
+    for row in rows {
+        let (path, mtime, size_bytes) = row?;
+        let name = cache_file_name(&path, mtime, size_bytes);
+        // A valid entry may remain in the RC4 flat layout while new entries
+        // use the recovered shard layout. Cleanup must preserve either.
+        valid.insert(directory.join(&name));
+        valid.insert(shard_dir_in(&directory.join("files"), &name).join(name));
+    }
+    Ok(valid)
 }
 
 /// Delete thumbnails the current library no longer references.
@@ -167,7 +171,21 @@ fn read_cache_entries(directory: &Path) -> Result<Vec<fs::DirEntry>> {
             )))
         }
     };
-    Ok(entries.flatten().collect())
+    let mut result: Vec<_> = entries.flatten().collect();
+    // Thumbnail shards have one known level beneath `files`. Deliberately do
+    // not recurse through arbitrary cache directories: materialized RAW
+    // sources and unrelated cache data must never be treated as thumbnails.
+    let files_root = directory.join("files");
+    if let Ok(shards) = fs::read_dir(files_root) {
+        for shard in shards.flatten() {
+            if shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                if let Ok(files) = fs::read_dir(shard.path()) {
+                    result.extend(files.flatten());
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 fn entry_len(entry: &fs::DirEntry) -> u64 {
@@ -249,7 +267,12 @@ mod cleanup_tests {
                 .unwrap();
         }
 
-        fn thumbnail_name(&self, path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> String {
+        fn thumbnail_name(
+            &self,
+            path: &str,
+            mtime: Option<i64>,
+            size_bytes: Option<i64>,
+        ) -> String {
             cache_file_name(path, mtime, size_bytes)
         }
 
@@ -300,7 +323,14 @@ mod cleanup_tests {
         let cleanup = fixture.clean();
 
         assert!(thumbnail.is_file());
-        assert_eq!(cleanup, CacheCleanup { valid: 1, removed: 0, bytes_freed: 0 });
+        assert_eq!(
+            cleanup,
+            CacheCleanup {
+                valid: 1,
+                removed: 0,
+                bytes_freed: 0
+            }
+        );
     }
 
     #[test]
@@ -327,7 +357,10 @@ mod cleanup_tests {
         let fixture = Fixture::new();
         fixture.add_photo("/photos/retagged.png", Some(7), Some(9));
         // Marker left by an earlier fingerprint (older mtime) of the photo.
-        let marker = fixture.write(&fixture.failure_marker_name("/photos/retagged.png", Some(6), Some(9)), DECODE_FAILURE_MARKER);
+        let marker = fixture.write(
+            &fixture.failure_marker_name("/photos/retagged.png", Some(6), Some(9)),
+            DECODE_FAILURE_MARKER,
+        );
         let expected_bytes = marker.metadata().unwrap().len();
 
         let cleanup = fixture.clean();
@@ -342,7 +375,10 @@ mod cleanup_tests {
     fn valid_failure_marker_is_preserved() {
         let fixture = Fixture::new();
         fixture.add_photo("/photos/broken.png", Some(11), Some(22));
-        let marker = fixture.write(&fixture.failure_marker_name("/photos/broken.png", Some(11), Some(22)), DECODE_FAILURE_MARKER);
+        let marker = fixture.write(
+            &fixture.failure_marker_name("/photos/broken.png", Some(11), Some(22)),
+            DECODE_FAILURE_MARKER,
+        );
 
         fixture.clean();
 
@@ -430,7 +466,10 @@ mod cleanup_tests {
             b"a",
         );
         let unused_thumbnail = fixture.write("deadbeef.jpg", b"stale");
-        let marker = fixture.write(&fixture.failure_marker_name("/photos/b.jpg", Some(3), Some(4)), DECODE_FAILURE_MARKER);
+        let marker = fixture.write(
+            &fixture.failure_marker_name("/photos/b.jpg", Some(3), Some(4)),
+            DECODE_FAILURE_MARKER,
+        );
         let notes = fixture.write("notes.txt", b"x");
         let expected_bytes: u64 = [&referenced, &unused_thumbnail, &marker, &notes]
             .into_iter()

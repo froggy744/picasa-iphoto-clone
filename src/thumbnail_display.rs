@@ -359,7 +359,24 @@ fn worker_loop(queue: Arc<Queue>) {
 }
 
 fn load_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
-    let path = Path::new(&request.cached_path);
+    // Legacy flat-layout compatibility runs on this worker, never during GTK
+    // model construction or ListView binding.
+    // The request already carries the deterministic sharded path.  Probe it
+    // first; only fall back to the legacy flat-layout search when absent.
+    // This avoids repeating compatibility lookups for every frame refresh.
+    let canonical = Path::new(&request.cached_path).to_path_buf();
+    let path = if canonical.is_file() {
+        canonical
+    } else {
+        crate::thumbnail::existing_cache_path(
+            &request.source_path,
+            Some(request.mtime),
+            Some(request.size_bytes),
+        )
+        .ok()
+        .flatten()
+        .unwrap_or(canonical)
+    };
     if !path.is_file() {
         crate::thumbnail::request_priority(
             request.source_path.clone(),
@@ -369,7 +386,7 @@ fn load_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
         return DisplayOutcome::Missing;
     }
 
-    let mut image = match image::open(path) {
+    let mut image = match image::open(&path) {
         Ok(image) => image.to_rgba8(),
         Err(error) => {
             // This is PIC's own cache file. A decode failure means the cache is

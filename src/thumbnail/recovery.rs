@@ -5,17 +5,24 @@ pub fn recovery_items(items: Vec<RecoveryItem>) -> (Vec<RecoveryItem>, usize) {
     let mut ready = Vec::new();
     let mut offline = 0;
     for item in items {
-        #[cfg(target_os="linux")]
+        #[cfg(target_os = "linux")]
         if crate::network_shares::private(&item.0)
-            && crate::image_format::uses(&item.0,crate::image_format::DecoderKind::Raw)
-            && !crate::image_format::for_path(&item.0).is_some_and(|format|format.id=="nikon_raw") {
+            && crate::image_format::uses(&item.0, crate::image_format::DecoderKind::Raw)
+            && !crate::image_format::for_path(&item.0)
+                .is_some_and(|format| format.id == "nikon_raw")
+        {
             // No eager/automatic download of a full network RAW original.
             continue;
         }
         let Ok(destination) = cache_path(&item.0, item.1, item.2) else {
             continue;
         };
-        if destination.is_file() || known_decode_failure(&item.0, &destination) {
+        if existing_cache_path(&item.0, item.1, item.2)
+            .ok()
+            .flatten()
+            .is_some()
+            || known_decode_failure(&item.0, &destination)
+        {
             continue;
         }
         if crate::source::file_available(&item.0) {

@@ -1164,6 +1164,7 @@ impl Gallery {
             .iter()
             .map(|path| path.to_string_lossy().into_owned())
             .collect::<HashSet<_>>();
+        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV thumbnail_refresh_paths count={}", paths.len()); }
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
@@ -1276,6 +1277,7 @@ impl Gallery {
     }
 
     pub fn replace(&self, photos: &[Photo]) {
+        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV gallery_replace photos={}", photos.len()); }
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
         // Assume a build is in progress until each completion path clears it.

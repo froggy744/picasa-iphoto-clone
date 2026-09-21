@@ -803,7 +803,8 @@ impl Gallery {
             return;
         }
 
-        self.current_columns.set(columns);
+        let previous_columns = self.current_columns.replace(columns);
+        if std::env::var_os("PICASA_TRACE").is_some() && previous_columns != columns { eprintln!("PIC_NAV current_columns_changed old={} new={}", previous_columns, columns); }
         self.root.set_min_columns(columns);
         self.root.set_max_columns(columns);
         self.root.queue_resize();

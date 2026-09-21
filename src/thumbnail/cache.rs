@@ -18,6 +18,42 @@ pub fn cache_dir() -> Result<PathBuf> {
 }
 
 pub fn cache_path(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result<PathBuf> {
+    let file_name = cache_file_name(path, mtime, size_bytes);
+    Ok(shard_dir_for(&file_name)?.join(file_name))
+}
+
+fn cache_path_in(
+    thumbs: &Path,
+    path: &str,
+    mtime: Option<i64>,
+    size_bytes: Option<i64>,
+) -> PathBuf {
+    let file_name = cache_file_name(path, mtime, size_bytes);
+    shard_dir_in(&thumbs.join("files"), &file_name).join(file_name)
+}
+
+/// The original RC3 cache layout: `thumbs/files/<bucket>/<hash>.jpg`.
+/// Buckets are derived from the key, never discovered by scanning the cache.
+pub fn shard_dir_for(file_name: &str) -> Result<PathBuf> {
+    Ok(shard_dir_in(&cache_dir()?.join("files"), file_name))
+}
+
+fn shard_dir_in(shard_root: &Path, file_name: &str) -> PathBuf {
+    let folder = cache_shard_char(file_name)
+        .map(|folder| folder.to_string())
+        .unwrap_or_else(|| "misc".to_owned());
+    shard_root.join(folder)
+}
+
+/// Map the first four hexadecimal characters of a cache key into the original
+/// 36 alphanumeric buckets (`0-9`, `a-z`).
+pub fn cache_shard_char(file_name: &str) -> Option<char> {
+    const SHARDS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let value = u16::from_str_radix(file_name.get(..4)?, 16).ok()?;
+    Some(SHARDS[(value % SHARDS.len() as u16) as usize] as char)
+}
+
+fn flat_cache_path(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result<PathBuf> {
     Ok(cache_dir()?.join(cache_file_name(path, mtime, size_bytes)))
 }
 
@@ -32,10 +68,7 @@ pub fn cache_file_name(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) 
         REMOTE_NEF_THUMBNAIL_CACHE_VERSION
     } else if is_dng(path) {
         DNG_THUMBNAIL_CACHE_VERSION
-    } else if crate::image_format::uses(
-        path,
-        crate::image_format::DecoderKind::Raw,
-    ) {
+    } else if crate::image_format::uses(path, crate::image_format::DecoderKind::Raw) {
         RAW_THUMBNAIL_CACHE_VERSION
     } else {
         THUMBNAIL_CACHE_VERSION
@@ -48,11 +81,16 @@ pub fn cache_file_name(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) 
     format!("{}.jpg", hasher.finalize().to_hex())
 }
 
-fn remote_nef(path:&str)->bool {
-    #[cfg(target_os="linux")]
-    {crate::network_shares::private(path) && is_nikon_raw(path)}
-    #[cfg(not(target_os="linux"))]
-    {let _=path;false}
+fn remote_nef(path: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        crate::network_shares::private(path) && is_nikon_raw(path)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 pub fn existing_cache_path(
@@ -60,16 +98,53 @@ pub fn existing_cache_path(
     mtime: Option<i64>,
     size_bytes: Option<i64>,
 ) -> Result<Option<PathBuf>> {
-    let candidate = cache_path(path, mtime, size_bytes)?;
-    Ok(candidate.is_file().then_some(candidate))
+    let started = std::time::Instant::now();
+    existing_cache_path_in(&cache_dir()?, path, mtime, size_bytes).map(|result| {
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!("PIC_THUMBNAIL cache_lookup result={} elapsed_us={} uri={}", if result.is_some() { "hit" } else { "miss" }, started.elapsed().as_micros(), path);
+        }
+        result
+    })
+}
+
+fn existing_cache_path_in(
+    thumbs: &Path,
+    path: &str,
+    mtime: Option<i64>,
+    size_bytes: Option<i64>,
+) -> Result<Option<PathBuf>> {
+    let candidate = cache_path_in(thumbs, path, mtime, size_bytes);
+    if candidate.is_file() {
+        return Ok(Some(candidate));
+    }
+    // Flat caches predate sharding. This is a pair of direct `is_file`
+    // lookups, not a directory scan, and lets offline originals stay usable.
+    let legacy = thumbs.join(cache_file_name(path, mtime, size_bytes));
+    Ok(legacy.is_file().then_some(legacy))
 }
 
 pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result<PathBuf> {
+    let started = std::time::Instant::now();
     let destination = cache_path(path, mtime, size_bytes)?;
     let failure_marker = destination.with_extension("failed");
     if destination.is_file() {
-        if std::env::var_os("PICASA_TRACE").is_some(){eprintln!("PIC_THUMBNAIL cache_hit uri={path} cache={}",destination.display());}
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "PIC_THUMBNAIL cache_hit uri={path} cache={}",
+                destination.display()
+            );
+        }
         return Ok(destination);
+    }
+    let legacy = flat_cache_path(path, mtime, size_bytes)?;
+    if legacy.is_file() {
+        // Do not move an entry from a GTK-visible lookup path. Keeping it is
+        // safe, avoids a blocking migration, and preserves offline access.
+        return Ok(legacy);
+    }
+    let legacy_failure_marker = legacy.with_extension("failed");
+    if legacy_failure_marker.is_file() && known_decode_failure(path, &legacy) {
+        return Ok(legacy);
     }
     if failure_marker.is_file() {
         if !known_decode_failure(path, &destination) {
@@ -77,7 +152,6 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
             // once; only confirmed decode failures now suppress future work.
             let _ = fs::remove_file(&failure_marker);
         } else {
-            
             return Ok(destination);
         }
     }
@@ -87,7 +161,6 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
         .map_err(|_| anyhow::anyhow!("thumbnail in-flight registry poisoned"))?
         .insert(destination.clone());
     if !claimed {
-        
         return Ok(destination);
     }
 
@@ -106,7 +179,16 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
         // naturally gets a new cache key and can be attempted again.
         let _ = fs::write(&failure_marker, DECODE_FAILURE_MARKER);
     }
-    if std::env::var_os("PICASA_TRACE").is_some(){match &result{Ok(cache)=>eprintln!("PIC_THUMBNAIL cache_write uri={path} cache={}",cache.display()),Err(error)=>eprintln!("PIC_THUMBNAIL failed uri={path} error={error:#}")}}
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        match &result {
+            Ok(cache) => eprintln!(
+                "PIC_THUMBNAIL cache_write uri={path} cache={} elapsed_ms={}",
+                cache.display(),
+                started.elapsed().as_millis()
+            ),
+            Err(error) => eprintln!("PIC_THUMBNAIL failed uri={path} error={error:#}"),
+        }
+    }
     result
 }
 
@@ -162,4 +244,82 @@ fn create_uncached(path: &str, destination: &PathBuf) -> Result<PathBuf> {
     )?;
     fs::write(destination, encoded)?;
     Ok(destination.clone())
+}
+
+#[cfg(test)]
+mod cache_layout_tests {
+    use super::*;
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    fn fixture() -> PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "picasa-thumbnail-layout-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn paths_are_deterministic_and_use_original_alphanumeric_shards() {
+        let root = fixture();
+        let first = cache_path_in(&root, "/photos/a.jpg", Some(1), Some(2));
+        let second = cache_path_in(&root, "/photos/a.jpg", Some(1), Some(2));
+        assert_eq!(first, second);
+        assert!(first.starts_with(root.join("files")));
+        let bucket = first
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(bucket.len(), 1);
+        assert!(bucket.as_bytes()[0].is_ascii_alphanumeric());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn distinct_hash_prefixes_distribute_across_buckets() {
+        let buckets: HashSet<_> = (0..2000u64)
+            .map(|value| cache_shard_char(&format!("{value:04x}{value:060x}.jpg")).unwrap())
+            .collect();
+        assert_eq!(buckets.len(), 36);
+    }
+
+    #[test]
+    fn existing_sharded_and_flat_entries_are_found_without_a_scan() {
+        let root = fixture();
+        let sharded = cache_path_in(&root, "/photos/sharded.jpg", Some(1), Some(2));
+        fs::create_dir_all(sharded.parent().unwrap()).unwrap();
+        fs::write(&sharded, b"jpeg").unwrap();
+        assert_eq!(
+            existing_cache_path_in(&root, "/photos/sharded.jpg", Some(1), Some(2)).unwrap(),
+            Some(sharded)
+        );
+        let name = cache_file_name("/photos/flat.jpg", Some(3), Some(4));
+        let flat = root.join(name);
+        fs::write(&flat, b"jpeg").unwrap();
+        assert_eq!(
+            existing_cache_path_in(&root, "/photos/flat.jpg", Some(3), Some(4)).unwrap(),
+            Some(flat)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn writing_a_thumbnail_creates_its_missing_shard_directory() {
+        let root = fixture();
+        let source = root.join("source.png");
+        image::RgbImage::from_pixel(8, 6, image::Rgb([20, 90, 160]))
+            .save(&source)
+            .unwrap();
+        let destination = cache_path_in(&root, "/photos/new.png", Some(5), Some(6));
+        assert!(!destination.parent().unwrap().exists());
+        create_uncached(source.to_str().unwrap(), &destination).unwrap();
+        assert!(destination.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
 }

@@ -15,7 +15,9 @@ pub fn create_many(
         items
             .par_iter()
             .map(|(path, mtime, size)| {
+                let wait_started = std::time::Instant::now();
                 wait_for_priority_requests();
+                if std::env::var_os("PICASA_TRACE").is_some() && wait_started.elapsed().as_micros() > 0 { eprintln!("PIC_THUMBNAIL queue_wait kind=background elapsed_us={} uri={}", wait_started.elapsed().as_micros(), path); }
                 let result = create(path, *mtime, *size);
                 completed(path);
                 result
@@ -82,7 +84,10 @@ fn thumbnail_worker_threads(items: &[(String, Option<i64>, Option<i64>)]) -> usi
         crate::image_format::uses(path, crate::image_format::DecoderKind::Raw)
     });
     if has_raw {
-        available.clamp(1, 2)
+        // RAW decoding is the dominant CPU/I/O cost. Keep bulk recovery to a
+        // single worker so the dedicated visible-priority workers retain
+        // enough CPU and disk bandwidth during fast scrolling.
+        1
     } else {
         available.clamp(2, 8)
     }
@@ -98,6 +103,10 @@ pub fn clear_cache() -> Result<()> {
         let path = entry?.path();
         if path.is_file() {
             fs::remove_file(path)?;
+        } else if path.file_name().is_some_and(|name| name == "files") {
+            // Only the thumbnail shard root is cleared. Other cache siblings
+            // are not originals and must remain outside this operation.
+            fs::remove_dir_all(path)?;
         }
     }
     Ok(())

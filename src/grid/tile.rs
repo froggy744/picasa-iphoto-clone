@@ -96,6 +96,7 @@ mod square_tile {
         pub favorite_indicators_visible: Cell<bool>,
         pub photo: RefCell<Option<PhotoObject>>,
         pub visual_loaded: Cell<bool>,
+        pub applied_visual_key: RefCell<Option<String>>,
         // Folder mode stores the backing photo index on each realized tile so
         // prefetch can warm the photo model ahead of the viewport rather than
         // being limited to GTK's currently realized widget pool.
@@ -273,11 +274,17 @@ impl SquareTile {
         expected_key: &str,
         paintable: &gtk::gdk::Paintable,
     ) -> bool {
+        let started = std::time::Instant::now();
         let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
             return false;
         };
         if photo_presentation_key(&photo).as_deref() != Some(expected_key) {
             return false;
+        }
+        if self.imp().visual_loaded.get()
+            && self.imp().applied_visual_key.borrow().as_deref() == Some(expected_key)
+        {
+            return true;
         }
         let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
             return false;
@@ -296,6 +303,8 @@ impl SquareTile {
         }
         photo.set_thumbnail_available(true);
         self.imp().visual_loaded.set(true);
+        *self.imp().applied_visual_key.borrow_mut() = Some(expected_key.to_owned());
+        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_THUMBNAIL paintable_assign elapsed_us={}", started.elapsed().as_micros()); }
         true
     }
 
@@ -429,6 +438,7 @@ impl SquareTile {
 
     fn unload_visual(&self) {
         self.imp().visual_loaded.set(false);
+        self.imp().applied_visual_key.borrow_mut().take();
         if !grid_scrub_active() {
             if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
                 if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
@@ -439,8 +449,10 @@ impl SquareTile {
     }
 
     fn bind_photo(&self, photo: &PhotoObject) {
+        let started = std::time::Instant::now();
         self.set_photo_deferred(photo);
         self.load_visual();
+        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_THUMBNAIL gtk_bind elapsed_us={} id={}", started.elapsed().as_micros(), photo.id()); }
     }
 
     /// Folder ListView bind must stay strictly presentation-only.
@@ -618,6 +630,7 @@ impl SquareTile {
     /// application validates that key before replacing this temporary backstop.
     fn clear_photo_folder_recycle(&self) {
         self.imp().visual_loaded.set(false);
+        self.imp().applied_visual_key.borrow_mut().take();
         self.imp().photo.take();
         self.imp().photo_index.set(None);
         if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
@@ -745,6 +758,7 @@ impl SquareTile {
             folder_thumbnail_cache_remove(&key);
         }
         self.imp().visual_loaded.set(false);
+        self.imp().applied_visual_key.borrow_mut().take();
         self.refresh_badges_from_model();
         self.queue_presentation_visual_async(true);
     }
@@ -930,4 +944,3 @@ fn raw_thumbnail_cache_insert(
         }
     });
 }
-

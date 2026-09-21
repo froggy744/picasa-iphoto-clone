@@ -25,7 +25,7 @@ const DNG_THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v7-dng-full-raw";
 // existence check so two workers cannot generate the same preview together.
 static IN_FLIGHT: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 
-type PriorityRequest = (String, Option<i64>, Option<i64>, PathBuf);
+type PriorityRequest = (String, Option<i64>, Option<i64>, PathBuf, std::time::Instant);
 
 type PriorityQueue = (Mutex<VecDeque<PriorityRequest>>, Condvar);
 
@@ -35,7 +35,11 @@ static PRIORITY_COMPLETIONS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
 static PRIORITY_DISPATCHES: AtomicUsize = AtomicUsize::new(0);
 
 const PRIORITY_QUEUE_CAPACITY: usize = 512;
-const PRIORITY_WORKERS: usize = 2;
+// Visible requests must not queue behind the single bulk RAW worker. Keep a
+// small dedicated pool so several newly visible tiles can make progress while
+// background generation continues; cache-key deduplication still prevents
+// duplicate generation.
+const PRIORITY_WORKERS: usize = 4;
 const PRIORITY_NEWEST_DISPATCHES: usize = 7;
 const PRIORITY_HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -67,14 +71,20 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
     let Ok(destination) = cache_path(&path, mtime, size_bytes) else {
         return;
     };
-    if destination.is_file() {
+    if existing_cache_path(&path, mtime, size_bytes)
+        .ok()
+        .flatten()
+        .is_some()
+    {
         return;
     }
     if known_decode_failure(&path, &destination) {
         return;
     }
     if !crate::source::cached_file_available(&path) {
-        if std::env::var_os("PICASA_TRACE").is_some(){eprintln!("PIC_THUMBNAIL skip reason=unavailable uri={path}");}
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!("PIC_THUMBNAIL skip reason=unavailable uri={path}");
+        }
         return;
     }
 
@@ -86,7 +96,12 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
         return;
     }
     drop(pending);
-    if std::env::var_os("PICASA_TRACE").is_some(){eprintln!("PIC_THUMBNAIL schedule source=visible uri={path} cache={}",destination.display());}
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "PIC_THUMBNAIL schedule source=visible uri={path} cache={}",
+            destination.display()
+        );
+    }
 
     let queue = PRIORITY_QUEUE.get_or_init(|| {
         let queue = Arc::new((
@@ -96,7 +111,7 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
         for _ in 0..PRIORITY_WORKERS {
             let queue = queue.clone();
             std::thread::spawn(move || loop {
-                let (path, mtime, size_bytes, destination) = {
+                let (path, mtime, size_bytes, destination, queued_at) = {
                     let (queue, wake) = &*queue;
                     let mut queue = queue.lock().expect("priority queue should not be poisoned");
                     while queue.is_empty() {
@@ -111,6 +126,7 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
                         queue.pop_front().expect("priority queue was checked above")
                     }
                 };
+                if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_THUMBNAIL queue_wait kind=visible elapsed_us={}", queued_at.elapsed().as_micros()); }
                 let started = std::time::Instant::now();
                 let failure_marker = destination.with_extension("failed");
                 let _pending_guard = PendingGuard(destination.clone());
@@ -150,7 +166,7 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
     let (queue, wake) = &**queue;
     let mut queue = queue.lock().expect("priority queue should not be poisoned");
     if queue.len() >= PRIORITY_QUEUE_CAPACITY {
-        if let Some((_, _, _, evicted)) = queue.pop_back() {
+        if let Some((_, _, _, evicted, _)) = queue.pop_back() {
             if let Ok(mut pending) = PRIORITY_PENDING
                 .get_or_init(|| Mutex::new(HashSet::new()))
                 .lock()
@@ -159,7 +175,7 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
             }
         }
     }
-    queue.push_front((path, mtime, size_bytes, destination.clone()));
+    queue.push_front((path, mtime, size_bytes, destination.clone(), std::time::Instant::now()));
     wake.notify_one();
 }
 
