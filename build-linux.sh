@@ -22,7 +22,7 @@ PROJECT_DIR=""
 BRANCH="$DEFAULT_BRANCH"
 ONLINE=0
 SKIP_TESTS="${PIC_SKIP_TESTS:-0}"
-STRICT_TESTS="${PIC_STRICT_TESTS:-0}"
+STRICT_TESTS="${PIC_STRICT_TESTS:-1}"
 BUILD_TARGET="${PIC_BUILD_TARGET:-}"
 LOG_DIR="${PIC_BUILD_LOG_DIR:-$SCRIPT_DIR/build-logs}"
 LOG_FILE=""
@@ -243,7 +243,8 @@ interactive_menu() {
 [[ -n "$MODE" ]] || interactive_menu
 [[ "$MODE" == local || "$MODE" == github ]] || die "Source mode must be local or github."
 BUILD_TARGET="${BUILD_TARGET:-both}"
-[[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == appimage || "$BUILD_TARGET" == flatpak ]] || \n    die "Build target must be both, appimage, or flatpak."
+[[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == appimage || "$BUILD_TARGET" == flatpak ]] || \
+    die "Build target must be both, appimage, or flatpak."
 
 mkdir -p "$CACHE_ROOT" "$TOOLS_DIR" "$WORK_ROOT" "$DIST_DIR"
 
@@ -262,7 +263,10 @@ HINT
 
 check_host_tools() {
     local missing=()
-    local commands=(cargo rustc pkg-config cmake cc make file tar)
+    local commands=(cargo tar)
+    if [[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == appimage ]]; then
+        commands+=(rustc pkg-config cmake cc make file)
+    fi
     if [[ "$BUILD_TARGET" == both || "$BUILD_TARGET" == flatpak ]]; then
         commands+=(flatpak flatpak-builder)
     fi
@@ -276,7 +280,8 @@ check_host_tools() {
         exit 1
     fi
 
-    if ! pkg-config --exists 'gtk4 >= 4.12' 'libadwaita-1 >= 1.5'; then
+    if [[ "$BUILD_TARGET" != flatpak ]] && \
+       ! pkg-config --exists 'gtk4 >= 4.12' 'libadwaita-1 >= 1.5'; then
         printf 'GTK4/libadwaita development packages are missing or too old.\n' >&2
         fedora_hint
         exit 1
@@ -392,19 +397,38 @@ ensure_flatpak_runtime() {
         flatpak info "$ref" >/dev/null 2>&1 || missing+=("$ref")
     done
 
-    ((${#missing[@]} == 0)) && return 0
-
-    if ((ONLINE)); then
+    if ((${#missing[@]})) && ((ONLINE)); then
         log "Installing missing Flatpak build runtimes for the current user"
         flatpak remote-add --user --if-not-exists flathub \
             https://dl.flathub.org/repo/flathub.flatpakrepo
         flatpak install --user -y flathub "${missing[@]}"
-    else
+    elif ((${#missing[@]})); then
         printf '\nMissing Flatpak runtime/SDK required for OFFLINE mode:\n' >&2
         printf '  %s\n' "${missing[@]}" >&2
         printf '\nRun GitHub mode once while online to install/cache them, or install them manually.\n' >&2
         return 1
     fi
+
+    verify_flatpak_sdk_compatibility
+}
+
+verify_flatpak_sdk_compatibility() {
+    local gnome_metadata rust_metadata supported rust_base
+    gnome_metadata="$(flatpak info --show-metadata "org.gnome.Sdk//$GNOME_RUNTIME")" || return 1
+    rust_metadata="$(flatpak info --show-metadata \
+        "org.freedesktop.Sdk.Extension.rust-stable//$FDO_RUST_RUNTIME")" || return 1
+    supported="$(awk '
+        /^\[Extension org[.]freedesktop[.]Platform[.]GL\]$/ { found=1; next }
+        found && /^versions[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+    ' <<<"$gnome_metadata")"
+    rust_base="$(awk -F/ '
+        /^runtime=org[.]freedesktop[.]Sdk\// { print $NF; exit }
+    ' <<<"$rust_metadata")"
+    [[ ";$supported;" == *";$FDO_RUST_RUNTIME;"* ]] || die \
+        "GNOME SDK $GNOME_RUNTIME is based on a different Freedesktop SDK (supported: ${supported:-unknown}); Rust extension $FDO_RUST_RUNTIME is incompatible."
+    [[ "$rust_base" == "$FDO_RUST_RUNTIME" ]] || die \
+        "Rust SDK extension metadata targets ${rust_base:-unknown}, expected $FDO_RUST_RUNTIME."
+    ok "Compatible Flatpak SDKs: GNOME $GNOME_RUNTIME / Freedesktop Rust $FDO_RUST_RUNTIME"
 }
 
 project_binary_name() {
@@ -863,4 +887,3 @@ fi
 if ((flatpak_selected && ! flatpak_ok)); then
     exit 1
 fi
-
