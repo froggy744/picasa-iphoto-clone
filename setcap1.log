@@ -1,9 +1,0 @@
-
-(process:524605): Gdk-WARNING **: 20:28:04.407: Failed to read portal settings: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/524605/root
-STARTUP cold_start_ms=14 photos=5157 displayed=10 folders=249 albums=4 scan=disabled rss_mb=61
-
-(pic-rs:524605): Gtk-WARNING **: 20:28:04.673: Theme parser error: <data>:26:1-2: Expected a valid selector
-WARNING: radv is not a conformant Vulkan implementation, testing use only.
-
-(pic-rs:524605): Gtk-WARNING **: 20:28:04.767: Creating a portal monitor failed: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/524605/root
-===== SCAN COMPLETE: imported=0 failed=0 | progressive gallery updates complete =====
