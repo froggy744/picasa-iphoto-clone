@@ -1,5 +1,21 @@
 use std::collections::{HashMap, HashSet};
 
+fn folder_name(path: &str) -> String {
+    if is_remote_path(path) {
+        let segment = path
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(path);
+        return glib::uri_unescape_string(segment, None::<&str>)
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| segment.to_string());
+    }
+
+    crate::source::filename(path)
+}
+
 fn ensure_parent_folder(connection: &Connection, path: &str) -> Result<Option<i64>> {
     let Some(parent) = Path::new(path).parent().and_then(|parent| parent.to_str()) else {
         return Ok(None);
@@ -17,7 +33,7 @@ fn ensure_parent_folder(connection: &Connection, path: &str) -> Result<Option<i6
         return Ok(Some(id));
     }
     let parent_id = ensure_parent_folder(connection, parent)?;
-    let name = parent.rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or(parent);
+    let name = folder_name(parent);
     connection.execute(
         "INSERT INTO folders(path, name, parent_id, imported_root) VALUES (?1, ?2, ?3, 0)",
         params![parent, name, parent_id],
@@ -60,11 +76,7 @@ fn repair_existing_folder_parents(connection: &Connection) -> Result<()> {
 }
 
 pub fn insert_folder(connection: &Connection, path: &str) -> Result<i64> {
-    let name = path
-        .rsplit('/')
-        .next()
-        .filter(|name| !name.is_empty())
-        .unwrap_or(&path);
+    let name = folder_name(path);
     let mut imported_parent: Option<i64> = connection
         .query_row(
             "SELECT id FROM folders
@@ -187,7 +199,7 @@ pub fn is_remote_path(_path: &str) -> bool {
 }
 
 pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: i64) -> Result<i64> {
-    let name = path.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or(path);
+    let name = folder_name(path);
     let _existing: Option<(i64, Option<i64>, bool)> = connection
         .query_row("SELECT id, parent_id, imported_root FROM folders WHERE path = ?1", [path], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .optional()?;
@@ -289,6 +301,11 @@ pub fn folders(connection: &Connection) -> Result<Vec<Folder>> {
         })
     })?;
     let mut folders = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    for folder in &mut folders {
+        if is_remote_path(&folder.path) {
+            folder.name = folder_name(&folder.path);
+        }
+    }
     let availability = folder_availability_by_id(&folders, |path| {
         crate::source::cached_source_available(path)
     });

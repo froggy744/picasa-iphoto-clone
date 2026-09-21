@@ -86,9 +86,11 @@ const STARTUP_VISIBLE_ALBUM_ROWS: usize = 5;
 
 /// Share the window's refresh sensitivity with existing and future menus.
 pub fn bind_refresh_gate(scrolled: &gtk::ScrolledWindow, gate: &gtk::Button) {
-    if let Some(list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) {
-        unsafe {
-            list.set_data(REFRESH_GATE_KEY, gate.downgrade());
+    for key in [FOLDER_LIST_KEY, SHARE_LIST_KEY] {
+        if let Some(list) = stored_widget::<gtk::ListBox>(scrolled, key) {
+            unsafe {
+                list.set_data(REFRESH_GATE_KEY, gate.downgrade());
+            }
         }
     }
 }
@@ -798,11 +800,16 @@ pub fn build(
     // Folder rows install their context menu while they are created, so these
     // callbacks must be available on the ListBox before populate_folders().
     unsafe {
-        folder_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder);
-        folder_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics);
-        folder_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder);
-        folder_list.set_data(FOLDER_FAVORITE_KEY, on_folder_favorite);
-        folder_list.set_data(FOLDER_WATCH_KEY, on_folder_watch);
+        folder_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder.clone());
+        folder_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics.clone());
+        folder_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder.clone());
+        folder_list.set_data(FOLDER_FAVORITE_KEY, on_folder_favorite.clone());
+        folder_list.set_data(FOLDER_WATCH_KEY, on_folder_watch.clone());
+        share_list.set_data(FOLDER_REFRESH_KEY, on_refresh_folder);
+        share_list.set_data(FOLDER_STATISTICS_KEY, on_folder_statistics);
+        share_list.set_data(FOLDER_REMOVE_KEY, on_remove_folder);
+        share_list.set_data(FOLDER_FAVORITE_KEY, on_folder_favorite);
+        share_list.set_data(FOLDER_WATCH_KEY, on_folder_watch);
     }
 
     populate_albums(&album_list, albums, &on_delete_album);
@@ -2181,6 +2188,7 @@ fn append_share_row(list: &gtk::ListBox, folder: &Folder, folders: &[Folder]) ->
         row.set_data("picasa-filter", SidebarFilter::Folder(folder.id));
     }
     list.append(&row);
+    add_folder_context_menu(list, &row, folder);
     row
 }
 
@@ -2897,6 +2905,25 @@ mod tests {
             share_list.observe_children().iter::<glib::Object>().count(),
             1,
             "saved shares should be present in the first rendered sidebar"
+        );
+        assert!(unsafe {
+            share_list
+                .data::<Rc<dyn Fn(Folder)>>(FOLDER_REMOVE_KEY)
+                .is_some()
+        });
+
+        let share_row = share_list
+            .first_child()
+            .and_then(|widget| widget.downcast::<gtk::ListBoxRow>().ok())
+            .unwrap();
+        let controllers = share_row.observe_controllers();
+        let has_right_click = (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .filter_map(|controller| controller.downcast::<gtk::GestureClick>().ok())
+            .any(|gesture| gesture.button() == 3);
+        assert!(
+            has_right_click,
+            "saved shares should install the folder context menu"
         );
 
         let share_scroll = share_list

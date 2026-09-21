@@ -981,4 +981,33 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn network_folder_names_are_decoded_for_new_and_existing_shares() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let path = "smb://server/Spar%20ladies%2020";
+
+        let id = mark_import_root(&connection, path).unwrap();
+        let stored_name: String = connection
+            .query_row("SELECT name FROM folders WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored_name, "Spar ladies 20");
+
+        connection
+            .execute(
+                "UPDATE folders SET name = 'Spar%20ladies%2020' WHERE id = ?1",
+                [id],
+            )
+            .unwrap();
+        let loaded = folders(&connection)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.id == id)
+            .unwrap();
+        assert_eq!(loaded.name, "Spar ladies 20");
+        assert_eq!(loaded.path, path);
+    }
 }
