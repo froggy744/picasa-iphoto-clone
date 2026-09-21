@@ -28,7 +28,9 @@ pub fn cache_path(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Re
 pub fn cache_file_name(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(path.as_bytes());
-    let cache_version = if is_dng(path) {
+    let cache_version = if remote_nef(path) {
+        REMOTE_NEF_THUMBNAIL_CACHE_VERSION
+    } else if is_dng(path) {
         DNG_THUMBNAIL_CACHE_VERSION
     } else if crate::image_format::uses(
         path,
@@ -44,6 +46,13 @@ pub fn cache_file_name(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) 
     hasher.update(b"\0");
     hasher.update(size_bytes.unwrap_or_default().to_string().as_bytes());
     format!("{}.jpg", hasher.finalize().to_hex())
+}
+
+fn remote_nef(path:&str)->bool {
+    #[cfg(target_os="linux")]
+    {crate::network_shares::private(path) && is_nikon_raw(path)}
+    #[cfg(not(target_os="linux"))]
+    {let _=path;false}
 }
 
 pub fn existing_cache_path(
