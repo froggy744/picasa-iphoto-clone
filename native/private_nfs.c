@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+#include <pthread.h>
 
 typedef int (*pic_entry_cb)(void *, const char *, unsigned int);
 static int trace_enabled(void) {
@@ -105,13 +106,15 @@ int pic_nfs_list(const char *host, const char *export_path, const char *relative
     nfs_destroy_context(nfs);
     return count;
 }
-/* A libnfs context must never be used concurrently. Network thumbnail workers
- * each reuse their own userspace read session for the same host/export.
- * Failed NFS operations invalidate the session; a subsequent request reconnects.
- * The context is NOT a GVfs or Linux kernel mount. */
-static _Thread_local struct nfs_context *read_session=NULL;
-static _Thread_local char read_host[256]={0};
-static _Thread_local char read_export[4096]={0};
+/* A libnfs context must never be used concurrently. Viewer reads run on
+ * short-lived Rust threads, so thread-local storage caused every image read to
+ * create a fresh session. Keep one process-local session and serialize its
+ * complete operation; failed NFS operations invalidate it. The context is NOT
+ * a GVfs or Linux kernel mount. */
+static pthread_mutex_t read_session_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct nfs_context *read_session=NULL;
+static char read_host[256]={0};
+static char read_export[4096]={0};
 static void invalidate_read_session(void) {
     if (read_session) nfs_destroy_context(read_session);
     read_session=NULL;
@@ -135,16 +138,19 @@ int pic_nfs_read(const char *host, const char *export_path, const char *relative
                  unsigned char **out, size_t *length, size_t max_bytes,
                  char *error, size_t cap) {
     *out=NULL;*length=0;
+    pthread_mutex_lock(&read_session_lock);
     struct nfs_context *nfs=get_read_session(host,export_path,error,cap);
-    if (!nfs) return -1;
+    if (!nfs) {pthread_mutex_unlock(&read_session_lock);return -1;}
     struct nfsfh *fh=NULL;
     if(nfs_open(nfs,relative,O_RDONLY,&fh)!=0) {
-        err(error,cap,"nfs_open",nfs);invalidate_read_session();return -1;
+        err(error,cap,"nfs_open",nfs);invalidate_read_session();
+        pthread_mutex_unlock(&read_session_lock);return -1;
     }
     size_t capbytes=64*1024,used=0;
     if(max_bytes<capbytes)capbytes=max_bytes;
     unsigned char *bytes=malloc(capbytes?capbytes:1);
-    if(!bytes) {snprintf(error,cap,"NFS out of memory");nfs_close(nfs,fh);return -1;}
+    if(!bytes) {snprintf(error,cap,"NFS out of memory");nfs_close(nfs,fh);
+        pthread_mutex_unlock(&read_session_lock);return -1;}
     int failed=0;
     for (;;) {
         if(used==capbytes) {
@@ -165,9 +171,9 @@ int pic_nfs_read(const char *host, const char *export_path, const char *relative
         /* Resource/memory/size errors do not imply a broken NFS session. */
         if (close_status<0 || strstr(error,"nfs_read:") || strstr(error,"nfs_close:"))
             invalidate_read_session();
-        free(bytes);return -1;
+        free(bytes);pthread_mutex_unlock(&read_session_lock);return -1;
     }
-    *out=bytes;*length=used;return 0;
+    *out=bytes;*length=used;pthread_mutex_unlock(&read_session_lock);return 0;
 }
 
 /* Scanner calls stat repeatedly on one worker thread. Reuse the libnfs
