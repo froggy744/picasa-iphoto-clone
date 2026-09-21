@@ -316,6 +316,7 @@ pub struct Lightbox {
     display_texture_cache: DisplayTextureCache,
     load_generation: Rc<Cell<u64>>,
     decode_cancel: Rc<RefCell<Option<Arc<ViewerRequestLease>>>>,
+    key_navigation_ready: Rc<Cell<bool>>,
     photo_changed: PhotoChangedHandler,
     // Keeps the toolbar 1:1 toggle in sync when the lightbox changes the mode
     // itself (for example Ctrl+wheel leaves 1:1 for a manual zoom).

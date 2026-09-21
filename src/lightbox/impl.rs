@@ -140,6 +140,7 @@ impl Lightbox {
         let zoom_before_one_to_one = Rc::new(Cell::new(0.0));
         let load_generation = Rc::new(Cell::new(0u64));
         let decode_cancel: Rc<RefCell<Option<Arc<ViewerRequestLease>>>> = Rc::new(RefCell::new(None));
+        let key_navigation_ready = Rc::new(Cell::new(true));
         let photo_changed: PhotoChangedHandler = Rc::new(RefCell::new(None));
         let one_to_one_sync: OneToOneSyncHandler = Rc::new(RefCell::new(None));
         let context_menu: ContextMenuHandler = Rc::new(RefCell::new(None));
@@ -432,6 +433,7 @@ impl Lightbox {
                     display_cache_for_scroll.clone(),
                     fit_geometry_fixed,
                     cache_hit,
+                    None,
                 );
                 schedule_lightbox_prefetch(
                     photos_for_scroll.clone(),
@@ -464,6 +466,7 @@ impl Lightbox {
         let display_cache_for_key = display_texture_cache.clone();
         let one_to_one_for_key = one_to_one_active.clone();
         let collection_navigation_for_key = collection_navigation.clone();
+        let key_navigation_ready_for_key = key_navigation_ready.clone();
 
         key.connect_key_pressed(move |_, key, _, _| {
             if (key == gtk::gdk::Key::Escape || key == gtk::gdk::Key::BackSpace)
@@ -526,6 +529,9 @@ impl Lightbox {
                 );
                 glib::Propagation::Stop
             } else if key == gtk::gdk::Key::Left || key == gtk::gdk::Key::Right {
+                if !key_navigation_ready_for_key.get() {
+                    return glib::Propagation::Stop;
+                }
                 let len = photos_for_key.borrow().len();
                 if len == 0 {
                     return glib::Propagation::Stop;
@@ -539,6 +545,7 @@ impl Lightbox {
                 };
 
                 if next != current {
+                    key_navigation_ready_for_key.set(false);
                     index_for_key.set(next);
                     zoom_for_key.set(0.0);
                     one_to_one_for_key.set(false);
@@ -568,6 +575,7 @@ impl Lightbox {
                         display_cache_for_key.clone(),
                         fit_geometry_fixed,
                         cache_hit,
+                        Some(key_navigation_ready_for_key.clone()),
                     );
                     schedule_lightbox_prefetch(
                         photos_for_key.clone(),
@@ -610,6 +618,7 @@ impl Lightbox {
             display_texture_cache,
             load_generation,
             decode_cancel,
+            key_navigation_ready,
             photo_changed,
             one_to_one_sync,
             context_menu,
@@ -738,6 +747,7 @@ impl Lightbox {
         self.zoom.set(0.0);
         self.zoom_before_one_to_one.set(0.0);
         self.one_to_one_active.set(false);
+        self.key_navigation_ready.set(true);
         self.native_texture.borrow_mut().take();
         reset_viewport(&self.picture_viewport);
         notify_photo_changed(&self.photo_changed, &self.photos.borrow(), self.index.get());
@@ -813,6 +823,7 @@ impl Lightbox {
                 display_texture_cache.clone(),
                 fit_geometry_fixed,
                 cache_hit,
+                None,
             );
             fit_picture(
                 &picture,
@@ -837,7 +848,7 @@ impl Lightbox {
 
 
     pub fn navigate_photo(&self, direction: i32) {
-        if !self.root.is_visible() {
+        if !self.root.is_visible() || !self.key_navigation_ready.get() {
             return;
         }
         let len = self.photos.borrow().len();
@@ -857,6 +868,7 @@ impl Lightbox {
             return;
         }
 
+        self.key_navigation_ready.set(false);
         self.index.set(next);
         self.zoom.set(0.0);
         self.one_to_one_active.set(false);
@@ -889,6 +901,7 @@ impl Lightbox {
             self.display_texture_cache.clone(),
             fit_geometry_fixed,
             cache_hit,
+            Some(self.key_navigation_ready.clone()),
         );
         schedule_lightbox_prefetch(
             self.photos.clone(),
@@ -973,6 +986,7 @@ impl Lightbox {
             self.display_texture_cache.clone(),
             fit_geometry_fixed,
             cache_hit,
+            None,
         );
         self.root.grab_focus();
     }
@@ -996,6 +1010,7 @@ impl Lightbox {
             active.cancel();
         }
         self.one_to_one_active.set(false);
+        self.key_navigation_ready.set(true);
         self.zoom.set(0.0);
         reset_viewport(&self.picture_viewport);
         self.root.set_visible(false);
@@ -1024,6 +1039,7 @@ impl Lightbox {
             self.display_texture_cache.clone(),
             false,
             false,
+            None,
         );
     }
 }

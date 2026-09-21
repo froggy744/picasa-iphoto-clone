@@ -21,6 +21,7 @@ fn show_photo(
     display_texture_cache: DisplayTextureCache,
     fit_geometry_fixed: bool,
     cache_hit: bool,
+    navigation_ready: Option<Rc<Cell<bool>>>,
 ) {
     let navigation_started = std::time::Instant::now();
     let Some(photo) = photos.get(index) else {
@@ -46,6 +47,9 @@ fn show_photo(
         ));
         cancel_lightbox_prefetch_except(None);
         VIEWER_FOREGROUND_GENERATION.store(0, Ordering::Release);
+        if let Some(navigation_ready) = navigation_ready {
+            navigation_ready.set(true);
+        }
         return;
     }
     let rotation = photo.rotation();
@@ -89,6 +93,7 @@ fn show_photo(
     let cache_path = path.clone();
     let photo = photo.clone();
     let display_texture_cache_for_result = display_texture_cache.clone();
+    let navigation_ready_for_result = navigation_ready.clone();
     glib::MainContext::default().spawn_local(async move {
         let result = ViewerResultSlot::wait(request.result.clone()).await;
 
@@ -106,6 +111,9 @@ fn show_photo(
                 Ordering::AcqRel,
                 Ordering::Acquire,
             );
+            if let Some(navigation_ready) = navigation_ready_for_result {
+                navigation_ready.set(true);
+            }
             return;
         }
         let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
@@ -180,6 +188,9 @@ fn show_photo(
                 picture.set_filename(Option::<&str>::None);
                 picture.set_size_request(1, 1);
             }
+        }
+        if let Some(navigation_ready) = navigation_ready_for_result {
+            navigation_ready.set(true);
         }
         lease.release();
     });
