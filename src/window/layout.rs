@@ -10,6 +10,7 @@
         let cleared_query = cleared_search_query.clone();
         let filter = filter.clone();
         let connection = connection.clone();
+        let folder_cache = folder_cache.clone();
         let gallery = gallery.clone();
         let lightbox = lightbox.clone();
         let sort = sort.clone();
@@ -32,10 +33,11 @@
                 open_in_folder_exact_target.set(None);
             }
             let folder_target = if let sidebar::SidebarFilter::Folder(folder_id) = new_filter {
-                db::folder_path_by_id(&connection.borrow(), folder_id)
-                    .ok()
-                    .flatten()
-                    .map(|path| (folder_id, path))
+                folder_cache
+                    .borrow()
+                    .iter()
+                    .find(|folder| folder.id == folder_id)
+                    .map(|folder| (folder_id, folder.path.clone()))
             } else {
                 None
             };

@@ -5,6 +5,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FolderCatalogEntry {
     folder_id: i64,
+    parent_id: Option<i64>,
     photo_count: usize,
 }
 

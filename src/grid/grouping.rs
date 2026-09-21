@@ -243,6 +243,7 @@ impl Gallery {
             .iter()
             .map(|folder| FolderCatalogEntry {
                 folder_id: folder.id,
+                parent_id: folder.parent_id,
                 photo_count: usize::try_from(folder.photo_count.max(0)).unwrap_or(0),
             })
             .collect::<Vec<_>>();

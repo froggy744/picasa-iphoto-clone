@@ -269,8 +269,16 @@ fn refresh_availability_ui(
             crate::source::probe_network_roots(&db::imported_root_paths(&connection)?);
             let folders = db::folders(&connection)?;
             let gallery_updates = changed_folder_availability(&previous_folder_availability, &folders);
+            let display_mode = sidebar::FolderDisplayMode::from_setting(
+                db::setting(&connection, sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY)
+                    .ok()
+                    .flatten()
+                    .as_deref(),
+            );
+            let folder_order = folder_stream_order(&folders, display_mode);
             Ok((
                 gallery_updates,
+                folder_order,
                 folders,
                 db::albums(&connection)?,
                 db::sidebar_counts(&connection)?,
@@ -286,9 +294,10 @@ fn refresh_availability_ui(
         Ok((result_generation, sidebar_data)) => {
             if result_generation == AVAILABILITY_GENERATION.load(AtomicOrdering::Relaxed) {
                 match sidebar_data {
-                    Ok((gallery_updates, folders, albums, counts)) => {
+                    Ok((gallery_updates, folder_order, folders, albums, counts)) => {
                         folder_cache.replace(folders.clone());
                         if let Some(gallery) = gallery_for_result.as_ref() {
+                            gallery.set_folder_catalog(&folders, &folder_order);
                             gallery.apply_folder_availability(
                                 &gallery_updates,
                                 move || {

@@ -151,10 +151,10 @@ mod zoom_ladder_tests {
 #[cfg(test)]
 mod folder_stream_tests {
     use super::{
-        folder_chunk_size, folder_dragged_positions, folder_line_height, folder_section_plan,
-        folder_selection_after_click, folder_virtual_row_matches, folder_virtual_rows,
-        FolderCatalogEntry, FolderRowData, FolderRowKind, FolderTileBounds, FolderVirtualRow,
-        GroupRange,
+        folder_chunk_size, folder_dragged_positions, folder_line_height, folder_navigation_scope,
+        folder_section_plan, folder_selection_after_click, folder_virtual_row_matches,
+        folder_virtual_rows, FolderCatalogEntry, FolderRowData, FolderRowKind, FolderTileBounds,
+        FolderVirtualRow, GroupRange,
     };
 
     #[test]
@@ -364,10 +364,12 @@ mod folder_stream_tests {
         let catalog = vec![
             FolderCatalogEntry {
                 folder_id: 11,
+                parent_id: None,
                 photo_count: 5,
             },
             FolderCatalogEntry {
                 folder_id: 274,
+                parent_id: Some(11),
                 photo_count: 5,
             },
         ];
@@ -376,6 +378,87 @@ mod folder_stream_tests {
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].folder_id, 274);
         assert_eq!(plan[0].range_index, Some(0));
+    }
+
+    #[test]
+    fn dietpi_uri_alias_navigates_by_folder_relationship_to_nested_photos() {
+        let clicked = "smb://DietPi.local:445/4TBP/Work";
+        let indexed = "smb://dietpi.local/4tbp/Work/Arise2014";
+        assert!(!std::path::Path::new(indexed).starts_with(std::path::Path::new(clicked)));
+
+        let scope = folder_navigation_scope(
+            [
+                (59, Some(11)),
+                (60, Some(59)),
+                (180, Some(60)),
+                (28, Some(27)),
+            ],
+            59,
+        );
+
+        assert!(scope.contains(&59));
+        assert!(scope.contains(&60));
+        assert!(scope.contains(&180));
+        assert!(!scope.contains(&28));
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn dietpi_uri_alias_scrolls_to_nested_photo_through_folder_relationships() {
+        use super::{gtk, Gallery, GroupMode, PhotoObject};
+        use crate::db::Folder;
+
+        gtk::init().unwrap();
+        let gallery = Gallery::new(
+            &[],
+            148,
+            |_| {},
+            |_, _| {},
+            |_, _, _, _| {},
+            |_, _| {},
+            |_| {},
+        );
+        gallery.group_mode.set(GroupMode::Folder);
+        gallery
+            .current_photos
+            .replace(vec![glib::Object::builder::<PhotoObject>()
+                .property("id", 700_i64)
+                .property("folder-id", 180_i64)
+                .property("folder-path", "smb://dietpi.local/4tbp/Work/Arise2014")
+                .property("original-available", true)
+                .build()]);
+        let folder = |id, path: &str, parent_id, photo_count| Folder {
+            id,
+            path: path.to_owned(),
+            name: path.rsplit('/').next().unwrap().to_owned(),
+            parent_id,
+            imported_root: id == 59,
+            watched: true,
+            photo_count,
+            subfolder_count: 0,
+            available: true,
+        };
+        let folders = vec![
+            folder(59, "smb://DietPi.local:445/4TBP/Work", None, 0),
+            folder(60, "smb://dietpi.local/4tbp/Work", Some(59), 0),
+            folder(180, "smb://dietpi.local/4tbp/Work/Arise2014", Some(60), 1),
+        ];
+        gallery.set_folder_catalog(&folders, &[59, 60, 180]);
+        gallery.rebuild_group_ranges();
+        gallery.rebuild_folder_rows();
+
+        assert!(gallery.scroll_to_folder(59, &folders[0].path));
+    }
+
+    #[test]
+    fn local_folder_navigation_includes_nested_folders_only() {
+        let scope =
+            folder_navigation_scope([(10, None), (11, Some(10)), (12, Some(11)), (20, None)], 10);
+
+        assert!(scope.contains(&10));
+        assert!(scope.contains(&11));
+        assert!(scope.contains(&12));
+        assert!(!scope.contains(&20));
     }
 
     #[test]
@@ -389,14 +472,17 @@ mod folder_stream_tests {
         let catalog = vec![
             FolderCatalogEntry {
                 folder_id: 1,
+                parent_id: None,
                 photo_count: 5,
             },
             FolderCatalogEntry {
                 folder_id: 11,
+                parent_id: Some(1),
                 photo_count: 5,
             },
             FolderCatalogEntry {
                 folder_id: 274,
+                parent_id: Some(11),
                 photo_count: 5,
             },
         ];
@@ -415,6 +501,7 @@ mod folder_stream_tests {
         let ranges = sample_ranges();
         let catalog = vec![FolderCatalogEntry {
             folder_id: 99,
+            parent_id: None,
             photo_count: 0,
         }];
         let plan = folder_section_plan(&ranges, &catalog, &[99, 10, 11]);

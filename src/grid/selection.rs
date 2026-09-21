@@ -1,3 +1,28 @@
+fn folder_navigation_scope(
+    relationships: impl IntoIterator<Item = (i64, Option<i64>)>,
+    target_id: i64,
+) -> HashSet<i64> {
+    let mut children = HashMap::<i64, Vec<i64>>::new();
+    for (folder_id, parent_id) in relationships {
+        if let Some(parent_id) = parent_id {
+            children.entry(parent_id).or_default().push(folder_id);
+        }
+    }
+
+    let mut scope = HashSet::from([target_id]);
+    let mut pending = vec![target_id];
+    while let Some(parent_id) = pending.pop() {
+        if let Some(folder_ids) = children.get(&parent_id) {
+            for folder_id in folder_ids {
+                if scope.insert(*folder_id) {
+                    pending.push(*folder_id);
+                }
+            }
+        }
+    }
+    scope
+}
+
 impl Gallery {
     /// Returns the currently selected thumbnail position when the grid has a
     /// single active selection. Keyboard navigation uses this to decide when
@@ -278,8 +303,14 @@ impl Gallery {
         None
     }
 
-    fn folder_header_row_for_target(&self, folder_id: i64, folder_path: &str) -> Option<u32> {
-        let target_path = std::path::Path::new(folder_path);
+    fn folder_header_row_for_target(&self, folder_id: i64) -> Option<u32> {
+        let scope = folder_navigation_scope(
+            self.folder_catalog
+                .borrow()
+                .iter()
+                .map(|folder| (folder.folder_id, folder.parent_id)),
+            folder_id,
+        );
         let mut descendant = None;
         for position in 0..self.folder_store.n_items() {
             let Some(row) = self
@@ -296,10 +327,7 @@ impl Gallery {
             if data.folder_id == folder_id {
                 return Some(position);
             }
-            if descendant.is_none()
-                && !data.folder_path.is_empty()
-                && std::path::Path::new(&data.folder_path).starts_with(target_path)
-            {
+            if descendant.is_none() && scope.contains(&data.folder_id) {
                 descendant = Some(position);
             }
         }
@@ -362,23 +390,26 @@ impl Gallery {
     /// Scroll the continuous Folder stream to the folder's real header row
     /// without rebuilding the gallery. Imported-root rows may not own photos
     /// directly, so the first descendant folder header is a valid target.
-    pub fn scroll_to_folder(&self, folder_id: i64, folder_path: &str) -> bool {
-        let target_path = std::path::Path::new(folder_path);
-        let Some(photo_position) = self.current_photos.borrow().iter().position(|photo| {
-            if photo.folder_id() == folder_id {
-                return true;
-            }
-            photo
-                .folder_path()
-                .as_deref()
-                .is_some_and(|path| std::path::Path::new(path).starts_with(target_path))
-        }) else {
+    pub fn scroll_to_folder(&self, folder_id: i64, _folder_path: &str) -> bool {
+        let scope = folder_navigation_scope(
+            self.folder_catalog
+                .borrow()
+                .iter()
+                .map(|folder| (folder.folder_id, folder.parent_id)),
+            folder_id,
+        );
+        let Some(photo_position) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .position(|photo| scope.contains(&photo.folder_id()))
+        else {
             return false;
         };
 
         self.selection.select_item(photo_position as u32, true);
         if self.group_mode.get() == GroupMode::Folder {
-            let Some(row) = self.folder_header_row_for_target(folder_id, folder_path) else {
+            let Some(row) = self.folder_header_row_for_target(folder_id) else {
                 return false;
             };
             self.folder_root
