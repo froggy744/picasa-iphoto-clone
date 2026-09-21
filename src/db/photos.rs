@@ -173,6 +173,19 @@ pub fn mark_import_root(connection: &Connection, path: &str) -> Result<i64> {
     Ok(id)
 }
 
+/// True when a folder path points at a directly transported network share
+/// (`smb://`, `nfs://`) instead of a local path. Such roots are presented in
+/// the sidebar's Network Shares section, never under Folders.
+#[cfg(target_os = "linux")]
+pub fn is_remote_path(path: &str) -> bool {
+    crate::network_shares::private(path)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn is_remote_path(_path: &str) -> bool {
+    false
+}
+
 pub fn insert_discovered_folder(connection: &Connection, path: &str, parent_id: i64) -> Result<i64> {
     let name = path.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or(path);
     let _existing: Option<(i64, Option<i64>, bool)> = connection

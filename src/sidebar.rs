@@ -98,6 +98,9 @@ const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
 const FOLDER_WATCH_KEY: &str = "picasa-sidebar-folder-watch";
 const FOLDER_MODE_TOGGLE_KEY: &str = "picasa-sidebar-folder-mode-toggle";
 const FOLDER_MODE_CHANGED_KEY: &str = "picasa-sidebar-folder-mode-changed";
+const FOLDER_SHARE_PANED_KEY: &str = "picasa-sidebar-folder-share-paned";
+const FOLDER_PANE_SAVED_KEY: &str = "picasa-sidebar-folder-pane-saved";
+const SHARE_LIST_KEY: &str = "picasa-sidebar-share-list";
 const KEYBOARD_GRID_TARGET_KEY: &str = "picasa-sidebar-keyboard-grid-target";
 const SCROLL_LOCATION_FOLDER_KEY: &str = "picasa-sidebar-scroll-location-folder";
 
@@ -113,6 +116,7 @@ pub fn build(
     on_filter: impl Fn(SidebarFilter) + 'static,
     on_create_album: Rc<dyn Fn()>,
     on_import_folder: Rc<dyn Fn()>,
+    on_add_share: Rc<dyn Fn()>,
     on_delete_album: Rc<dyn Fn(i64)>,
     on_unavailable: Rc<dyn Fn()>,
     on_refresh_folder: Rc<dyn Fn(String)>,
@@ -245,7 +249,7 @@ pub fn build(
     }
 
     let folder_list = section_list();
-    connect_filter_list(&folder_list, on_filter, filter_syncing.clone());
+    connect_filter_list(&folder_list, on_filter.clone(), filter_syncing.clone());
 
     let folder_scroll = gtk::ScrolledWindow::new();
     folder_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -267,9 +271,106 @@ pub fn build(
     folder_section.set_hexpand(true);
     folder_section.set_vexpand(true);
     folder_section.append(&folder_heading);
-    folder_section.append(&folder_revealer);
+    // folder_revealer is NOT appended here: it becomes the start child of
+    // folder_share_paned below. Appending it to this box as well would leave
+    // the widget parented here, the paned's set_start_child would be rejected
+    // (Gtk-CRITICAL assertion), and the Folders/Network Shares divider would
+    // silently disappear.
+
+    // NETWORK SHARES: registered smb:// and nfs:// roots, listed in their own
+    // section below Folders so they can never be mistaken for local folders.
+    // The section lives inside the existing Folders pane (no new GtkPaned), so
+    // the current Albums/Folders resize behaviour is untouched.
+    let (share_heading, share_indicator) = collapsible_heading(
+        "Network Shares",
+        Some(on_add_share.clone()),
+        "Add Network Share",
+        true,
+        None,
+    );
+    share_heading.add_css_class("sidebar-sticky-heading");
+    let share_list = section_list();
+    connect_filter_list(&share_list, on_filter.clone(), filter_syncing.clone());
+    let share_scroll = gtk::ScrolledWindow::new();
+    share_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    share_scroll.set_hexpand(true);
+    // The Folders pane keeps its expand behaviour; the share list only claims
+    // its natural height up to a small cap so a long share list cannot crowd
+    // out the Folders tree above it.
+    share_scroll.set_propagate_natural_height(true);
+    share_scroll.set_max_content_height(150);
+    share_scroll.set_child(Some(&share_list));
+    let share_revealer = gtk::Revealer::new();
+    share_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+    share_revealer.set_reveal_child(true);
+    share_revealer.set_hexpand(true);
+    share_revealer.set_child(Some(&share_scroll));
+    {
+        let revealer = share_revealer.clone();
+        let indicator = share_indicator.clone();
+        let expanded = Rc::new(Cell::new(true));
+        share_indicator.connect_clicked(move |_| {
+            let now = !expanded.get();
+            expanded.set(now);
+            revealer.set_reveal_child(now);
+            indicator.set_icon_name(if now {
+                "pan-down-symbolic"
+            } else {
+                "pan-end-symbolic"
+            });
+        });
+    }
+    // Native drag handle between Folders and Network Shares, matching the
+    // Albums split: the user can resize both sections with GtkPaned's native
+    // divider. The share heading stays in the end pane, so even with the
+    // share rows collapsed the handle cannot drag over or hide it.
+    let share_section = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    share_section.set_hexpand(true);
+    share_section.set_vexpand(true);
+    share_section.append(&share_heading);
+    share_section.append(&share_revealer);
+    let folder_share_paned = gtk::Paned::new(gtk::Orientation::Vertical);
+    folder_share_paned.add_css_class("sidebar-section-paned");
+    folder_share_paned.set_hexpand(true);
+    folder_share_paned.set_vexpand(true);
+    // Match the Albums split behaviour: the upper pane keeps its size when the
+    // window changes and the lower pane absorbs the difference.
+    folder_share_paned.set_resize_start_child(false);
+    folder_share_paned.set_resize_end_child(true);
+    folder_share_paned.set_shrink_start_child(true);
+    folder_share_paned.set_shrink_end_child(false);
+    folder_share_paned.set_start_child(Some(&folder_revealer));
+    folder_share_paned.set_end_child(Some(&share_section));
+    folder_section.append(&folder_share_paned);
+    // Match Albums: remember the user's last native divider position so
+    // collapsing Folders does not throw away their preferred split. 260 is
+    // only a pre-layout fallback; once GTK allocates the paned (including the
+    // startup placement below) the real position is remembered here.
+    let saved_folder_pane_position = Rc::new(Cell::new(260));
+    let folder_pane_animating = Rc::new(Cell::new(false));
+    let folder_pane_animation_generation = Rc::new(Cell::new(0_u64));
+    {
+        let state = state.clone();
+        let saved_position = saved_folder_pane_position.clone();
+        let animating = folder_pane_animating.clone();
+        folder_share_paned.connect_position_notify(move |paned| {
+            let position = paned.position();
+            // Only treat native user dragging as a new saved position. During
+            // our collapse/expand animation the pane position changes every
+            // frame and must not overwrite the user's preferred split.
+            if state.borrow().folders_expanded
+                && !animating.get()
+                && paned.start_child().is_some()
+                && position > 0
+            {
+                saved_position.set(position);
+            }
+        });
+    }
+    folder_revealer.set_transition_duration(ALBUM_PANE_ANIMATION_MS);
 
     let section_paned = gtk::Paned::new(gtk::Orientation::Vertical);
+    section_paned.add_css_class("sidebar-section-paned");
     section_paned.set_hexpand(true);
     section_paned.set_vexpand(true);
     // Preserve the user's Album height when the window itself grows/shrinks;
@@ -425,20 +526,85 @@ pub fn build(
 
     let set_folders_expanded: Rc<dyn Fn(bool)> = {
         let state = state.clone();
+        let paned = folder_share_paned.clone();
         let revealer = folder_revealer.clone();
         let indicator = folder_indicator.clone();
+        let saved_position = saved_folder_pane_position.clone();
+        let animating = folder_pane_animating.clone();
+        let animation_generation = folder_pane_animation_generation.clone();
         Rc::new(move |expanded| {
             if state.borrow().folders_expanded == expanded {
                 return;
             }
+
+            if !expanded && !animating.get() {
+                let position = paned.position();
+                if position > 0 {
+                    saved_position.set(position);
+                }
+            }
+
             state.borrow_mut().folders_expanded = expanded;
-            revealer.set_reveal_child(expanded);
-            revealer.set_vexpand(expanded);
             indicator.set_icon_name(if expanded {
                 "pan-down-symbolic"
             } else {
                 "pan-end-symbolic"
             });
+            indicator.set_tooltip_text(Some(if expanded { "Collapse" } else { "Expand" }));
+
+            let generation = animation_generation.get().wrapping_add(1);
+            animation_generation.set(generation);
+            animating.set(true);
+
+            if expanded {
+                // Reattach hidden at zero height, then reveal and grow the
+                // native pane. If a collapse was interrupted, continue from
+                // the current position instead of jumping back to zero.
+                let was_detached = paned.start_child().is_none();
+                if was_detached {
+                    revealer.set_reveal_child(false);
+                    paned.set_start_child(Some(&revealer));
+                    paned.set_position(0);
+                }
+
+                let from = paned.position().max(0);
+                revealer.set_reveal_child(true);
+                let target = saved_position.get().max(0);
+                animate_sidebar_pane_position(
+                    &paned,
+                    from,
+                    target,
+                    animation_generation.clone(),
+                    generation,
+                    animating.clone(),
+                    None,
+                );
+            } else {
+                let from = paned.position().max(0);
+                revealer.set_reveal_child(false);
+
+                let paned_for_finish = paned.clone();
+                let revealer_for_finish = revealer.clone();
+                let state_for_finish = state.clone();
+                let finish: Rc<dyn Fn()> = Rc::new(move || {
+                    if !state_for_finish.borrow().folders_expanded {
+                        // Detach the start pane so the divider auto-hides,
+                        // exactly like the collapsed Albums pane.
+                        paned_for_finish.set_start_child(None::<&gtk::Widget>);
+                        revealer_for_finish.set_reveal_child(false);
+                    }
+                });
+
+                animate_sidebar_pane_position(
+                    &paned,
+                    from,
+                    0,
+                    animation_generation.clone(),
+                    generation,
+                    animating.clone(),
+                    Some(finish),
+                );
+            }
         })
     };
 
@@ -500,6 +666,7 @@ pub fn build(
 
     populate_albums(&album_list, albums, &on_delete_album);
     populate_folders(&folder_list, folders, &state, &on_unavailable);
+    refresh_network_shares(&outer, folders, &on_unavailable);
 
     outer.set_child(Some(&root));
 
@@ -541,6 +708,47 @@ pub fn build(
         });
     }
 
+    // On first presentation, place the Folders / Network Shares divider right
+    // below the Folders rows (Folders natural height). Without this the paned
+    // can push the divider to the bottom edge, hiding the separator line and
+    // making the Folders section look fixed while only Albums is resizable.
+    {
+        let paned = folder_share_paned.clone();
+        let folder_list = folder_list.clone();
+        let folder_heading_for_map = folder_heading.clone();
+        let applied = Rc::new(Cell::new(false));
+        let applied_for_map = applied.clone();
+        folder_share_paned.connect_map(move |_| {
+            if applied_for_map.replace(true) {
+                return;
+            }
+
+            let paned = paned.clone();
+            let folder_list = folder_list.clone();
+            let folder_heading = folder_heading_for_map.clone();
+            glib::idle_add_local_once(move || {
+                // Measure the actual row widgets; a GtkScrolledWindow reports
+                // a near-zero natural height unless propagate-natural-height
+                // is enabled, so the revealers cannot be measured directly.
+                let desired = list_natural_height_for_rows(&folder_list, usize::MAX)
+                    + folder_heading.height();
+                if desired <= 0 {
+                    return;
+                }
+
+                let max_position = paned.max_position();
+                let target = if max_position > 0 {
+                    desired.min(max_position)
+                } else {
+                    desired
+                };
+                if target > 0 {
+                    paned.set_position(target);
+                }
+            });
+        });
+    }
+
     // Store stable widget/state handles on the existing GtkScrolledWindow so
     // refresh() and append_folder() can update only the relevant sections
     // without changing any caller-facing API.
@@ -558,6 +766,9 @@ pub fn build(
         outer.set_data(FOLDER_INDICATOR_KEY, folder_indicator);
         outer.set_data(FOLDER_MODE_TOGGLE_KEY, folder_mode_toggle);
         outer.set_data(FOLDER_MODE_CHANGED_KEY, on_folder_display_mode_changed);
+        outer.set_data(FOLDER_SHARE_PANED_KEY, folder_share_paned);
+        outer.set_data(FOLDER_PANE_SAVED_KEY, saved_folder_pane_position);
+        outer.set_data(SHARE_LIST_KEY, share_list);
         outer.set_data(FILTER_SYNCING_KEY, filter_syncing);
     }
 
@@ -716,26 +927,30 @@ fn folder_rows(list: &gtk::ListBox) -> Vec<gtk::ListBoxRow> {
 fn navigation_sections(
     scrolled: &gtk::ScrolledWindow,
 ) -> Vec<(gtk::ListBox, Vec<gtk::ListBoxRow>)> {
-    [LIBRARY_LIST_KEY, ALBUM_LIST_KEY, FOLDER_LIST_KEY]
-        .into_iter()
-        .filter_map(|key| {
-            let list = stored_widget::<gtk::ListBox>(scrolled, key)?;
-            let mut rows = Vec::new();
-            let mut child = list.first_child();
-            while let Some(widget) = child {
-                let next = widget.next_sibling();
-                if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
-                    let selectable =
-                        unsafe { row.data::<SidebarFilter>("picasa-filter") }.is_some();
-                    if selectable {
-                        rows.push(row);
-                    }
+    [
+        LIBRARY_LIST_KEY,
+        ALBUM_LIST_KEY,
+        FOLDER_LIST_KEY,
+        SHARE_LIST_KEY,
+    ]
+    .into_iter()
+    .filter_map(|key| {
+        let list = stored_widget::<gtk::ListBox>(scrolled, key)?;
+        let mut rows = Vec::new();
+        let mut child = list.first_child();
+        while let Some(widget) = child {
+            let next = widget.next_sibling();
+            if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+                let selectable = unsafe { row.data::<SidebarFilter>("picasa-filter") }.is_some();
+                if selectable {
+                    rows.push(row);
                 }
-                child = next;
             }
-            (!rows.is_empty()).then_some((list, rows))
-        })
-        .collect()
+            child = next;
+        }
+        (!rows.is_empty()).then_some((list, rows))
+    })
+    .collect()
 }
 
 fn selected_navigation_row(
@@ -821,6 +1036,7 @@ pub fn refresh(
 
     clear_list(&folder_list);
     populate_folders(&folder_list, folders, &state, &on_unavailable);
+    refresh_network_shares(scrolled, folders, &on_unavailable);
 
     if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, LIBRARY_REVEALER_KEY) {
         revealer.set_reveal_child(state.borrow().library_expanded);
@@ -843,9 +1059,12 @@ pub fn refresh(
         });
     }
     if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, FOLDER_REVEALER_KEY) {
+        // Mirror the Albums refresh: assert reveal state only. The pane
+        // position/vexpand is owned by the collapse animation and the user's
+        // divider drags; forcing vexpand here would break re-expansion after
+        // a collapsed pane was detached.
         let expanded = state.borrow().folders_expanded;
         revealer.set_reveal_child(expanded);
-        revealer.set_vexpand(expanded);
     }
     if let Some(indicator) = stored_widget::<gtk::Button>(scrolled, FOLDER_INDICATOR_KEY) {
         indicator.set_icon_name(if state.borrow().folders_expanded {
@@ -896,6 +1115,7 @@ pub fn refresh_folder_rows(
     let folder_scroll_value = folder_scroll_value(scrolled);
     clear_list(&folder_list);
     populate_folders(&folder_list, folders, &state, on_unavailable);
+    refresh_network_shares(scrolled, folders, on_unavailable);
     restore_folder_scroll(scrolled, folder_scroll_value);
 }
 
@@ -1207,6 +1427,9 @@ pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) 
     if let Some(folder_list) = stored_widget::<gtk::ListBox>(scrolled, FOLDER_LIST_KEY) {
         folder_list.unselect_all();
     }
+    if let Some(share_list) = stored_widget::<gtk::ListBox>(scrolled, SHARE_LIST_KEY) {
+        share_list.unselect_all();
+    }
 
     match filter {
         SidebarFilter::All | SidebarFilter::Favorites | SidebarFilter::RecentlyAdded => {
@@ -1218,6 +1441,9 @@ pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) 
         }
         SidebarFilter::Folder(_) => {
             select_matching_row(scrolled, FOLDER_LIST_KEY, filter);
+            // The same Folder filter may be presented by a share row when the
+            // target is a registered network share root.
+            select_matching_row(scrolled, SHARE_LIST_KEY, filter);
         }
     }
     syncing.set(false);
@@ -1270,9 +1496,30 @@ pub fn scroll_to_folder(scrolled: &gtk::ScrolledWindow, folder_id: i64) {
     // A navigation request must make the target row visible even when the
     // user previously collapsed the entire Folders section.
     state.borrow_mut().folders_expanded = true;
+    // Reattach the pane first if the section was collapsed: the collapse
+    // animation detaches the start child so the divider auto-hides, exactly
+    // like the Albums pane.
+    if let Some(paned) = stored_widget::<gtk::Paned>(scrolled, FOLDER_SHARE_PANED_KEY) {
+        if paned.start_child().is_none() {
+            if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, FOLDER_REVEALER_KEY) {
+                revealer.set_reveal_child(false);
+                paned.set_start_child(Some(&revealer));
+                paned.set_position(0);
+            }
+        }
+        if let Some(saved) = unsafe {
+            paned
+                .data::<Rc<Cell<i32>>>(FOLDER_PANE_SAVED_KEY)
+                .map(|s| s.as_ref().clone())
+        } {
+            let target = saved.get().max(0);
+            if target > 0 {
+                paned.set_position(target);
+            }
+        }
+    }
     if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, FOLDER_REVEALER_KEY) {
         revealer.set_reveal_child(true);
-        revealer.set_vexpand(true);
     }
     if let Some(indicator) = stored_widget::<gtk::Button>(scrolled, FOLDER_INDICATOR_KEY) {
         indicator.set_icon_name("pan-down-symbolic");
@@ -1576,6 +1823,15 @@ fn populate_folders(
     state: &Rc<RefCell<SidebarState>>,
     on_unavailable: &Rc<dyn Fn()>,
 ) {
+    // Filter for every rebuild path, not just refresh_folder_rows(): startup,
+    // change-of-view and scan events all pass through this function. Network
+    // share roots belong to the Network Shares section, never to Folders.
+    let local_folders: Vec<Folder> = folders
+        .iter()
+        .filter(|folder| !crate::db::is_remote_path(&folder.path))
+        .cloned()
+        .collect();
+    let folders = local_folders.as_slice();
     unsafe {
         list.set_data("picasa-folder-cache", folders.to_vec());
         list.set_data("picasa-folder-unavailable-callback", on_unavailable.clone());
@@ -1674,6 +1930,113 @@ fn append_folder_branch(
             }
         }
     }
+}
+
+/// Registered network shares (imported smb:// and nfs:// roots). Presented in
+/// their own sidebar section below Folders, never mixed into the local folder
+/// tree. Rebuilt by every folder refresh path, so a newly added share appears
+/// immediately and stays listed after refreshes and restarts.
+fn refresh_network_shares(
+    scrolled: &gtk::ScrolledWindow,
+    folders: &[Folder],
+    _on_unavailable: &Rc<dyn Fn()>,
+) {
+    let Some(list) = stored_widget::<gtk::ListBox>(scrolled, SHARE_LIST_KEY) else {
+        return;
+    };
+    clear_list(&list);
+    let shares: Vec<Folder> = folders
+        .iter()
+        .filter(|folder| folder.imported_root && crate::db::is_remote_path(&folder.path))
+        .cloned()
+        .collect();
+    list.set_visible(!shares.is_empty());
+    if shares.is_empty() {
+        return;
+    }
+    for share in &shares {
+        append_share_row(&list, share, folders);
+    }
+}
+
+fn append_share_row(list: &gtk::ListBox, folder: &Folder, folders: &[Folder]) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.set_margin_top(2);
+    row.set_margin_bottom(2);
+    row.set_tooltip_text(Some(folder.path.as_str()));
+
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    content.set_margin_top(4);
+    content.set_margin_bottom(4);
+    content.set_margin_start(4);
+    content.set_margin_end(8);
+
+    let icon_overlay = gtk::Overlay::new();
+    icon_overlay.set_size_request(18, 18);
+    icon_overlay.set_halign(gtk::Align::Center);
+    icon_overlay.set_valign(gtk::Align::Center);
+    icon_overlay.set_hexpand(false);
+    let icon = gtk::Image::from_icon_name("folder-remote-symbolic");
+    icon.set_pixel_size(18);
+    icon_overlay.set_child(Some(&icon));
+    if !folder.available {
+        // Same offline indicator as local folders: the row survives, only the
+        // original files are unreachable right now.
+        let badge = gtk::Image::from_icon_name("dialog-warning-symbolic");
+        badge.set_pixel_size(11);
+        badge.set_halign(gtk::Align::End);
+        badge.set_valign(gtk::Align::End);
+        badge.add_css_class("unavailable-badge");
+        badge.set_tooltip_text(Some(
+            "Share unreachable - cached thumbnails remain available",
+        ));
+        icon_overlay.add_overlay(&badge);
+    }
+    content.append(&icon_overlay);
+
+    let name = gtk::Label::new(Some(&folder.name));
+    name.set_xalign(0.0);
+    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    name.set_hexpand(true);
+    content.append(&name);
+
+    // Photos indexed under a share live in descendant folder rows, so the
+    // share's own photo_count alone is not the section count. Sum the stored
+    // counts across the in-memory descendant tree; no extra query.
+    let totals: HashMap<i64, i64> = folders
+        .iter()
+        .map(|candidate| (candidate.id, candidate.photo_count.max(0)))
+        .collect();
+    let mut children_of: HashMap<Option<i64>, Vec<i64>> = HashMap::new();
+    for candidate in folders {
+        children_of
+            .entry(candidate.parent_id)
+            .or_default()
+            .push(candidate.id);
+    }
+    let mut count = 0_i64;
+    let mut pending = vec![folder.id];
+    while let Some(id) = pending.pop() {
+        count += totals.get(&id).copied().unwrap_or(0);
+        if let Some(children) = children_of.get(&Some(id)) {
+            pending.extend_from_slice(children);
+        }
+    }
+
+    let count_label = gtk::Label::new(Some(&format_count(count)));
+    count_label.set_width_request(36);
+    count_label.set_xalign(1.0);
+    count_label.set_valign(gtk::Align::Center);
+    count_label.add_css_class("dim-label");
+    count_label.add_css_class("sidebar-count");
+    content.append(&count_label);
+
+    row.set_child(Some(&content));
+    unsafe {
+        row.set_data("picasa-filter", SidebarFilter::Folder(folder.id));
+    }
+    list.append(&row);
+    row
 }
 
 fn append_folder_row(

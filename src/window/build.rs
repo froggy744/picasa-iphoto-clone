@@ -244,6 +244,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         })
     };
+    let add_network_share_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let add_network_share: Rc<dyn Fn()> = {
+        let slot = add_network_share_slot.clone();
+        Rc::new(move || {
+            if let Some(callback) = slot.borrow().as_ref() {
+                callback();
+            }
+        })
+    };
     let delete_album_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> = Rc::new(RefCell::new(None));
     let delete_album: Rc<dyn Fn(i64)> = {
         let slot = delete_album_slot.clone();
@@ -2752,41 +2761,43 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         });
         let parent_for_local=parent.clone();
         let selected_for_local=selected.clone();
-        let local:Rc<dyn Fn()>=Rc::new(move || {
-            let dialog=gtk::FileChooserNative::new(
-                Some("Import Local Folder"),Some(&parent_for_local),
-                gtk::FileChooserAction::SelectFolder,Some("Import"),Some("Cancel"));
-            let selected=selected_for_local.clone();
-            dialog.connect_response(move |dlg,response| {
-                if response==gtk::ResponseType::Accept {
-                    if let Some(file)=dlg.file(){ selected(crate::source::reference(&file)); }
-                }
-                dlg.destroy();
-            });
-            dialog.show();
+        // The Folders + button imports local folders only. Network shares are
+        // added through their own section below Folders.
+        let dialog=gtk::FileChooserNative::new(
+            Some("Import Local Folder"),Some(&parent_for_local),
+            gtk::FileChooserAction::SelectFolder,Some("Import"),Some("Cancel"));
+        dialog.connect_response(move |dlg,response| {
+            if response==gtk::ResponseType::Accept {
+                if let Some(file)=dlg.file(){ selected_for_local(crate::source::reference(&file)); }
+            }
+            dlg.destroy();
         });
-        #[cfg(target_os="linux")]
-        {
-            let choice=adw::AlertDialog::builder()
-                .heading("Import photo folder")
-                .body("Import a local folder, or browse SMB/NFS photos directly without copying originals to Picasa.")
-                .default_response("local")
-                .close_response("cancel")
-                .build();
-            choice.add_response("cancel","Cancel");
-            choice.add_response("local","Local folder");
-            choice.add_response("network","Network shares");
-            let parent_for_network=parent.clone();
-            choice.connect_response(None,move |_,response|match response {
-                "local"=>local(),
-                "network"=>crate::network_picker::open(
-                    parent_for_network.upcast_ref::<gtk::Window>(),selected.clone()),
-                _=>(),
-            });
-            choice.present(Some(&parent));
-        }
-        #[cfg(not(target_os="linux"))]
-        local();
+        dialog.show();
+    })));
+
+    #[cfg(target_os="linux")]
+    add_network_share_slot.replace(Some(Rc::new(move || {
+        let scan_job=scan_job_for_import.clone();
+        let start_next_scan=start_next_scan_for_import.clone();
+        let connection=connection_for_import.clone();
+        let sidebar_refresh=sidebar_refresh_for_import.clone();
+        let selected: Rc<dyn Fn(String)>=Rc::new(move |root: String| {
+            if let Err(error)=db::mark_import_root(&connection.borrow(),&root){
+                eprintln!("Could not register imported folder {root}: {error}");
+                return;
+            }
+            sidebar_refresh();
+            {
+                let mut job=scan_job.borrow_mut();
+                job.authorize_photo_scan(PhotoScanRequestReason::ImportFolder)
+                    .expect("import is an authorized scan reason");
+                job.pending.push_back(root);
+            }
+            start_next_scan();
+        });
+        let parent_for_network=parent.clone();
+        crate::network_picker::open(
+            parent_for_network.upcast_ref::<gtk::Window>(),selected);
     })));
 
     let scan_job_for_refresh = scan_job.clone();

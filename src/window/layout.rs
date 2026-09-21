@@ -258,6 +258,7 @@
         },
         create_album.clone(),
         import_folder.clone(),
+        add_network_share.clone(),
         delete_album.clone(),
         availability_refresh.clone(),
         {
