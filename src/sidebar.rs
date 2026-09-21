@@ -294,16 +294,13 @@ pub fn build(
     let share_scroll = gtk::ScrolledWindow::new();
     share_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     share_scroll.set_hexpand(true);
-    // The Folders pane keeps its expand behaviour; the share list only claims
-    // its natural height up to a small cap so a long share list cannot crowd
-    // out the Folders tree above it.
-    share_scroll.set_propagate_natural_height(true);
-    share_scroll.set_max_content_height(150);
+    share_scroll.set_vexpand(true);
     share_scroll.set_child(Some(&share_list));
     let share_revealer = gtk::Revealer::new();
     share_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     share_revealer.set_reveal_child(true);
     share_revealer.set_hexpand(true);
+    share_revealer.set_vexpand(true);
     share_revealer.set_child(Some(&share_scroll));
     let shares_expanded = Rc::new(Cell::new(true));
     let set_shares_expanded: Rc<dyn Fn(bool)> = {
@@ -328,9 +325,7 @@ pub fn build(
         });
     }
     // Right-click the Network Shares heading: Reveal All when collapsed,
-    // Collapse All when expanded. Reveal All also lifts the share list's
-    // height cap so every row is visible, and lets the share pane claim its
-    // natural height (the divider may move up to make room).
+    // Collapse All when expanded.
     {
         let set_expanded = set_shares_expanded.clone();
         attach_section_context_menu(
@@ -345,18 +340,7 @@ pub fn build(
             }),
             Rc::new({
                 let set_expanded = set_expanded.clone();
-                let share_scroll_for_reveal = share_scroll.clone();
-                let share_list_for_reveal = share_list.clone();
-                move || {
-                    set_expanded(true);
-                    // Lift the natural-height cap and grow the share pane so
-                    // every row is visible instead of clipped under the cap.
-                    share_scroll_for_reveal.set_max_content_height(-1);
-                    let desired = list_natural_height_for_rows(&share_list_for_reveal, usize::MAX);
-                    if desired > 0 {
-                        share_scroll_for_reveal.set_max_content_height(desired);
-                    }
-                }
+                move || set_expanded(true)
             }),
             Rc::new(move || set_expanded(false)),
         );
@@ -823,6 +807,11 @@ pub fn build(
 
     populate_albums(&album_list, albums, &on_delete_album);
     populate_folders(&folder_list, folders, &state, &on_unavailable);
+    // The first refresh must be able to resolve the share list just like all
+    // later refreshes. Register it before populating saved network roots.
+    unsafe {
+        outer.set_data(SHARE_LIST_KEY, share_list.clone());
+    }
     refresh_network_shares(&outer, folders, &on_unavailable);
 
     outer.set_child(Some(&root));
@@ -925,7 +914,6 @@ pub fn build(
         outer.set_data(FOLDER_MODE_CHANGED_KEY, on_folder_display_mode_changed);
         outer.set_data(FOLDER_SHARE_PANED_KEY, folder_share_paned);
         outer.set_data(FOLDER_PANE_SAVED_KEY, saved_folder_pane_position);
-        outer.set_data(SHARE_LIST_KEY, share_list);
         outer.set_data(FILTER_SYNCING_KEY, filter_syncing);
     }
 
@@ -2857,5 +2845,72 @@ fn format_count(value: i64) -> String {
         format!("-{grouped}")
     } else {
         grouped
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn saved_network_shares_populate_at_startup_and_use_the_remaining_height() {
+        gtk::init().unwrap();
+
+        let folders = vec![Folder {
+            id: 1,
+            path: "smb://server/photos".to_string(),
+            name: "photos".to_string(),
+            parent_id: None,
+            imported_root: true,
+            watched: false,
+            photo_count: 4,
+            subfolder_count: 0,
+            available: true,
+        }];
+        let no_args: Rc<dyn Fn()> = Rc::new(|| {});
+        let sidebar = build(
+            &folders,
+            &[],
+            SidebarCounts {
+                photos: 4,
+                favorites: 0,
+                recently_added: 0,
+            },
+            |_| {},
+            no_args.clone(),
+            no_args.clone(),
+            no_args.clone(),
+            Rc::new(|_| {}),
+            no_args.clone(),
+            Rc::new(|_| {}),
+            Rc::new(|_| {}),
+            Rc::new(|_| {}),
+            Rc::new(|_, _| {}),
+            Rc::new(|_, _| {}),
+            FolderDisplayMode::Tree,
+            Rc::new(|_| {}),
+        );
+
+        let share_list = stored_widget::<gtk::ListBox>(&sidebar, SHARE_LIST_KEY).unwrap();
+        assert_eq!(
+            share_list.observe_children().iter::<glib::Object>().count(),
+            1,
+            "saved shares should be present in the first rendered sidebar"
+        );
+
+        let share_scroll = share_list
+            .ancestor(gtk::ScrolledWindow::static_type())
+            .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
+            .unwrap();
+        assert!(share_scroll.vexpands());
+        assert_eq!(share_scroll.vscrollbar_policy(), gtk::PolicyType::Automatic);
+        assert_eq!(share_scroll.max_content_height(), -1);
+
+        let share_revealer = share_scroll
+            .ancestor(gtk::Revealer::static_type())
+            .and_then(|widget| widget.downcast::<gtk::Revealer>().ok())
+            .unwrap();
+        assert!(share_revealer.vexpands());
     }
 }
