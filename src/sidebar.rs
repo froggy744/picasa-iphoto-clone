@@ -328,7 +328,9 @@ pub fn build(
         });
     }
     // Right-click the Network Shares heading: Reveal All when collapsed,
-    // Collapse All when expanded.
+    // Collapse All when expanded. Reveal All also lifts the share list's
+    // height cap so every row is visible, and lets the share pane claim its
+    // natural height (the divider may move up to make room).
     {
         let set_expanded = set_shares_expanded.clone();
         attach_section_context_menu(
@@ -343,7 +345,18 @@ pub fn build(
             }),
             Rc::new({
                 let set_expanded = set_expanded.clone();
-                move || set_expanded(true)
+                let share_scroll_for_reveal = share_scroll.clone();
+                let share_list_for_reveal = share_list.clone();
+                move || {
+                    set_expanded(true);
+                    // Lift the natural-height cap and grow the share pane so
+                    // every row is visible instead of clipped under the cap.
+                    share_scroll_for_reveal.set_max_content_height(-1);
+                    let desired = list_natural_height_for_rows(&share_list_for_reveal, usize::MAX);
+                    if desired > 0 {
+                        share_scroll_for_reveal.set_max_content_height(desired);
+                    }
+                }
             }),
             Rc::new(move || set_expanded(false)),
         );
@@ -554,18 +567,29 @@ pub fn build(
 
     // Right-click the Albums heading: Reveal All when collapsed, Collapse All
     // when expanded. Albums has no nested branches, so the section is the
-    // whole scope.
+    // whole scope. Reveal All ignores the divider position: the pane grows to
+    // fit every album row instead of returning to the saved bar position.
     {
         let state_for_reveal = state.clone();
         let state_for_collapse = state.clone();
         let set_expanded = set_albums_expanded.clone();
+        let album_list_for_reveal = album_list.clone();
+        let saved_album_position_for_reveal = saved_album_pane_position.clone();
         attach_section_context_menu(
             &album_heading,
             Rc::new(move || !state_for_reveal.borrow().albums_expanded),
             Rc::new(move || state_for_collapse.borrow().albums_expanded),
             Rc::new({
                 let set_expanded = set_expanded.clone();
-                move || set_expanded(true)
+                move || {
+                    // Measure the full album list (works while detached), aim
+                    // the pane there, then let the expand animation target it.
+                    let desired = list_natural_height_for_rows(&album_list_for_reveal, usize::MAX);
+                    if desired > 0 {
+                        saved_album_position_for_reveal.set(desired);
+                    }
+                    set_expanded(true);
+                }
             }),
             Rc::new(move || set_expanded(false)),
         );
@@ -750,10 +774,8 @@ pub fn build(
                 // Reveal All ignores the divider position: grow the pane so
                 // every revealed row is visible instead of clipped under the
                 // saved (possibly dragged-up) bar position.
-                let desired = list_natural_height_for_rows(
-                    &list_for_reveal_action,
-                    usize::MAX,
-                ) + folder_heading_for_reveal.height();
+                let desired = list_natural_height_for_rows(&list_for_reveal_action, usize::MAX)
+                    + folder_heading_for_reveal.height();
                 if desired > 0 {
                     saved_folder_pane_position_for_reveal.set(desired);
                     folder_share_paned_for_reveal.set_position(desired);
