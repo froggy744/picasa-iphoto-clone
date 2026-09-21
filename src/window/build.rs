@@ -2740,6 +2740,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let scan_job_for_import = scan_job.clone();
     let start_next_scan_for_import = start_next_scan.clone();
 
+    #[cfg(target_os = "linux")]
+    let scan_job_for_network = scan_job_for_import.clone();
+    #[cfg(target_os = "linux")]
+    let start_next_scan_for_network = start_next_scan_for_import.clone();
+    #[cfg(target_os = "linux")]
+    let connection_for_network = connection_for_import.clone();
+    #[cfg(target_os = "linux")]
+    let sidebar_refresh_for_network = sidebar_refresh_for_import.clone();
+    #[cfg(target_os = "linux")]
+    let parent_for_network = parent.clone();
+
     import_folder_slot.replace(Some(Rc::new(move || {
         let scan_job=scan_job_for_import.clone();
         let start_next_scan=start_next_scan_for_import.clone();
@@ -2777,10 +2788,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     #[cfg(target_os="linux")]
     add_network_share_slot.replace(Some(Rc::new(move || {
-        let scan_job=scan_job_for_import.clone();
-        let start_next_scan=start_next_scan_for_import.clone();
-        let connection=connection_for_import.clone();
-        let sidebar_refresh=sidebar_refresh_for_import.clone();
+        let scan_job=scan_job_for_network.clone();
+        let start_next_scan=start_next_scan_for_network.clone();
+        let connection=connection_for_network.clone();
+        let sidebar_refresh=sidebar_refresh_for_network.clone();
         let selected: Rc<dyn Fn(String)>=Rc::new(move |root: String| {
             if let Err(error)=db::mark_import_root(&connection.borrow(),&root){
                 eprintln!("Could not register imported folder {root}: {error}");
@@ -2795,7 +2806,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
             start_next_scan();
         });
-        let parent_for_network=parent.clone();
+        let parent_for_network=parent_for_network.clone();
         crate::network_picker::open(
             parent_for_network.upcast_ref::<gtk::Window>(),selected);
     })));
@@ -3369,4 +3380,3 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     window
 }
-
