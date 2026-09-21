@@ -132,8 +132,16 @@ pub fn cache_stats(valid: &HashSet<PathBuf>) -> Result<CacheStats> {
 }
 
 fn cache_stats_in(directory: &Path, valid: &HashSet<PathBuf>) -> Result<CacheStats> {
+    // `valid` contains both the legacy flat path and the sharded path for each
+    // cache key. They are compatibility locations for one thumbnail, not two
+    // required thumbnails.
+    let required = valid
+        .iter()
+        .filter_map(|path| path.file_name())
+        .collect::<HashSet<_>>()
+        .len() as u64;
     let mut stats = CacheStats {
-        required: valid.len() as u64,
+        required,
         ..CacheStats::default()
     };
     for entry in read_cache_entries(directory)? {
