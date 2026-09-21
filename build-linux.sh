@@ -26,6 +26,7 @@ BUILD_TARGET="${PIC_BUILD_TARGET:-}"
 LOG_DIR="${PIC_BUILD_LOG_DIR:-$SCRIPT_DIR/build-logs}"
 LOG_FILE=""
 BUILD_STARTED_AT=""
+BUILD_STARTED_EPOCH=0
 CANCEL_SIGNAL=""
 
 log()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*" >&2; }
@@ -144,6 +145,7 @@ start_logging() {
     # still be written. It exits naturally when this script closes the pipe.
     exec > >(trap '' INT TERM HUP; exec tee -a "$LOG_FILE") 2>&1
 
+    BUILD_STARTED_EPOCH="$(date '+%s')"
     BUILD_STARTED_AT="$(date '+%Y-%m-%dT%H:%M:%S%z')"
     printf '%s\n' '============================================================'
     printf '%s\n' 'PIC Linux Packager build log'
@@ -170,8 +172,12 @@ handle_signal() {
 finish_logging() {
     local status=$?
     trap - EXIT
-    local finished outcome
+    local finished finished_epoch elapsed duration outcome
+    finished_epoch="$(date '+%s')"
     finished="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+    elapsed=$((finished_epoch-BUILD_STARTED_EPOCH))
+    printf -v duration '%02d:%02d:%02d' \
+        "$((elapsed/3600))" "$(((elapsed%3600)/60))" "$((elapsed%60))"
 
     if [[ -n "$CANCEL_SIGNAL" ]]; then
         outcome="CANCELLED"
@@ -189,7 +195,9 @@ finish_logging() {
 
     printf '\n%s\n' '============================================================'
     printf 'Build session: %s\n' "$outcome"
-    printf 'Finished:      %s\n' "$finished"
+    printf 'Started:       %s\n' "$BUILD_STARTED_AT"
+    printf 'Ended:         %s\n' "$finished"
+    printf 'Duration:      %s (HH:MM:SS)\n' "$duration"
     printf 'Exit code:     %s\n' "$status"
     [[ -z "$CANCEL_SIGNAL" ]] || printf 'Signal:        %s\n' "$CANCEL_SIGNAL"
     printf 'Build log: %s\n' "$LOG_FILE"
@@ -770,7 +778,8 @@ EOF_CARGO
     "--filesystem=xdg-cache/picasa-rs:create",
     "--filesystem=xdg-run/gvfsd",
     "--filesystem=xdg-run/gvfs",
-    "--talk-name=org.gtk.vfs.*"
+    "--talk-name=org.gtk.vfs.*",
+    "--system-talk-name=org.freedesktop.Avahi"
   ],
   "build-options": {
     "append-path": "/usr/lib/sdk/rust-stable/bin",

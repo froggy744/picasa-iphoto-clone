@@ -117,6 +117,7 @@ mod recovery_tests {
     #[test]
     fn legacy_offline_failure_marker_is_retried() {
         let fixture = Fixture::new(false);
+        fs::create_dir_all(fixture.destination.parent().unwrap()).unwrap();
         fs::write(
             fixture.destination.with_extension("failed"),
             b"thumbnail generation failed\n",

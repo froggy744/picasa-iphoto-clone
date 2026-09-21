@@ -59,7 +59,8 @@ PIC retains access to its existing native library at
 `~/.cache/picasa-rs`. Its Flatpak permissions also cover external drives,
 host-mounted NFS/SMB filesystems and host GVfs mounts. The corresponding host
 GVfs backend (for example `gvfs-smb`) must be installed for a GVfs protocol to
-be available.
+be available. PIC also uses the host Avahi service to resolve discovered
+`.local` SMB/NFS server names when the Flatpak runtime lacks host `nss-mdns`.
 
 ## Optional AppImage
 
