@@ -3370,6 +3370,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 paths.push(path);
             }
             run_ui_guarded("targeted thumbnail refresh", || {
+                if std::env::var_os("PICASA_TRACE").is_some(){eprintln!("PIC_THUMBNAIL tile_refresh count={}",paths.len());}
                 gallery_for_events.refresh_thumbnails_for_paths(&paths)
             });
             

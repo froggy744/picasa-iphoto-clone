@@ -7,7 +7,8 @@ pub fn recovery_items(items: Vec<RecoveryItem>) -> (Vec<RecoveryItem>, usize) {
     for item in items {
         #[cfg(target_os="linux")]
         if crate::network_shares::private(&item.0)
-            && crate::image_format::uses(&item.0,crate::image_format::DecoderKind::Raw) {
+            && crate::image_format::uses(&item.0,crate::image_format::DecoderKind::Raw)
+            && !crate::image_format::for_path(&item.0).is_some_and(|format|format.id=="nikon_raw") {
             // No eager/automatic download of a full network RAW original.
             continue;
         }

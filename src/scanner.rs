@@ -207,8 +207,11 @@ fn scan_with_control(
                     .context("indexed photo disappeared")?;
                 imported += 1;
                 // A metadata-only repair does not invalidate the thumbnail.
-                if (!fingerprint_matches || missing_heif_thumbnail)
+                if (!fingerprint_matches || missing_heif_thumbnail || missing_raw_thumbnail)
                     && !remote_raw_thumbnail_unsupported(&path) {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!("PIC_THUMBNAIL schedule source=scan raw={} uri={path}",is_raw(&path));
+                    }
                     thumbnails.push((
                         path.clone(),
                         photo_metadata.mtime,

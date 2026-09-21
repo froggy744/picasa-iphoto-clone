@@ -73,6 +73,7 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
         return;
     }
     if !crate::source::cached_file_available(&path) {
+        if std::env::var_os("PICASA_TRACE").is_some(){eprintln!("PIC_THUMBNAIL skip reason=unavailable uri={path}");}
         return;
     }
 
@@ -84,6 +85,7 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
         return;
     }
     drop(pending);
+    if std::env::var_os("PICASA_TRACE").is_some(){eprintln!("PIC_THUMBNAIL schedule source=visible uri={path} cache={}",destination.display());}
 
     let queue = PRIORITY_QUEUE.get_or_init(|| {
         let queue = Arc::new((

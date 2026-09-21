@@ -59,7 +59,7 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
     let destination = cache_path(path, mtime, size_bytes)?;
     let failure_marker = destination.with_extension("failed");
     if destination.is_file() {
-        
+        if std::env::var_os("PICASA_TRACE").is_some(){eprintln!("PIC_THUMBNAIL cache_hit uri={path} cache={}",destination.display());}
         return Ok(destination);
     }
     if failure_marker.is_file() {
@@ -97,6 +97,7 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
         // naturally gets a new cache key and can be attempted again.
         let _ = fs::write(&failure_marker, DECODE_FAILURE_MARKER);
     }
+    if std::env::var_os("PICASA_TRACE").is_some(){match &result{Ok(cache)=>eprintln!("PIC_THUMBNAIL cache_write uri={path} cache={}",cache.display()),Err(error)=>eprintln!("PIC_THUMBNAIL failed uri={path} error={error:#}")}}
     result
 }
 
