@@ -141,6 +141,7 @@ fn show_photo(
 
         match result {
             Ok(result) => {
+                let display_started = std::time::Instant::now();
                 let bytes = glib::Bytes::from_owned(result.pixels.clone());
                 let texture = gtk::gdk::MemoryTexture::new(
                     result.width as i32,
@@ -163,6 +164,11 @@ fn show_photo(
                 }
 
                 picture.set_paintable(Some(&texture));
+                viewer_trace(format!(
+                    "display_apply elapsed_ms={} uri={}",
+                    display_started.elapsed().as_millis(),
+                    viewer_trace_uri(&cache_path),
+                ));
                 viewer_trace(format!(
                     "display_done lane=foreground source=decode navigation_ms={} uri={}",
                     navigation_started.elapsed().as_millis(),
@@ -219,7 +225,7 @@ fn viewer_trace(message: impl std::fmt::Display) {
     if std::env::var_os("PICASA_TRACE").is_some() {
         static TRACE_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
         let elapsed = TRACE_STARTED.get_or_init(std::time::Instant::now).elapsed();
-        eprintln!("PIC_VIEWER t_ms={} {message}", elapsed.as_millis());
+        eprintln!("PIC_VIEWER t_ms={} tid={:?} {message}", elapsed.as_millis(), std::thread::current().id());
     }
 }
 

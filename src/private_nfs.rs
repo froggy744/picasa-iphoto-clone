@@ -57,14 +57,19 @@ extern "C" fn names(context:*mut c_void, name:*const c_char, kind:c_uint)->c_int
 static EXPORTS:OnceLock<Mutex<HashMap<String,Vec<String>>>>=OnceLock::new();
 fn exports(host:&str)->anyhow::Result<Vec<String>> {
     let cache=EXPORTS.get_or_init(||Mutex::new(HashMap::new()));
-    if let Some(previous)=cache.lock().unwrap().get(host).cloned(){return Ok(previous)}
+    if let Some(previous)=cache.lock().unwrap().get(host).cloned(){
+        crate::network_shares::trace("PRIVATE_NFS",format!("export_cache_hit host={host} count={}",previous.len()));
+        return Ok(previous)
+    }
+    let started=std::time::Instant::now();
+    crate::network_shares::trace("PRIVATE_NFS",format!("export_discovery_start host={host}"));
     let mut results: Vec<(String,u32)> = Vec::new();let mut buffer=[0 as c_char;512];let chost=CString::new(host)?;
     let returned=unsafe{pic_nfs_exports(chost.as_ptr(),names,&mut results as *mut _ as *mut c_void,
         buffer.as_mut_ptr(),buffer.len())};
     if returned<0{anyhow::bail!("{}",err(&buffer))}
     let mut paths=results.into_iter().map(|(path,_)|path.trim_end_matches('/').to_owned()).collect::<Vec<_>>();
     paths.sort();paths.dedup();
-    crate::network_shares::trace("PRIVATE_NFS",format!("export_discovery host={host} count={} paths={paths:?}",paths.len()));
+    crate::network_shares::trace("PRIVATE_NFS",format!("export_discovery_done host={host} count={} elapsed_ms={} paths={paths:?}",paths.len(),started.elapsed().as_millis()));
     cache.lock().unwrap().insert(host.to_owned(),paths.clone());
     Ok(paths)
 }

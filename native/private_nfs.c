@@ -1,6 +1,7 @@
 /* Direct userspace NFS backend. nfs_mount is libnfs's session setup,
  * NOT a Linux kernel mount nor a GVfs mount. Read-only operations only. */
 #include <nfsc/libnfs.h>
+#include <nfsc/libnfs-raw.h>
 #include <nfsc/libnfs-raw-mount.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -11,11 +12,41 @@
 #include <stdint.h>
 #include <limits.h>
 #include <pthread.h>
+#include <time.h>
+#include <netdb.h>
 
 typedef int (*pic_entry_cb)(void *, const char *, unsigned int);
 static int trace_enabled(void) {
     const char *value = getenv("PICASA_TRACE");
     return value && *value;
+}
+static uint64_t monotonic_ms(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+static void trace_stage(const char *stage, uint64_t started, const char *host,
+                        const char *export_path, const char *relative,
+                        const char *detail) {
+    if (!trace_enabled()) return;
+    fprintf(stderr, "PIC_NFS stage=%s elapsed_ms=%llu tid=%lu host=%s export=%s relative=%s%s%s\n",
+            stage, (unsigned long long)(monotonic_ms() - started),
+            (unsigned long)pthread_self(), host ? host : "-",
+            export_path ? export_path : "-", relative ? relative : "-",
+            detail ? " " : "", detail ? detail : "");
+}
+static void trace_hostname_resolution(const char *host) {
+    if (!trace_enabled()) return;
+    uint64_t started = monotonic_ms();
+    struct addrinfo hints = {0}, *results = NULL;
+    hints.ai_socktype = SOCK_STREAM;
+    int status = getaddrinfo(host, NULL, &hints, &results);
+    int count = 0;
+    for (struct addrinfo *entry = results; entry; entry = entry->ai_next) count++;
+    char detail[64];
+    snprintf(detail, sizeof detail, "status=%d addresses=%d", status, count);
+    trace_stage("hostname_resolution", started, host, NULL, NULL, detail);
+    if (results) freeaddrinfo(results);
 }
 static void err(char *dst, size_t cap, const char *op, struct nfs_context *nfs) {
     const char *detail = nfs ? nfs_get_error(nfs) : NULL;
@@ -29,7 +60,10 @@ static struct nfs_context *open_session(const char *host, const char *export_pat
                                         char *error, size_t cap) {
     char attempts[768] = {0};
     for (int version = 3; version <= 4; version++) {
+        uint64_t context_started = monotonic_ms();
         struct nfs_context *nfs = nfs_init_context();
+        trace_stage("context_creation", context_started, host, export_path, NULL,
+                    nfs ? "outcome=ok" : "outcome=error");
         if (!nfs) {
             snprintf(error, cap, "nfs_init_context failed for %s", host);
             return NULL;
@@ -42,9 +76,15 @@ static struct nfs_context *open_session(const char *host, const char *export_pat
         }
         /* Disable endless reconnection during the initial connection probe. */
         nfs_set_autoreconnect(nfs, 0);
-        if (trace_enabled()) fprintf(stderr, "PIC_NFS_CONNECT create_start host=%s export=%s version=%d\n",
-                                     host, export_path, version);
+        uint64_t connect_started = monotonic_ms();
+        if (trace_enabled()) fprintf(stderr, "PIC_NFS_CONNECT create_start host=%s export=%s version=%d tid=%lu\n",
+                                     host, export_path, version, (unsigned long)pthread_self());
         int status = nfs_mount(nfs, host, export_path);
+        char connect_detail[64];
+        snprintf(connect_detail, sizeof connect_detail, "version=%d outcome=%s status=%d",
+                 version, status == 0 ? "ok" : "error", status);
+        trace_stage("connection_establishment", connect_started, host, export_path, NULL,
+                    connect_detail);
         if (status == 0) {
             if (trace_enabled()) fprintf(stderr, "PIC_NFS_CONNECT create_ok host=%s export=%s version=%d\n",
                                          host, export_path, version);
@@ -69,14 +109,22 @@ static struct nfs_context *open_session(const char *host, const char *export_pat
 }
 int pic_nfs_exports(const char *host, pic_entry_cb cb, void *ctx,
                     char *error, size_t cap) {
+    trace_hostname_resolution(host);
+    uint64_t discovery_started = monotonic_ms();
     struct exportnode *list = mount_getexports(host);
-    if (!list) { snprintf(error, cap, "NFS export discovery failed for %s (check rpcbind/mountd and NFSv3)", host); return -1; }
+    if (!list) {
+        trace_stage("export_discovery", discovery_started, host, NULL, NULL, "outcome=error");
+        snprintf(error, cap, "NFS export discovery failed for %s (check rpcbind/mountd and NFSv3)", host); return -1;
+    }
     int total=0;
     for (struct exportnode *e=list;e;e=e->ex_next) {
         if (e->ex_dir && cb(ctx,e->ex_dir,7) != 0) break;
         total++;
     }
     mount_free_export_list(list);
+    char detail[48];
+    snprintf(detail, sizeof detail, "outcome=ok exports=%d", total);
+    trace_stage("export_discovery", discovery_started, host, NULL, NULL, detail);
     return total;
 }
 int pic_nfs_list(const char *host, const char *export_path, const char *relative,
@@ -138,20 +186,27 @@ int pic_nfs_read(const char *host, const char *export_path, const char *relative
                  unsigned char **out, size_t *length, size_t max_bytes,
                  char *error, size_t cap) {
     *out=NULL;*length=0;
+    uint64_t lock_started = monotonic_ms();
     pthread_mutex_lock(&read_session_lock);
+    trace_stage("read_session_lock", lock_started, host, export_path, relative, "outcome=acquired");
     struct nfs_context *nfs=get_read_session(host,export_path,error,cap);
     if (!nfs) {pthread_mutex_unlock(&read_session_lock);return -1;}
     struct nfsfh *fh=NULL;
+    uint64_t open_started = monotonic_ms();
     if(nfs_open(nfs,relative,O_RDONLY,&fh)!=0) {
+        trace_stage("file_open", open_started, host, export_path, relative, "outcome=error");
         err(error,cap,"nfs_open",nfs);invalidate_read_session();
         pthread_mutex_unlock(&read_session_lock);return -1;
     }
+    trace_stage("file_open", open_started, host, export_path, relative, "outcome=ok");
     size_t capbytes=64*1024,used=0;
     if(max_bytes<capbytes)capbytes=max_bytes;
     unsigned char *bytes=malloc(capbytes?capbytes:1);
     if(!bytes) {snprintf(error,cap,"NFS out of memory");nfs_close(nfs,fh);
         pthread_mutex_unlock(&read_session_lock);return -1;}
     int failed=0;
+    uint64_t read_started = monotonic_ms();
+    int read_calls = 0;
     for (;;) {
         if(used==capbytes) {
             if(capbytes>=max_bytes) {snprintf(error,cap,"NFS image exceeds 128 MiB safety limit");failed=1;break;}
@@ -160,12 +215,38 @@ int pic_nfs_read(const char *host, const char *export_path, const char *relative
             if(!more){snprintf(error,cap,"NFS out of memory");failed=1;break;}
             bytes=more;capbytes=next;
         }
+        uint64_t call_started = monotonic_ms();
+        struct rpc_stats stats_before = {0}, stats_after = {0};
+        int collect_rpc_stats = trace_enabled();
+        if (collect_rpc_stats)
+            rpc_get_stats(nfs_get_rpc_context(nfs), &stats_before);
         int got=nfs_read(nfs,fh,bytes+used,capbytes-used);
+        read_calls++;
+        if (collect_rpc_stats) {
+            rpc_get_stats(nfs_get_rpc_context(nfs), &stats_after);
+            char detail[192];
+            snprintf(detail, sizeof detail,
+                     "iteration=%d outcome=%s bytes=%d timedout_delta=%llu retransmitted_delta=%llu reconnects_delta=%llu",
+                     read_calls, got < 0 ? "error" : "ok", got,
+                     (unsigned long long)(stats_after.num_timedout - stats_before.num_timedout),
+                     (unsigned long long)(stats_after.num_retransmitted - stats_before.num_retransmitted),
+                     (unsigned long long)(stats_after.num_reconnects - stats_before.num_reconnects));
+            trace_stage("rpc_read", call_started, host, export_path, relative, detail);
+        }
+        if (read_calls == 1) {
+            char detail[64];
+            snprintf(detail, sizeof detail, "outcome=%s bytes=%d", got < 0 ? "error" : "ok", got);
+            trace_stage("first_read", call_started, host, export_path, relative, detail);
+        }
         if(got<0){err(error,cap,"nfs_read",nfs);failed=1;break;}
         if(got==0)break;
         used+=(size_t)got;
     }
     int close_status=nfs_close(nfs,fh);
+    char read_detail[96];
+    snprintf(read_detail, sizeof read_detail, "outcome=%s bytes=%zu calls=%d",
+             failed ? "error" : "ok", used, read_calls);
+    trace_stage("file_read_complete", read_started, host, export_path, relative, read_detail);
     if (close_status<0 && !failed) {err(error,cap,"nfs_close",nfs);failed=1;}
     if(failed){
         /* Resource/memory/size errors do not imply a broken NFS session. */

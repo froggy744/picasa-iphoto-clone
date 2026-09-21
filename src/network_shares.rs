@@ -14,7 +14,7 @@ pub struct Metadata {pub size: u64, pub mtime: Option<i64>, pub is_dir: bool}
 pub fn private(uri: &str) -> bool { uri.starts_with("nfs://") || uri.starts_with("smb://") }
 pub fn trace(area: &str, message: impl std::fmt::Display) {
     if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!("PIC_NETWORK {area} {message}");
+        eprintln!("PIC_NETWORK tid={:?} {area} {message}", std::thread::current().id());
     }
 }
 
