@@ -2,6 +2,61 @@
 mod viewer_presentation_tests {
     use super::*;
 
+    #[test]
+    fn arrow_steps_remain_single_photo_and_clamp_at_collection_edges() {
+        assert_eq!(navigation_step(4, 1, 10), 5);
+        assert_eq!(navigation_step(4, -1, 10), 3);
+        assert_eq!(navigation_step(0, -1, 10), 0);
+        assert_eq!(navigation_step(9, 1, 10), 9);
+    }
+
+    #[test]
+    fn wheel_steps_accumulate_without_dispatching_intermediate_targets() {
+        let mut wheel = WheelNavigationState::default();
+        wheel.begin(1);
+        assert_eq!(wheel.queue_step(4, 1, 10), Some(5));
+        assert_eq!(wheel.queue_step(4, 1, 10), Some(6));
+        assert_eq!(wheel.queue_step(4, 1, 10), Some(7));
+        assert_eq!(wheel.take_pending_target(), Some(7));
+        assert_eq!(wheel.active_direction, 0);
+    }
+
+    #[test]
+    fn arrow_clears_pending_wheel_target_without_changing_its_step() {
+        let mut wheel = WheelNavigationState::default();
+        wheel.begin(1);
+        wheel.queue_step(4, 1, 10);
+        wheel.queue_step(4, 1, 10);
+
+        wheel.cancel();
+        assert_eq!(wheel.take_pending_target(), None);
+        assert_eq!(navigation_step(4, -1, 10), 3);
+    }
+
+    #[test]
+    fn wheel_target_clamps_and_reversal_drops_old_pending_target() {
+        let mut wheel = WheelNavigationState::default();
+        wheel.begin(1);
+        assert_eq!(wheel.queue_step(8, 1, 10), Some(9));
+        assert_eq!(wheel.queue_step(8, 1, 10), None);
+
+        wheel.cancel();
+        wheel.begin(-1);
+        assert_eq!(wheel.queue_step(8, -1, 10), Some(7));
+        assert_eq!(wheel.take_pending_target(), Some(7));
+    }
+
+    #[test]
+    fn cancelled_wheel_request_releases_the_controller() {
+        let mut wheel = WheelNavigationState::default();
+        wheel.begin(1);
+        wheel.queue_step(4, 1, 10);
+
+        wheel.cancel();
+        assert_eq!(wheel.active_direction, 0);
+        assert_eq!(wheel.take_pending_target(), None);
+    }
+
     fn request_key(name: &str) -> ViewerRequestKey {
         ViewerRequestKey {
             path: format!("/test/{name}.jpg"),

@@ -22,6 +22,7 @@ fn show_photo(
     fit_geometry_fixed: bool,
     cache_hit: bool,
     navigation_ready: Option<Rc<Cell<bool>>>,
+    navigation_settled: Option<Rc<dyn Fn()>>,
 ) {
     let navigation_started = std::time::Instant::now();
     let Some(photo) = photos.get(index) else {
@@ -32,6 +33,12 @@ fn show_photo(
     // thumbnail in the lightbox; keep the previous full-size image during
     // navigation and show a neutral backdrop on initial open.
     let path = photo.path();
+    viewer_trace(format!(
+        "show_photo_request generation={} index={} uri={}",
+        expected_generation,
+        index,
+        viewer_trace_uri(&path),
+    ));
     if let Some(previous) = decode_cancel.borrow_mut().take() {
         previous.cancel();
     }
@@ -49,6 +56,9 @@ fn show_photo(
         VIEWER_FOREGROUND_GENERATION.store(0, Ordering::Release);
         if let Some(navigation_ready) = navigation_ready {
             navigation_ready.set(true);
+        }
+        if let Some(navigation_settled) = navigation_settled {
+            navigation_settled();
         }
         return;
     }
@@ -94,6 +104,7 @@ fn show_photo(
     let photo = photo.clone();
     let display_texture_cache_for_result = display_texture_cache.clone();
     let navigation_ready_for_result = navigation_ready.clone();
+    let navigation_settled_for_result = navigation_settled.clone();
     glib::MainContext::default().spawn_local(async move {
         let result = ViewerResultSlot::wait(request.result.clone()).await;
 
@@ -111,8 +122,13 @@ fn show_photo(
                 Ordering::AcqRel,
                 Ordering::Acquire,
             );
-            if let Some(navigation_ready) = navigation_ready_for_result {
-                navigation_ready.set(true);
+            if viewer_generation_current(generation.get(), expected_generation) {
+                if let Some(navigation_ready) = navigation_ready_for_result {
+                    navigation_ready.set(true);
+                }
+                if let Some(navigation_settled) = navigation_settled_for_result {
+                    navigation_settled();
+                }
             }
             return;
         }
@@ -192,13 +208,18 @@ fn show_photo(
         if let Some(navigation_ready) = navigation_ready_for_result {
             navigation_ready.set(true);
         }
+        if let Some(navigation_settled) = navigation_settled_for_result {
+            navigation_settled();
+        }
         lease.release();
     });
 }
 
 fn viewer_trace(message: impl std::fmt::Display) {
     if std::env::var_os("PICASA_TRACE").is_some() {
-        eprintln!("PIC_VIEWER {message}");
+        static TRACE_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let elapsed = TRACE_STARTED.get_or_init(std::time::Instant::now).elapsed();
+        eprintln!("PIC_VIEWER t_ms={} {message}", elapsed.as_millis());
     }
 }
 

@@ -300,6 +300,48 @@ const DISPLAY_TEXTURE_CACHE_CAPACITY: usize = 32;
 // protects large/zoomed viewports.
 const DISPLAY_TEXTURE_CACHE_BYTE_BUDGET: usize = 256 * 1024 * 1024;
 
+#[derive(Default)]
+struct WheelNavigationState {
+    pending_target: Option<usize>,
+    active_direction: i32,
+}
+
+impl WheelNavigationState {
+    fn begin(&mut self, direction: i32) {
+        self.pending_target = None;
+        self.active_direction = direction;
+    }
+
+    fn queue_step(&mut self, current: usize, direction: i32, len: usize) -> Option<usize> {
+        let base = self.pending_target.unwrap_or(current);
+        let target = navigation_step(base, direction, len);
+        (target != base).then(|| {
+            self.pending_target = Some(target);
+            target
+        })
+    }
+
+    fn take_pending_target(&mut self) -> Option<usize> {
+        self.active_direction = 0;
+        self.pending_target.take()
+    }
+
+    fn cancel(&mut self) {
+        self.pending_target = None;
+        self.active_direction = 0;
+    }
+}
+
+fn navigation_step(current: usize, direction: i32, len: usize) -> usize {
+    if direction < 0 {
+        current.saturating_sub(1)
+    } else if direction > 0 && len > 0 {
+        (current + 1).min(len - 1)
+    } else {
+        current
+    }
+}
+
 pub struct Lightbox {
     pub root: gtk::Overlay,
     backdrop: gtk::Box,
@@ -317,6 +359,7 @@ pub struct Lightbox {
     load_generation: Rc<Cell<u64>>,
     decode_cancel: Rc<RefCell<Option<Arc<ViewerRequestLease>>>>,
     key_navigation_ready: Rc<Cell<bool>>,
+    wheel_navigation: Rc<RefCell<WheelNavigationState>>,
     photo_changed: PhotoChangedHandler,
     // Keeps the toolbar 1:1 toggle in sync when the lightbox changes the mode
     // itself (for example Ctrl+wheel leaves 1:1 for a manual zoom).

@@ -141,6 +141,7 @@ impl Lightbox {
         let load_generation = Rc::new(Cell::new(0u64));
         let decode_cancel: Rc<RefCell<Option<Arc<ViewerRequestLease>>>> = Rc::new(RefCell::new(None));
         let key_navigation_ready = Rc::new(Cell::new(true));
+        let wheel_navigation = Rc::new(RefCell::new(WheelNavigationState::default()));
         let photo_changed: PhotoChangedHandler = Rc::new(RefCell::new(None));
         let one_to_one_sync: OneToOneSyncHandler = Rc::new(RefCell::new(None));
         let context_menu: ContextMenuHandler = Rc::new(RefCell::new(None));
@@ -341,14 +342,106 @@ impl Lightbox {
         let picture_for_scroll = picture.clone();
         let root_for_scroll = root.clone();
         let zoom_for_scroll = zoom.clone();
-        let generation_for_scroll = load_generation.clone();
-        let cancel_for_scroll = decode_cancel.clone();
-        let photo_changed_for_scroll = photo_changed.clone();
-        let viewport_for_scroll = picture_viewport.clone();
         let native_texture_for_scroll = native_texture.clone();
-        let display_cache_for_scroll = display_texture_cache.clone();
         let one_to_one_for_scroll = one_to_one_active.clone();
         let one_to_one_sync_for_scroll = one_to_one_sync.clone();
+        let wheel_navigation_for_scroll = wheel_navigation.clone();
+        let wheel_dispatch_slot: Rc<RefCell<Option<Rc<dyn Fn(usize, i32)>>>> =
+            Rc::new(RefCell::new(None));
+
+        let wheel_dispatch: Rc<dyn Fn(usize, i32)> = {
+            let photos = photos.clone();
+            let index = index.clone();
+            let picture = picture.clone();
+            let root = root.clone();
+            let zoom = zoom.clone();
+            let generation = load_generation.clone();
+            let decode_cancel = decode_cancel.clone();
+            let photo_changed = photo_changed.clone();
+            let viewport = picture_viewport.clone();
+            let native_texture = native_texture.clone();
+            let display_cache = display_texture_cache.clone();
+            let one_to_one = one_to_one_active.clone();
+            let key_navigation_ready = key_navigation_ready.clone();
+            let wheel_navigation = wheel_navigation.clone();
+            let dispatch_slot = wheel_dispatch_slot.clone();
+            let index_for_settled = index.clone();
+            let wheel_navigation_for_settled = wheel_navigation.clone();
+            let settled: Rc<dyn Fn()> = Rc::new(move || {
+                let Some(target) = wheel_navigation_for_settled
+                    .borrow_mut()
+                    .take_pending_target()
+                else {
+                    return;
+                };
+                let current = index_for_settled.get();
+                if target == current {
+                    return;
+                }
+                let direction = if target < current { -1 } else { 1 };
+                viewer_trace(format!(
+                    "navigation_dispatch source=wheel_coalesced from_index={} to_index={} direction={direction}",
+                    current, target
+                ));
+                if let Some(dispatch) = dispatch_slot.borrow().as_ref() {
+                    dispatch(target, direction);
+                }
+            });
+            Rc::new(move |next, direction| {
+                // Wheel requests own their completion state. If this replaces
+                // an arrow request, restore arrow readiness immediately so a
+                // subsequent key press retains its established behavior.
+                key_navigation_ready.set(true);
+                wheel_navigation.borrow_mut().begin(direction);
+                index.set(next);
+                zoom.set(0.0);
+                one_to_one.set(false);
+                native_texture.borrow_mut().take();
+                reset_viewport(&viewport);
+                let (fit_geometry_fixed, cache_hit) = prepare_navigation_photo(
+                    &picture,
+                    photos.borrow().get(next),
+                    &root,
+                    zoom.get(),
+                    &display_cache,
+                );
+                viewer_trace(format!(
+                    "infobar_update source=wheel index={} uri={}",
+                    next,
+                    viewer_trace_uri(&photos.borrow()[next].path()),
+                ));
+                notify_photo_changed(&photo_changed, &photos.borrow(), next);
+                let expected_generation = generation.get().wrapping_add(1);
+                generation.set(expected_generation);
+                show_photo(
+                    &picture,
+                    &photos.borrow(),
+                    next,
+                    &root,
+                    zoom.clone(),
+                    generation.clone(),
+                    expected_generation,
+                    decode_cancel.clone(),
+                    &viewport,
+                    native_texture.clone(),
+                    display_cache.clone(),
+                    fit_geometry_fixed,
+                    cache_hit,
+                    None,
+                    Some(settled.clone()),
+                );
+                schedule_lightbox_prefetch(
+                    photos.clone(),
+                    next,
+                    direction,
+                    root.clone(),
+                    zoom.clone(),
+                    display_cache.clone(),
+                    generation.clone(),
+                );
+            })
+        };
+        wheel_dispatch_slot.replace(Some(wheel_dispatch.clone()));
 
         scroll.connect_scroll(move |controller, _, dy| {
             
@@ -390,60 +483,44 @@ impl Lightbox {
                 return glib::Propagation::Proceed;
             }
 
+            viewer_trace(format!("wheel_event dy={dy}"));
+
             let len = photos_for_scroll.borrow().len();
             if len == 0 {
                 return glib::Propagation::Stop;
             }
 
+            let direction = if dy < 0.0 { -1 } else { 1 };
             let current = index_for_scroll.get();
-            let next = if dy < 0.0 {
-                current.saturating_sub(1)
-            } else {
-                (current + 1).min(len - 1)
-            };
+            if wheel_navigation_for_scroll.borrow().active_direction != 0 {
+                let mut state = wheel_navigation_for_scroll.borrow_mut();
+                if state.active_direction != 0 && state.active_direction != direction {
+                    state.cancel();
+                    let next = navigation_step(current, direction, len);
+                    drop(state);
+                    if next != current {
+                        viewer_trace(format!(
+                            "navigation_dispatch source=wheel_reversal from_index={} to_index={} direction={direction}",
+                            current, next
+                        ));
+                        wheel_dispatch(next, direction);
+                    }
+                } else if let Some(target) = state.queue_step(current, direction, len) {
+                    viewer_trace(format!(
+                        "wheel_accumulate current_index={} target_index={} direction={direction}",
+                        current, target
+                    ));
+                }
+                return glib::Propagation::Stop;
+            }
 
+            let next = navigation_step(current, direction, len);
             if next != current {
-                index_for_scroll.set(next);
-                zoom_for_scroll.set(0.0);
-                one_to_one_for_scroll.set(false);
-                native_texture_for_scroll.borrow_mut().take();
-                reset_viewport(&viewport_for_scroll);
-                let (fit_geometry_fixed, cache_hit) = prepare_navigation_photo(
-                    &picture_for_scroll,
-                    photos_for_scroll.borrow().get(next),
-                    &root_for_scroll,
-                    zoom_for_scroll.get(),
-                    &display_cache_for_scroll,
-                );
-                notify_photo_changed(&photo_changed_for_scroll, &photos_for_scroll.borrow(), next);
-                let generation = generation_for_scroll.get().wrapping_add(1);
-                generation_for_scroll.set(generation);
-
-                show_photo(
-                    &picture_for_scroll,
-                    &photos_for_scroll.borrow(),
-                    next,
-                    &root_for_scroll,
-                    zoom_for_scroll.clone(),
-                    generation_for_scroll.clone(),
-                    generation,
-                    cancel_for_scroll.clone(),
-                    &viewport_for_scroll,
-                    native_texture_for_scroll.clone(),
-                    display_cache_for_scroll.clone(),
-                    fit_geometry_fixed,
-                    cache_hit,
-                    None,
-                );
-                schedule_lightbox_prefetch(
-                    photos_for_scroll.clone(),
-                    next,
-                    if dy < 0.0 { -1 } else { 1 },
-                    root_for_scroll.clone(),
-                    zoom_for_scroll.clone(),
-                    display_cache_for_scroll.clone(),
-                    generation_for_scroll.clone(),
-                );
+                viewer_trace(format!(
+                    "navigation_dispatch source=wheel from_index={} to_index={} direction={direction}",
+                    current, next
+                ));
+                wheel_dispatch(next, direction);
             }
 
             glib::Propagation::Stop
@@ -467,6 +544,7 @@ impl Lightbox {
         let one_to_one_for_key = one_to_one_active.clone();
         let collection_navigation_for_key = collection_navigation.clone();
         let key_navigation_ready_for_key = key_navigation_ready.clone();
+        let wheel_navigation_for_key = wheel_navigation.clone();
 
         key.connect_key_pressed(move |_, key, _, _| {
             if (key == gtk::gdk::Key::Escape || key == gtk::gdk::Key::BackSpace)
@@ -529,6 +607,9 @@ impl Lightbox {
                 );
                 glib::Propagation::Stop
             } else if key == gtk::gdk::Key::Left || key == gtk::gdk::Key::Right {
+                // Arrow navigation never inherits an accumulated wheel target.
+                // Its one-step readiness behavior remains otherwise unchanged.
+                wheel_navigation_for_key.borrow_mut().cancel();
                 if !key_navigation_ready_for_key.get() {
                     return glib::Propagation::Stop;
                 }
@@ -538,11 +619,8 @@ impl Lightbox {
                 }
 
                 let current = index_for_key.get();
-                let next = if key == gtk::gdk::Key::Left {
-                    current.saturating_sub(1)
-                } else {
-                    (current + 1).min(len - 1)
-                };
+                let direction = if key == gtk::gdk::Key::Left { -1 } else { 1 };
+                let next = navigation_step(current, direction, len);
 
                 if next != current {
                     key_navigation_ready_for_key.set(false);
@@ -576,11 +654,12 @@ impl Lightbox {
                         fit_geometry_fixed,
                         cache_hit,
                         Some(key_navigation_ready_for_key.clone()),
+                        None,
                     );
                     schedule_lightbox_prefetch(
                         photos_for_key.clone(),
                         next,
-                        if key == gtk::gdk::Key::Left { -1 } else { 1 },
+                        direction,
                         root_for_escape.clone(),
                         zoom_for_key.clone(),
                         display_cache_for_key.clone(),
@@ -619,6 +698,7 @@ impl Lightbox {
             load_generation,
             decode_cancel,
             key_navigation_ready,
+            wheel_navigation,
             photo_changed,
             one_to_one_sync,
             context_menu,
@@ -748,6 +828,7 @@ impl Lightbox {
         self.zoom_before_one_to_one.set(0.0);
         self.one_to_one_active.set(false);
         self.key_navigation_ready.set(true);
+        self.wheel_navigation.borrow_mut().cancel();
         self.native_texture.borrow_mut().take();
         reset_viewport(&self.picture_viewport);
         notify_photo_changed(&self.photo_changed, &self.photos.borrow(), self.index.get());
@@ -824,6 +905,7 @@ impl Lightbox {
                 fit_geometry_fixed,
                 cache_hit,
                 None,
+                None,
             );
             fit_picture(
                 &picture,
@@ -848,6 +930,7 @@ impl Lightbox {
 
 
     pub fn navigate_photo(&self, direction: i32) {
+        self.wheel_navigation.borrow_mut().cancel();
         if !self.root.is_visible() || !self.key_navigation_ready.get() {
             return;
         }
@@ -857,13 +940,7 @@ impl Lightbox {
         }
 
         let current = self.index.get();
-        let next = if direction < 0 {
-            current.saturating_sub(1)
-        } else if direction > 0 {
-            (current + 1).min(len - 1)
-        } else {
-            current
-        };
+        let next = navigation_step(current, direction, len);
         if next == current {
             return;
         }
@@ -902,6 +979,7 @@ impl Lightbox {
             fit_geometry_fixed,
             cache_hit,
             Some(self.key_navigation_ready.clone()),
+            None,
         );
         schedule_lightbox_prefetch(
             self.photos.clone(),
@@ -987,6 +1065,7 @@ impl Lightbox {
             fit_geometry_fixed,
             cache_hit,
             None,
+            None,
         );
         self.root.grab_focus();
     }
@@ -1011,6 +1090,7 @@ impl Lightbox {
         }
         self.one_to_one_active.set(false);
         self.key_navigation_ready.set(true);
+        self.wheel_navigation.borrow_mut().cancel();
         self.zoom.set(0.0);
         reset_viewport(&self.picture_viewport);
         self.root.set_visible(false);
@@ -1039,6 +1119,7 @@ impl Lightbox {
             self.display_texture_cache.clone(),
             false,
             false,
+            None,
             None,
         );
     }
