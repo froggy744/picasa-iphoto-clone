@@ -22,6 +22,7 @@ fn show_photo(
     fit_geometry_fixed: bool,
     cache_hit: bool,
 ) {
+    let navigation_started = std::time::Instant::now();
     let Some(photo) = photos.get(index) else {
         return;
     };
@@ -38,6 +39,11 @@ fn show_photo(
             "cache_hit lane=foreground uri={}",
             viewer_trace_uri(&path)
         ));
+        viewer_trace(format!(
+            "display_done lane=foreground source=texture_cache navigation_ms={} uri={}",
+            navigation_started.elapsed().as_millis(),
+            viewer_trace_uri(&path)
+        ));
         cancel_lightbox_prefetch_except(None);
         VIEWER_FOREGROUND_GENERATION.store(0, Ordering::Release);
         return;
@@ -48,6 +54,8 @@ fn show_photo(
         viewer_decode_target(root, rotation, zoom.get() < 0.0);
     let key = ViewerRequestKey {
         path: path.clone(),
+        mtime: photo.mtime(),
+        size_bytes: photo.size_bytes(),
         rotation,
         edit_recipe: edit_recipe_text.clone(),
         target_width,
@@ -131,6 +139,11 @@ fn show_photo(
                 }
 
                 picture.set_paintable(Some(&texture));
+                viewer_trace(format!(
+                    "display_done lane=foreground source=decode navigation_ms={} uri={}",
+                    navigation_started.elapsed().as_millis(),
+                    viewer_trace_uri(&cache_path),
+                ));
                 if zoom.get() >= 0.0 {
                     if !fit_geometry_fixed {
                         fit_picture(
@@ -232,10 +245,27 @@ fn start_viewer_request(key: ViewerRequestKey, request: Arc<ViewerRequest>) {
             ));
             let started = std::time::Instant::now();
             let recipe = crate::edit::EditRecipe::decode(&worker_key.edit_recipe);
+            let lane_request = request_for_worker.clone();
+            let cancelled_request = request_for_worker.clone();
+            let read_context = crate::source::ViewerReadContext::new(
+                move || {
+                    if lane_request.foreground.load(Ordering::Acquire) {
+                        crate::source::ViewerReadLane::Foreground
+                    } else {
+                        crate::source::ViewerReadLane::Prefetch
+                    }
+                },
+                move || !cancelled_request.has_consumers(),
+                Some(crate::source::ViewerSourceFingerprint {
+                    mtime: worker_key.mtime,
+                    size_bytes: worker_key.size_bytes,
+                }),
+            );
             let result = crate::thumbnail::decode_for_viewer_with_cancel(
                 &worker_key.path,
                 worker_key.target_width,
                 worker_key.target_height,
+                Some(&read_context),
                 || !request_for_worker.has_consumers(),
             )
             .map(|image| {
@@ -488,6 +518,8 @@ fn prefetch_display_texture(
     let edit_recipe_text = photo.edit_recipe();
     let key = ViewerRequestKey {
         path: path.clone(),
+        mtime: photo.mtime(),
+        size_bytes: photo.size_bytes(),
         rotation,
         edit_recipe: edit_recipe_text.clone(),
         target_width,

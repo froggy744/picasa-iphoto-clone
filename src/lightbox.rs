@@ -80,6 +80,8 @@ static VIEWER_FOREGROUND_GENERATION: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ViewerRequestKey {
     path: String,
+    mtime: i64,
+    size_bytes: i64,
     rotation: i32,
     edit_recipe: String,
     target_width: u32,

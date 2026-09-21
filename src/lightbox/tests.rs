@@ -5,6 +5,8 @@ mod viewer_presentation_tests {
     fn request_key(name: &str) -> ViewerRequestKey {
         ViewerRequestKey {
             path: format!("/test/{name}.jpg"),
+            mtime: 1,
+            size_bytes: 1,
             rotation: 0,
             edit_recipe: String::new(),
             target_width: 800,

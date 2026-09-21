@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -15,14 +15,36 @@ pub enum ViewerReadLane {
     Prefetch,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ViewerSourceFingerprint {
+    pub mtime: i64,
+    pub size_bytes: i64,
+}
+
+impl ViewerSourceFingerprint {
+    fn valid(self) -> bool {
+        self.mtime > 0 && self.size_bytes > 0
+    }
+}
+
+pub struct ViewerSourceRead {
+    pub bytes: Arc<[u8]>,
+    pub cache_hit: bool,
+}
+
 #[derive(Clone)]
 pub struct ViewerReadContext {
     lane: Arc<dyn Fn() -> ViewerReadLane + Send + Sync>,
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    fingerprint: Option<ViewerSourceFingerprint>,
 }
 
 impl ViewerReadContext {
-    pub fn new<L, C>(lane: L, cancelled: C) -> Self
+    pub fn new<L, C>(
+        lane: L,
+        cancelled: C,
+        fingerprint: Option<ViewerSourceFingerprint>,
+    ) -> Self
     where
         L: Fn() -> ViewerReadLane + Send + Sync + 'static,
         C: Fn() -> bool + Send + Sync + 'static,
@@ -30,6 +52,7 @@ impl ViewerReadContext {
         Self {
             lane: Arc::new(lane),
             cancelled: Arc::new(cancelled),
+            fingerprint: fingerprint.filter(|fingerprint| fingerprint.valid()),
         }
     }
 
@@ -114,6 +137,7 @@ impl PriorityReadGate {
         }
     }
 
+    #[cfg(test)]
     fn run<T>(&self, context: &ViewerReadContext, operation: impl FnOnce() -> T) -> Option<T> {
         let _permit = self.acquire(context)?;
         Some(operation())
@@ -140,6 +164,92 @@ impl Drop for PriorityReadPermit<'_> {
 
 static SMB_VIEWER_READ_GATE: OnceLock<PriorityReadGate> = OnceLock::new();
 static NFS_VIEWER_READ_GATE: OnceLock<PriorityReadGate> = OnceLock::new();
+
+const VIEWER_SOURCE_CACHE_MAX_ENTRIES: usize = 16;
+const VIEWER_SOURCE_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+struct ViewerSourceCacheEntry {
+    reference: String,
+    fingerprint: ViewerSourceFingerprint,
+    bytes: Arc<[u8]>,
+}
+
+struct ViewerSourceCache {
+    entries: VecDeque<ViewerSourceCacheEntry>,
+    total_bytes: usize,
+    max_entries: usize,
+    max_bytes: usize,
+}
+
+impl ViewerSourceCache {
+    fn new(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            total_bytes: 0,
+            max_entries,
+            max_bytes,
+        }
+    }
+
+    fn lookup(
+        &mut self,
+        reference: &str,
+        fingerprint: ViewerSourceFingerprint,
+    ) -> Option<Arc<[u8]>> {
+        let position = self.entries.iter().position(|entry| {
+            entry.reference == reference && entry.fingerprint == fingerprint
+        })?;
+        let entry = self.entries.remove(position)?;
+        let bytes = entry.bytes.clone();
+        self.entries.push_front(entry);
+        Some(bytes)
+    }
+
+    fn insert(
+        &mut self,
+        reference: &str,
+        fingerprint: ViewerSourceFingerprint,
+        bytes: Arc<[u8]>,
+    ) -> Vec<(String, usize)> {
+        if bytes.len() > self.max_bytes || self.max_entries == 0 {
+            return Vec::new();
+        }
+        if let Some(position) = self.entries.iter().position(|entry| {
+            entry.reference == reference && entry.fingerprint == fingerprint
+        }) {
+            if let Some(entry) = self.entries.remove(position) {
+                self.total_bytes = self.total_bytes.saturating_sub(entry.bytes.len());
+            }
+        }
+        self.total_bytes += bytes.len();
+        self.entries.push_front(ViewerSourceCacheEntry {
+            reference: reference.to_owned(),
+            fingerprint,
+            bytes,
+        });
+
+        let mut evicted = Vec::new();
+        while self.entries.len() > self.max_entries || self.total_bytes > self.max_bytes {
+            let Some(entry) = self.entries.pop_back() else {
+                break;
+            };
+            self.total_bytes = self.total_bytes.saturating_sub(entry.bytes.len());
+            evicted.push((entry.reference, entry.bytes.len()));
+        }
+        evicted
+    }
+}
+
+static VIEWER_SOURCE_CACHE: OnceLock<Mutex<ViewerSourceCache>> = OnceLock::new();
+
+fn viewer_source_cache() -> &'static Mutex<ViewerSourceCache> {
+    VIEWER_SOURCE_CACHE.get_or_init(|| {
+        Mutex::new(ViewerSourceCache::new(
+            VIEWER_SOURCE_CACHE_MAX_ENTRIES,
+            VIEWER_SOURCE_CACHE_MAX_BYTES,
+        ))
+    })
+}
 
 fn availability_cache() -> &'static Mutex<HashMap<String, bool>> {
     AVAILABILITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -290,15 +400,102 @@ fn trace_reference(reference: &str) -> String {
     format!("{scheme}://{safe_rest}")
 }
 
+fn read_cached_network_with<F>(
+    cache: &Mutex<ViewerSourceCache>,
+    reference: &str,
+    fingerprint: ViewerSourceFingerprint,
+    reader: F,
+) -> Result<ViewerSourceRead>
+where
+    F: FnOnce() -> Result<Vec<u8>>,
+{
+    if let Some(bytes) = cache.lock().unwrap().lookup(reference, fingerprint) {
+        return Ok(ViewerSourceRead {
+            bytes,
+            cache_hit: true,
+        });
+    }
+    let bytes: Arc<[u8]> = reader()?.into();
+    let inserted_bytes = bytes.len();
+    let (evicted, inserted) = {
+        let mut cache = cache.lock().unwrap();
+        let inserted = inserted_bytes <= cache.max_bytes && cache.max_entries != 0;
+        let evicted = cache.insert(reference, fingerprint, bytes.clone());
+        (evicted, inserted)
+    };
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!(
+            "PIC_VIEWER source_cache action={} bytes={} uri={}",
+            if inserted { "insert" } else { "skip_oversize" },
+            inserted_bytes,
+            trace_reference(reference),
+        );
+        for (evicted_reference, evicted_bytes) in evicted {
+            eprintln!(
+                "PIC_VIEWER source_cache action=evict bytes={} uri={}",
+                evicted_bytes,
+                trace_reference(&evicted_reference),
+            );
+        }
+    }
+    Ok(ViewerSourceRead {
+        bytes,
+        cache_hit: false,
+    })
+}
+
 /// Read an original for the lightbox. Direct SMB and NFS already serialize
 /// their process-wide sessions; this matching Rust-side gate makes that queue
 /// foreground-aware and removes cancelled waiters before they enter FFI.
-pub fn read_for_viewer(reference: &str, context: &ViewerReadContext) -> Result<Vec<u8>> {
+/// Successful network bytes are retained before the caller's stale check, so
+/// reversing direction can reuse work that the original consumer no longer needs.
+pub fn read_for_viewer(
+    reference: &str,
+    context: &ViewerReadContext,
+) -> Result<ViewerSourceRead> {
     if context.cancelled() {
         anyhow::bail!("cancelled before source read");
     }
     #[cfg(target_os = "linux")]
     if crate::network_shares::private(reference) {
+        if let Some(fingerprint) = context.fingerprint {
+            if let Some(bytes) = viewer_source_cache()
+                .lock()
+                .unwrap()
+                .lookup(reference, fingerprint)
+            {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "PIC_VIEWER source_cache lane={} action=hit bytes={} uri={}",
+                        match context.lane() {
+                            ViewerReadLane::Foreground => "foreground",
+                            ViewerReadLane::Prefetch => "prefetch",
+                        },
+                        bytes.len(),
+                        trace_reference(reference),
+                    );
+                }
+                return Ok(ViewerSourceRead {
+                    bytes,
+                    cache_hit: true,
+                });
+            }
+        }
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "PIC_VIEWER source_cache lane={} action={} uri={}",
+                match context.lane() {
+                    ViewerReadLane::Foreground => "foreground",
+                    ViewerReadLane::Prefetch => "prefetch",
+                },
+                if context.fingerprint.is_some() {
+                    "miss"
+                } else {
+                    "bypass"
+                },
+                trace_reference(reference),
+            );
+        }
         let gate = if reference.starts_with("smb://") {
             SMB_VIEWER_READ_GATE.get_or_init(PriorityReadGate::new)
         } else {
@@ -318,9 +515,65 @@ pub fn read_for_viewer(reference: &str, context: &ViewerReadContext) -> Result<V
                 trace_reference(reference),
             );
         }
-        return crate::network_shares::read(reference);
+        // A request may have waited behind an active native read. Recheck the
+        // cache after admission so a completed stale request is not reread.
+        if let Some(fingerprint) = context.fingerprint {
+            if let Some(bytes) = viewer_source_cache()
+                .lock()
+                .unwrap()
+                .lookup(reference, fingerprint)
+            {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "PIC_VIEWER source_cache lane={} action=hit_after_wait bytes={} uri={}",
+                        match context.lane() {
+                            ViewerReadLane::Foreground => "foreground",
+                            ViewerReadLane::Prefetch => "prefetch",
+                        },
+                        bytes.len(),
+                        trace_reference(reference),
+                    );
+                }
+                return Ok(ViewerSourceRead {
+                    bytes,
+                    cache_hit: true,
+                });
+            }
+        }
+        let started = Instant::now();
+        let result = if let Some(fingerprint) = context.fingerprint {
+            read_cached_network_with(viewer_source_cache(), reference, fingerprint, || {
+                crate::network_shares::read(reference)
+            })
+        } else {
+            crate::network_shares::read(reference).map(|bytes| ViewerSourceRead {
+                bytes: bytes.into(),
+                cache_hit: false,
+            })
+        };
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "PIC_VIEWER network_done lane={} read_ms={} bytes={} source={} outcome={} uri={}",
+                match context.lane() {
+                    ViewerReadLane::Foreground => "foreground",
+                    ViewerReadLane::Prefetch => "prefetch",
+                },
+                started.elapsed().as_millis(),
+                result.as_ref().map(|read| read.bytes.len()).unwrap_or(0),
+                result
+                    .as_ref()
+                    .map(|read| if read.cache_hit { "cache" } else { "network" })
+                    .unwrap_or("none"),
+                if result.is_ok() { "ok" } else { "error" },
+                trace_reference(reference),
+            );
+        }
+        return result;
     }
-    read(reference)
+    read(reference).map(|bytes| ViewerSourceRead {
+        bytes: bytes.into(),
+        cache_hit: false,
+    })
 }
 
 #[cfg(test)]
@@ -336,6 +589,7 @@ mod viewer_read_tests {
         ViewerReadContext::new(
             move || lane,
             move || cancelled.load(Ordering::Acquire),
+            None,
         )
     }
 
@@ -391,6 +645,58 @@ mod viewer_read_tests {
     }
 
     #[test]
+    fn promoted_waiter_takes_foreground_priority_without_restarting() {
+        let gate = Arc::new(PriorityReadGate::new());
+        let (entered_send, entered_receive) = mpsc::channel();
+        let (release_send, release_receive) = mpsc::channel();
+        let active_gate = gate.clone();
+        let active = std::thread::spawn(move || {
+            let context = context(ViewerReadLane::Prefetch, Arc::new(AtomicBool::new(false)));
+            active_gate.run(&context, || {
+                entered_send.send(()).unwrap();
+                release_receive.recv().unwrap();
+            })
+        });
+        entered_receive.recv().unwrap();
+
+        let (order_send, order_receive) = mpsc::channel();
+        let earlier_gate = gate.clone();
+        let earlier_send = order_send.clone();
+        let earlier = std::thread::spawn(move || {
+            let context = context(ViewerReadLane::Prefetch, Arc::new(AtomicBool::new(false)));
+            earlier_gate.run(&context, || earlier_send.send("earlier-prefetch").unwrap())
+        });
+        wait_for_waiters(&gate, 1);
+
+        let promoted = Arc::new(AtomicBool::new(false));
+        let promoted_gate = gate.clone();
+        let promoted_state = promoted.clone();
+        let later = std::thread::spawn(move || {
+            let context = ViewerReadContext::new(
+                move || {
+                    if promoted_state.load(Ordering::Acquire) {
+                        ViewerReadLane::Foreground
+                    } else {
+                        ViewerReadLane::Prefetch
+                    }
+                },
+                || false,
+                None,
+            );
+            promoted_gate.run(&context, || order_send.send("promoted").unwrap())
+        });
+        wait_for_waiters(&gate, 2);
+        promoted.store(true, Ordering::Release);
+        release_send.send(()).unwrap();
+
+        assert_eq!(order_receive.recv().unwrap(), "promoted");
+        assert_eq!(order_receive.recv().unwrap(), "earlier-prefetch");
+        assert!(active.join().unwrap().is_some());
+        assert!(earlier.join().unwrap().is_some());
+        assert!(later.join().unwrap().is_some());
+    }
+
+    #[test]
     fn cancelled_waiter_never_calls_reader() {
         let gate = Arc::new(PriorityReadGate::new());
         let (entered_send, entered_receive) = mpsc::channel();
@@ -421,5 +727,75 @@ mod viewer_read_tests {
         assert!(active.join().unwrap().is_some());
         assert!(waiting.join().unwrap().is_none());
         assert!(!reader_called.load(Ordering::Acquire));
+    }
+
+    fn fingerprint(mtime: i64, size_bytes: i64) -> ViewerSourceFingerprint {
+        ViewerSourceFingerprint { mtime, size_bytes }
+    }
+
+    #[test]
+    fn completed_network_read_is_reused_after_original_consumer_is_stale() {
+        let cache = Mutex::new(ViewerSourceCache::new(4, 1024));
+        let mut reads = 0;
+        let first = read_cached_network_with(
+            &cache,
+            "smb://server/share/photo.jpg",
+            fingerprint(10, 4),
+            || {
+                reads += 1;
+                Ok(vec![1, 2, 3, 4])
+            },
+        )
+        .unwrap();
+        assert!(!first.cache_hit);
+
+        let second = read_cached_network_with(
+            &cache,
+            "smb://server/share/photo.jpg",
+            fingerprint(10, 4),
+            || {
+                reads += 1;
+                Ok(vec![9, 9, 9, 9])
+            },
+        )
+        .unwrap();
+        assert!(second.cache_hit);
+        assert_eq!(&*second.bytes, &[1, 2, 3, 4]);
+        assert_eq!(reads, 1);
+    }
+
+    #[test]
+    fn changed_source_fingerprint_forces_another_read() {
+        let cache = Mutex::new(ViewerSourceCache::new(4, 1024));
+        let mut reads = 0;
+        for source in [fingerprint(10, 4), fingerprint(11, 4)] {
+            let result = read_cached_network_with(
+                &cache,
+                "nfs://server/export/photo.jpg",
+                source,
+                || {
+                    reads += 1;
+                    Ok(vec![reads as u8; 4])
+                },
+            )
+            .unwrap();
+            assert!(!result.cache_hit);
+        }
+        assert_eq!(reads, 2);
+    }
+
+    #[test]
+    fn source_cache_evicts_lru_at_count_and_byte_limits() {
+        let mut cache = ViewerSourceCache::new(2, 5);
+        cache.insert("smb://server/a.jpg", fingerprint(1, 2), Arc::from([1, 1]));
+        cache.insert("smb://server/b.jpg", fingerprint(1, 2), Arc::from([2, 2]));
+        assert!(cache.lookup("smb://server/a.jpg", fingerprint(1, 2)).is_some());
+        cache.insert("smb://server/c.jpg", fingerprint(1, 2), Arc::from([3, 3]));
+
+        assert!(cache.lookup("smb://server/a.jpg", fingerprint(1, 2)).is_some());
+        assert!(cache.lookup("smb://server/b.jpg", fingerprint(1, 2)).is_none());
+        assert!(cache.lookup("smb://server/c.jpg", fingerprint(1, 2)).is_some());
+        assert!(cache.total_bytes <= 5);
+        assert!(cache.entries.len() <= 2);
     }
 }
