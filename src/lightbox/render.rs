@@ -15,90 +15,77 @@ fn show_photo(
     zoom: Rc<Cell<f64>>,
     generation: Rc<Cell<u64>>,
     expected_generation: u64,
-    decode_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
+    decode_cancel: Rc<RefCell<Option<Arc<ViewerRequestLease>>>>,
     picture_viewport: &gtk::ScrolledWindow,
     native_texture: Rc<RefCell<Option<NativeTextureCache>>>,
     display_texture_cache: DisplayTextureCache,
     fit_geometry_fixed: bool,
     cache_hit: bool,
+    navigation_ready: Option<Rc<Cell<bool>>>,
 ) {
+    let navigation_started = std::time::Instant::now();
     let Some(photo) = photos.get(index) else {
         return;
     };
 
-    // Stop speculative work BEFORE the foreground decode asks for a slot.
-    cancel_lightbox_prefetch();
     // Decode a display-quality image off the GTK thread. Never display a
     // thumbnail in the lightbox; keep the previous full-size image during
     // navigation and show a neutral backdrop on initial open.
     let path = photo.path();
     if let Some(previous) = decode_cancel.borrow_mut().take() {
-        previous.store(true, Ordering::Release);
+        previous.cancel();
     }
     if cache_hit {
+        viewer_trace(format!(
+            "cache_hit lane=foreground uri={}",
+            viewer_trace_uri(&path)
+        ));
+        viewer_trace(format!(
+            "display_done lane=foreground source=texture_cache navigation_ms={} uri={}",
+            navigation_started.elapsed().as_millis(),
+            viewer_trace_uri(&path)
+        ));
+        cancel_lightbox_prefetch_except(None);
         VIEWER_FOREGROUND_GENERATION.store(0, Ordering::Release);
+        if let Some(navigation_ready) = navigation_ready {
+            navigation_ready.set(true);
+        }
         return;
     }
-    VIEWER_FOREGROUND_GENERATION.store(expected_generation, Ordering::Release);
-    let cancelled = Arc::new(AtomicBool::new(false));
-    *decode_cancel.borrow_mut() = Some(cancelled.clone());
-    let cancelled_for_thread = cancelled.clone();
-    let result_slot = ResultSlot::new();
-    let result_slot_for_worker = result_slot.clone();
-    let decode_path = path.clone();
     let rotation = photo.rotation();
     let edit_recipe_text = photo.edit_recipe();
-    let edit_recipe = crate::edit::EditRecipe::decode(&edit_recipe_text);
     let (target_width, target_height, _, _, _, _) =
         viewer_decode_target(root, rotation, zoom.get() < 0.0);
-
-    if std::thread::Builder::new()
-        .name("lightbox-decode".to_string())
-        .spawn(move || {
-            if cancelled_for_thread.load(Ordering::Acquire) {
-                let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
-                    expected_generation, 0, Ordering::AcqRel, Ordering::Acquire
-                );
-                result_slot_for_worker.send(Err(anyhow::anyhow!("cancelled before decode")));
-                return;
-            }
-            let gate = VIEWER_DECODE_GATE
-                .get_or_init(|| DecodeSemaphore::new(MAX_CONCURRENT_VIEWER_DECODES));
-            let Some(_permit) = gate.acquire_cancelled(&cancelled_for_thread) else {
-
-                let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
-                    expected_generation, 0, Ordering::AcqRel, Ordering::Acquire
-                );
-                result_slot_for_worker.send(Err(anyhow::anyhow!("cancelled at decode gate")));
-                return;
-            };
-
-            let result: anyhow::Result<(u32, u32, Vec<u8>)> = (|| {
-                let image = crate::thumbnail::decode_for_viewer_with_cancel(
-                    &decode_path,
-                    target_width,
-                    target_height,
-                    || cancelled_for_thread.load(Ordering::Acquire),
-                )?;
-                if cancelled_for_thread.load(Ordering::Acquire) {
-                    anyhow::bail!("cancelled");
-                }
-                let image = rotate_image(image, rotation);
-                let image = crate::edit::render::apply_recipe(image, &edit_recipe);
-
-                Ok((image.width(), image.height(), image.into_raw()))
-            })();
-            let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
-                expected_generation, 0, Ordering::AcqRel, Ordering::Acquire
-            );
-            result_slot_for_worker.send(result);
-        })
-        .is_err() {
-        result_slot.send(Err(anyhow::anyhow!("could not start lightbox decode thread")));
-        let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
-            expected_generation, 0, Ordering::AcqRel, Ordering::Acquire
-        );
+    let key = ViewerRequestKey {
+        path: path.clone(),
+        mtime: photo.mtime(),
+        size_bytes: photo.size_bytes(),
+        rotation,
+        edit_recipe: edit_recipe_text.clone(),
+        target_width,
+        target_height,
+    };
+    // Keep a matching prefetch alive: the foreground lease below promotes it.
+    // Other speculative requests lose their leases before they can occupy a
+    // decode slot ahead of the selected image.
+    cancel_lightbox_prefetch_except(Some(&key));
+    VIEWER_FOREGROUND_GENERATION.store(expected_generation, Ordering::Release);
+    let (request, lease, claim) = claim_viewer_request(&key, true);
+    viewer_trace(format!(
+        "request lane=foreground action={} uri={} variant={}x{}",
+        match claim {
+            ViewerRequestClaim::New => "new",
+            ViewerRequestClaim::JoinedForeground => "join",
+            ViewerRequestClaim::PromotedPrefetch => "promote",
+        },
+        viewer_trace_uri(&path),
+        target_width,
+        target_height,
+    ));
+    if matches!(claim, ViewerRequestClaim::New) {
+        start_viewer_request(key, request.clone());
     }
+    *decode_cancel.borrow_mut() = Some(lease.clone());
 
     let picture = picture.clone();
     let root = root.clone();
@@ -106,23 +93,45 @@ fn show_photo(
     let cache_path = path.clone();
     let photo = photo.clone();
     let display_texture_cache_for_result = display_texture_cache.clone();
+    let navigation_ready_for_result = navigation_ready.clone();
     glib::MainContext::default().spawn_local(async move {
-        let result = ResultSlot::wait(result_slot).await;
+        let result = ViewerResultSlot::wait(request.result.clone()).await;
 
-        if generation.get() != expected_generation || cancelled.load(Ordering::Acquire) {
-
+        let stale =
+            !viewer_generation_current(generation.get(), expected_generation) || lease.cancelled();
+        if stale {
+            viewer_trace(format!(
+                "display_discard lane=foreground uri={} reason=stale",
+                viewer_trace_uri(&cache_path),
+            ));
+            lease.release();
+            let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
+                expected_generation,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            if let Some(navigation_ready) = navigation_ready_for_result {
+                navigation_ready.set(true);
+            }
             return;
         }
+        let _ = VIEWER_FOREGROUND_GENERATION.compare_exchange(
+            expected_generation,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
 
         match result {
-            Ok((width, height, pixels)) => {
-                let bytes = glib::Bytes::from_owned(pixels);
+            Ok(result) => {
+                let bytes = glib::Bytes::from_owned(result.pixels.clone());
                 let texture = gtk::gdk::MemoryTexture::new(
-                    width as i32,
-                    height as i32,
+                    result.width as i32,
+                    result.height as i32,
                     gtk::gdk::MemoryFormat::R8g8b8a8,
                     &bytes,
-                    width as usize * 4,
+                    result.width as usize * 4,
                 );
 
                 // Never overwrite PhotoObject's source dimensions with the
@@ -138,6 +147,11 @@ fn show_photo(
                 }
 
                 picture.set_paintable(Some(&texture));
+                viewer_trace(format!(
+                    "display_done lane=foreground source=decode navigation_ms={} uri={}",
+                    navigation_started.elapsed().as_millis(),
+                    viewer_trace_uri(&cache_path),
+                ));
                 if zoom.get() >= 0.0 {
                     if !fit_geometry_fixed {
                         fit_picture(
@@ -164,7 +178,6 @@ fn show_photo(
                     picture_viewport.queue_resize();
                     center_viewport_soon(&picture_viewport);
                 }
-
             }
             Err(_) => {
                 // A failed decode must not leave the previous photo visible.
@@ -174,11 +187,128 @@ fn show_photo(
                 picture.set_paintable(gtk::gdk::Paintable::NONE);
                 picture.set_filename(Option::<&str>::None);
                 picture.set_size_request(1, 1);
-
             }
         }
+        if let Some(navigation_ready) = navigation_ready_for_result {
+            navigation_ready.set(true);
+        }
+        lease.release();
     });
+}
 
+fn viewer_trace(message: impl std::fmt::Display) {
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!("PIC_VIEWER {message}");
+    }
+}
+
+fn viewer_trace_uri(uri: &str) -> String {
+    let Some((scheme, rest)) = uri.split_once("://") else {
+        return uri.to_owned();
+    };
+    // Stored share URIs normally contain no authority credentials, but trace
+    // output must remain safe if a URI was supplied with userinfo.
+    let safe_rest = rest
+        .rsplit_once('@')
+        .map(|(_, value)| value)
+        .unwrap_or(rest);
+    format!("{scheme}://{safe_rest}")
+}
+
+fn viewer_generation_current(current: u64, expected: u64) -> bool {
+    current == expected
+}
+
+fn start_viewer_request(key: ViewerRequestKey, request: Arc<ViewerRequest>) {
+    let request_for_worker = request.clone();
+    let worker_key = key.clone();
+    if std::thread::Builder::new()
+        .name("lightbox-decode".to_string())
+        .spawn(move || {
+            let queued = std::time::Instant::now();
+            let gate = VIEWER_DECODE_GATE
+                .get_or_init(|| DecodeSemaphore::new(MAX_CONCURRENT_VIEWER_DECODES));
+            let Some(_permit) = gate.acquire_while(|| request_for_worker.has_consumers()) else {
+                finish_viewer_request(
+                    &worker_key,
+                    &request_for_worker,
+                    Err(Arc::from("cancelled at decode gate")),
+                );
+                return;
+            };
+            if !request_for_worker.has_consumers()
+                || (VIEWER_FOREGROUND_GENERATION.load(Ordering::Acquire) != 0
+                    && !request_for_worker.foreground.load(Ordering::Acquire))
+            {
+                finish_viewer_request(
+                    &worker_key,
+                    &request_for_worker,
+                    Err(Arc::from("cancelled before decode")),
+                );
+                return;
+            }
+            viewer_trace(format!(
+                "decode_start uri={} variant={}x{} queue_ms={}",
+                viewer_trace_uri(&worker_key.path),
+                worker_key.target_width,
+                worker_key.target_height,
+                queued.elapsed().as_millis(),
+            ));
+            let started = std::time::Instant::now();
+            let recipe = crate::edit::EditRecipe::decode(&worker_key.edit_recipe);
+            let lane_request = request_for_worker.clone();
+            let cancelled_request = request_for_worker.clone();
+            let read_context = crate::source::ViewerReadContext::new(
+                move || {
+                    if lane_request.foreground.load(Ordering::Acquire) {
+                        crate::source::ViewerReadLane::Foreground
+                    } else {
+                        crate::source::ViewerReadLane::Prefetch
+                    }
+                },
+                move || !cancelled_request.has_consumers(),
+                Some(crate::source::ViewerSourceFingerprint {
+                    mtime: worker_key.mtime,
+                    size_bytes: worker_key.size_bytes,
+                }),
+            );
+            let result = crate::thumbnail::decode_for_viewer_with_cancel(
+                &worker_key.path,
+                worker_key.target_width,
+                worker_key.target_height,
+                Some(&read_context),
+                || !request_for_worker.has_consumers(),
+            )
+            .map(|image| {
+                let image = crate::edit::render::apply_recipe(
+                    rotate_image(image, worker_key.rotation),
+                    &recipe,
+                );
+                Arc::new(ViewerDecodeResult {
+                    width: image.width(),
+                    height: image.height(),
+                    pixels: image.into_raw(),
+                })
+            })
+            .map_err(|error| Arc::from(error.to_string()));
+            viewer_trace(format!(
+                "decode_done uri={} variant={}x{} elapsed_ms={} outcome={}",
+                viewer_trace_uri(&worker_key.path),
+                worker_key.target_width,
+                worker_key.target_height,
+                started.elapsed().as_millis(),
+                if result.is_ok() { "ok" } else { "error" },
+            ));
+            finish_viewer_request(&worker_key, &request_for_worker, result);
+        })
+        .is_err()
+    {
+        finish_viewer_request(
+            &key,
+            &request,
+            Err(Arc::from("could not start lightbox decode thread")),
+        );
+    }
 }
 
 fn display_texture_cache_lookup(
@@ -245,6 +375,13 @@ fn display_texture_cache_insert(
             break;
         };
         total = total.saturating_sub(removed.bytes);
+        viewer_trace(format!(
+            "cache_evict uri={} bytes={} remaining_entries={} remaining_bytes={}",
+            viewer_trace_uri(&removed.path),
+            removed.bytes,
+            cache.len(),
+            total,
+        ));
     }
 }
 
@@ -252,21 +389,47 @@ thread_local! {
     // Only one lightbox exists, so the pending prefetch timer and cancel token
     // live in thread-local state rather than on every navigation closure.
     static PREFETCH_SOURCE: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
-    static PREFETCH_CANCEL: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+    static PREFETCH_CANCEL: RefCell<Vec<Arc<ViewerRequestLease>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Cancel the pending prefetch timer and any in-flight prefetch decode.
 /// Called on every navigation (so a stale prefetch never competes with the
 /// photo the user actually moved to) and when the lightbox closes.
 fn cancel_lightbox_prefetch() {
+    cancel_lightbox_prefetch_except(None);
+}
+
+/// Cancel speculative leases except for the exact request that the foreground
+/// is about to claim. Retaining that lease makes foreground promotion safe:
+/// cancelling the old prefetch cannot discard the selected image's result.
+fn cancel_lightbox_prefetch_except(keep: Option<&ViewerRequestKey>) {
     PREFETCH_SOURCE.with(|slot| {
         if let Some(source) = slot.borrow_mut().take() {
             source.remove();
         }
     });
     PREFETCH_CANCEL.with(|slot| {
-        if let Some(cancel) = slot.borrow_mut().take() {
-            cancel.store(true, Ordering::Release);
+        let mut leases = slot.borrow_mut();
+        leases.retain(|lease| {
+            let retain = keep.is_some_and(|key| {
+                // The request itself is the canonical key; compare through
+                // the registry's pointer only after the foreground claim.
+                // Before that, an exact key match is represented by the
+                // matching result request held by this lease.
+                let requests = VIEWER_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()));
+                requests
+                    .lock()
+                    .unwrap()
+                    .get(key)
+                    .is_some_and(|request| Arc::ptr_eq(request, &lease.request))
+            });
+            if !retain {
+                lease.cancel();
+            }
+            retain
+        });
+        if keep.is_none() {
+            leases.clear();
         }
     });
 }
@@ -291,7 +454,9 @@ fn schedule_lightbox_prefetch(
     let expected_generation = generation.get();
     let source = glib::timeout_add_local(Duration::from_millis(250), move || {
         if !root.is_visible() || generation.get() != expected_generation {
-            PREFETCH_SOURCE.with(|slot| { slot.borrow_mut().take(); });
+            PREFETCH_SOURCE.with(|slot| {
+                slot.borrow_mut().take();
+            });
             return glib::ControlFlow::Break;
         }
         // Do not launch either neighbor until the requested photo has
@@ -300,26 +465,21 @@ fn schedule_lightbox_prefetch(
         if VIEWER_FOREGROUND_GENERATION.load(Ordering::Acquire) != 0 {
             return glib::ControlFlow::Continue;
         }
-        PREFETCH_SOURCE.with(|slot| { slot.borrow_mut().take(); });
+        PREFETCH_SOURCE.with(|slot| {
+            slot.borrow_mut().take();
+        });
         let len = photos.borrow().len();
         let previous = current.checked_sub(1);
         let next = current.checked_add(1).filter(|&index| index < len);
         // Prefer the direction of travel, but warm *both* immediate neighbors.
         // No folder-wide prefetch: at most two speculative viewer decodes.
-        let targets = if direction < 0 { [previous, next] } else { [next, previous] };
-        let cancel = Arc::new(AtomicBool::new(false));
-        PREFETCH_CANCEL.with(|slot| {
-            slot.borrow_mut().replace(cancel.clone());
-        });
+        let targets = if direction < 0 {
+            [previous, next]
+        } else {
+            [next, previous]
+        };
         for target in targets.into_iter().flatten() {
-            prefetch_display_texture(
-                &photos.borrow(),
-                target,
-                &root,
-                zoom.get(),
-                cache.clone(),
-                cancel.clone(),
-            );
+            prefetch_display_texture(&photos.borrow(), target, &root, zoom.get(), cache.clone());
         }
         glib::ControlFlow::Break
     });
@@ -338,7 +498,6 @@ fn prefetch_display_texture(
     root: &gtk::Overlay,
     zoom: f64,
     cache: DisplayTextureCache,
-    cancel: Arc<AtomicBool>,
 ) {
     let Some(photo) = photos.get(index) else {
         return;
@@ -359,74 +518,64 @@ fn prefetch_display_texture(
     )
     .is_some()
     {
+        viewer_trace(format!(
+            "cache_hit lane=prefetch uri={}",
+            viewer_trace_uri(&path)
+        ));
         return;
     }
 
     let rotation = photo.rotation();
     let edit_recipe_text = photo.edit_recipe();
-    let edit_recipe = crate::edit::EditRecipe::decode(&edit_recipe_text);
-    let decode_path = path.clone();
+    let key = ViewerRequestKey {
+        path: path.clone(),
+        mtime: photo.mtime(),
+        size_bytes: photo.size_bytes(),
+        rotation,
+        edit_recipe: edit_recipe_text.clone(),
+        target_width,
+        target_height,
+    };
+    let (request, lease, claim) = claim_viewer_request(&key, false);
+    viewer_trace(format!(
+        "request lane=prefetch action={} uri={} variant={}x{}",
+        match claim {
+            ViewerRequestClaim::New => "new",
+            ViewerRequestClaim::JoinedForeground => "join",
+            ViewerRequestClaim::PromotedPrefetch => "promote",
+        },
+        viewer_trace_uri(&path),
+        target_width,
+        target_height,
+    ));
+    PREFETCH_CANCEL.with(|slot| slot.borrow_mut().push(lease.clone()));
+    if matches!(claim, ViewerRequestClaim::New) {
+        start_viewer_request(key, request.clone());
+    }
     let cache_path = path.clone();
     let cache_for_result = cache.clone();
-    let result_slot: Arc<ResultSlot<anyhow::Result<(u32, u32, Vec<u8>)>>> = ResultSlot::new();
-    let result_slot_for_worker = result_slot.clone();
-    let cancel_for_thread = cancel.clone();
-    if std::thread::Builder::new()
-        .name("lightbox-prefetch".to_string())
-        .spawn(move || {
-            let aborted = || anyhow::anyhow!("cancelled");
-            if cancel_for_thread.load(Ordering::Acquire) {
-                result_slot_for_worker.send(Err(aborted()));
-                return;
-            }
-            let gate = VIEWER_DECODE_GATE
-                .get_or_init(|| DecodeSemaphore::new(MAX_CONCURRENT_VIEWER_DECODES));
-            let Some(_permit) = gate.acquire_cancelled(&cancel_for_thread) else {
-                result_slot_for_worker.send(Err(aborted()));
-                return;
-            };
-            // A new foreground request may have arrived while we queued
-            // at the gate; release this speculative permit immediately.
-            if VIEWER_FOREGROUND_GENERATION.load(Ordering::Acquire) != 0 {
-                result_slot_for_worker.send(Err(aborted()));
-                return;
-            }
-            let result = (|| -> anyhow::Result<(u32, u32, Vec<u8>)> {
-                let image = crate::thumbnail::decode_for_viewer_with_cancel(
-                    &decode_path,
-                    target_width,
-                    target_height,
-                    || cancel_for_thread.load(Ordering::Acquire),
-                )?;
-                if cancel_for_thread.load(Ordering::Acquire) {
-                    anyhow::bail!("cancelled");
-                }
-                let image = rotate_image(image, rotation);
-                let image = crate::edit::render::apply_recipe(image, &edit_recipe);
-                Ok((image.width(), image.height(), image.into_raw()))
-            })();
-            result_slot_for_worker.send(result);
-        })
-        .is_err()
-    {
-        return;
-    }
 
     glib::MainContext::default().spawn_local(async move {
-        let result = ResultSlot::wait(result_slot).await;
-        if cancel.load(Ordering::Acquire) {
+        let result = ViewerResultSlot::wait(request.result.clone()).await;
+        if lease.cancelled() {
+            viewer_trace(format!(
+                "display_discard lane=prefetch uri={} reason=cancelled",
+                viewer_trace_uri(&cache_path),
+            ));
+            lease.release();
             return;
         }
-        let Ok((width, height, pixels)) = result else {
+        let Ok(result) = result else {
+            lease.release();
             return;
         };
-        let bytes = glib::Bytes::from_owned(pixels);
+        let bytes = glib::Bytes::from_owned(result.pixels.clone());
         let texture = gtk::gdk::MemoryTexture::new(
-            width as i32,
-            height as i32,
+            result.width as i32,
+            result.height as i32,
             gtk::gdk::MemoryFormat::R8g8b8a8,
             &bytes,
-            width as usize * 4,
+            result.width as usize * 4,
         );
         display_texture_cache_insert(
             &cache_for_result,
@@ -437,7 +586,7 @@ fn prefetch_display_texture(
             target_height,
             texture,
         );
-
+        lease.release();
     });
 }
 
@@ -543,7 +692,6 @@ fn center_viewport_soon(viewport: &gtk::ScrolledWindow) {
 
         horizontal.set_value(centered_h);
         vertical.set_value(centered_v);
-
     });
 }
 
@@ -639,7 +787,6 @@ fn fit_picture(
     );
 
     picture.set_size_request(fitted_width, fitted_height);
-
 }
 
 fn fitted_picture_dimensions(

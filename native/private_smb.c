@@ -10,8 +10,15 @@
 #include <sys/stat.h>
 #include <pthread.h>
 
+/* The legacy smbc_* API owns one process-wide client context. Keep calls
+ * serialized because the context and its connection cache are not safe for
+ * concurrent use; do not reinitialize it for each image read. */
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static int initialized = 0;
+static int trace_enabled(void) {
+    const char *value = getenv("PICASA_TRACE");
+    return value && *value;
+}
 static void guest_auth(const char *server, const char *share, char *workgroup, int wglen,
                        char *username, int unlen, char *password, int pwlen) {
     (void)server; (void)share; (void)workgroup; (void)wglen;
@@ -20,10 +27,14 @@ static void guest_auth(const char *server, const char *share, char *workgroup, i
 }
 static int init_smb(char *error, size_t cap) {
     if (!initialized) {
+        if (trace_enabled()) fprintf(stderr, "PIC_SMB_CONNECT create_start\n");
         if (smbc_init(guest_auth, 0) != 0) {
             snprintf(error, cap, "smbc_init: %s", strerror(errno)); return -1;
         }
         initialized = 1;
+        if (trace_enabled()) fprintf(stderr, "PIC_SMB_CONNECT create_ok\n");
+    } else if (trace_enabled()) {
+        fprintf(stderr, "PIC_SMB_CONNECT reuse\n");
     }
     return 0;
 }
@@ -57,6 +68,7 @@ int pic_smb_read(const char *uri, unsigned char **out, size_t *length, size_t ma
     *out=NULL; *length=0;
     pthread_mutex_lock(&lock);
     if (init_smb(error,cap)) { pthread_mutex_unlock(&lock); return -1; }
+    if (trace_enabled()) fprintf(stderr, "PIC_SMB_READ start\n");
     int fd=smbc_open(uri,O_RDONLY,0);
     if (fd < 0) { fail(error,cap,"smbc_open"); pthread_mutex_unlock(&lock); return -1; }
     size_t allocated=64*1024, used=0;
@@ -80,6 +92,7 @@ int pic_smb_read(const char *uri, unsigned char **out, size_t *length, size_t ma
     pthread_mutex_unlock(&lock);
     if (failed) { free(bytes); return -1; }
     *out=bytes; *length=used;
+    if (trace_enabled()) fprintf(stderr, "PIC_SMB_READ done bytes=%zu\n", used);
     return 0;
 }
 void pic_smb_free(void *bytes) { free(bytes); }

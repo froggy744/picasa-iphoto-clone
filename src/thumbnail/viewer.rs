@@ -172,18 +172,21 @@ pub fn decode_for_viewer(
     viewport_width: u32,
     viewport_height: u32,
 ) -> Result<image::RgbaImage> {
-    decode_for_viewer_with_cancel(reference, viewport_width, viewport_height, || false)
+    decode_for_viewer_with_cancel(reference, viewport_width, viewport_height, None, || false)
 }
 
 pub fn decode_for_viewer_with_cancel<F>(
     reference: &str,
     viewport_width: u32,
     viewport_height: u32,
+    read_context: Option<&crate::source::ViewerReadContext>,
     cancelled: F,
 ) -> Result<image::RgbaImage>
 where
     F: Fn() -> bool,
 {
+    let decode_started = std::time::Instant::now();
+    let mut source_read_ms = 0;
     check_viewer_cancelled(&cancelled, "before_orientation_metadata")?;
     // HEIF container transforms are applied by heif-oxide during decode.
     let orientation = if is_heif(reference) {
@@ -253,7 +256,13 @@ where
             (image, target_width, target_height)
         }
     } else if is_jpeg(reference) {
-        let bytes = crate::source::read(reference)?;
+        // A network read is synchronous and the SMB/NFS backends serialize
+        // their sessions. Bail out before entering that lock when navigation
+        // has already made this request obsolete.
+        check_viewer_cancelled(&cancelled, "before_source_read")?;
+        let source_started = std::time::Instant::now();
+        let bytes = read_viewer_source(reference, read_context)?;
+        source_read_ms += source_started.elapsed().as_millis();
         let (source_width, source_height) = jpeg_dimensions(&bytes)?;
         let (target_width, target_height) = viewer_target_dimensions(
             source_width,
@@ -275,7 +284,10 @@ where
             target_height,
         )
     } else if is_heif(reference) {
-        let bytes = crate::source::read(reference)?;
+        check_viewer_cancelled(&cancelled, "before_source_read")?;
+        let source_started = std::time::Instant::now();
+        let bytes = read_viewer_source(reference, read_context)?;
+        source_read_ms += source_started.elapsed().as_millis();
         check_viewer_cancelled(&cancelled, "before_heif_decode")?;
         let decoded = decode_heif(&bytes)?;
         check_viewer_cancelled(&cancelled, "after_heif_decode")?;
@@ -291,7 +303,10 @@ where
         );
         (image, target_width, target_height)
     } else {
-        let bytes = crate::source::read(reference)?;
+        check_viewer_cancelled(&cancelled, "before_source_read")?;
+        let source_started = std::time::Instant::now();
+        let bytes = read_viewer_source(reference, read_context)?;
+        source_read_ms += source_started.elapsed().as_millis();
         let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
         check_viewer_cancelled(&cancelled, "before_generic_decode")?;
         let image = reader.decode()?;
@@ -320,7 +335,34 @@ where
     check_viewer_cancelled(&cancelled, "before_final_orientation")?;
     let oriented = apply_orientation(DynamicImage::ImageRgba8(image), orientation).into_rgba8();
     check_viewer_cancelled(&cancelled, "after_final_orientation")?;
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        let total_ms = decode_started.elapsed().as_millis();
+        eprintln!(
+            "PIC_VIEWER decode_stage source_ms={} cpu_ms={} uri={}",
+            source_read_ms,
+            total_ms.saturating_sub(source_read_ms),
+            viewer_trace_reference(reference),
+        );
+    }
     Ok(oriented)
+}
+
+fn read_viewer_source(
+    reference: &str,
+    context: Option<&crate::source::ViewerReadContext>,
+) -> Result<std::sync::Arc<[u8]>> {
+    match context {
+        Some(context) => Ok(crate::source::read_for_viewer(reference, context)?.bytes),
+        None => Ok(crate::source::read(reference)?.into()),
+    }
+}
+
+fn viewer_trace_reference(reference: &str) -> String {
+    let Some((scheme, rest)) = reference.split_once("://") else {
+        return reference.to_owned();
+    };
+    let safe_rest = rest.rsplit_once('@').map(|(_, value)| value).unwrap_or(rest);
+    format!("{scheme}://{safe_rest}")
 }
 
 fn check_viewer_cancelled<F>(cancelled: &F, stage: &str) -> Result<()>
@@ -446,6 +488,31 @@ pub fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage 
         )),
         8 => DynamicImage::ImageRgba8(image::imageops::rotate270(&image.to_rgba8())),
         _ => image,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn cancelled_remote_jpeg_stops_before_source_read() {
+        let checks = Cell::new(0);
+        let error = decode_for_viewer_with_cancel(
+            "smb://example.invalid/share/photo.jpg",
+            1124,
+            794,
+            None,
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                next >= 3
+            },
+        )
+        .expect_err("cancelled request must not attempt a network read");
+        assert!(error.to_string().contains("cancelled at before_source_read"));
+        assert_eq!(checks.get(), 3);
     }
 }
 
