@@ -87,7 +87,7 @@ fn children(uri:&str,results:Vec<(String,u32)>)->Vec<Entry>{
         let is_dir=kind==7;
         if !is_dir && !(kind==8 && crate::image_format::supported(std::path::Path::new(&name))){return None}
         let uri=format!("{}/{}",uri.trim_end_matches('/'),encode(&name));
-        Some(Entry{name,uri,is_dir})
+        Some(Entry{name,uri,is_dir,server:String::new()})
     }).collect::<Vec<_>>();
     entries.sort_by(|a,b|b.is_dir.cmp(&a.is_dir).then_with(||a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     entries
@@ -98,7 +98,7 @@ pub fn list(uri:&str)->anyhow::Result<Vec<Entry>>{
     // Zeroconf advertises /mnt as a service root even though /mnt is NOT itself an export.
     if path=="/" || path=="/mnt" || path=="/exports" {
         let result=all.into_iter().map(|path|Entry{name:path.rsplit('/').next().unwrap_or(&path).to_owned(),
-            uri:format!("nfs://{host}{path}"),is_dir:true}).collect::<Vec<_>>();
+            uri:format!("nfs://{host}{path}"),is_dir:true,server:String::new()}).collect::<Vec<_>>();
         crate::network_shares::trace("PRIVATE_NFS",format!("exports_display host={host} advertised_path={path} count={}",result.len()));
         return Ok(result)
     }

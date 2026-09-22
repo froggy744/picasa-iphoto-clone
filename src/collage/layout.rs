@@ -3,7 +3,17 @@ use super::model::{CollageProject, LayoutKind};
 pub fn apply(project: &mut CollageProject) {
     match project.layout {
         LayoutKind::Grid => grid(project),
-        LayoutKind::Mosaic => mosaic(project),
+        LayoutKind::Mosaic => {
+            if project.keep_photo_aspect {
+                // A fitted photo cannot fill an arbitrary tile without
+                // letterboxing. Use the aspect-aware packer so the tiles are
+                // shaped around the selected photos instead of leaving their
+                // backgrounds as large white holes.
+                super::smart_mosaic::apply_fit_mosaic(project);
+            } else {
+                mosaic(project)
+            }
+        }
         LayoutKind::SmartMosaic => super::smart_mosaic::apply(project),
     }
 }
@@ -256,6 +266,7 @@ mod tests {
                         library_rotation: 0,
                         edit_recipe: String::new(),
                         aspect_ratio: 1.5,
+                        visual_weight: 0.5,
                     },
                     x: 0.0,
                     y: 0.0,
@@ -291,6 +302,30 @@ mod tests {
         let mut project = project(17, LayoutKind::Grid, 1);
         project.relayout();
         assert!(inside(&project));
+    }
+
+    #[test]
+    fn smart_canvas_matches_the_selected_photos_orientation() {
+        let mut project = project(4, LayoutKind::SmartMosaic, 1);
+        for item in &mut project.items {
+            item.photo.aspect_ratio = 0.56;
+        }
+        project.choose_smart_canvas();
+        assert_eq!(
+            project.orientation,
+            crate::collage::model::CollageOrientation::Portrait
+        );
+        assert_eq!(project.aspect, crate::collage::model::AspectRatio::SixteenNine);
+
+        for item in &mut project.items {
+            item.photo.aspect_ratio = 1.5;
+        }
+        project.choose_smart_canvas();
+        assert_eq!(
+            project.orientation,
+            crate::collage::model::CollageOrientation::Landscape
+        );
+        assert_eq!(project.aspect, crate::collage::model::AspectRatio::ThreeTwo);
     }
 
     #[test]

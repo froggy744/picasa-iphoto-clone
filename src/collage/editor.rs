@@ -265,8 +265,8 @@ pub fn build(
         (
             &smart_tile,
             "collage-smart-mosaic-symbolic",
-            "Smart",
-            "Smart Mosaic: automatic layout with a dominant photo",
+            "Smart AI",
+            "Smart AI: analyses the selected photo thumbnails and chooses the strongest focal layout",
         ),
         (
             &grid_tile,
@@ -527,54 +527,29 @@ pub fn build(
         });
     }
 
-    // Corners + slider share a single row under an edit-style heading:
-    // on/off checkbox, then the radius slider bracketed by sharp/rounded
-    // end icons. The icons state the actual range (0% .. 20%).
+    // Zero is square; any positive radius enables rounded corners. Keeping
+    // this as one direct control avoids a second, conflicting on/off state.
     add_section_label(&controls, "ROUND CORNERS");
-    let round_corners = gtk::CheckButton::new();
-    round_corners.set_tooltip_text(Some("Enable rounded corners"));
-    round_corners.set_valign(gtk::Align::Center);
-    round_corners.set_active(project.borrow().round_corners);
-    let corner_sharp_icon = gtk::Image::from_icon_name("collage-corner-sharp-symbolic");
-    corner_sharp_icon.set_tooltip_text(Some("No corner radius (0%)"));
-    let corner_round_icon = gtk::Image::from_icon_name("collage-corner-round-symbolic");
-    corner_round_icon.set_tooltip_text(Some("Maximum corner radius (20%)"));
-    let corner_icons_active = project.borrow().round_corners;
-    corner_sharp_icon.set_sensitive(corner_icons_active);
-    corner_round_icon.set_sensitive(corner_icons_active);
     let corner_radius = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 0.2, 0.005);
-    corner_radius.set_value(project.borrow().corner_radius as f64);
+    corner_radius.set_value(if project.borrow().round_corners {
+        project.borrow().corner_radius as f64
+    } else {
+        0.0
+    });
     corner_radius.set_digits(3);
     corner_radius.set_draw_value(false);
-    corner_radius.set_sensitive(project.borrow().round_corners);
-    corner_radius.set_tooltip_text(Some("Corner radius (0% to 20% of the tile's short side)"));
+    corner_radius.set_tooltip_text(Some("Corner radius: 0% is square, 20% is fully rounded"));
     corner_radius.set_hexpand(true);
-    let radius_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    radius_row.add_css_class("collage-radius-row");
-    radius_row.append(&round_corners);
-    radius_row.append(&corner_sharp_icon);
-    radius_row.append(&corner_radius);
-    radius_row.append(&corner_round_icon);
-    controls.append(&radius_row);
-    {
-        let project = project.clone();
-        let refresh = refresh.clone();
-        let corner_radius = corner_radius.clone();
-        let corner_sharp_icon = corner_sharp_icon.clone();
-        let corner_round_icon = corner_round_icon.clone();
-        round_corners.connect_toggled(move |button| {
-            project.borrow_mut().round_corners = button.is_active();
-            corner_radius.set_sensitive(button.is_active());
-            corner_sharp_icon.set_sensitive(button.is_active());
-            corner_round_icon.set_sensitive(button.is_active());
-            refresh();
-        });
-    }
+    controls.append(&corner_radius);
     {
         let project = project.clone();
         let refresh = refresh.clone();
         corner_radius.connect_value_changed(move |scale| {
-            project.borrow_mut().corner_radius = scale.value() as f32;
+            let radius = scale.value() as f32;
+            let mut project_data = project.borrow_mut();
+            project_data.corner_radius = radius;
+            project_data.round_corners = radius > 0.0;
+            drop(project_data);
             refresh();
         });
     }
@@ -606,49 +581,61 @@ pub fn build(
     {
         let project = project.clone();
         let smart_tile = smart_tile.clone();
+        let portrait_btn = portrait_btn.clone();
         let landscape_btn = landscape_btn.clone();
         let fit_toggle = fit_toggle.clone();
         let aspect = aspect.clone();
         let custom_width = custom_width.clone();
         let custom_height = custom_height.clone();
         let background = background.clone();
-        let round_corners = round_corners.clone();
         let corner_radius = corner_radius.clone();
         let spacing = spacing.clone();
         let aspect_frame = aspect_frame.clone();
         let custom_ratio = custom_ratio.clone();
-        let corner_sharp_icon = corner_sharp_icon.clone();
-        let corner_round_icon = corner_round_icon.clone();
         reset_defaults.connect_clicked(move |_| {
-            {
+            let (aspect_index, orientation, canvas_ratio) = {
                 let mut project_data = project.borrow_mut();
                 project_data.layout = LayoutKind::SmartMosaic;
-                project_data.orientation = CollageOrientation::Landscape;
-                project_data.aspect = AspectRatio::SixteenNine;
                 project_data.custom_aspect = 16.0 / 9.0;
                 project_data.background = Background::White;
                 project_data.round_corners = false;
-                project_data.corner_radius = 0.06;
+                project_data.corner_radius = 0.0;
                 project_data.spacing = 0.018;
                 project_data.keep_photo_aspect = true;
-            }
+                // Reset restores Smart AI itself, including its canvas
+                // recommendation for the current photo selection.
+                project_data.choose_smart_canvas();
+                let aspect_index = match project_data.aspect {
+                    AspectRatio::Square => 0,
+                    AspectRatio::FourThree => 1,
+                    AspectRatio::ThreeTwo => 2,
+                    AspectRatio::SixteenNine => 3,
+                    AspectRatio::Custom => 4,
+                };
+                (
+                    aspect_index,
+                    project_data.orientation,
+                    project_data.effective_aspect_ratio(),
+                )
+            };
             smart_tile.set_active(true);
-            landscape_btn.set_active(true);
+            if orientation == CollageOrientation::Portrait {
+                portrait_btn.set_active(true);
+            } else {
+                landscape_btn.set_active(true);
+            }
             fit_toggle.set_active(true);
             // The tile handler skips no-op activations, so re-assert the
             // fit sensitivity explicitly (it may have been greyed by Grid).
             fit_toggle.set_sensitive(true);
-            aspect.set_selected(3);
+            aspect.set_selected(aspect_index);
             custom_width.set_value(16.0);
             custom_height.set_value(9.0);
             background.set_selected(0);
-            round_corners.set_active(false);
-            corner_radius.set_value(0.06);
+            corner_radius.set_value(0.0);
             spacing.set_value(0.018);
             custom_ratio.set_visible(false);
-            aspect_frame.set_ratio(16.0 / 9.0);
-            corner_sharp_icon.set_sensitive(false);
-            corner_round_icon.set_sensitive(false);
+            aspect_frame.set_ratio(canvas_ratio);
             let mut project_data = project.borrow_mut();
             project_data.relayout();
         });
@@ -1234,6 +1221,7 @@ mod sizing_tests {
                     library_rotation: 0,
                     edit_recipe: String::new(),
                     aspect_ratio: if i % 2 == 0 { 1.5 } else { 0.65 },
+                    visual_weight: 0.5,
                 },
                 x: 0.0,
                 y: 0.0,

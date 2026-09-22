@@ -363,10 +363,7 @@ extern "C" fn auth_callback(
 ) {
     let credentials = THREAD_CREDENTIALS
         .with(|slot| slot.borrow().clone())
-        .unwrap_or_else(|| SmbCredentials {
-            user: String::from("guest"),
-            password: String::new(),
-        });
+        .unwrap_or_else(|| os_default_credentials());
     unsafe {
         fill_buffer("WORKGROUP", workgroup, workgroup_len);
         fill_buffer(&credentials.user, username, username_len);
@@ -775,13 +772,40 @@ impl Drop for FlightGuard<'_> {
     }
 }
 
-/// Anonymous/guest credentials: libsmbclient maps empty user + empty password
-/// to the guest/anonymous logon when the server allows it.
-fn guest_credentials() -> SmbCredentials {
+/// The current OS account with an empty password: the fallback identity when a
+/// server asks for a login and no credentials were supplied. This mirrors
+/// `smbclient -N` and GNOME's accepted "cancel" on the auth prompt. Windows
+/// file servers commonly deny the literal "guest" account and empty-user
+/// sessions while accepting an anonymous session under the caller's own local
+/// identity, so libsmbclient's classic guest mapping produced spurious
+/// "access denied".
+fn os_default_credentials() -> SmbCredentials {
     SmbCredentials {
-        user: String::new(),
+        user: os_username(),
         password: String::new(),
     }
+}
+
+/// Resolve the current account name. `getpwuid` is authoritative; `$USER`
+/// backs it up on minimal runtimes.
+fn os_username() -> String {
+    unsafe {
+        let pw = libc::getpwuid(libc::geteuid());
+        if !pw.is_null() && !(*pw).pw_name.is_null() {
+            return std::ffi::CStr::from_ptr((*pw).pw_name)
+                .to_string_lossy()
+                .into_owned();
+        }
+    }
+    std::env::var("USER")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|_| String::from("guest"))
+}
+
+/// Anonymous/guest fallback: the OS account with an empty password (see
+/// `os_default_credentials`).
+fn guest_credentials() -> SmbCredentials {
+    os_default_credentials()
 }
 
 /// True when the last failed libsmbclient call set errno to an access-denied
