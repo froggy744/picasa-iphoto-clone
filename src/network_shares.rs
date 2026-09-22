@@ -10,6 +10,8 @@ pub struct Entry {
     pub name: String,
     pub uri: String,
     pub is_dir: bool,
+    /// Best-effort PC/server name, empty when unknown.
+    pub server: String,
 }
 #[derive(Clone, Debug)]
 pub struct Metadata {
@@ -211,10 +213,11 @@ pub fn discover() -> Result<Vec<Entry>> {
             .map(|v| v.to_string())
             .unwrap_or_else(|| iterator.child(&info).uri().to_string());
         if private(&uri) {
-            entries.push(Entry {
+entries.push(Entry {
                 name: info.display_name().to_string(),
                 uri,
                 is_dir: true,
+                server: String::new(),
             });
         }
     }
@@ -232,7 +235,7 @@ pub fn scan_subnet() -> Result<Vec<Entry>> {
     trace("SCAN", format!("start hosts={}", hosts.len()));
     let mut entries = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for (host, kind) in hosts {
+    for (host, server, kind) in hosts {
         let listed = if kind == 7 {
             let uri = format!("nfs://{host}/");
             crate::private_nfs::list(&uri)
@@ -242,8 +245,9 @@ pub fn scan_subnet() -> Result<Vec<Entry>> {
         };
         match listed {
             Ok(children) => {
-                for entry in children {
-                    trace("SCAN", format!("host={host} share={} uri={}", entry.name, entry.uri));
+                for mut entry in children {
+                    if entry.server.is_empty() { entry.server = server.clone(); }
+                    trace("SCAN", format!("host={host} server={server} share={} uri={}", entry.name, entry.uri));
                     if seen.insert(entry.uri.clone()) {
                         entries.push(entry);
                     }
