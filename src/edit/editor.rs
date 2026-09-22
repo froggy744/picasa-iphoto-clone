@@ -9,7 +9,7 @@ use libadwaita as adw;
 use rusqlite::Connection;
 
 use super::filters::FilterPreset;
-use super::model::{CropRect, EditRecipe, EditSession};
+use super::model::{CropRect, EditRecipe, EditSession, OverlayAnchor, OverlaySpec};
 
 pub struct EditEditor {
     pub root: gtk::Box,
@@ -68,6 +68,7 @@ include!("crop.rs");
 include!("controls.rs");
 include!("undo.rs");
 include!("export.rs");
+include!("overlays_ui.rs");
 
 pub fn build(
     parent: &gtk::Window,
@@ -159,9 +160,14 @@ pub fn build(
     crop_toggle.set_group(Some(&tools_toggle));
     crop_toggle.set_hexpand(true);
     crop_toggle.set_tooltip_text(Some("Crop, straighten and compose the photo"));
+    let overlays_toggle = gtk::ToggleButton::with_label("Overlays");
+    overlays_toggle.set_group(Some(&tools_toggle));
+    overlays_toggle.set_hexpand(true);
+    overlays_toggle.set_tooltip_text(Some("Place PNG/JPG logos, badges and banners on the photo"));
     panel_tabs.append(&tools_toggle);
     panel_tabs.append(&filters_toggle);
     panel_tabs.append(&crop_toggle);
+    panel_tabs.append(&overlays_toggle);
     sidebar.append(&panel_tabs);
 
     let tools_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -183,6 +189,13 @@ pub fn build(
     crop_box.set_margin_bottom(16);
     crop_box.set_margin_start(14);
     crop_box.set_margin_end(14);
+    let overlays_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    overlays_box.set_hexpand(true);
+    overlays_box.set_vexpand(true);
+    overlays_box.set_margin_top(12);
+    overlays_box.set_margin_bottom(16);
+    overlays_box.set_margin_start(14);
+    overlays_box.set_margin_end(14);
     let tools_scroll = gtk::ScrolledWindow::new();
     tools_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     tools_scroll.set_child(Some(&tools_box));
@@ -192,6 +205,9 @@ pub fn build(
     let crop_scroll = gtk::ScrolledWindow::new();
     crop_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     crop_scroll.set_child(Some(&crop_box));
+    let overlays_scroll = gtk::ScrolledWindow::new();
+    overlays_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    overlays_scroll.set_child(Some(&overlays_box));
     let panel_stack = gtk::Stack::new();
     panel_stack.set_hexpand(true);
     panel_stack.set_vexpand(true);
@@ -199,6 +215,7 @@ pub fn build(
     panel_stack.add_named(&tools_scroll, Some("tools"));
     panel_stack.add_named(&filters_scroll, Some("filters"));
     panel_stack.add_named(&crop_scroll, Some("crop"));
+    panel_stack.add_named(&overlays_scroll, Some("overlays"));
     panel_stack.set_visible_child(&tools_scroll);
     sidebar.append(&panel_stack);
     body.set_start_child(Some(&sidebar));
@@ -234,6 +251,16 @@ pub fn build(
     crop_overlay.set_cursor_from_name(Some("crosshair"));
     preview_area.add_overlay(&crop_overlay);
 
+    // Overlay layer sits above the photo (and above the crop overlay in
+    // stacking order) but yields pointer events unless the Overlays tab is
+    // active and the recipe actually has overlays. Drawing still happens so
+    // overlays remain visible on Tools/Filters tabs.
+    let overlay_layer = gtk::DrawingArea::new();
+    overlay_layer.set_hexpand(true);
+    overlay_layer.set_vexpand(true);
+    overlay_layer.set_can_target(false);
+    preview_area.add_overlay(&overlay_layer);
+
     let busy = gtk::Spinner::new();
     busy.set_halign(gtk::Align::Center);
     busy.set_valign(gtk::Align::Center);
@@ -257,6 +284,12 @@ pub fn build(
     }
     let session = Rc::new(RefCell::new(EditSession::new(recipe)));
     let syncing = Rc::new(Cell::new(false));
+    // Index into recipe.overlays of the overlay selected for canvas/panel
+    // editing; None when nothing is selected.
+    let selected_overlay: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
+    // Filled once the Overlays panel is built so sync_controls (undo/redo,
+    // reset, crop commits) can refresh the list without a dependency cycle.
+    let sync_overlays_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let pending_crop = Rc::new(RefCell::new(CropRect::default()));
     let crop_aspect_preset = Rc::new(Cell::new(CropAspectPreset::Free));
     let crop_portrait = Rc::new(Cell::new(false));
@@ -558,6 +591,7 @@ pub fn build(
         let native_one_to_one = native_one_to_one.clone();
         let pending_one_to_one_anchor = pending_one_to_one_anchor.clone();
         let crop_overlay = crop_overlay.clone();
+        let overlay_layer = overlay_layer.clone();
         let preview_debounce = preview_debounce.clone();
         let preview_worker = preview_worker.clone();
         Rc::new(move || {
@@ -582,6 +616,7 @@ pub fn build(
             let native_one_to_one = native_one_to_one.clone();
             let pending_one_to_one_anchor = pending_one_to_one_anchor.clone();
             let crop_overlay = crop_overlay.clone();
+            let overlay_layer = overlay_layer.clone();
             let preview_debounce_for_fire = preview_debounce.clone();
             let preview_worker = preview_worker.clone();
             let active_rotation = active_rotation_for_queue.clone();
@@ -656,6 +691,7 @@ pub fn build(
                     let canvas_zoom = canvas_zoom.clone();
                     let pending_one_to_one_anchor = pending_one_to_one_anchor.clone();
                     let crop_overlay = crop_overlay.clone();
+                    let overlay_layer = overlay_layer.clone();
                     glib::timeout_add_local(Duration::from_millis(25), move || {
                         match receiver.try_recv() {
                             Ok(result) => {
@@ -766,6 +802,7 @@ pub fn build(
                                         }
                                         status.set_text(&format!("{} × {} preview", width, height));
                                         crop_overlay.queue_draw();
+                                        overlay_layer.queue_draw();
                                     }
                                     Err(error) => {
                                         status.set_text(&format!("Preview failed: {error}"));
@@ -1053,15 +1090,27 @@ pub fn build(
             }
         });
     }
+    {
+        let panel_stack = panel_stack.clone();
+        overlays_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                panel_stack.set_visible_child_name("overlays");
+            }
+        });
+    }
 
     let sync_controls: Rc<dyn Fn()> = {
         let controls = controls.clone();
         let session = session.clone();
         let syncing = syncing.clone();
+        let sync_overlays_slot = sync_overlays_slot.clone();
         Rc::new(move || {
             syncing.set(true);
             controls.sync(&session.borrow().recipe);
             syncing.set(false);
+            if let Some(sync_overlays) = sync_overlays_slot.borrow().as_ref() {
+                sync_overlays();
+            }
         })
     };
 
@@ -1092,8 +1141,10 @@ pub fn build(
         let canvas_zoom = canvas_zoom.clone();
         let native_one_to_one = native_one_to_one.clone();
         let one_to_one_sync = one_to_one_sync.clone();
+        let selected_overlay = selected_overlay.clone();
         reset.connect_clicked(move |_| {
             session.borrow_mut().reset();
+            selected_overlay.set(None);
             sync_controls();
             update_history_buttons();
             pending_crop.replace(CropRect::default());
@@ -1459,6 +1510,7 @@ pub fn build(
     // tab, the Apply Crop button or the Enter key commits the pending crop.
     {
         let crop_overlay = crop_overlay.clone();
+        let overlay_layer = overlay_layer.clone();
         let pending_crop = pending_crop.clone();
         let canvas_zoom = canvas_zoom.clone();
         let native_one_to_one = native_one_to_one.clone();
@@ -1478,10 +1530,15 @@ pub fn build(
                 }
                 apply_canvas_zoom(&picture, &picture_scroll, preview_dimensions.get(), 0.0);
                 pending_crop.replace(CropRect::default());
+                // The crop rubber-band owns the canvas while Crop is active;
+                // overlay bitmaps would only obscure the dimming mask.
+                overlay_layer.set_visible(false);
                 crop_overlay.set_visible(true);
                 crop_overlay.queue_draw();
             } else {
                 apply_crop();
+                overlay_layer.set_visible(true);
+                overlay_layer.queue_draw();
             }
         });
     }
@@ -1626,6 +1683,91 @@ pub fn build(
         preview_dimensions.clone(),
         crop_aspect_ratio.clone(),
     );
+
+    // Overlay canvas layer + Overlays panel. Built after the zoom actions so
+    // Ctrl+wheel on the layer can reuse the toolbar zoom closures, and after
+    // sync_controls so undo/redo can refresh the panel through the slot.
+    let redraw_overlay_canvas: Rc<dyn Fn()> = {
+        let overlay_layer = overlay_layer.clone();
+        Rc::new(move || overlay_layer.queue_draw())
+    };
+    let update_canvas_input: Rc<dyn Fn()> = {
+        let overlay_layer = overlay_layer.clone();
+        let overlays_toggle = overlays_toggle.clone();
+        let crop_overlay = crop_overlay.clone();
+        let session = session.clone();
+        Rc::new(move || {
+            let in_crop = crop_overlay.is_visible();
+            overlay_layer.set_visible(!in_crop);
+            let enable = overlays_toggle.is_active()
+                && !session.borrow().recipe.overlays.is_empty()
+                && !in_crop;
+            overlay_layer.set_can_target(enable);
+            if enable {
+                overlay_layer.set_cursor_from_name(Some("default"));
+            } else {
+                overlay_layer.set_cursor_from_name(None);
+            }
+            overlay_layer.queue_draw();
+        })
+    };
+    {
+        let update_canvas_input = update_canvas_input.clone();
+        overlays_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                update_canvas_input();
+            }
+        });
+    }
+    {
+        let update_canvas_input = update_canvas_input.clone();
+        tools_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                update_canvas_input();
+            }
+        });
+    }
+    {
+        let update_canvas_input = update_canvas_input.clone();
+        filters_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                update_canvas_input();
+            }
+        });
+    }
+
+    let sync_overlays_panel = build_overlays_panel(
+        &overlays_box,
+        session.clone(),
+        connection.clone(),
+        parent.clone(),
+        selected_overlay.clone(),
+        syncing.clone(),
+        preview_dimensions.clone(),
+        update_history_buttons.clone(),
+        redraw_overlay_canvas.clone(),
+        update_canvas_input.clone(),
+        overlays_toggle.clone(),
+    );
+    sync_overlays_slot.replace(Some(sync_overlays_panel.clone()));
+
+    configure_overlay_canvas(
+        &overlay_layer,
+        session.clone(),
+        selected_overlay.clone(),
+        preview_dimensions.clone(),
+        canvas_zoom.clone(),
+        native_one_to_one.clone(),
+        picture_scroll.clone(),
+        overlays_toggle.clone(),
+        zoom_in_action.clone(),
+        zoom_out_action.clone(),
+        update_history_buttons.clone(),
+        sync_overlays_panel.clone(),
+        update_canvas_input.clone(),
+    );
+    update_canvas_input();
+    redraw_overlay_canvas();
 
     {
         let on_close = on_close.clone();
@@ -2018,8 +2160,21 @@ mod panel_tests {
             vec![
                 "Tools".to_string(),
                 "Filters".to_string(),
-                "Crop".to_string()
+                "Crop".to_string(),
+                "Overlays".to_string()
             ]
+        );
+
+        let overlays_tab = buttons
+            .iter()
+            .find(|button| button.label().as_deref() == Some("Overlays"))
+            .unwrap();
+        overlays_tab.emit_clicked();
+        settle_gtk();
+        assert_eq!(
+            stack.visible_child_name().as_deref(),
+            Some("overlays"),
+            "Overlays tab must show its panel page"
         );
 
         let crop_tab = buttons

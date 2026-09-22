@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
-const SCHEMA: &str = r#"
+pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS photos (
   id INTEGER PRIMARY KEY,
   path TEXT UNIQUE NOT NULL,
@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS album_photos (
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS overlay_assets (
+  hash TEXT PRIMARY KEY,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  format TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  added_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at DESC);
 CREATE INDEX IF NOT EXISTS idx_photos_folder ON photos(folder_id);
@@ -127,4 +135,5 @@ include!("db/core.rs");
 include!("db/albums.rs");
 include!("db/photos.rs");
 include!("db/settings.rs");
+include!("db/overlay_assets.rs");
 include!("db/tests.rs");
