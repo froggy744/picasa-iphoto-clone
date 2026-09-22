@@ -2788,16 +2788,21 @@ fn attach_section_context_menu(
 
         let popover = gtk::Popover::new();
         popover.set_has_arrow(false);
+        // This menu is the right-click companion to the disclosure button's
+        // Collapse/Expand tooltip. Keep the same compact tooltip presentation
+        // for both Reveal All and Collapse All instead of inheriting a large
+        // theme-specific popover surface.
+        popover.add_css_class("sidebar-section-tooltip-menu");
         popover.set_parent(&heading);
-        let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        menu.set_margin_top(6);
-        menu.set_margin_bottom(6);
-        menu.set_margin_start(6);
-        menu.set_margin_end(6);
+        // Match GTK's tooltip child spacing. The tooltip-style popover surface
+        // owns the padding, so a second set of menu margins would make this
+        // visibly larger than the disclosure button's native tooltip.
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 6);
 
         if reveal_visible {
             let item = gtk::Button::with_label("Reveal All");
             item.add_css_class("flat");
+            item.add_css_class("sidebar-section-tooltip-item");
             let popover_for_reveal = popover.clone();
             let reveal = on_reveal.clone();
             item.connect_clicked(move |_| {
@@ -2810,6 +2815,7 @@ fn attach_section_context_menu(
         if collapse_visible {
             let item = gtk::Button::with_label("Collapse All");
             item.add_css_class("flat");
+            item.add_css_class("sidebar-section-tooltip-item");
             let popover_for_collapse = popover.clone();
             let collapse = on_collapse.clone();
             item.connect_clicked(move |_| {

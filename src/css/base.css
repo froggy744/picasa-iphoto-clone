@@ -29,3 +29,33 @@ paned.sidebar-section-paned > separator {
   background-color: transparent;
   border-top: 1px solid alpha(@theme_fg_color, 0.35);
 }
+
+/* The disclosure button uses GTK's compact dark tooltip for Collapse/Expand.
+ * Its right-click Reveal All / Collapse All menu is deliberately styled as
+ * the same surface so the action does not change appearance with its label. */
+popover.sidebar-section-tooltip-menu > contents {
+  padding: 6px 10px;
+  color: #ffffff;
+  background-color: rgba(0, 0, 6, 0.80);
+  background-clip: padding-box;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 9px;
+  box-shadow: none;
+}
+
+popover.sidebar-section-tooltip-menu button.sidebar-section-tooltip-item,
+popover.sidebar-section-tooltip-menu button.sidebar-section-tooltip-item:hover,
+popover.sidebar-section-tooltip-menu button.sidebar-section-tooltip-item:focus,
+popover.sidebar-section-tooltip-menu button.sidebar-section-tooltip-item:active {
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  color: #ffffff;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  box-shadow: none;
+  outline: none;
+  font-weight: normal;
+}
