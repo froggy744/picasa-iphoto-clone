@@ -83,6 +83,7 @@ const FOLDER_REFRESH_KEY: &str = "picasa-sidebar-folder-refresh";
 const REFRESH_GATE_KEY: &str = "picasa-sidebar-refresh-gate";
 const ALBUM_PANE_ANIMATION_MS: u32 = 250;
 const STARTUP_VISIBLE_ALBUM_ROWS: usize = 5;
+const SECTION_TRAILING_SPACE: i32 = 12;
 
 /// Share the window's refresh sensitivity with existing and future menus.
 pub fn bind_refresh_gate(scrolled: &gtk::ScrolledWindow, gate: &gtk::Button) {
@@ -257,6 +258,10 @@ pub fn build(
     folder_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     folder_scroll.set_hexpand(true);
     folder_scroll.set_vexpand(true);
+    // Contribute a useful natural height on first map. The native divider is
+    // still freely draggable once the sidebar is visible.
+    folder_scroll.set_propagate_natural_height(true);
+    folder_scroll.set_max_content_height(260);
     folder_scroll.set_child(Some(&folder_list));
 
     let folder_revealer = gtk::Revealer::new();
@@ -365,9 +370,15 @@ pub fn build(
     folder_share_paned.set_resize_start_child(false);
     folder_share_paned.set_resize_end_child(true);
     folder_share_paned.set_shrink_start_child(true);
-    folder_share_paned.set_shrink_end_child(false);
+    // Network Shares is optional content.  It must be allowed to shrink on a
+    // small first window allocation so the Folders heading and its first row
+    // are never reduced to a clipped strip.
+    folder_share_paned.set_shrink_end_child(true);
     folder_share_paned.set_start_child(Some(&folder_revealer));
     folder_share_paned.set_end_child(Some(&share_section));
+    // Give the visible Folders tree an initial allocation before GTK's first
+    // map pass; the later measured placement refines this for actual rows.
+    folder_share_paned.set_position(260);
     folder_section.append(&folder_share_paned);
     // Match Albums: remember the user's last native divider position so
     // collapsing Folders does not throw away their preferred split. 260 is
@@ -406,9 +417,14 @@ pub fn build(
     section_paned.set_resize_start_child(false);
     section_paned.set_resize_end_child(true);
     section_paned.set_shrink_start_child(true);
-    section_paned.set_shrink_end_child(false);
+    // The lower section can shrink during a constrained first allocation;
+    // this preserves the initial Album row rather than showing headings only.
+    section_paned.set_shrink_end_child(true);
     section_paned.set_start_child(Some(&album_revealer));
     section_paned.set_end_child(Some(&folder_section));
+    // Likewise, do not let the first allocation present Albums as a collapsed
+    // strip while the idle measurement is still pending.
+    section_paned.set_position(260);
     root.append(&section_paned);
 
     // Remember the user's last native divider position so collapsing Albums
@@ -447,6 +463,7 @@ pub fn build(
         let state = state.clone();
         let paned = section_paned.clone();
         let revealer = album_revealer.clone();
+        let list = album_list.clone();
         let indicator = album_indicator.clone();
         let saved_position = saved_album_pane_position.clone();
         let animating = album_pane_animating.clone();
@@ -488,7 +505,18 @@ pub fn build(
 
                 let from = paned.position().max(0);
                 revealer.set_reveal_child(true);
-                let target = saved_position.get().max(0);
+                // A collapsed pane may have remembered a near-zero divider
+                // position. Expand enough to show the first five available
+                // rows, without making that an enforced minimum afterwards:
+                // the native divider remains fully user-adjustable.
+                let fit_height = list_natural_height_for_rows(&list, STARTUP_VISIBLE_ALBUM_ROWS)
+                    + SECTION_TRAILING_SPACE;
+                let requested = saved_position.get().max(fit_height).max(0);
+                let target = if paned.max_position() > 0 {
+                    requested.min(paned.max_position())
+                } else {
+                    requested
+                };
                 animate_sidebar_pane_position(
                     &paned,
                     from,
@@ -585,6 +613,7 @@ pub fn build(
         let state = state.clone();
         let paned = folder_share_paned.clone();
         let revealer = folder_revealer.clone();
+        let list = folder_list.clone();
         let indicator = folder_indicator.clone();
         let saved_position = saved_folder_pane_position.clone();
         let animating = folder_pane_animating.clone();
@@ -626,7 +655,17 @@ pub fn build(
 
                 let from = paned.position().max(0);
                 revealer.set_reveal_child(true);
-                let target = saved_position.get().max(0);
+                // Like Albums, reopening must not restore an unusably small
+                // divider position. This is an expansion-time fit only; it
+                // never prevents the user from resizing the pane afterward.
+                let fit_height = list_natural_height_for_rows(&list, STARTUP_VISIBLE_ALBUM_ROWS)
+                    + SECTION_TRAILING_SPACE;
+                let requested = saved_position.get().max(fit_height).max(0);
+                let target = if paned.max_position() > 0 {
+                    requested.min(paned.max_position())
+                } else {
+                    requested
+                };
                 animate_sidebar_pane_position(
                     &paned,
                     from,
@@ -842,7 +881,8 @@ pub fn build(
             let album_list = album_list.clone();
             let saved_position = saved_position.clone();
             glib::idle_add_local_once(move || {
-                let desired = list_natural_height_for_rows(&album_list, STARTUP_VISIBLE_ALBUM_ROWS);
+                let desired = list_natural_height_for_rows(&album_list, STARTUP_VISIBLE_ALBUM_ROWS)
+                    + SECTION_TRAILING_SPACE;
                 if desired <= 0 {
                     return;
                 }
@@ -868,7 +908,6 @@ pub fn build(
     {
         let paned = folder_share_paned.clone();
         let folder_list = folder_list.clone();
-        let folder_heading_for_map = folder_heading.clone();
         let applied = Rc::new(Cell::new(false));
         let applied_for_map = applied.clone();
         folder_share_paned.connect_map(move |_| {
@@ -878,13 +917,19 @@ pub fn build(
 
             let paned = paned.clone();
             let folder_list = folder_list.clone();
-            let folder_heading = folder_heading_for_map.clone();
             glib::idle_add_local_once(move || {
                 // Measure the actual row widgets; a GtkScrolledWindow reports
                 // a near-zero natural height unless propagate-natural-height
                 // is enabled, so the revealers cannot be measured directly.
-                let desired = list_natural_height_for_rows(&folder_list, usize::MAX)
-                    + folder_heading.height();
+                // A cold start has to expose at least one usable Folder row.
+                // Do not impose this as a permanent minimum: after startup
+                // the native divider remains fully user-adjustable.
+                // Match Albums by leaving a small, predictable breathing
+                // space between the final visible row and the drag handle.
+                // The heading is outside this inner paned and therefore must
+                // not be included in its position calculation.
+                let desired = list_natural_height_for_rows(&folder_list, 1)
+                    + SECTION_TRAILING_SPACE;
                 if desired <= 0 {
                     return;
                 }
@@ -2761,12 +2806,8 @@ fn collapsible_heading(
     (content, indicator)
 }
 
-/// Right-click context menu on a section heading: Reveal All / Collapse All.
-/// Items appear only when they have something to do: Reveal All while the
-/// section (or any nested branch) is hidden, Collapse All while anything is
-/// expanded. Uses the same Popover + flat-button construction as the folder
-/// context menu, so styling matches the rest of the sidebar. Closes on item
-/// activation or on any click outside; left-click behaviour is untouched.
+/// Compact right-click controls for section-wide reveal/collapse actions.
+/// Reveal retains a short hover label; collapse is self-explanatory by icon.
 fn attach_section_context_menu(
     heading: &gtk::Box,
     show_reveal: Rc<dyn Fn() -> bool>,
@@ -2789,15 +2830,17 @@ fn attach_section_context_menu(
         let popover = gtk::Popover::new();
         popover.set_has_arrow(false);
         popover.set_parent(&heading);
-        let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        menu.set_margin_top(6);
-        menu.set_margin_bottom(6);
-        menu.set_margin_start(6);
-        menu.set_margin_end(6);
+        let menu = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        menu.set_margin_top(3);
+        menu.set_margin_bottom(3);
+        menu.set_margin_start(3);
+        menu.set_margin_end(3);
 
         if reveal_visible {
-            let item = gtk::Button::with_label("Reveal All");
+            let item = gtk::Button::from_icon_name("view-reveal-symbolic");
             item.add_css_class("flat");
+            item.set_size_request(24, 24);
+            item.set_tooltip_text(Some("Reveal all"));
             let popover_for_reveal = popover.clone();
             let reveal = on_reveal.clone();
             item.connect_clicked(move |_| {
@@ -2808,8 +2851,9 @@ fn attach_section_context_menu(
         }
 
         if collapse_visible {
-            let item = gtk::Button::with_label("Collapse All");
+            let item = gtk::Button::from_icon_name("pan-down-symbolic");
             item.add_css_class("flat");
+            item.set_size_request(24, 24);
             let popover_for_collapse = popover.clone();
             let collapse = on_collapse.clone();
             item.connect_clicked(move |_| {

@@ -626,7 +626,21 @@
     main_split.set_content(Some(&right_column));
     main_split.set_min_sidebar_width(200.0);
     main_split.set_max_sidebar_width(600.0);
-    main_split.set_sidebar_width_fraction(0.22);
+    let saved_sidebar_fraction = db::setting(
+        &connection.borrow(),
+        SIDEBAR_WIDTH_FRACTION_SETTING_KEY,
+    )
+    .ok()
+    .flatten()
+    .and_then(|value| value.parse::<f64>().ok())
+    .filter(|value| value.is_finite())
+    .unwrap_or(0.22)
+    .clamp(0.10, 0.70);
+    main_split.set_sidebar_width_fraction(saved_sidebar_fraction);
+    // The normal desktop view always starts with its sidebar available.
+    // OverlaySplitView may temporarily hide it in the compact breakpoint,
+    // but that responsive state must never become a persisted startup state.
+    main_split.set_show_sidebar(true);
     main_split.set_enable_show_gesture(true);
     main_split.set_enable_hide_gesture(true);
 
@@ -778,10 +792,16 @@
     let sidebar_resize_preview_end = sidebar_resize_preview.clone();
     let gallery_for_sidebar_drag_end = gallery.clone();
     let gallery_surface_for_sidebar_drag_end = gallery_scroll_stack.clone();
+    let connection_for_sidebar_drag_end = connection.clone();
     sidebar_drag.connect_drag_end(move |_, _, _| {
         sidebar_resize_preview_end.set_visible(false);
         main_split_for_drag_end
             .set_sidebar_width_fraction(pending_sidebar_fraction_end.get());
+        let _ = db::set_setting(
+            &connection_for_sidebar_drag_end.borrow(),
+            SIDEBAR_WIDTH_FRACTION_SETTING_KEY,
+            &pending_sidebar_fraction_end.get().to_string(),
+        );
         sidebar_resize_active_for_end.set(false);
 
         // Wait until the split view has received its single final allocation,

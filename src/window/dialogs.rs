@@ -63,15 +63,27 @@ pub(crate) fn debug_log(message: &str) {
     let _ = writeln!(file, "{message}");
 }
 
-fn install_close_confirmation(window: &adw::ApplicationWindow) {
+fn install_close_confirmation(
+    window: &adw::ApplicationWindow,
+    on_close_requested: Rc<dyn Fn(&adw::ApplicationWindow)>,
+) {
     let close_confirmation_open = Rc::new(Cell::new(false));
     let close_confirmation_allowed = Rc::new(Cell::new(false));
     let close_confirmation_open_for_request = close_confirmation_open.clone();
     let close_confirmation_allowed_for_request = close_confirmation_allowed.clone();
+    let on_close_requested_for_request = on_close_requested.clone();
     window.connect_close_request(move |window| {
+        // The confirmation's approved response calls `window.close()` again.
+        // That second close request must only be allowed through: storing
+        // there can overwrite the real geometry captured by this first one.
         if close_confirmation_allowed_for_request.get() {
             return glib::Propagation::Proceed;
         }
+        // Store the view while the native window is still mapped.  Waiting for
+        // destroy/unrealize can yield a default-sized allocation, and a close
+        // confirmation means that signal is not guaranteed to be reached on
+        // the original close request.
+        on_close_requested_for_request(window);
         if close_confirmation_open_for_request.replace(true) {
             return glib::Propagation::Stop;
         }

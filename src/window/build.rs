@@ -1,15 +1,95 @@
 include!("dialogs.rs");
 include!("navigation.rs");
 
+const APP_VIEW_WIDTH_SETTING_KEY: &str = "app-view-width";
+const APP_VIEW_HEIGHT_SETTING_KEY: &str = "app-view-height";
+const APP_VIEW_MAXIMIZED_SETTING_KEY: &str = "app-view-maximized";
+const APP_VIEW_STATE_VERSION_SETTING_KEY: &str = "app-view-state-version";
+const APP_VIEW_STATE_VERSION: &str = "2";
+pub(super) const SIDEBAR_WIDTH_FRACTION_SETTING_KEY: &str = "sidebar-width-fraction";
+
+fn saved_view_dimension(connection: &Connection, key: &str, fallback: i32, min: i32) -> i32 {
+    db::setting(connection, key)
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|value| *value >= min)
+        .unwrap_or(fallback)
+}
+
+fn has_saved_window_view(connection: &Connection) -> bool {
+    if db::setting(connection, APP_VIEW_STATE_VERSION_SETTING_KEY)
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some(APP_VIEW_STATE_VERSION)
+    {
+        return false;
+    }
+    let valid_dimension = |key, min| {
+        db::setting(connection, key)
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<i32>().ok())
+            .is_some_and(|value| value >= min)
+    };
+    valid_dimension(APP_VIEW_WIDTH_SETTING_KEY, 640)
+        && valid_dimension(APP_VIEW_HEIGHT_SETTING_KEY, 480)
+}
+
+fn save_window_view(window: &adw::ApplicationWindow, connection: &Connection) {
+    let width = window.width();
+    let height = window.height();
+    if width >= 640 {
+        let _ = db::set_setting(connection, APP_VIEW_WIDTH_SETTING_KEY, &width.to_string());
+    }
+    if height >= 480 {
+        let _ = db::set_setting(connection, APP_VIEW_HEIGHT_SETTING_KEY, &height.to_string());
+    }
+    let _ = db::set_setting(
+        connection,
+        APP_VIEW_MAXIMIZED_SETTING_KEY,
+        if window.is_maximized() { "true" } else { "false" },
+    );
+    // Write the version last so a partially stored view is never restored.
+    let _ = db::set_setting(
+        connection,
+        APP_VIEW_STATE_VERSION_SETTING_KEY,
+        APP_VIEW_STATE_VERSION,
+    );
+}
+
 pub fn build(app: &adw::Application, connection: Connection) -> adw::ApplicationWindow {
     let build_started = Instant::now();
     let window = adw::ApplicationWindow::new(app);
     window.set_title(Some("PIC - Picasa iPhoto Clone"));
-    window.set_default_size(1440, 900);
-
-    install_close_confirmation(&window);
+    let has_saved_window_view = has_saved_window_view(&connection);
+    let saved_width = saved_view_dimension(&connection, APP_VIEW_WIDTH_SETTING_KEY, 1440, 640);
+    let saved_height = saved_view_dimension(&connection, APP_VIEW_HEIGHT_SETTING_KEY, 900, 480);
+    let saved_maximized = db::setting(&connection, APP_VIEW_MAXIMIZED_SETTING_KEY)
+        .ok()
+        .flatten()
+        // A fresh install should use the available desktop rather than letting
+        // a large default request be compositor-clamped into a small floating
+        // window. Once the user restores/resizes it, that explicit preference
+        // is persisted and takes precedence on later launches.
+        .is_some_and(|value| value == "true");
+    // Do not let a stale compact width make a large desktop start in a narrow
+    // floating window. A valid user-sized view is restored as-is.
+    let start_maximized = saved_maximized || !has_saved_window_view;
+    window.set_default_size(saved_width, saved_height);
+    if start_maximized {
+        window.maximize();
+    }
 
     let connection = Rc::new(RefCell::new(connection));
+    install_close_confirmation(
+        &window,
+        Rc::new({
+            let connection = connection.clone();
+            move |window| save_window_view(window, &connection.borrow())
+        }),
+    );
     let folders = db::folders(&connection.borrow()).unwrap_or_default();
     let folder_cache = Rc::new(RefCell::new(folders.clone()));
     let albums = db::albums(&connection.borrow()).unwrap_or_default();
@@ -2505,7 +2585,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // consuming grid space. The breakpoint restores the expanded split view
     // automatically when the window grows again.
     let compact = adw::Breakpoint::new(
-        adw::BreakpointCondition::parse("max-width: 1050px")
+        adw::BreakpointCondition::parse("max-width: 820px")
             .expect("valid compact sidebar breakpoint"),
     );
     compact.add_setter(&main_split, "collapsed", Some(&true.to_value()));
