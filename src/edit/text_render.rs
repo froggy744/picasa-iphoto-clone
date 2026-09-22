@@ -122,16 +122,19 @@ pub fn render_text_rgba(
                 let source = &row[x * 4..x * 4 + 4];
                 let offset = (y * width + x) * 4;
                 let out = &mut rgba[offset..offset + 4];
-                let source_alpha = u32::from(source[3]);
+                // Cairo ARGB32 as a native u32 is always A<<24|R<<16|G<<8|B
+                // (premultiplied); byte order in memory is BGRA on LE.
+                let pixel = u32::from_ne_bytes([source[0], source[1], source[2], source[3]]);
+                let source_alpha = (pixel >> 24) & 0xFF;
                 if source_alpha == 0 {
                     out.fill(0);
                 } else {
-                    for channel in 0..3 {
-                        out[channel] = ((u32::from(source[channel]) * 255 + source_alpha / 2)
-                            / source_alpha)
+                    for (channel, shift) in [(0usize, 16u32), (1, 8), (2, 0)] {
+                        let premultiplied = (pixel >> shift) & 0xFF;
+                        out[channel] = ((premultiplied * 255 + source_alpha / 2) / source_alpha)
                             .min(255) as u8;
                     }
-                    out[3] = source[3];
+                    out[3] = source_alpha as u8;
                 }
             }
         }
@@ -212,5 +215,32 @@ mod tests {
             pixel.0[3] > 0 && pixel.0[0] > 200 && pixel.0[1] > 200 && pixel.0[2] > 200
         });
         assert!(lit, "unpremultiplied white glyphs recover near 255 rgb");
+    }
+
+    #[test]
+    fn saturated_picker_colours_keep_their_channel_order() {
+        for (red, green, blue, expect) in [
+            (1.0, 0.0, 0.0, (255u8, 0u8, 0u8)),
+            (0.0, 1.0, 0.0, (0u8, 255u8, 0u8)),
+            (0.0, 0.0, 1.0, (0u8, 0u8, 255u8)),
+        ] {
+            let mut layer = layer_with("RGB");
+            layer.set_color_rgba(red, green, blue, 1.0);
+            let raster = render_text_rgba(&layer, 800.0, 800.0).unwrap();
+            let lit: Vec<_> = raster.pixels().filter(|pixel| pixel.0[3] > 200).collect();
+            assert!(!lit.is_empty(), "glyphs must paint opaque pixels");
+            let dominant = lit
+                .iter()
+                .filter(|pixel| {
+                    pixel.0[0] == expect.0 && pixel.0[1] == expect.1 && pixel.0[2] == expect.2
+                })
+                .count();
+            assert!(
+                dominant > lit.len() / 2,
+                "picked rgba({red},{green},{blue}) must render as {:?}, got sample {:?}",
+                expect,
+                lit[0].0
+            );
+        }
     }
 }
