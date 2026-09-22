@@ -14,6 +14,10 @@ pub struct CollagePhoto {
     pub library_rotation: i32,
     pub edit_recipe: String,
     pub aspect_ratio: f32,
+    /// On-device visual-interest estimate derived from the cached thumbnail.
+    /// Smart layout uses this to give the clearest, most visually distinctive
+    /// selections the strongest positions instead of trusting selection order.
+    pub visual_weight: f32,
 }
 
 fn photo_aspect_ratio(photo: &PhotoObject) -> f32 {
@@ -30,6 +34,80 @@ fn photo_aspect_ratio(photo: &PhotoObject) -> f32 {
     } else {
         1.5
     }
+}
+
+/// Small, deterministic on-device vision model for collage composition.
+///
+/// A collage should not promote an arbitrary first-selected image.  The model
+/// samples the already-generated thumbnail (never the full original) and
+/// combines usable exposure, contrast, edge detail, colourfulness and centre
+/// detail into a visual-interest score.  It deliberately has a neutral
+/// fallback: unavailable/offline thumbnails remain valid collage candidates.
+fn visual_interest(photo: &PhotoObject) -> f32 {
+    let Some(path) = photo.cached_thumbnail_path() else {
+        return 0.5;
+    };
+    let Ok(image) = image::open(path) else {
+        return 0.5;
+    };
+    let image = image.to_rgb8();
+    let (width, height) = image.dimensions();
+    if width < 2 || height < 2 {
+        return 0.5;
+    }
+    // Bound work for large cache entries while retaining a representative
+    // image sample. Thumbnails are normally 320px, so this is inexpensive.
+    let step_x = (width / 96).max(1);
+    let step_y = (height / 96).max(1);
+    let mut count = 0.0f32;
+    let mut sum_luma = 0.0;
+    let mut sum_luma_squared = 0.0;
+    let mut saturation = 0.0;
+    let mut detail = 0.0;
+    let mut centre_detail = 0.0;
+    let mut centre_count = 0.0f32;
+    for y in (step_y..height).step_by(step_y as usize) {
+        for x in (step_x..width).step_by(step_x as usize) {
+            let pixel = image.get_pixel(x, y).0;
+            let luma =
+                (0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32)
+                    / 255.0;
+            let maximum = pixel[0].max(pixel[1]).max(pixel[2]) as f32;
+            let minimum = pixel[0].min(pixel[1]).min(pixel[2]) as f32;
+            let left = image.get_pixel(x - step_x, y).0;
+            let above = image.get_pixel(x, y - step_y).0;
+            let left_luma =
+                (0.2126 * left[0] as f32 + 0.7152 * left[1] as f32 + 0.0722 * left[2] as f32)
+                    / 255.0;
+            let above_luma =
+                (0.2126 * above[0] as f32 + 0.7152 * above[1] as f32 + 0.0722 * above[2] as f32)
+                    / 255.0;
+            let edge = (luma - left_luma).abs() + (luma - above_luma).abs();
+            count += 1.0;
+            sum_luma += luma;
+            sum_luma_squared += luma * luma;
+            saturation += (maximum - minimum) / 255.0;
+            detail += edge;
+            // Detail around the centre is a useful, privacy-preserving proxy
+            // for a subject without attempting face recognition.
+            if x * 4 >= width && x * 4 <= width * 3 && y * 4 >= height && y * 4 <= height * 3 {
+                centre_detail += edge;
+                centre_count += 1.0;
+            }
+        }
+    }
+    if count == 0.0 {
+        return 0.5;
+    }
+    let mean = sum_luma / count;
+    let contrast = ((sum_luma_squared / count - mean * mean).max(0.0).sqrt() / 0.24).min(1.0);
+    let colour = (saturation / count / 0.45).min(1.0);
+    let detail = (detail / count / 0.34).min(1.0);
+    let centred =
+        (centre_detail / centre_count.max(1.0) / (detail * 0.34).max(0.001)).min(1.5) / 1.5;
+    let exposure = 1.0 - ((mean - 0.52).abs() / 0.52).min(1.0) * 0.45;
+    (0.18 + contrast * 0.25 + detail * 0.30 + colour * 0.14 + centred * 0.08 + exposure * 0.05)
+        .clamp(0.2, 1.0)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,8 +204,56 @@ impl CollageProject {
                 })
                 .collect(),
         };
+        project.choose_smart_canvas();
         project.relayout();
         project
+    }
+
+    /// Pick the closest supported canvas shape for a new Smart AI collage.
+    /// The weighted log-distance is stable across portrait and landscape
+    /// photos, and using visual interest lets the strongest selections have
+    /// more influence than incidental supporting shots.  Users can still
+    /// choose any aspect manually after the initial recommendation.
+    pub fn choose_smart_canvas(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
+        let candidates = [
+            (AspectRatio::Square, CollageOrientation::Landscape),
+            (AspectRatio::FourThree, CollageOrientation::Landscape),
+            (AspectRatio::ThreeTwo, CollageOrientation::Landscape),
+            (AspectRatio::SixteenNine, CollageOrientation::Landscape),
+            (AspectRatio::Square, CollageOrientation::Portrait),
+            (AspectRatio::FourThree, CollageOrientation::Portrait),
+            (AspectRatio::ThreeTwo, CollageOrientation::Portrait),
+            (AspectRatio::SixteenNine, CollageOrientation::Portrait),
+        ];
+        let (aspect, orientation) = candidates
+            .into_iter()
+            .min_by(
+                |(left_aspect, left_orientation), (right_aspect, right_orientation)| {
+                    let cost = |aspect: AspectRatio, orientation: CollageOrientation| {
+                        let canvas = match orientation {
+                            CollageOrientation::Landscape => aspect.value(),
+                            CollageOrientation::Portrait => 1.0 / aspect.value(),
+                        };
+                        self.items
+                            .iter()
+                            .map(|item| {
+                                let importance = item.photo.visual_weight.max(0.2);
+                                importance
+                                    * (canvas / item.photo.aspect_ratio.max(0.01)).ln().powi(2)
+                            })
+                            .sum::<f32>()
+                    };
+                    cost(*left_aspect, *left_orientation)
+                        .total_cmp(&cost(*right_aspect, *right_orientation))
+                },
+            )
+            .expect("Smart canvas candidates are never empty");
+        self.aspect = aspect;
+        self.orientation = orientation;
+        self.custom_aspect = aspect.value();
     }
 
     pub fn relayout(&mut self) {
@@ -332,6 +458,7 @@ fn collage_photo_from_object(photo: &PhotoObject) -> CollagePhoto {
         library_rotation: photo.rotation(),
         edit_recipe: photo.edit_recipe(),
         aspect_ratio: photo_aspect_ratio(photo),
+        visual_weight: visual_interest(photo),
     }
 }
 
@@ -405,6 +532,7 @@ mod draft_tests {
                     library_rotation: 0,
                     edit_recipe: String::new(),
                     aspect_ratio: 1.5,
+                    visual_weight: 0.5,
                 },
                 x: 0.25,
                 y: 0.5,
