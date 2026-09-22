@@ -5,14 +5,56 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let build_started = Instant::now();
     let window = adw::ApplicationWindow::new(app);
     window.set_title(Some("PIC - Picasa iPhoto Clone"));
-    window.set_default_size(1440, 900);
-
-    install_close_confirmation(&window);
-
     let connection = Rc::new(RefCell::new(connection));
+    let saved_window_width = numeric_setting(&connection.borrow(), WINDOW_WIDTH_SETTING_KEY)
+        .unwrap_or(1440)
+        .clamp(640, 7680);
+    let saved_window_height = numeric_setting(&connection.borrow(), WINDOW_HEIGHT_SETTING_KEY)
+        .unwrap_or(900)
+        .clamp(480, 4320);
+    let saved_window_maximized = db::setting(&connection.borrow(), WINDOW_MAXIMIZED_SETTING_KEY)
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true");
+    window.set_default_size(saved_window_width, saved_window_height);
+    if saved_window_maximized {
+        window.maximize();
+    }
+
     let folders = db::folders(&connection.borrow()).unwrap_or_default();
     let folder_cache = Rc::new(RefCell::new(folders.clone()));
     let albums = db::albums(&connection.borrow()).unwrap_or_default();
+    let initial_filter = sidebar_filter_from_setting(
+        db::setting(&connection.borrow(), LAST_VIEW_SETTING_KEY)
+            .ok()
+            .flatten()
+            .as_deref(),
+        &folders,
+        &albums,
+    );
+    let saved_view_photo_id = numeric_setting::<i64>(
+        &connection.borrow(),
+        LAST_VIEW_PHOTO_ID_SETTING_KEY,
+    );
+    // "Activated" means the photo most recently opened in the viewer. Keep
+    // that identity separate from ordinary selection and viewport scrolling.
+    let last_activated_photo_id = Rc::new(Cell::new(numeric_setting::<i64>(
+        &connection.borrow(),
+        LAST_ACTIVATED_PHOTO_ID_SETTING_KEY,
+    )));
+    let saved_view_scroll = numeric_setting::<f64>(
+        &connection.borrow(),
+        LAST_VIEW_SCROLL_SETTING_KEY,
+    )
+    .unwrap_or(0.0)
+    .max(0.0);
+    let saved_albums_scroll = numeric_setting::<f64>(
+        &connection.borrow(),
+        LAST_ALBUMS_SCROLL_SETTING_KEY,
+    )
+    .unwrap_or(0.0)
+    .max(0.0);
     let sidebar_counts = db::sidebar_counts(&connection.borrow()).unwrap_or_default();
     let sort = Rc::new(Cell::new(PhotoSort {
         field: SortField::from_key(
@@ -39,16 +81,36 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     } else {
         grid::GroupMode::None
     }));
-    let mut all_startup_photos = db::photos(&connection.borrow(), None, false, None)
-        .unwrap_or_default();
-    retain_enabled_formats(&connection.borrow(), &mut all_startup_photos);
-    let mut photos = all_startup_photos.clone();
+    let mut photos = match initial_filter {
+        sidebar::SidebarFilter::Albums => Vec::new(),
+        sidebar::SidebarFilter::Album(album_id) => {
+            db::photos_in_album(&connection.borrow(), album_id, None).unwrap_or_default()
+        }
+        sidebar::SidebarFilter::Favorites => {
+            db::photos(&connection.borrow(), None, true, None).unwrap_or_default()
+        }
+        _ => db::photos(&connection.borrow(), None, false, None).unwrap_or_default(),
+    };
+    retain_enabled_formats(&connection.borrow(), &mut photos);
     limit_recently_added(
         &connection.borrow(),
-        sidebar::SidebarFilter::RecentlyAdded,
+        initial_filter,
         &mut photos,
     );
-    sort_photos(&mut photos, sort.get());
+    if matches!(initial_filter, sidebar::SidebarFilter::Folder(_)) {
+        let display_mode = sidebar::FolderDisplayMode::from_setting(
+            db::setting(
+                &connection.borrow(),
+                sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY,
+            )
+            .ok()
+            .flatten()
+            .as_deref(),
+        );
+        sort_folder_stream(&mut photos, &folders, sort.get(), display_mode);
+    } else {
+        sort_photos(&mut photos, sort.get());
+    }
     let startup_photos = Rc::new(photos);
     eprintln!(
         "STARTUP cold_start_ms={} photos={} displayed={} folders={} albums={} scan=disabled rss_mb={}",
@@ -68,6 +130,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let lightbox = Rc::new(Lightbox::new());
     let info_for_lightbox = info.clone();
     let selected_photo_for_lightbox = selected_photo.clone();
+    let last_activated_for_lightbox = last_activated_photo_id.clone();
+    let connection_for_lightbox = connection.clone();
 
     // Appearance themes are discovered from the themes folder at runtime; the
     // engine applies them, persists the choice, and is shared with the
@@ -79,6 +143,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         lightbox.clone(),
     );
     lightbox.set_photo_changed_handler(move |photo| {
+        last_activated_for_lightbox.set(Some(photo.id()));
+        if let Err(error) = db::set_setting(
+            &connection_for_lightbox.borrow(),
+            LAST_ACTIVATED_PHOTO_ID_SETTING_KEY,
+            &photo.id().to_string(),
+        ) {
+            eprintln!("Could not save last activated photo: {error}");
+        }
         info_for_lightbox.set_photo(Some(&photo));
         // Navigating to another photo restores the viewer's normal fit state.
         info_for_lightbox.one_to_one.set_active(false);
@@ -100,7 +172,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let info_for_grid = info.clone();
     let selected_photo_for_grid = selected_photo.clone();
     let lightbox_for_grid = lightbox.clone();
-    let filter = Rc::new(Cell::new(sidebar::SidebarFilter::RecentlyAdded));
+    let filter = Rc::new(Cell::new(initial_filter));
     let search_text = Rc::new(RefCell::new(String::new()));
     let search_entry_slot: Rc<RefCell<Option<gtk::SearchEntry>>> = Rc::new(RefCell::new(None));
     let search_suppressed = Rc::new(Cell::new(false));
@@ -1920,7 +1992,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     edit_page.set_hexpand(true);
     edit_page.set_vexpand(true);
     main_stack.add_named(&edit_page, Some("edit"));
-    main_stack.set_visible_child_name("photos");
+    main_stack.set_visible_child_name(if initial_filter == sidebar::SidebarFilter::Albums {
+        "albums"
+    } else {
+        "photos"
+    });
     content.append(&main_stack);
     content.append(&info.root);
 
@@ -2479,9 +2555,37 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let startup_photos_for_idle = startup_photos.clone();
     let startup_total = startup_photos_for_idle.len();
     let mut startup_offset = 0usize;
+    let startup_view_restored = Rc::new(Cell::new(false));
+    let restore_startup_view: Rc<dyn Fn()> = {
+        let restored = startup_view_restored.clone();
+        let gallery = gallery.clone();
+        let albums_home = albums_home.clone();
+        Rc::new(move || {
+            if restored.replace(true) {
+                return;
+            }
+            if initial_filter == sidebar::SidebarFilter::Albums {
+                let adjustment = albums_home.vadjustment();
+                glib::timeout_add_local_once(Duration::from_millis(50), move || {
+                    let upper = (adjustment.upper() - adjustment.page_size())
+                        .max(adjustment.lower());
+                    adjustment
+                        .set_value(saved_albums_scroll.clamp(adjustment.lower(), upper));
+                });
+            } else if !last_activated_photo_id
+                .get()
+                .is_some_and(|photo_id| gallery.restore_activated_photo(photo_id))
+            {
+                if let Some(photo_id) = saved_view_photo_id {
+                    gallery.restore_view(photo_id, saved_view_scroll);
+                }
+            }
+        })
+    };
     const STARTUP_BATCH_SIZE: usize = 500;
     glib::idle_add_local(move || {
         if startup_offset >= startup_total {
+            restore_startup_view();
             return glib::ControlFlow::Break;
         }
 
@@ -2495,6 +2599,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         startup_offset = end;
 
         if startup_offset >= startup_total {
+            restore_startup_view();
             glib::ControlFlow::Break
         } else {
             glib::ControlFlow::Continue
@@ -3377,6 +3482,77 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         }
 
         glib::ControlFlow::Continue
+    });
+
+    // Persist the browsing destination and its viewport only after the user
+    // confirms Exit. Destination changes are also written immediately in
+    // layout.rs, so an abnormal process termination still restores the most
+    // important part of the session.
+    install_close_confirmation(&window, {
+        let connection = connection.clone();
+        let filter = filter.clone();
+        let gallery = gallery.clone();
+        let albums_home = albums_home.clone();
+        let main_split = main_split.clone();
+        let window = window.clone();
+        Rc::new(move || {
+            let guard = connection.borrow();
+            let current_filter = filter.get();
+            let _ = db::set_setting(
+                &guard,
+                LAST_VIEW_SETTING_KEY,
+                &sidebar_filter_setting(current_filter),
+            );
+
+            if current_filter == sidebar::SidebarFilter::Albums {
+                let _ = db::set_setting(
+                    &guard,
+                    LAST_ALBUMS_SCROLL_SETTING_KEY,
+                    &albums_home.vadjustment().value().to_string(),
+                );
+            } else {
+                let scroll_y = gallery.scroll_position();
+                let anchor_id = gallery.viewport_center_photo().map(|photo| photo.id());
+                let _ = db::set_setting(
+                    &guard,
+                    LAST_VIEW_SCROLL_SETTING_KEY,
+                    &scroll_y.to_string(),
+                );
+                if let Some(photo_id) = anchor_id {
+                    let _ = db::set_setting(
+                        &guard,
+                        LAST_VIEW_PHOTO_ID_SETTING_KEY,
+                        &photo_id.to_string(),
+                    );
+                } else {
+                    let _ = db::delete_setting(&guard, LAST_VIEW_PHOTO_ID_SETTING_KEY);
+                }
+            }
+
+            let maximized = window.is_maximized();
+            let _ = db::set_setting(
+                &guard,
+                WINDOW_MAXIMIZED_SETTING_KEY,
+                if maximized { "true" } else { "false" },
+            );
+            if !maximized {
+                let _ = db::set_setting(
+                    &guard,
+                    WINDOW_WIDTH_SETTING_KEY,
+                    &window.width().to_string(),
+                );
+                let _ = db::set_setting(
+                    &guard,
+                    WINDOW_HEIGHT_SETTING_KEY,
+                    &window.height().to_string(),
+                );
+            }
+            let _ = db::set_setting(
+                &guard,
+                SIDEBAR_WIDTH_FRACTION_SETTING_KEY,
+                &main_split.sidebar_width_fraction().to_string(),
+            );
+        })
     });
 
     window

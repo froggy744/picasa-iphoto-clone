@@ -67,6 +67,13 @@
                 }
             });
             filter.set(new_filter);
+            if let Err(error) = db::set_setting(
+                &connection.borrow(),
+                LAST_VIEW_SETTING_KEY,
+                &sidebar_filter_setting(new_filter),
+            ) {
+                eprintln!("Could not save current view: {error}");
+            }
             if let Some(sidebar) = sidebar_selection.borrow().as_ref() {
                 sidebar::set_active_filter(sidebar, new_filter);
             }
@@ -626,7 +633,13 @@
     main_split.set_content(Some(&right_column));
     main_split.set_min_sidebar_width(200.0);
     main_split.set_max_sidebar_width(600.0);
-    main_split.set_sidebar_width_fraction(0.22);
+    let saved_sidebar_fraction = numeric_setting::<f64>(
+        &connection.borrow(),
+        SIDEBAR_WIDTH_FRACTION_SETTING_KEY,
+    )
+    .unwrap_or(0.22)
+    .clamp(0.10, 0.70);
+    main_split.set_sidebar_width_fraction(saved_sidebar_fraction);
     main_split.set_enable_show_gesture(true);
     main_split.set_enable_hide_gesture(true);
 

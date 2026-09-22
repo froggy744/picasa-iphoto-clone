@@ -63,7 +63,10 @@ pub(crate) fn debug_log(message: &str) {
     let _ = writeln!(file, "{message}");
 }
 
-fn install_close_confirmation(window: &adw::ApplicationWindow) {
+fn install_close_confirmation(
+    window: &adw::ApplicationWindow,
+    save_session: Rc<dyn Fn()>,
+) {
     let close_confirmation_open = Rc::new(Cell::new(false));
     let close_confirmation_allowed = Rc::new(Cell::new(false));
     let close_confirmation_open_for_request = close_confirmation_open.clone();
@@ -87,11 +90,13 @@ fn install_close_confirmation(window: &adw::ApplicationWindow) {
         dialog.set_response_appearance("close", adw::ResponseAppearance::Destructive);
 
         let window_for_response = window.clone();
+        let save_session_for_response = save_session.clone();
         let close_confirmation_open_for_response = close_confirmation_open_for_request.clone();
         let close_confirmation_allowed_for_response = close_confirmation_allowed_for_request.clone();
         dialog.connect_response(None, move |dialog, response| {
             close_confirmation_open_for_response.set(false);
             if response == "close" {
+                save_session_for_response();
                 close_confirmation_allowed_for_response.set(true);
                 window_for_response.close();
             } else {

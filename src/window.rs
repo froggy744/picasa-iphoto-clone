@@ -26,6 +26,15 @@ const SORT_FIELD_SETTING_KEY: &str = "photo-sort-field";
 const SORT_DIRECTION_SETTING_KEY: &str = "photo-sort-direction";
 const GROUP_MODE_SETTING_KEY: &str = "photo-group-mode";
 const GRID_THUMBNAIL_SIZE_SETTING_KEY: &str = "grid-thumbnail-size";
+const LAST_VIEW_SETTING_KEY: &str = "last-view";
+const LAST_VIEW_PHOTO_ID_SETTING_KEY: &str = "last-view-photo-id";
+const LAST_ACTIVATED_PHOTO_ID_SETTING_KEY: &str = "last-activated-photo-id";
+const LAST_VIEW_SCROLL_SETTING_KEY: &str = "last-view-scroll";
+const LAST_ALBUMS_SCROLL_SETTING_KEY: &str = "last-albums-scroll";
+const WINDOW_WIDTH_SETTING_KEY: &str = "window-width";
+const WINDOW_HEIGHT_SETTING_KEY: &str = "window-height";
+const WINDOW_MAXIMIZED_SETTING_KEY: &str = "window-maximized";
+const SIDEBAR_WIDTH_FRACTION_SETTING_KEY: &str = "sidebar-width-fraction";
 // Fallback before the first real layout when no thumbnail size is stored.
 // A ladder level, so +/- from it stays on the canonical sizes.
 const DEFAULT_GRID_THUMBNAIL_SIZE: i32 = 160;
@@ -161,6 +170,111 @@ fn grid_thumbnail_size_from_setting(connection: &Connection) -> Option<i32> {
         .map(|size| size.clamp(100, 300))
         // The untouched legacy default is not a real preference.
         .filter(|size| *size != LEGACY_GRID_THUMBNAIL_SIZE)
+}
+
+fn sidebar_filter_setting(filter: sidebar::SidebarFilter) -> String {
+    match filter {
+        sidebar::SidebarFilter::All => "all".into(),
+        sidebar::SidebarFilter::Favorites => "favorites".into(),
+        sidebar::SidebarFilter::RecentlyAdded => "recently-added".into(),
+        sidebar::SidebarFilter::Albums => "albums".into(),
+        sidebar::SidebarFilter::Folder(id) => format!("folder:{id}"),
+        sidebar::SidebarFilter::Album(id) => format!("album:{id}"),
+    }
+}
+
+/// Decode the last destination and reject references that disappeared since
+/// the previous session. A stale album/folder must never reopen as an empty,
+/// unselectable page.
+fn sidebar_filter_from_setting(
+    value: Option<&str>,
+    folders: &[db::Folder],
+    albums: &[db::Album],
+) -> sidebar::SidebarFilter {
+    match value.unwrap_or_default() {
+        "all" => sidebar::SidebarFilter::All,
+        "favorites" => sidebar::SidebarFilter::Favorites,
+        "albums" => sidebar::SidebarFilter::Albums,
+        "recently-added" => sidebar::SidebarFilter::RecentlyAdded,
+        value if value.starts_with("folder:") => value[7..]
+            .parse::<i64>()
+            .ok()
+            .filter(|id| folders.iter().any(|folder| folder.id == *id))
+            .map(sidebar::SidebarFilter::Folder)
+            .unwrap_or(sidebar::SidebarFilter::RecentlyAdded),
+        value if value.starts_with("album:") => value[6..]
+            .parse::<i64>()
+            .ok()
+            .filter(|id| albums.iter().any(|album| album.id == *id))
+            .map(sidebar::SidebarFilter::Album)
+            .unwrap_or(sidebar::SidebarFilter::RecentlyAdded),
+        _ => sidebar::SidebarFilter::RecentlyAdded,
+    }
+}
+
+fn numeric_setting<T: std::str::FromStr>(connection: &Connection, key: &str) -> Option<T> {
+    db::setting(connection, key).ok().flatten()?.parse().ok()
+}
+
+#[cfg(test)]
+mod session_restore_tests {
+    use super::{sidebar_filter_from_setting, sidebar_filter_setting};
+    use crate::{db, sidebar::SidebarFilter};
+
+    #[test]
+    fn every_sidebar_destination_has_a_stable_setting() {
+        assert_eq!(sidebar_filter_setting(SidebarFilter::All), "all");
+        assert_eq!(sidebar_filter_setting(SidebarFilter::Favorites), "favorites");
+        assert_eq!(
+            sidebar_filter_setting(SidebarFilter::RecentlyAdded),
+            "recently-added"
+        );
+        assert_eq!(sidebar_filter_setting(SidebarFilter::Albums), "albums");
+        assert_eq!(sidebar_filter_setting(SidebarFilter::Folder(42)), "folder:42");
+        assert_eq!(sidebar_filter_setting(SidebarFilter::Album(17)), "album:17");
+    }
+
+    #[test]
+    fn existing_album_and_folder_are_restored() {
+        let folders = [db::Folder {
+            id: 42,
+            path: "/photos".into(),
+            name: "Photos".into(),
+            parent_id: None,
+            imported_root: true,
+            watched: false,
+            photo_count: 0,
+            subfolder_count: 0,
+            available: true,
+        }];
+        let albums = [db::Album {
+            id: 17,
+            name: "Holiday".into(),
+            created_at: 0,
+            photo_count: 0,
+            cover_frame: None,
+            cover_photo_id: None,
+        }];
+
+        assert_eq!(
+            sidebar_filter_from_setting(Some("folder:42"), &folders, &albums),
+            SidebarFilter::Folder(42)
+        );
+        assert_eq!(
+            sidebar_filter_from_setting(Some("album:17"), &folders, &albums),
+            SidebarFilter::Album(17)
+        );
+    }
+
+    #[test]
+    fn missing_or_invalid_destination_falls_back_safely() {
+        for value in [None, Some("album:17"), Some("folder:nope"), Some("unknown")] {
+            assert_eq!(
+                sidebar_filter_from_setting(value, &[], &[]),
+                SidebarFilter::RecentlyAdded
+            );
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

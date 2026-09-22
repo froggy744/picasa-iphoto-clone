@@ -43,6 +43,134 @@ impl Gallery {
             .unwrap_or_else(|| self.last_scroll_y.get())
     }
 
+    /// Return the realized photo nearest the visual centre of the active
+    /// viewport. Session restore uses this as its focus anchor: the scrollbar
+    /// value restores the exact view, while this id restores keyboard focus to
+    /// the middle of what the user was looking at.
+    pub fn viewport_center_photo(&self) -> Option<PhotoObject> {
+        let root: gtk::Widget = if self.group_mode.get() == GroupMode::Folder {
+            self.folder_root.clone().upcast()
+        } else {
+            self.root.clone().upcast()
+        };
+        let center_x = root.width().max(1) as f32 * 0.5;
+        let center_y = root.height().max(1) as f32 * 0.5;
+        let mut tiles = Vec::new();
+        collect_tiles(&root, &mut tiles);
+
+        tiles
+            .into_iter()
+            .filter_map(|tile| {
+                if !tile.is_mapped() || !tile.is_visible() {
+                    return None;
+                }
+                let photo = tile.imp().photo.borrow().clone()?;
+                let bounds = tile.compute_bounds(&root)?;
+                if bounds.x() + bounds.width() <= 0.0
+                    || bounds.x() >= root.width() as f32
+                    || bounds.y() + bounds.height() <= 0.0
+                    || bounds.y() >= root.height() as f32
+                {
+                    return None;
+                }
+                let dx = bounds.x() + bounds.width() * 0.5 - center_x;
+                let dy = bounds.y() + bounds.height() * 0.5 - center_y;
+                Some((dx * dx + dy * dy, photo))
+            })
+            .min_by(|left, right| left.0.total_cmp(&right.0))
+            .map(|(_, photo)| photo)
+            .or_else(|| self.photo_for_scroll_position(self.scroll_position()))
+    }
+
+    /// Restore the most recently activated photo as the visual and keyboard
+    /// focus of the grid. Returning `false` lets startup fall back to the
+    /// separately saved viewport when that photo is not in the current view.
+    pub fn restore_activated_photo(&self, photo_id: i64) -> bool {
+        let Some(position) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .position(|photo| photo.id() == photo_id)
+        else {
+            return false;
+        };
+        let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        let folder_row = folder_mode
+            .then(|| self.folder_row_index_for_photo(photo_id))
+            .flatten();
+        let root: gtk::Widget = if folder_mode {
+            self.folder_root.clone().upcast()
+        } else {
+            self.root.clone().upcast()
+        };
+        let adjustment = if folder_mode {
+            self.folder_root.vadjustment()
+        } else {
+            self.root.vadjustment()
+        };
+        let grid_root = self.root.clone();
+        let folder_root = self.folder_root.clone();
+        let selection = self.selection.clone();
+        glib::idle_add_local_once(move || {
+            selection.select_item(position as u32, true);
+            if folder_mode {
+                if let Some(row) = folder_row {
+                    folder_root.scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+                }
+            } else {
+                grid_root.scroll_to(
+                    position as u32,
+                    gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                    None,
+                );
+            }
+
+            let attempts = Cell::new(0_u8);
+            root.add_tick_callback(move |root, _| {
+                attempts.set(attempts.get().saturating_add(1));
+                // Let scroll_to() realize and allocate the destination before
+                // measuring its centre; first-frame bounds can belong to a
+                // recycled tile at the old viewport position.
+                if attempts.get() < 2 {
+                    return glib::ControlFlow::Continue;
+                }
+                let mut tiles = Vec::new();
+                collect_tiles(root, &mut tiles);
+                let tile = tiles.into_iter().find(|tile| {
+                    tile.is_mapped()
+                        && tile
+                            .imp()
+                            .photo
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|photo| photo.id() == photo_id)
+                });
+                let Some(tile) = tile else {
+                    return if attempts.get() >= 60 {
+                        root.grab_focus();
+                        glib::ControlFlow::Break
+                    } else {
+                        glib::ControlFlow::Continue
+                    };
+                };
+                let Some(bounds) = tile.compute_bounds(root) else {
+                    return glib::ControlFlow::Continue;
+                };
+                if let Some(adjustment) = adjustment.as_ref() {
+                    let target = adjustment.value() + f64::from(bounds.y())
+                        + f64::from(bounds.height()) * 0.5
+                        - f64::from(root.height()) * 0.5;
+                    let upper =
+                        (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+                    adjustment.set_value(target.clamp(adjustment.lower(), upper));
+                }
+                tile.grab_focus();
+                glib::ControlFlow::Break
+            });
+        });
+        true
+    }
+
     /// Return keyboard focus to the realized `SquareTile` for `photo_id` in the
     /// folder stream. A `GtkListView` row may hold several photos, so focusing
     /// the list alone leaves arrow keys without a thumbnail to start from.
