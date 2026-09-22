@@ -203,6 +203,7 @@ impl OverlaySpec {
     pub const MIN_WIDTH: f32 = 0.02;
     pub const MAX_WIDTH: f32 = 1.0;
     pub const DEFAULT_WIDTH: f32 = 0.25;
+    pub const POSITION_MARGIN: f32 = 0.03;
 
     /// A centered overlay covering a quarter of the photo's width.
     pub fn new_centered(asset: impl Into<String>) -> Self {
@@ -277,6 +278,7 @@ impl OverlaySpec {
     }
 
     /// Change the anchor while keeping the overlay exactly where it is.
+    #[allow(dead_code)]
     pub fn reanchor(
         &mut self,
         anchor: OverlayAnchor,
@@ -290,6 +292,20 @@ impl OverlaySpec {
     }
 
     /// Restore the default placement used when an overlay is first added.
+    pub fn position_at(&mut self, anchor: OverlayAnchor) {
+        let margin = Self::POSITION_MARGIN;
+        self.anchor = anchor;
+        let (x, y) = match anchor {
+            OverlayAnchor::TopLeft => (margin, margin),
+            OverlayAnchor::TopRight => (1.0 - margin, margin),
+            OverlayAnchor::Center => (0.5, 0.5),
+            OverlayAnchor::BottomLeft => (margin, 1.0 - margin),
+            OverlayAnchor::BottomRight => (1.0 - margin, 1.0 - margin),
+        };
+        self.x = x;
+        self.y = y;
+    }
+
     pub fn reset_placement(&mut self) {
         self.anchor = OverlayAnchor::Center;
         self.x = 0.5;
@@ -969,6 +985,33 @@ mod tests {
             assert!((restored.width - rect.width).abs() < 1e-5);
             assert!((restored.height - rect.height).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn position_at_pins_corners_with_a_uniform_margin() {
+        let mut overlay = OverlaySpec::new_centered("logo");
+        overlay.width = 0.25;
+        overlay.opacity = 0.6;
+        overlay.position_at(OverlayAnchor::BottomRight);
+        assert_eq!(overlay.anchor, OverlayAnchor::BottomRight);
+        let rect = overlay.rect(1600.0, 900.0, 1.0);
+        assert!((rect.right() - 0.97).abs() < 1e-6);
+        assert!((rect.bottom() - 0.97).abs() < 1e-6);
+        assert!((rect.width - 0.25).abs() < 1e-6);
+        assert!((overlay.opacity - 0.6).abs() < 1e-6);
+
+        overlay.position_at(OverlayAnchor::TopLeft);
+        let rect = overlay.rect(1600.0, 900.0, 1.0);
+        assert!((rect.left - 0.03).abs() < 1e-6);
+        assert!((rect.top - 0.03).abs() < 1e-6);
+        assert!((rect.width - 0.25).abs() < 1e-6);
+
+        overlay.position_at(OverlayAnchor::Center);
+        let rect = overlay.rect(1600.0, 900.0, 1.0);
+        assert!((rect.left + rect.width * 0.5 - 0.5).abs() < 1e-6);
+        assert!((rect.top + rect.height * 0.5 - 0.5).abs() < 1e-6);
+        assert!((rect.width - 0.25).abs() < 1e-6);
+        assert!((overlay.opacity - 0.6).abs() < 1e-6);
     }
 
     #[test]

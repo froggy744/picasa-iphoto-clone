@@ -751,7 +751,7 @@ fn build_overlays_panel(
     add_section_label(&selected_section, "SELECTED OVERLAY");
     let opacity_row = add_slider(&selected_section, "Opacity", 0.0, 1.0, 0.01, 2);
 
-    add_section_label(&selected_section, "ANCHOR");
+    add_section_label(&selected_section, "POSITION");
     let anchor_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     anchor_row.add_css_class("linked");
     anchor_row.add_css_class("overlay-anchor-row");
@@ -957,14 +957,13 @@ fn build_overlays_panel(
         });
     }
 
-    // Anchor toggles re-express the rectangle under a new corner without
-    // moving the overlay on screen.
+    // Position toggles move the overlay to the named spot on the photo,
+    // keeping its size and opacity.
     for (anchor, button) in &anchor_buttons {
         let anchor = *anchor;
         let session = session.clone();
         let selected = selected.clone();
         let syncing = syncing.clone();
-        let preview_dimensions = preview_dimensions.clone();
         let update_history_buttons = update_history_buttons.clone();
         let redraw_canvas = redraw_canvas.clone();
         button.connect_toggled(move |button| {
@@ -974,14 +973,11 @@ fn build_overlays_panel(
             let Some(index) = selected.get() else {
                 return;
             };
-            let (photo_w, photo_h) = preview_dimensions.get();
-            let (photo_w, photo_h) = (photo_w.max(1) as f32, photo_h.max(1) as f32);
             session.borrow_mut().mutate(move |recipe| {
                 let Some(overlay) = recipe.overlays.get_mut(index) else {
                     return;
                 };
-                let aspect = asset_aspect(&overlay.asset).unwrap_or(1.0);
-                overlay.reanchor(anchor, photo_w, photo_h, aspect);
+                overlay.position_at(anchor);
             });
             update_history_buttons();
             redraw_canvas();
