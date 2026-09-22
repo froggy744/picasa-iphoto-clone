@@ -406,6 +406,7 @@
                 }
             })
         },
+        sidebar::SidebarVisibility::from_connection(&connection.borrow()),
     );
     sidebar::set_keyboard_grid_target(&sidebar, gallery.root.upcast_ref());
     sidebar_for_unavailable.replace(Some(sidebar.clone()));

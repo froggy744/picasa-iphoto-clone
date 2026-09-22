@@ -680,6 +680,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let thumbs_window = settings_surface.clone();
         let thumbs_gallery = settings_gallery_for_thumbs.clone();
         let thumbs_connection = settings_connection.clone();
+        let visibility_connection = settings_connection.clone();
+        let visibility_sidebar = settings_sidebar.clone();
         settings_window.present(
             &settings_parent,
             settings_connection.clone(),
@@ -736,6 +738,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     crate::window::debug_log("THUMB SETTINGS: set_fit_whole_photo end");
                 });
                 crate::window::debug_log("THUMB SETTINGS: apply callback exit");
+            }),
+            Rc::new(move || {
+                if let Some(sidebar) = visibility_sidebar.borrow().as_ref().cloned() {
+                    let visibility = sidebar::SidebarVisibility::from_connection(
+                        &visibility_connection.borrow(),
+                    );
+                    sidebar::apply_visibility(&sidebar, visibility);
+                }
             }),
             {
                 let rebuild_folder_watches = settings_rebuild_folder_watches.clone();

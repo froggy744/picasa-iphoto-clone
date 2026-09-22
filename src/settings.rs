@@ -34,6 +34,7 @@ impl SettingsWindow {
         formats_changed: Rc<dyn Fn()>,
         theme_changed: Rc<dyn Fn()>,
         thumbnail_changed: Rc<dyn Fn()>,
+        sidebar_changed: Rc<dyn Fn()>,
         folder_watch_changed: Rc<dyn Fn()>,
         maintenance: LibraryMaintenance,
         theme_engine: Rc<crate::window::theme::ThemeEngine>,
@@ -84,16 +85,21 @@ impl SettingsWindow {
             Some("formats"),
             "File Formats",
         );
-        let (themes_page, refresh_appearance) = themes_page(
-            connection.clone(),
-            theme_changed,
-            thumbnail_changed.clone(),
-            theme_engine,
-        );
+        let (themes_page, refresh_appearance) = themes_page(theme_engine);
         self.refresh_appearance
             .borrow_mut()
             .replace(refresh_appearance);
         stack.add_titled(&themes_page, Some("themes"), "Themes");
+        stack.add_titled(
+            &interface_page(connection.clone(), theme_changed, thumbnail_changed),
+            Some("interface"),
+            "Interface",
+        );
+        stack.add_titled(
+            &sidebar_page(connection.clone(), sidebar_changed),
+            Some("sidebar"),
+            "Sidebar",
+        );
         stack.add_titled(
             &folders_page(connection.clone(), folder_watch_changed),
             Some("folders"),
@@ -169,6 +175,76 @@ fn formats_page(
             Some(&extensions),
             Some(toggle.upcast_ref()),
         );
+    }
+    content.append(&list);
+    scroll_page(content)
+}
+
+fn sidebar_page(
+    connection: Rc<RefCell<Connection>>,
+    sidebar_changed: Rc<dyn Fn()>,
+) -> gtk::ScrolledWindow {
+    let content = page_content(
+        "Sidebar",
+        "Choose which sections and destinations are shown in the sidebar.",
+    );
+    let list = settings_list();
+    for (title, subtitle, key) in [
+        (
+            "Library",
+            "Show the Library section.",
+            crate::sidebar::LIBRARY_VISIBLE_SETTING_KEY,
+        ),
+        (
+            "Albums",
+            "Show albums and the Albums section.",
+            crate::sidebar::ALBUMS_VISIBLE_SETTING_KEY,
+        ),
+        (
+            "Folders",
+            "Show imported local folders.",
+            crate::sidebar::FOLDERS_VISIBLE_SETTING_KEY,
+        ),
+        (
+            "Network Shares",
+            "Show registered network shares.",
+            crate::sidebar::NETWORK_SHARES_VISIBLE_SETTING_KEY,
+        ),
+        (
+            "All Photos",
+            "Show All Photos in the Library section.",
+            crate::sidebar::ALL_PHOTOS_VISIBLE_SETTING_KEY,
+        ),
+        (
+            "Favourites",
+            "Show Favourites in the Library section.",
+            crate::sidebar::FAVOURITES_VISIBLE_SETTING_KEY,
+        ),
+        (
+            "Recently Added",
+            "Show Recently Added in the Library section.",
+            crate::sidebar::RECENTLY_ADDED_VISIBLE_SETTING_KEY,
+        ),
+    ] {
+        let toggle = gtk::Switch::new();
+        toggle.set_valign(gtk::Align::Center);
+        toggle.set_active(saved_bool(&connection.borrow(), key).unwrap_or(true));
+        {
+            let connection = connection.clone();
+            let sidebar_changed = sidebar_changed.clone();
+            toggle.connect_active_notify(move |toggle| {
+                if let Err(error) = crate::db::set_setting(
+                    &connection.borrow(),
+                    key,
+                    &toggle.is_active().to_string(),
+                ) {
+                    eprintln!("Could not save sidebar visibility for {key}: {error}");
+                    return;
+                }
+                sidebar_changed();
+            });
+        }
+        append_row(&list, title, Some(subtitle), Some(toggle.upcast_ref()));
     }
     content.append(&list);
     scroll_page(content)
@@ -983,9 +1059,6 @@ fn set_album_view_style(connection: &Connection, style: AlbumViewStyle) -> anyho
 }
 
 fn themes_page(
-    connection: Rc<RefCell<Connection>>,
-    theme_changed: Rc<dyn Fn()>,
-    thumbnail_changed: Rc<dyn Fn()>,
     theme_engine: Rc<crate::window::theme::ThemeEngine>,
 ) -> (gtk::ScrolledWindow, Rc<dyn Fn()>) {
     let content = page_content("Themes", "Customize theme options.");
@@ -1039,9 +1112,18 @@ fn themes_page(
     };
     rebuild_appearance();
 
+    (scroll_page(content), rebuild_appearance)
+}
+
+fn interface_page(
+    connection: Rc<RefCell<Connection>>,
+    theme_changed: Rc<dyn Fn()>,
+    thumbnail_changed: Rc<dyn Fn()>,
+) -> gtk::ScrolledWindow {
+    let content = page_content("Interface", "Customize albums and thumbnail appearance.");
+
     // Thumbnail appearance toggles. Both apply live through thumbnail_changed
-    // and are re-read at startup. They sit above the album theme options so
-    // every visual style choice is grouped on the Themes tab.
+    // and are re-read at startup.
     let thumbnail_heading = gtk::Label::new(Some("Thumbnails"));
     thumbnail_heading.set_halign(gtk::Align::Start);
     thumbnail_heading.add_css_class("heading");
@@ -1294,7 +1376,7 @@ fn themes_page(
         });
     }
     content.append(&list);
-    (scroll_page(content), rebuild_appearance)
+    scroll_page(content)
 }
 
 fn page_content(title: &str, subtitle: &str) -> gtk::Box {
@@ -1718,18 +1800,10 @@ mod tests {
             .unwrap();
         let notified = Rc::new(Cell::new(0));
         let notified_for_callback = notified.clone();
-        let display = gtk::gdk::Display::default().unwrap();
-        let lightbox = Rc::new(crate::lightbox::Lightbox::new());
-        let engine = crate::window::theme::ThemeEngine::new(
-            display,
-            connection.clone(),
-            lightbox,
-        );
-        let (page, _refresh_appearance) = themes_page(
+        let page = interface_page(
             connection.clone(),
             Rc::new(move || notified_for_callback.set(notified_for_callback.get() + 1)),
             Rc::new(|| {}),
-            engine,
         );
         let mut switches = Vec::new();
         let mut buttons = Vec::new();
@@ -1746,9 +1820,8 @@ mod tests {
                 "Reset All Theme Settings",
             ],
         );
-        // Switch order: the runtime-discovered appearance radios first
-        // (their count follows the themes folder contents), then the two
-        // thumbnail toggles, then bookshelf and album covers at the end.
+        // Switch order: the two thumbnail toggles, then bookshelf and album
+        // covers at the end.
         let album_switches = &switches[switches.len() - 2..];
         assert_eq!(album_switches.len(), 2);
         assert!(!album_switches[0].is_active());

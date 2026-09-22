@@ -40,6 +40,60 @@ impl FolderDisplayMode {
 }
 
 pub const FOLDER_DISPLAY_MODE_SETTING_KEY: &str = "folder-display-mode";
+pub const LIBRARY_VISIBLE_SETTING_KEY: &str = "sidebar-library-visible";
+pub const ALBUMS_VISIBLE_SETTING_KEY: &str = "sidebar-albums-visible";
+pub const FOLDERS_VISIBLE_SETTING_KEY: &str = "sidebar-folders-visible";
+pub const NETWORK_SHARES_VISIBLE_SETTING_KEY: &str = "sidebar-network-shares-visible";
+pub const ALL_PHOTOS_VISIBLE_SETTING_KEY: &str = "sidebar-all-photos-visible";
+pub const FAVOURITES_VISIBLE_SETTING_KEY: &str = "sidebar-favourites-visible";
+pub const RECENTLY_ADDED_VISIBLE_SETTING_KEY: &str = "sidebar-recently-added-visible";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarVisibility {
+    pub library: bool,
+    pub albums: bool,
+    pub folders: bool,
+    pub network_shares: bool,
+    pub all_photos: bool,
+    pub favourites: bool,
+    pub recently_added: bool,
+}
+
+impl Default for SidebarVisibility {
+    fn default() -> Self {
+        Self {
+            library: true,
+            albums: true,
+            folders: true,
+            network_shares: true,
+            all_photos: true,
+            favourites: true,
+            recently_added: true,
+        }
+    }
+}
+
+impl SidebarVisibility {
+    pub fn from_connection(connection: &rusqlite::Connection) -> Self {
+        fn visible(connection: &rusqlite::Connection, key: &str) -> bool {
+            crate::db::setting(connection, key)
+                .ok()
+                .flatten()
+                .as_deref()
+                != Some("false")
+        }
+
+        Self {
+            library: visible(connection, LIBRARY_VISIBLE_SETTING_KEY),
+            albums: visible(connection, ALBUMS_VISIBLE_SETTING_KEY),
+            folders: visible(connection, FOLDERS_VISIBLE_SETTING_KEY),
+            network_shares: visible(connection, NETWORK_SHARES_VISIBLE_SETTING_KEY),
+            all_photos: visible(connection, ALL_PHOTOS_VISIBLE_SETTING_KEY),
+            favourites: visible(connection, FAVOURITES_VISIBLE_SETTING_KEY),
+            recently_added: visible(connection, RECENTLY_ADDED_VISIBLE_SETTING_KEY),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct SidebarState {
@@ -68,16 +122,23 @@ impl Default for SidebarState {
 
 const STATE_KEY: &str = "picasa-sidebar-state";
 const LIBRARY_LIST_KEY: &str = "picasa-sidebar-library-list";
+const LIBRARY_HEADING_KEY: &str = "picasa-sidebar-library-heading";
 const LIBRARY_REVEALER_KEY: &str = "picasa-sidebar-library-revealer";
 const LIBRARY_INDICATOR_KEY: &str = "picasa-sidebar-library-indicator";
 const ALBUM_LIST_KEY: &str = "picasa-sidebar-album-list";
+const ALBUM_HEADING_KEY: &str = "picasa-sidebar-album-heading";
 const ALBUM_REVEALER_KEY: &str = "picasa-sidebar-album-revealer";
 const ALBUM_INDICATOR_KEY: &str = "picasa-sidebar-album-indicator";
 const FOLDER_LIST_KEY: &str = "picasa-sidebar-folder-list";
+const FOLDER_HEADING_KEY: &str = "picasa-sidebar-folder-heading";
 const FOLDER_SCROLL_KEY: &str = "picasa-sidebar-folder-scroll";
 const FOLDER_REVEALER_KEY: &str = "picasa-sidebar-folder-revealer";
 const FOLDER_INDICATOR_KEY: &str = "picasa-sidebar-folder-indicator";
 const CURRENT_FILTER_KEY: &str = "picasa-sidebar-current-filter";
+const VISIBILITY_KEY: &str = "picasa-sidebar-visibility";
+const SECTION_PANED_KEY: &str = "picasa-sidebar-section-paned";
+const FOLDER_SECTION_KEY: &str = "picasa-sidebar-folder-section";
+const SHARE_SECTION_KEY: &str = "picasa-sidebar-share-section";
 const FILTER_SYNCING_KEY: &str = "picasa-sidebar-filter-syncing";
 const FOLDER_REFRESH_KEY: &str = "picasa-sidebar-folder-refresh";
 const REFRESH_GATE_KEY: &str = "picasa-sidebar-refresh-gate";
@@ -128,6 +189,7 @@ pub fn build(
     on_folder_watch: Rc<dyn Fn(Folder, bool)>,
     folder_display_mode: FolderDisplayMode,
     on_folder_display_mode_changed: Rc<dyn Fn(FolderDisplayMode)>,
+    visibility: SidebarVisibility,
 ) -> gtk::ScrolledWindow {
     let on_filter: Rc<dyn Fn(SidebarFilter)> = Rc::new(on_filter);
     let mut initial_state = SidebarState::default();
@@ -907,13 +969,17 @@ pub fn build(
     // without changing any caller-facing API.
     unsafe {
         outer.set_data(STATE_KEY, state);
+        outer.set_data(VISIBILITY_KEY, visibility);
         outer.set_data(LIBRARY_LIST_KEY, library_list);
+        outer.set_data(LIBRARY_HEADING_KEY, library_heading);
         outer.set_data(LIBRARY_REVEALER_KEY, library_revealer);
         outer.set_data(LIBRARY_INDICATOR_KEY, library_indicator);
         outer.set_data(ALBUM_LIST_KEY, album_list);
+        outer.set_data(ALBUM_HEADING_KEY, album_heading);
         outer.set_data(ALBUM_REVEALER_KEY, album_revealer);
         outer.set_data(ALBUM_INDICATOR_KEY, album_indicator);
         outer.set_data(FOLDER_LIST_KEY, folder_list);
+        outer.set_data(FOLDER_HEADING_KEY, folder_heading);
         outer.set_data(FOLDER_SCROLL_KEY, folder_scroll);
         outer.set_data(FOLDER_REVEALER_KEY, folder_revealer);
         outer.set_data(FOLDER_INDICATOR_KEY, folder_indicator);
@@ -921,8 +987,13 @@ pub fn build(
         outer.set_data(FOLDER_MODE_CHANGED_KEY, on_folder_display_mode_changed);
         outer.set_data(FOLDER_SHARE_PANED_KEY, folder_share_paned);
         outer.set_data(FOLDER_PANE_SAVED_KEY, saved_folder_pane_position);
+        outer.set_data(SECTION_PANED_KEY, section_paned);
+        outer.set_data(FOLDER_SECTION_KEY, folder_section);
+        outer.set_data(SHARE_SECTION_KEY, share_section);
         outer.set_data(FILTER_SYNCING_KEY, filter_syncing);
     }
+
+    apply_visibility(&outer, visibility);
 
     let keyboard = gtk::EventControllerKey::new();
     keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -1189,6 +1260,7 @@ pub fn refresh(
     clear_list(&folder_list);
     populate_folders(&folder_list, folders, &state, &on_unavailable);
     refresh_network_shares(scrolled, folders, &on_unavailable);
+    apply_visibility(scrolled, sidebar_visibility(scrolled));
 
     if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, LIBRARY_REVEALER_KEY) {
         revealer.set_reveal_child(state.borrow().library_expanded);
@@ -1245,6 +1317,7 @@ pub fn refresh_library_counts(
 
     clear_list(&library_list);
     populate_library(&library_list, counts, on_unavailable);
+    apply_library_visibility(scrolled, sidebar_visibility(scrolled));
 
     if let Some(filter) = current_filter(scrolled) {
         set_active_filter(scrolled, filter);
@@ -1777,6 +1850,15 @@ fn sidebar_state(scrolled: &gtk::ScrolledWindow) -> Option<Rc<RefCell<SidebarSta
     }
 }
 
+fn sidebar_visibility(scrolled: &gtk::ScrolledWindow) -> SidebarVisibility {
+    unsafe {
+        scrolled
+            .data::<SidebarVisibility>(VISIBILITY_KEY)
+            .map(|visibility| *visibility.as_ref())
+            .unwrap_or_default()
+    }
+}
+
 /// Mark whether the sidebar is explicitly pinned open.
 ///
 /// Pinned means mouse-leave must not auto-hide it.
@@ -1894,6 +1976,65 @@ fn connect_filter_list(
 fn clear_list(list: &gtk::ListBox) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
+    }
+}
+
+pub fn apply_visibility(scrolled: &gtk::ScrolledWindow, visibility: SidebarVisibility) {
+    unsafe {
+        scrolled.set_data(VISIBILITY_KEY, visibility);
+    }
+
+    if let Some(heading) = stored_widget::<gtk::Box>(scrolled, LIBRARY_HEADING_KEY) {
+        heading.set_visible(visibility.library);
+    }
+    if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, LIBRARY_REVEALER_KEY) {
+        revealer.set_visible(visibility.library);
+    }
+    if let Some(heading) = stored_widget::<gtk::Box>(scrolled, ALBUM_HEADING_KEY) {
+        heading.set_visible(visibility.albums);
+    }
+    if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, ALBUM_REVEALER_KEY) {
+        revealer.set_visible(visibility.albums);
+    }
+    if let Some(heading) = stored_widget::<gtk::Box>(scrolled, FOLDER_HEADING_KEY) {
+        heading.set_visible(visibility.folders);
+    }
+    if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, FOLDER_REVEALER_KEY) {
+        revealer.set_visible(visibility.folders);
+    }
+    if let Some(section) = stored_widget::<gtk::Box>(scrolled, SHARE_SECTION_KEY) {
+        section.set_visible(visibility.network_shares);
+    }
+    if let Some(section) = stored_widget::<gtk::Box>(scrolled, FOLDER_SECTION_KEY) {
+        section.set_visible(visibility.folders || visibility.network_shares);
+    }
+    if let Some(paned) = stored_widget::<gtk::Paned>(scrolled, SECTION_PANED_KEY) {
+        paned.set_visible(visibility.albums || visibility.folders || visibility.network_shares);
+    }
+
+    apply_library_visibility(scrolled, visibility);
+}
+
+fn apply_library_visibility(scrolled: &gtk::ScrolledWindow, visibility: SidebarVisibility) {
+    let Some(list) = stored_widget::<gtk::ListBox>(scrolled, LIBRARY_LIST_KEY) else {
+        return;
+    };
+    let mut child = list.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        let Ok(row) = widget.downcast::<gtk::ListBoxRow>() else {
+            continue;
+        };
+        let Some(filter) = (unsafe { row.data::<SidebarFilter>("picasa-filter") }) else {
+            continue;
+        };
+        let visible = match unsafe { *filter.as_ref() } {
+            SidebarFilter::All => visibility.all_photos,
+            SidebarFilter::Favorites => visibility.favourites,
+            SidebarFilter::RecentlyAdded => visibility.recently_added,
+            _ => true,
+        };
+        row.set_visible(visible);
     }
 }
 
@@ -2867,6 +3008,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sidebar_visibility_defaults_to_on_and_restores_saved_switches() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            .unwrap();
+
+        assert_eq!(
+            SidebarVisibility::from_connection(&connection),
+            SidebarVisibility::default()
+        );
+
+        crate::db::set_setting(&connection, ALBUMS_VISIBLE_SETTING_KEY, "false").unwrap();
+        crate::db::set_setting(&connection, FAVOURITES_VISIBLE_SETTING_KEY, "false").unwrap();
+        let visibility = SidebarVisibility::from_connection(&connection);
+        assert!(!visibility.albums);
+        assert!(!visibility.favourites);
+        assert!(visibility.library);
+        assert!(visibility.folders);
+    }
+
+    #[test]
     #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
     fn saved_network_shares_populate_at_startup_and_use_the_remaining_height() {
         gtk::init().unwrap();
@@ -2904,6 +3066,7 @@ mod tests {
             Rc::new(|_, _| {}),
             FolderDisplayMode::Tree,
             Rc::new(|_| {}),
+            SidebarVisibility::default(),
         );
 
         let share_list = stored_widget::<gtk::ListBox>(&sidebar, SHARE_LIST_KEY).unwrap();
@@ -2945,5 +3108,51 @@ mod tests {
             .and_then(|widget| widget.downcast::<gtk::Revealer>().ok())
             .unwrap();
         assert!(share_revealer.vexpands());
+
+        apply_visibility(
+            &sidebar,
+            SidebarVisibility {
+                library: false,
+                albums: false,
+                folders: false,
+                network_shares: false,
+                all_photos: false,
+                favourites: true,
+                recently_added: false,
+            },
+        );
+        assert!(!stored_widget::<gtk::Box>(&sidebar, LIBRARY_HEADING_KEY)
+            .unwrap()
+            .is_visible());
+        assert!(!stored_widget::<gtk::Box>(&sidebar, ALBUM_HEADING_KEY)
+            .unwrap()
+            .is_visible());
+        assert!(!stored_widget::<gtk::Box>(&sidebar, FOLDER_SECTION_KEY)
+            .unwrap()
+            .is_visible());
+        assert!(!stored_widget::<gtk::Box>(&sidebar, SHARE_SECTION_KEY)
+            .unwrap()
+            .is_visible());
+
+        apply_visibility(
+            &sidebar,
+            SidebarVisibility {
+                library: true,
+                all_photos: false,
+                favourites: true,
+                recently_added: false,
+                ..SidebarVisibility::default()
+            },
+        );
+        let library_list = stored_widget::<gtk::ListBox>(&sidebar, LIBRARY_LIST_KEY).unwrap();
+        assert!(!row_for_filter(&library_list, SidebarFilter::All)
+            .unwrap()
+            .is_visible());
+        assert!(row_for_filter(&library_list, SidebarFilter::Favorites)
+            .unwrap()
+            .is_visible());
+        assert!(!row_for_filter(&library_list, SidebarFilter::RecentlyAdded)
+            .unwrap()
+            .is_visible());
     }
 }
