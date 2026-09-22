@@ -1,5 +1,6 @@
 /* Compact Nautilus-style photo context menu. */
 .photo-context-menu {
+             min-width: 120px;
              padding: 6px;
              border-radius: 12px;
              border: 1px solid alpha(currentColor, 0.10);
@@ -7,14 +8,14 @@
              box-shadow: 0 4px 14px alpha(black, 0.16);
          }
          .photo-context-item {
-             min-height: 28px;
+             min-width: 40px;
+             min-height: 32px;
              padding: 0 12px;
              margin: 0;
              border: 0;
              border-radius: 6px;
              background: transparent;
              box-shadow: none;
-             font-size: 14px;
              font-weight: 400;
          }
          .photo-context-item:hover {
@@ -28,34 +29,30 @@
          .photo-context-item > label {
              padding: 0;
              margin: 0;
-             font-size: 14px;
              font-weight: 400;
          }
          .photo-context-submenu {
-             min-height: 28px;
+             min-height: 32px;
              padding: 0;
              margin: 0;
              background: transparent;
              box-shadow: none;
          }
          .photo-context-submenu > button {
-             min-height: 28px;
+             min-width: 40px;
+             min-height: 32px;
              padding: 0 12px;
              margin: 0;
              border: 0;
              border-radius: 6px;
              background: transparent;
              box-shadow: none;
-             font-size: 14px;
              font-weight: 400;
          }
          .photo-context-submenu > button:hover {
              background-color: alpha(currentColor, 0.07);
          }
-         .photo-context-submenu label {
-             font-size: 14px;
-             font-weight: 400;
-         }
+         .photo-context-submenu label { font-weight: 400; }
          .photo-context-submenu > button > box {
              padding: 0;
              margin: 0;
@@ -63,5 +60,5 @@
          .photo-context-separator {
              min-height: 1px;
              padding: 0;
-             margin: 4px 8px;
+             margin: 6px 0;
          }

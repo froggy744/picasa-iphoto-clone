@@ -64,7 +64,7 @@ gridview.section-grid > child:selected .selection-badge, gridview.section-grid >
 .photo-action-button:hover { background: #505050; }
 .photo-context-menu, .photo-context-menu viewport { background: #3a3a3a; }
 .photo-context-menu { border: 1px solid #686868; border-radius: 8px; box-shadow: 0 5px 18px rgba(0,0,0,0.70); }
-.photo-context-menu button { min-height: 32px; padding: 6px 10px; color: #f5f5f5; }
+.photo-context-menu button { color: #f5f5f5; }
 .photo-context-menu button:hover { background: #505050; }
 button.clear-action-button { color: #2e3436; background: #e6e6e6; border: 1px solid #9a9a9a; }
 button.clear-action-button:hover { color: #1f2325; background: #f0f0f0; border-color: #777777; }

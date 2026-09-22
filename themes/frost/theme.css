@@ -126,7 +126,7 @@ window, .layout-left-column, .navigation-sidebar { background: @nord0; color: @n
     .photo-action-button:hover { background: alpha(@nord4, 0.12); }
     .photo-context-menu, .photo-context-menu viewport { background: @nord1; }
     .photo-context-menu { border: 1px solid alpha(@nord4, 0.18); border-radius: 8px; box-shadow: 0 5px 18px alpha(#000000, 0.40); }
-    .photo-context-menu button { color: @nord5; min-height: 32px; padding: 6px 10px; }
+    .photo-context-menu button { color: @nord5; }
     .photo-context-menu button:hover { background: alpha(@nord4, 0.10); }
     button.clear-action-button { color: @nord0; background: @nord4; border: 1px solid @nord3; }
     button.clear-action-button:hover { color: @nord0; background: @nord5; border-color: @nord10; }

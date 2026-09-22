@@ -338,7 +338,7 @@ window {
                     0 0 20px alpha(@accent_bg_color, 0.40),
                     inset 0 0 24px alpha(@accent_bg_color, 0.05);
     }
-    .photo-context-menu button { color: @theme_fg_color; min-height: 32px; padding: 6px 10px; }
+    .photo-context-menu button { color: @theme_fg_color; }
     .photo-context-menu button:hover {
         background: alpha(@accent_bg_color, 0.18);
         color: @accent_color;

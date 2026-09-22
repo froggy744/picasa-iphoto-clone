@@ -112,7 +112,7 @@ window, .layout-left-column, .navigation-sidebar { background: @window_bg_color;
     .photo-action-button:hover { background: alpha(@accent_bg_color, 0.14); }
     .photo-context-menu, .photo-context-menu viewport { background: @window_bg_color; }
     .photo-context-menu { border: 1px solid alpha(@accent_bg_color, 0.22); border-radius: 8px; box-shadow: 0 5px 18px alpha(#008080, 0.18); }
-    .photo-context-menu button { color: @theme_fg_color; min-height: 32px; padding: 6px 10px; }
+    .photo-context-menu button { color: @theme_fg_color; }
     .photo-context-menu button:hover { background: alpha(@accent_bg_color, 0.12); }
     button.clear-action-button { color: #1a3a3a; background: #e0efef; border: 1px solid #7ab8b8; }
     button.clear-action-button:hover { color: #0d2a2a; background: #d0e8e8; border-color: #5aa8a8; }

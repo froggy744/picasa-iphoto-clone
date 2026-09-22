@@ -64,7 +64,6 @@ fn context_submenu_button(label: &str, css_class: &str) -> gtk::MenuButton {
     button.add_css_class("flat");
     button.add_css_class("photo-context-submenu");
     button.add_css_class(css_class);
-    button.set_height_request(28);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let text = gtk::Label::new(Some(label));
     text.set_xalign(0.0);
@@ -135,7 +134,6 @@ fn show_photo_context_menu(
     ensure_context_menu_css(&host.display());
 
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    menu.set_width_request(236);
     menu.set_margin_top(0);
     menu.set_margin_bottom(0);
     menu.set_margin_start(0);
@@ -145,7 +143,6 @@ fn show_photo_context_menu(
         let button = gtk::Button::new();
         button.set_focus_on_click(false);
         button.set_halign(gtk::Align::Fill);
-        button.set_height_request(28);
         button.set_margin_top(0);
         button.set_margin_bottom(0);
         button.add_css_class("flat");
@@ -709,7 +706,6 @@ fn show_photo_context_menu(
     // A context menu should never expand into a near full-height panel.
     // Keep enough room for the common actions and scroll only the overflow.
     menu_host.set_max_content_height((host.height() - 32).clamp(1, 460));
-    menu_host.set_width_request(272);
     menu_host.set_halign(gtk::Align::Start);
     menu_host.set_valign(gtk::Align::Start);
     menu_host.set_can_target(true);
@@ -719,7 +715,7 @@ fn show_photo_context_menu(
     // menu's top-left corner.  Measure after the complete menu has been built
     // so the centring also follows dynamic items such as album actions.
     let (_, natural_width, _, _) = menu_host.measure(gtk::Orientation::Horizontal, -1);
-    let measured_width = natural_width.max(272).min(host.width().max(1));
+    let measured_width = natural_width.max(1).min(host.width().max(1));
     let (_, natural_height, _, _) =
         menu_host.measure(gtk::Orientation::Vertical, measured_width);
     let measured_height = natural_height
