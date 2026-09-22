@@ -21,6 +21,36 @@ pub struct Metadata {
 pub fn private(uri: &str) -> bool {
     uri.starts_with("nfs://") || uri.starts_with("smb://")
 }
+/// Accept the kinds of address a user might type into the picker and turn them
+/// into a canonical `smb://` or `nfs://` URI. Bare hostnames, IPs and UNC-style
+/// `\\server\share` paths default to SMB; explicit `smb://`/`nfs://` pass
+/// through unchanged. Returns `None` for emptiness or anything that is not a
+/// network share address (local paths, http, etc.).
+pub fn normalize_input(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed == "network:///" || trimmed.starts_with("smb://") || trimmed.starts_with("nfs://") {
+        return Some(trimmed.to_owned());
+    }
+    let forward = trimmed.replace('\\', "/");
+    let forward = forward.trim_end_matches('/');
+    let forward = forward.strip_prefix("//").unwrap_or(&forward);
+    if forward.contains("://") {
+        return None;
+    }
+    let (host, path) = forward.split_once('/').unwrap_or((forward, ""));
+    if host.is_empty() || host.contains('/') || host.contains('@') {
+        return None;
+    }
+    let uri = if path.is_empty() {
+        format!("smb://{host}/")
+    } else {
+        format!("smb://{host}/{path}")
+    };
+    Some(uri)
+}
 pub fn trace(area: &str, message: impl std::fmt::Display) {
     if std::env::var_os("PICASA_TRACE").is_some() {
         eprintln!(
@@ -193,6 +223,39 @@ pub fn discover() -> Result<Vec<Entry>> {
     Ok(entries)
 }
 
+/// Automatic subnet scan: probe the local /24 for SMB/NFS servers, then list
+/// each reachable SMB server's shares and each NFS-only server's exports.
+/// Independent of the network:/// (mDNS/WSD) discovery so a server that is not
+/// advertised still appears. Runs the same native transport as everything else.
+pub fn scan_subnet() -> Result<Vec<Entry>> {
+    let hosts = crate::private_smb::scan_hosts(None)?;
+    trace("SCAN", format!("start hosts={}", hosts.len()));
+    let mut entries = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (host, kind) in hosts {
+        let listed = if kind == 7 {
+            let uri = format!("nfs://{host}/");
+            crate::private_nfs::list(&uri)
+        } else {
+            let uri = format!("smb://{host}/");
+            crate::private_smb::list(&uri)
+        };
+        match listed {
+            Ok(children) => {
+                for entry in children {
+                    trace("SCAN", format!("host={host} share={} uri={}", entry.name, entry.uri));
+                    if seen.insert(entry.uri.clone()) {
+                        entries.push(entry);
+                    }
+                }
+            }
+            Err(error) => trace("SCAN", format!("host={host} list_failed {error}")),
+        }
+    }
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(entries)
+}
+
 pub fn info(uri: &str) -> Result<gio::FileInfo> {
     let meta = stat(uri)?;
     let info = gio::FileInfo::new();
@@ -215,6 +278,14 @@ pub fn info(uri: &str) -> Result<gio::FileInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "live network scan"]
+    fn live_scan_subnet_finds_shares() {
+        let entries = scan_subnet().expect("subnet scan should run");
+        assert!(!entries.is_empty(), "expected at least one share on the local subnet");
+        assert!(entries.iter().any(|entry| entry.uri.starts_with("smb://") || entry.uri.starts_with("nfs://")));
+    }
 
     #[test]
     fn finds_uri_hostname_without_consuming_port_or_path() {
@@ -242,5 +313,27 @@ mod tests {
             replace_host(routed, range, host),
             "nfs://DietPi.local:2049/4TBP"
         );
+    }
+
+    #[test]
+    fn normalizes_typed_addresses_to_canonical_smb_uris() {
+        assert_eq!(normalize_input("Ella.local"), Some("smb://Ella.local/".into()));
+        assert_eq!(
+            normalize_input("Ella.local/Documents/2025"),
+            Some("smb://Ella.local/Documents/2025".into())
+        );
+        assert_eq!(
+            normalize_input(r"\\Ella.local\Documents\2025"),
+            Some("smb://Ella.local/Documents/2025".into())
+        );
+        assert_eq!(normalize_input("10.0.0.119"), Some("smb://10.0.0.119/".into()));
+        assert_eq!(
+            normalize_input("smb://DietPi.local:445/Photos"),
+            Some("smb://DietPi.local:445/Photos".into())
+        );
+        assert_eq!(normalize_input("nfs://10.0.0.2/export"), Some("nfs://10.0.0.2/export".into()));
+        assert_eq!(normalize_input(""), None);
+        assert_eq!(normalize_input("/home/peet/photos"), None);
+        assert_eq!(normalize_input("https://example.com/share"), None);
     }
 }
