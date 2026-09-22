@@ -236,19 +236,22 @@ fn show_photo_context_menu(
     }
     let copy_edits = add_action("Copy Edits");
     let paste_edits = add_action("Paste Edits");
-    let paste_overlays = add_action("Paste Overlays Only");
+    let paste_overlays = add_action("Paste Text & Overlays Only");
     let reset_edits = add_action("Reset Edits");
     let clicked_recipe = photo.edit_recipe();
     let clicked_is_edited = !crate::edit::EditRecipe::decode(&clicked_recipe).is_default();
     copy_edits.set_sensitive(clicked_is_edited);
     paste_edits.set_sensitive(context.edit_clipboard.borrow().is_some());
-    // Only enable when the clipboard carries at least one overlay.
+    // Only enable when the clipboard carries at least one overlay or text layer.
     paste_overlays.set_sensitive(
         context
             .edit_clipboard
             .borrow()
             .as_deref()
-            .is_some_and(|recipe| !crate::edit::EditRecipe::decode(recipe).overlays.is_empty()),
+            .is_some_and(|recipe| {
+                let decoded = crate::edit::EditRecipe::decode(recipe);
+                !decoded.overlays.is_empty() || !decoded.text_layers.is_empty()
+            }),
     );
     reset_edits.set_sensitive(clicked_is_edited || selection_ids.iter().any(|id| {
         db::photo(&context.connection.borrow(), *id)
@@ -292,6 +295,9 @@ fn show_photo_context_menu(
                         paste_context.info.set_photo(Some(&selected));
                     }
                 }
+                if let Some(lightbox) = paste_context.lightbox.upgrade() {
+                    lightbox.update_edit_recipe(*id, &recipe);
+                }
             }
             if let Some(lightbox) = paste_context.lightbox.upgrade() {
                 lightbox.refresh_current();
@@ -314,19 +320,19 @@ fn show_photo_context_menu(
                     Err(error) => {
                         show_error(
                             button.upcast_ref(),
-                            "Could not paste overlays",
+                            "Could not paste text or overlays",
                             &error.to_string(),
                         );
                         return;
                     }
                 };
-                let recipe = crate::edit::model::paste_overlays_only(&destination, &clipboard);
+                let recipe = crate::edit::model::paste_layers_only(&destination, &clipboard);
                 if let Err(error) =
                     db::set_edit_recipe(&paste_context.connection.borrow(), *id, &recipe)
                 {
                     show_error(
                         button.upcast_ref(),
-                        "Could not paste overlays",
+                        "Could not paste text or overlays",
                         &error.to_string(),
                     );
                     return;
@@ -341,6 +347,9 @@ fn show_photo_context_menu(
                         paste_context.selected_photo.replace(Some(selected.clone()));
                         paste_context.info.set_photo(Some(&selected));
                     }
+                }
+                if let Some(lightbox) = paste_context.lightbox.upgrade() {
+                    lightbox.update_edit_recipe(*id, &recipe);
                 }
             }
             if let Some(lightbox) = paste_context.lightbox.upgrade() {
@@ -371,6 +380,9 @@ fn show_photo_context_menu(
                         reset_context.selected_photo.replace(Some(selected.clone()));
                         reset_context.info.set_photo(Some(&selected));
                     }
+                }
+                if let Some(lightbox) = reset_context.lightbox.upgrade() {
+                    lightbox.update_edit_recipe(*id, "");
                 }
             }
             if let Some(lightbox) = reset_context.lightbox.upgrade() {

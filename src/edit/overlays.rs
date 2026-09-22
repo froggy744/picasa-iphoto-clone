@@ -188,7 +188,10 @@ pub fn clear_asset_cache() {
 /// and keep their own colours no matter how the photograph was edited. Missing
 /// or corrupted assets are skipped without failing the render.
 pub fn composite_overlays(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
-    if recipe.overlays.is_empty() || image.width() == 0 || image.height() == 0 {
+    if (recipe.overlays.is_empty() && recipe.text_layers.is_empty())
+        || image.width() == 0
+        || image.height() == 0
+    {
         return image;
     }
     let photo_width = image.width() as f32;
@@ -207,6 +210,23 @@ pub fn composite_overlays(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImag
         let aspect = asset.width() as f32 / asset.height().max(1) as f32;
         let rect = overlay.rect(photo_width, photo_height, aspect);
         blend_overlay(&mut image, &asset, rect, overlay.opacity);
+    }
+    for layer in &recipe.text_layers {
+        if !layer.visible || layer.opacity <= 0.001 {
+            continue;
+        }
+        let Some(raster) = super::text_render::render_text_rgba(
+            layer,
+            f64::from(photo_width),
+            f64::from(photo_height),
+        ) else {
+            continue;
+        };
+        let rect = layer.rect_with_size(
+            raster.width() as f32 / photo_width,
+            raster.height() as f32 / photo_height,
+        );
+        blend_overlay(&mut image, &raster, rect, layer.opacity);
     }
     image
 }
@@ -304,7 +324,7 @@ fn blend_overlay(
 
 #[cfg(test)]
 mod tests {
-    use super::super::model::{OverlayAnchor, OverlaySpec};
+    use super::super::model::{OverlayAnchor, OverlaySpec, TextLayerSpec};
     use super::*;
     use image::Rgba;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -608,6 +628,93 @@ mod tests {
         );
         assert_eq!(portrait.get_pixel(19, 39).0[0], 255, "corner is covered");
         assert_eq!(portrait.get_pixel(0, 0).0, [0, 0, 255, 255]);
+
+        unsafe { std::env::remove_var(OVERLAY_DIR_ENV_VAR) };
+        let _ = std::fs::remove_dir_all(directory);
+        clear_asset_cache();
+    }
+
+    #[test]
+    fn text_layers_composite_without_any_overlay_assets() {
+        let base = RgbaImage::from_pixel(64, 48, Rgba([0, 0, 0, 255]));
+        let mut recipe = EditRecipe::default();
+        let mut layer = TextLayerSpec::new_default();
+        layer.text = "Hi".to_string();
+        layer.size = 0.4;
+        layer.set_color_rgba(1.0, 1.0, 1.0, 1.0);
+        layer.anchor = OverlayAnchor::Center;
+        layer.x = 0.5;
+        layer.y = 0.5;
+        recipe.text_layers.push(layer.clone());
+
+        let output = composite_overlays(base.clone(), &recipe);
+        let changed = output
+            .pixels()
+            .zip(base.pixels())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(changed > 0, "white glyphs must alter black pixels");
+        let lit = output
+            .pixels()
+            .any(|pixel| pixel.0[0] > 200 && pixel.0[1] > 200 && pixel.0[2] > 200);
+        assert!(lit, "glyph core is near-white");
+        assert_eq!(output.get_pixel(0, 0).0, [0, 0, 0, 255], "corner untouched");
+
+        let mut hidden = EditRecipe::default();
+        let mut hidden_layer = layer.clone();
+        hidden_layer.visible = false;
+        hidden.text_layers.push(hidden_layer);
+        assert_eq!(
+            composite_overlays(base.clone(), &hidden).as_raw(),
+            base.as_raw()
+        );
+
+        let mut transparent = EditRecipe::default();
+        let mut faded = layer;
+        faded.opacity = 0.0;
+        transparent.text_layers.push(faded);
+        assert_eq!(
+            composite_overlays(base.clone(), &transparent).as_raw(),
+            base.as_raw()
+        );
+    }
+
+    #[test]
+    fn text_paints_above_image_overlays() {
+        let _guard = FS_LOCK.lock().unwrap();
+        let directory = unique_overlay_dir("text-above");
+        unsafe { std::env::set_var(OVERLAY_DIR_ENV_VAR, &directory) };
+        clear_asset_cache();
+
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.execute_batch(crate::db::SCHEMA).unwrap();
+        let prepared =
+            prepare_overlay_bytes(&png_bytes(8, 8, [255, 0, 0, 255]), "red.png").unwrap();
+        store_overlay_asset(&connection, &prepared).unwrap();
+
+        let mut recipe = EditRecipe::default();
+        let mut overlay = OverlaySpec::new_centered(&prepared.hash);
+        overlay.anchor = OverlayAnchor::Center;
+        overlay.x = 0.5;
+        overlay.y = 0.5;
+        overlay.width = 1.0;
+        recipe.overlays.push(overlay);
+        let mut layer = TextLayerSpec::new_default();
+        layer.text = "W".to_string();
+        layer.size = 0.5;
+        layer.set_color_rgba(1.0, 1.0, 1.0, 1.0);
+        recipe.text_layers.push(layer);
+
+        let output = composite_overlays(
+            RgbaImage::from_pixel(48, 48, Rgba([0, 0, 255, 255])),
+            &recipe,
+        );
+        assert_eq!(output.get_pixel(0, 0).0[1], 0, "red covers the photo");
+        assert_eq!(output.get_pixel(0, 0).0[0], 255);
+        let whitish = output
+            .pixels()
+            .any(|pixel| pixel.0[0] > 220 && pixel.0[1] > 220 && pixel.0[2] > 220);
+        assert!(whitish, "text sits on top of the red overlay");
 
         unsafe { std::env::remove_var(OVERLAY_DIR_ENV_VAR) };
         let _ = std::fs::remove_dir_all(directory);

@@ -12,14 +12,22 @@ enum OverlayDragMode {
     Pan,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LayerSelection {
+    Image(usize),
+    Text(usize),
+}
+
 #[derive(Clone, Copy, Debug)]
 struct OverlayDragState {
     mode: OverlayDragMode,
     /// Pointer position at drag begin, in normalized photo coordinates.
     start_norm: (f64, f64),
-    /// Overlay rectangle at drag begin, in normalized photo coordinates.
+    /// Layer rectangle at drag begin, in normalized photo coordinates.
     start_rect: super::model::NormRect,
-    start_index: usize,
+    layer: LayerSelection,
+    /// Text layer font size (photo-height fraction) at drag begin.
+    start_size: f32,
     anchor: super::model::OverlayAnchor,
     pan_origin_h: f64,
     pan_origin_v: f64,
@@ -36,7 +44,8 @@ impl Default for OverlayDragState {
                 width: 0.0,
                 height: 0.0,
             },
-            start_index: 0,
+            layer: LayerSelection::Image(0),
+            start_size: 0.0,
             anchor: super::model::OverlayAnchor::Center,
             pan_origin_h: 0.0,
             pan_origin_v: 0.0,
@@ -281,6 +290,90 @@ fn overlay_norm_rect(
     Some(overlay.rect(photo_w, photo_h, aspect))
 }
 
+fn text_norm_rect(
+    layer: &super::model::TextLayerSpec,
+    photo_w: f32,
+    photo_h: f32,
+) -> Option<super::model::NormRect> {
+    super::text_render::text_rect(layer, photo_w as f64, photo_h as f64)
+}
+
+fn text_screen_rect(
+    display: (f64, f64, f64, f64),
+    photo_w: f32,
+    photo_h: f32,
+    layer: &super::model::TextLayerSpec,
+) -> Option<(f64, f64, f64, f64)> {
+    let rect = text_norm_rect(layer, photo_w, photo_h)?;
+    let (x, y, w, h) = display;
+    Some((
+        x + rect.left as f64 * w,
+        y + rect.top as f64 * h,
+        rect.width as f64 * w,
+        rect.height as f64 * h,
+    ))
+}
+
+fn draw_selection_chrome(
+    context: &gtk::cairo::Context,
+    display: (f64, f64, f64, f64),
+    rect: super::model::NormRect,
+    anchor: OverlayAnchor,
+) {
+    let (dx, dy, dw, dh) = display;
+    let x = dx + rect.left as f64 * dw;
+    let y = dy + rect.top as f64 * dh;
+    let w = rect.width as f64 * dw;
+    let h = rect.height as f64 * dh;
+    if context.save().is_err() {
+        return;
+    }
+    let _ = context.set_source_rgba(0.25, 0.62, 1.0, 0.95);
+    let _ = context.set_line_width(2.0);
+    let _ = context.rectangle(x, y, w, h);
+    let _ = context.stroke();
+    let handle = OVERLAY_HANDLE_RADIUS;
+    let (handle_norm_x, handle_norm_y) = resize_handle_point(rect, anchor);
+    let handle_x = dx + handle_norm_x as f64 * dw - handle;
+    let handle_y = dy + handle_norm_y as f64 * dh - handle;
+    let _ = context.set_source_rgba(1.0, 1.0, 1.0, 0.95);
+    let _ = context.rectangle(handle_x, handle_y, handle * 2.0, handle * 2.0);
+    let _ = context.fill();
+    let _ = context.set_source_rgba(0.25, 0.62, 1.0, 1.0);
+    let _ = context.set_line_width(1.5);
+    let _ = context.rectangle(handle_x, handle_y, handle * 2.0, handle * 2.0);
+    let _ = context.stroke();
+    let _ = context.restore();
+}
+
+fn build_position_row(
+    parent: &gtk::Box,
+) -> (Vec<(OverlayAnchor, gtk::ToggleButton)>, gtk::ToggleButton) {
+    let anchor_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    anchor_row.add_css_class("linked");
+    anchor_row.add_css_class("overlay-anchor-row");
+    let mut anchor_buttons = Vec::new();
+    let first_anchor = gtk::ToggleButton::with_label(OverlayAnchor::TopLeft.label());
+    first_anchor.set_active(true);
+    first_anchor.set_hexpand(true);
+    anchor_row.append(&first_anchor);
+    anchor_buttons.push((OverlayAnchor::TopLeft, first_anchor.clone()));
+    for anchor in [
+        OverlayAnchor::TopRight,
+        OverlayAnchor::Center,
+        OverlayAnchor::BottomLeft,
+        OverlayAnchor::BottomRight,
+    ] {
+        let button = gtk::ToggleButton::with_label(anchor.label());
+        button.set_group(Some(&first_anchor));
+        button.set_hexpand(true);
+        anchor_row.append(&button);
+        anchor_buttons.push((anchor, button));
+    }
+    parent.append(&anchor_row);
+    (anchor_buttons, first_anchor)
+}
+
 /// Wire up drawing, hit-testing and gestures on the overlay layer. The layer
 /// only becomes event-targetable when the Overlays tab is active and the
 /// photo actually has overlays; otherwise it draws (or idles) and pointer
@@ -290,15 +383,18 @@ fn configure_overlay_canvas(
     layer: &gtk::DrawingArea,
     session: Rc<RefCell<EditSession>>,
     selected: Rc<Cell<Option<usize>>>,
+    selected_text: Rc<Cell<Option<usize>>>,
     preview_dimensions: Rc<Cell<(i32, i32)>>,
     canvas_zoom: Rc<Cell<f64>>,
     native_one_to_one: Rc<Cell<bool>>,
     picture_scroll: gtk::ScrolledWindow,
     overlays_toggle: gtk::ToggleButton,
+    text_toggle: gtk::ToggleButton,
     zoom_in_action: Rc<dyn Fn()>,
     zoom_out_action: Rc<dyn Fn()>,
     update_history_buttons: Rc<dyn Fn()>,
     sync_overlays_panel: Rc<dyn Fn()>,
+    sync_text_panel: Rc<dyn Fn()>,
     update_canvas_input: Rc<dyn Fn()>,
 ) {
     layer.set_hexpand(true);
@@ -343,8 +439,10 @@ fn configure_overlay_canvas(
     {
         let session = session.clone();
         let selected = selected.clone();
+        let selected_text = selected_text.clone();
         let preview_dimensions = preview_dimensions.clone();
         let overlays_toggle = overlays_toggle.clone();
+        let text_toggle = text_toggle.clone();
         let picture_scroll = picture_scroll.clone();
         let display_rect_from_params = display_rect_from_params.clone();
         layer.set_draw_func(move |_, context, width, height| {
@@ -385,43 +483,58 @@ fn configure_overlay_canvas(
                     let h = rect.height as f64 * dh;
                     blit_rgba_onto(context, &image, x, y, w, h, overlay.opacity as f64);
                 }
+                for text_layer in &recipe.recipe.text_layers {
+                    if !text_layer.visible {
+                        continue;
+                    }
+                    let Some(raster) = super::text_render::render_text_rgba(
+                        text_layer,
+                        f64::from(photo_w),
+                        f64::from(photo_h),
+                    ) else {
+                        continue;
+                    };
+                    let rect = text_layer.rect_with_size(
+                        raster.width() as f32 / photo_w,
+                        raster.height() as f32 / photo_h,
+                    );
+                    let x = dx + rect.left as f64 * dw;
+                    let y = dy + rect.top as f64 * dh;
+                    let w = rect.width as f64 * dw;
+                    let h = rect.height as f64 * dh;
+                    blit_rgba_onto(context, &raster, x, y, w, h, text_layer.opacity as f64);
+                }
             }
             let _ = context.restore();
 
-            if !overlays_toggle.is_active() {
-                return;
+            if overlays_toggle.is_active() {
+                let recipe = session.borrow();
+                let Some(rect) = selected
+                    .get()
+                    .and_then(|index| recipe.recipe.overlays.get(index))
+                    .filter(|overlay| overlay.visible)
+                    .and_then(|overlay| {
+                        overlay_norm_rect(overlay, photo_w, photo_h)
+                            .map(|rect| (rect, overlay.anchor))
+                    })
+                else {
+                    return;
+                };
+                draw_selection_chrome(context, display, rect.0, rect.1);
+            } else if text_toggle.is_active() {
+                let recipe = session.borrow();
+                let Some(rect) = selected_text
+                    .get()
+                    .and_then(|index| recipe.recipe.text_layers.get(index))
+                    .filter(|layer| layer.visible)
+                    .and_then(|layer| {
+                        text_norm_rect(layer, photo_w, photo_h).map(|rect| (rect, layer.anchor))
+                    })
+                else {
+                    return;
+                };
+                draw_selection_chrome(context, display, rect.0, rect.1);
             }
-            let index = selected.get();
-            let recipe = session.borrow();
-            let Some(overlay) = index.and_then(|index| recipe.recipe.overlays.get(index)) else {
-                return;
-            };
-            let Some(rect) = overlay_norm_rect(overlay, photo_w, photo_h) else {
-                return;
-            };
-            let x = dx + rect.left as f64 * dw;
-            let y = dy + rect.top as f64 * dh;
-            let w = rect.width as f64 * dw;
-            let h = rect.height as f64 * dh;
-            if context.save().is_err() {
-                return;
-            }
-            let _ = context.set_source_rgba(0.25, 0.62, 1.0, 0.95);
-            let _ = context.set_line_width(2.0);
-            let _ = context.rectangle(x, y, w, h);
-            let _ = context.stroke();
-            let handle = OVERLAY_HANDLE_RADIUS;
-            let (handle_norm_x, handle_norm_y) = resize_handle_point(rect, overlay.anchor);
-            let handle_x = dx + handle_norm_x as f64 * dw - handle;
-            let handle_y = dy + handle_norm_y as f64 * dh - handle;
-            let _ = context.set_source_rgba(1.0, 1.0, 1.0, 0.95);
-            let _ = context.rectangle(handle_x, handle_y, handle * 2.0, handle * 2.0);
-            let _ = context.fill();
-            let _ = context.set_source_rgba(0.25, 0.62, 1.0, 1.0);
-            let _ = context.set_line_width(1.5);
-            let _ = context.rectangle(handle_x, handle_y, handle * 2.0, handle * 2.0);
-            let _ = context.stroke();
-            let _ = context.restore();
         });
     }
 
@@ -446,12 +559,16 @@ fn configure_overlay_canvas(
     {
         let session = session.clone();
         let selected = selected.clone();
+        let selected_text = selected_text.clone();
         let preview_dimensions = preview_dimensions.clone();
         let picture_scroll = picture_scroll.clone();
         let drag_state = drag_state.clone();
         let display_rect_from_params = display_rect_from_params.clone();
         let sync_overlays_panel = sync_overlays_panel.clone();
+        let sync_text_panel = sync_text_panel.clone();
         let update_canvas_input = update_canvas_input.clone();
+        let overlays_toggle = overlays_toggle.clone();
+        let text_toggle = text_toggle.clone();
         let layer = layer.clone();
         drag.connect_drag_begin(move |_, start_x, start_y| {
             let widget_width = layer.width().max(1) as f64;
@@ -465,39 +582,93 @@ fn configure_overlay_canvas(
 
             let recipe = session.borrow();
             let overlays = &recipe.recipe.overlays;
+            let texts = &recipe.recipe.text_layers;
             let selected_index = selected.get();
+            let selected_text_index = selected_text.get();
 
-            // Prefer the resize handle of the currently selected overlay.
-            if let Some(index) = selected_index {
-                if let Some(overlay) = overlays.get(index).filter(|overlay| overlay.visible) {
-                    if let Some(rect) = overlay_norm_rect(overlay, photo_w, photo_h) {
-                        if hits_resize_handle(
-                            display,
-                            rect,
-                            start_x,
-                            start_y,
-                            OVERLAY_HANDLE_RADIUS,
-                            overlay.anchor,
-                        ) {
-                            let anchor = overlay.anchor;
-                            drop(recipe);
-                            drag_state.replace(OverlayDragState {
-                                mode: OverlayDragMode::Resize,
-                                start_norm,
-                                start_rect: rect,
-                                start_index: index,
-                                anchor,
-                                pan_origin_h: 0.0,
-                                pan_origin_v: 0.0,
-                            });
-                            session.borrow_mut().begin_action();
-                            return;
+            // Prefer the resize handle of the selected text layer while the
+            // Text tab owns the canvas.
+            if text_toggle.is_active() {
+                if let Some(index) = selected_text_index {
+                    if let Some(text) = texts.get(index).filter(|text| text.visible) {
+                        if let Some(rect) = text_norm_rect(text, photo_w, photo_h) {
+                            if hits_resize_handle(
+                                display,
+                                rect,
+                                start_x,
+                                start_y,
+                                OVERLAY_HANDLE_RADIUS,
+                                text.anchor,
+                            ) {
+                                let anchor = text.anchor;
+                                let start_size = text.size;
+                                drop(recipe);
+                                drag_state.replace(OverlayDragState {
+                                    mode: OverlayDragMode::Resize,
+                                    start_norm,
+                                    start_rect: rect,
+                                    layer: LayerSelection::Text(index),
+                                    start_size,
+                                    anchor,
+                                    pan_origin_h: 0.0,
+                                    pan_origin_v: 0.0,
+                                });
+                                session.borrow_mut().begin_action();
+                                return;
+                            }
                         }
                     }
                 }
             }
 
-            // Hit-test topmost overlay first (later entries paint on top).
+            // Next: the resize handle of the selected image overlay while the
+            // Overlays tab owns the canvas.
+            if overlays_toggle.is_active() {
+                if let Some(index) = selected_index {
+                    if let Some(overlay) = overlays.get(index).filter(|overlay| overlay.visible) {
+                        if let Some(rect) = overlay_norm_rect(overlay, photo_w, photo_h) {
+                            if hits_resize_handle(
+                                display,
+                                rect,
+                                start_x,
+                                start_y,
+                                OVERLAY_HANDLE_RADIUS,
+                                overlay.anchor,
+                            ) {
+                                let anchor = overlay.anchor;
+                                drop(recipe);
+                                drag_state.replace(OverlayDragState {
+                                    mode: OverlayDragMode::Resize,
+                                    start_norm,
+                                    start_rect: rect,
+                                    layer: LayerSelection::Image(index),
+                                    start_size: 0.0,
+                                    anchor,
+                                    pan_origin_h: 0.0,
+                                    pan_origin_v: 0.0,
+                                });
+                                session.borrow_mut().begin_action();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Hit-test topmost text first, then topmost image overlay.
+            let mut text_hit: Option<usize> = None;
+            for (index, text) in texts.iter().enumerate().rev() {
+                if !text.visible {
+                    continue;
+                }
+                let Some((x, y, w, h)) = text_screen_rect(display, photo_w, photo_h, text) else {
+                    continue;
+                };
+                if start_x >= x && start_x <= x + w && start_y >= y && start_y <= y + h {
+                    text_hit = Some(index);
+                    break;
+                }
+            }
             let mut hit: Option<usize> = None;
             for (index, overlay) in overlays.iter().enumerate().rev() {
                 if !overlay.visible {
@@ -514,9 +685,46 @@ fn configure_overlay_canvas(
             }
             drop(recipe);
 
+            match text_hit {
+                Some(index) => {
+                    selected_text.set(Some(index));
+                    text_toggle.set_active(true);
+                    let (start_rect, anchor, start_size) = {
+                        let recipe = session.borrow();
+                        let text = recipe.recipe.text_layers.get(index);
+                        let rect = text
+                            .and_then(|text| text_norm_rect(text, photo_w, photo_h))
+                            .unwrap_or_default_for_test();
+                        (
+                            rect,
+                            text.map(|text| text.anchor)
+                                .unwrap_or(OverlayAnchor::Center),
+                            text.map(|text| text.size).unwrap_or(0.0),
+                        )
+                    };
+                    drag_state.replace(OverlayDragState {
+                        mode: OverlayDragMode::Move,
+                        start_norm,
+                        start_rect,
+                        layer: LayerSelection::Text(index),
+                        start_size,
+                        anchor,
+                        pan_origin_h: 0.0,
+                        pan_origin_v: 0.0,
+                    });
+                    session.borrow_mut().begin_action();
+                    sync_text_panel();
+                    update_canvas_input();
+                    layer.queue_draw();
+                    return;
+                }
+                None => {}
+            }
+
             match hit {
                 Some(index) => {
                     selected.set(Some(index));
+                    overlays_toggle.set_active(true);
                     let (start_rect, anchor) = {
                         let recipe = session.borrow();
                         let overlay = recipe.recipe.overlays.get(index);
@@ -534,7 +742,8 @@ fn configure_overlay_canvas(
                         mode: OverlayDragMode::Move,
                         start_norm,
                         start_rect,
-                        start_index: index,
+                        layer: LayerSelection::Image(index),
+                        start_size: 0.0,
                         anchor,
                         pan_origin_h: 0.0,
                         pan_origin_v: 0.0,
@@ -554,7 +763,8 @@ fn configure_overlay_canvas(
                             width: 0.0,
                             height: 0.0,
                         },
-                        start_index: 0,
+                        layer: LayerSelection::Image(0),
+                        start_size: 0.0,
                         anchor: OverlayAnchor::Center,
                         pan_origin_h: hadj,
                         pan_origin_v: vadj,
@@ -600,32 +810,73 @@ fn configure_overlay_canvas(
                         screen_to_normalized(display, pointer_screen.0, pointer_screen.1);
                     let (photo_w_f, photo_h_f) = preview_dimensions.get();
                     let (photo_w, photo_h) = (photo_w_f.max(1) as f32, photo_h_f.max(1) as f32);
-                    let index = state.start_index;
                     let mut session = session.borrow_mut();
-                    let aspect = session
-                        .recipe
-                        .overlays
-                        .get(index)
-                        .map(|overlay| asset_aspect(&overlay.asset).unwrap_or(1.0))
-                        .unwrap_or(1.0);
-                    session.mutate_active(|recipe| {
-                        let Some(overlay) = recipe.overlays.get_mut(index) else {
-                            return;
-                        };
-                        let rect = if state.mode == OverlayDragMode::Resize {
-                            resize_rect_from_anchor(
-                                state.start_rect,
-                                pointer_norm,
-                                photo_w,
-                                photo_h,
-                                aspect,
-                                state.anchor,
-                            )
-                        } else {
-                            move_rect(state.start_rect, state.start_norm, pointer_norm)
-                        };
-                        overlay.set_rect(rect, photo_w, photo_h, aspect);
-                    });
+                    match state.layer {
+                        LayerSelection::Image(index) => {
+                            let aspect = session
+                                .recipe
+                                .overlays
+                                .get(index)
+                                .map(|overlay| asset_aspect(&overlay.asset).unwrap_or(1.0))
+                                .unwrap_or(1.0);
+                            session.mutate_active(|recipe| {
+                                let Some(overlay) = recipe.overlays.get_mut(index) else {
+                                    return;
+                                };
+                                let rect = if state.mode == OverlayDragMode::Resize {
+                                    resize_rect_from_anchor(
+                                        state.start_rect,
+                                        pointer_norm,
+                                        photo_w,
+                                        photo_h,
+                                        aspect,
+                                        state.anchor,
+                                    )
+                                } else {
+                                    move_rect(state.start_rect, state.start_norm, pointer_norm)
+                                };
+                                overlay.set_rect(rect, photo_w, photo_h, aspect);
+                            });
+                        }
+                        LayerSelection::Text(index) => {
+                            session.mutate_active(|recipe| {
+                                let Some(text) = recipe.text_layers.get_mut(index) else {
+                                    return;
+                                };
+                                if state.mode == OverlayDragMode::Resize {
+                                    let aspect = if state.start_rect.height > 1.0e-6 {
+                                        state.start_rect.width * photo_w
+                                            / (state.start_rect.height * photo_h)
+                                    } else {
+                                        1.0
+                                    };
+                                    let resized = resize_rect_from_anchor(
+                                        state.start_rect,
+                                        pointer_norm,
+                                        photo_w,
+                                        photo_h,
+                                        aspect,
+                                        state.anchor,
+                                    );
+                                    let scale = if state.start_rect.width > 1.0e-6 {
+                                        f64::from(resized.width / state.start_rect.width)
+                                    } else {
+                                        1.0
+                                    };
+                                    text.size = (f64::from(state.start_size) * scale) as f32;
+                                    text.size = text.size.clamp(
+                                        super::model::TextLayerSpec::MIN_SIZE,
+                                        super::model::TextLayerSpec::MAX_SIZE,
+                                    );
+                                    text.set_position_from_rect(resized);
+                                } else {
+                                    let moved =
+                                        move_rect(state.start_rect, state.start_norm, pointer_norm);
+                                    text.set_position_from_rect(moved);
+                                }
+                            });
+                        }
+                    }
                     drop(session);
                     layer.queue_draw();
                 }
@@ -638,13 +889,17 @@ fn configure_overlay_canvas(
         let drag_state = drag_state.clone();
         let update_history_buttons = update_history_buttons.clone();
         let sync_overlays_panel = sync_overlays_panel.clone();
+        let sync_text_panel = sync_text_panel.clone();
         let layer = layer.clone();
         drag.connect_drag_end(move |_, _, _| {
             let state = *drag_state.borrow();
             if matches!(state.mode, OverlayDragMode::Move | OverlayDragMode::Resize) {
                 session.borrow_mut().end_action();
                 update_history_buttons();
-                sync_overlays_panel();
+                match state.layer {
+                    LayerSelection::Image(_) => sync_overlays_panel(),
+                    LayerSelection::Text(_) => sync_text_panel(),
+                }
                 layer.queue_draw();
             }
             drag_state.replace(OverlayDragState::default());
@@ -752,28 +1007,7 @@ fn build_overlays_panel(
     let opacity_row = add_slider(&selected_section, "Opacity", 0.0, 1.0, 0.01, 2);
 
     add_section_label(&selected_section, "POSITION");
-    let anchor_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    anchor_row.add_css_class("linked");
-    anchor_row.add_css_class("overlay-anchor-row");
-    let mut anchor_buttons = Vec::new();
-    let first_anchor = gtk::ToggleButton::with_label(OverlayAnchor::TopLeft.label());
-    first_anchor.set_active(true);
-    first_anchor.set_hexpand(true);
-    anchor_row.append(&first_anchor);
-    anchor_buttons.push((OverlayAnchor::TopLeft, first_anchor.clone()));
-    for anchor in [
-        OverlayAnchor::TopRight,
-        OverlayAnchor::Center,
-        OverlayAnchor::BottomLeft,
-        OverlayAnchor::BottomRight,
-    ] {
-        let button = gtk::ToggleButton::with_label(anchor.label());
-        button.set_group(Some(&first_anchor));
-        button.set_hexpand(true);
-        anchor_row.append(&button);
-        anchor_buttons.push((anchor, button));
-    }
-    selected_section.append(&anchor_row);
+    let (anchor_buttons, first_anchor) = build_position_row(&selected_section);
 
     let fit_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     fit_row.set_margin_top(6);
@@ -1407,6 +1641,7 @@ mod overlay_geometry_tests {
     fn drag_mode_defaults_are_inert() {
         let state = OverlayDragState::default();
         assert_eq!(state.mode, OverlayDragMode::None);
-        assert_eq!(state.start_index, 0);
+        assert_eq!(state.layer, LayerSelection::Image(0));
+        assert_eq!(state.start_size, 0.0);
     }
 }

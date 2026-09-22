@@ -22,9 +22,9 @@ The whole window becomes the editor: controls on the left, your photo big on the
 
 At the top you'll find **back arrow** (return to the library), **Undo / Redo**, **zoom − / +**, **Reset**, **Tools**, **Export** and the big blue **Done** button when you're finished.
 
-## The Four Tabs: Tools · Filters · Crop · Overlays
+## The Five Tabs: Tools · Filters · Crop · Overlays · Text
 
-The left panel has four tabs:
+The left panel has five tabs:
 
 ### 🛠 Tools — sliders and one-click fixes
 
@@ -83,6 +83,20 @@ Overlays composite last — after crop, rotation and tone — so they sit cleanl
 
 Edits are still non-destructive: import, move, and opacity all live in the edit recipe.
 
+### 🔤 Text — captions, titles & callouts
+
+Click **Add Text** to drop an editable text layer on the photo, then type your words straight into the editor or **drag** the text around on the canvas; the corner handle resizes it (the font scales with it). The panel lists every text layer. Select one to adjust:
+
+- **Text** — edit the content; every line stays exactly as you typed it
+- **Font, size & colour** — pick any installed font and a colour; size is a percentage of the photo height so it exports sharp at any resolution
+- **Bold / Italic, Left / Centre / Right** — style the text; alignment lines up multiline entries inside their box
+- **Opacity** — fade the text in or out
+- **Position** — jump the text to a corner or centre of the photo
+- **Reset Placement** — back to centre at full opacity (keeps your wording and styling)
+- **Remove Text** — delete it from this photo
+
+Text layers live in the same edit recipe as overlays: they composite above everything else, survive copy/paste of edits, export at full quality, and **Undo / Redo** treats a burst of typing as one step.
+
 ---
 
 ## Undo, Redo, Reset — Experiment Freely
@@ -97,7 +111,7 @@ Because nothing touches the original file, you can experiment as wildly as you l
 
 Fixed ten sunset photos from the same shoot? Edit one, **copy its edits**, select the others and **paste**. Consistent looks across a whole batch in seconds.
 
-Right-click also offers **Paste Overlays Only** — when the clipboard holds at least one overlay, this swaps only the overlay list onto the selected photos and leaves exposure, crop, and the rest of each photo's recipe alone. Pasting twice is safe: the destination overlays are *replaced*, never duplicated.
+Right-click also offers **Paste Text & Overlays Only** — when the clipboard holds at least one overlay or text layer, this swaps only those layers onto the selected photos and leaves exposure, crop, and the rest of each photo's recipe alone. Pasting twice is safe: the destination layers are *replaced*, never duplicated.
 
 ## Export — Save Your Edited Photo
 

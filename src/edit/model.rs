@@ -128,6 +128,33 @@ impl OverlayAnchor {
     }
 }
 
+/// Horizontal alignment of the lines inside a text layer's bounding box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
+}
+
+impl TextAlign {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Left => "l",
+            Self::Center => "c",
+            Self::Right => "r",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "l" => Some(Self::Left),
+            "c" => Some(Self::Center),
+            "r" => Some(Self::Right),
+            _ => None,
+        }
+    }
+}
+
 /// Axis-aligned rectangle in normalized final-photo space (0..1 per axis).
 ///
 /// Overlay geometry is stored and rendered relative to the final photograph
@@ -383,6 +410,141 @@ impl OverlaySpec {
     }
 }
 
+fn next_text_layer_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("t{nanos:x}-{n:x}")
+}
+
+/// One editable text layer placed on a photograph. Geometry follows the same
+/// normalized anchor model as image overlays: `(x, y)` is the photo position
+/// of `anchor`, and the bounding box is derived at render time from the font
+/// size, content and photo dimensions (it is not stored).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextLayerSpec {
+    pub id: String,
+    /// Multiline content; `\n` separates lines.
+    pub text: String,
+    pub font_family: String,
+    /// Font height as a fraction of the photo height, so text stays sharp at
+    /// any export resolution.
+    pub size: f32,
+    pub bold: bool,
+    pub italic: bool,
+    /// 0xRRGGBBAA
+    pub color: u32,
+    pub align: TextAlign,
+    pub anchor: OverlayAnchor,
+    pub x: f32,
+    pub y: f32,
+    /// 0.0 ..= 1.0
+    pub opacity: f32,
+    pub visible: bool,
+}
+
+impl TextLayerSpec {
+    pub const MIN_SIZE: f32 = 0.004;
+    pub const MAX_SIZE: f32 = 0.5;
+    pub const DEFAULT_SIZE: f32 = 0.045;
+    pub const POSITION_MARGIN: f32 = OverlaySpec::POSITION_MARGIN;
+
+    /// A centred layer with placeholder content, matching the defaults the
+    /// Text panel shows on first use.
+    pub fn new_default() -> Self {
+        Self {
+            id: next_text_layer_id(),
+            text: "Your text".to_string(),
+            font_family: "Sans".to_string(),
+            size: Self::DEFAULT_SIZE,
+            bold: false,
+            italic: false,
+            color: 0xFFFF_FFFF,
+            align: TextAlign::Left,
+            anchor: OverlayAnchor::Center,
+            x: 0.5,
+            y: 0.5,
+            opacity: 1.0,
+            visible: true,
+        }
+    }
+
+    /// Normalized bounding box for a measured box already expressed as photo
+    /// fractions, anchored like `OverlaySpec::rect`.
+    pub fn rect_with_size(&self, width: f32, height: f32) -> NormRect {
+        let (left, top) = match self.anchor {
+            OverlayAnchor::TopLeft => (self.x, self.y),
+            OverlayAnchor::TopRight => (self.x - width, self.y),
+            OverlayAnchor::Center => (self.x - width * 0.5, self.y - height * 0.5),
+            OverlayAnchor::BottomLeft => (self.x, self.y - height),
+            OverlayAnchor::BottomRight => (self.x - width, self.y - height),
+        };
+        NormRect {
+            left,
+            top,
+            width,
+            height,
+        }
+    }
+
+    /// Store the layer's anchor point so its bounding box lands exactly on
+    /// `rect` (size is re-measured at render time, never stored here).
+    pub fn set_position_from_rect(&mut self, rect: NormRect) {
+        let (x, y) = match self.anchor {
+            OverlayAnchor::TopLeft => (rect.left, rect.top),
+            OverlayAnchor::TopRight => (rect.right(), rect.top),
+            OverlayAnchor::Center => (rect.left + rect.width * 0.5, rect.top + rect.height * 0.5),
+            OverlayAnchor::BottomLeft => (rect.left, rect.bottom()),
+            OverlayAnchor::BottomRight => (rect.right(), rect.bottom()),
+        };
+        self.x = x;
+        self.y = y;
+    }
+
+    /// Move the layer to a named photo position with the standard 3% margin,
+    /// keeping content, formatting, size and opacity untouched.
+    pub fn position_at(&mut self, anchor: OverlayAnchor) {
+        let margin = Self::POSITION_MARGIN;
+        self.anchor = anchor;
+        let (x, y) = match anchor {
+            OverlayAnchor::TopLeft => (margin, margin),
+            OverlayAnchor::TopRight => (1.0 - margin, margin),
+            OverlayAnchor::Center => (0.5, 0.5),
+            OverlayAnchor::BottomLeft => (margin, 1.0 - margin),
+            OverlayAnchor::BottomRight => (1.0 - margin, 1.0 - margin),
+        };
+        self.x = x;
+        self.y = y;
+    }
+
+    pub fn reset_placement(&mut self) {
+        self.anchor = OverlayAnchor::Center;
+        self.x = 0.5;
+        self.y = 0.5;
+        self.opacity = 1.0;
+        self.visible = true;
+    }
+
+    pub fn color_rgba(&self) -> (f32, f32, f32, f32) {
+        (
+            ((self.color >> 24) & 0xFF) as f32 / 255.0,
+            ((self.color >> 16) & 0xFF) as f32 / 255.0,
+            ((self.color >> 8) & 0xFF) as f32 / 255.0,
+            (self.color & 0xFF) as f32 / 255.0,
+        )
+    }
+
+    pub fn set_color_rgba(&mut self, red: f32, green: f32, blue: f32, alpha: f32) {
+        let channel = |value: f32| ((value.clamp(0.0, 1.0) * 255.0).round() as u32) & 0xFF;
+        self.color =
+            (channel(red) << 24) | (channel(green) << 16) | (channel(blue) << 8) | channel(alpha);
+    }
+}
+
 /// Compact JSON wire form for one overlay inside the edit-recipe string.
 /// Field names stay short and are strictly typed (no free-form user text) so
 /// the recipe's `key=value|key=value` framing is never ambiguous.
@@ -446,16 +608,109 @@ fn encode_overlays(overlays: &[OverlaySpec]) -> String {
     serde_json::to_string(&wires).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// Replace only the overlay list of `destination` with the clipboard's
-/// overlays, leaving exposure, contrast, saturation, crop and rotation of the
-/// destination untouched.
+/// Compact JSON wire form for one text layer inside the edit-recipe string.
+/// Field names stay short and strictly typed so the recipe's
+/// `key=value|key=value` framing is never ambiguous.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TextLayerWire {
+    /// layer identifier
+    i: String,
+    /// text content
+    t: String,
+    /// font family
+    f: String,
+    /// size as fraction of photo height
+    s: f32,
+    b: bool,
+    /// italic
+    k: bool,
+    /// colour 0xRRGGBBAA
+    c: u32,
+    /// alignment code
+    a: String,
+    /// anchor code
+    n: String,
+    x: f32,
+    y: f32,
+    /// opacity
+    o: f32,
+    v: bool,
+}
+
+fn decode_text_layers(value: &str) -> Vec<TextLayerSpec> {
+    let Ok(wires) = serde_json::from_str::<Vec<TextLayerWire>>(value) else {
+        return Vec::new();
+    };
+    wires
+        .into_iter()
+        .filter_map(|wire| {
+            let anchor = OverlayAnchor::from_code(&wire.n)?;
+            Some(TextLayerSpec {
+                id: if wire.i.trim().is_empty() {
+                    next_text_layer_id()
+                } else {
+                    wire.i
+                },
+                text: wire.t,
+                font_family: if wire.f.trim().is_empty() {
+                    "Sans".to_string()
+                } else {
+                    wire.f
+                },
+                size: wire
+                    .s
+                    .clamp(TextLayerSpec::MIN_SIZE, TextLayerSpec::MAX_SIZE),
+                bold: wire.b,
+                italic: wire.k,
+                color: wire.c,
+                align: TextAlign::from_code(&wire.a).unwrap_or(TextAlign::Left),
+                anchor,
+                x: wire.x,
+                y: wire.y,
+                opacity: wire.o.clamp(0.0, 1.0),
+                visible: wire.v,
+            })
+        })
+        .collect()
+}
+
+fn encode_text_layers(layers: &[TextLayerSpec]) -> String {
+    let wires = layers
+        .iter()
+        .map(|layer| TextLayerWire {
+            i: layer.id.clone(),
+            t: layer.text.clone(),
+            f: layer.font_family.clone(),
+            s: layer.size,
+            b: layer.bold,
+            k: layer.italic,
+            c: layer.color,
+            a: layer.align.code().to_string(),
+            n: layer.anchor.code().to_string(),
+            x: layer.x,
+            y: layer.y,
+            o: layer.opacity,
+            v: layer.visible,
+        })
+        .collect::<Vec<_>>();
+    let json = serde_json::to_string(&wires).unwrap_or_else(|_| "[]".to_string());
+    // A raw `|` inside user text would split the recipe's key=value framing;
+    // JSON allows it escaped, and serde decodes the escape transparently.
+    json.replace('|', "\\u007c")
+}
+
+/// Replace only the image overlays and text layers of `destination` with the
+/// clipboard's, leaving exposure, contrast, saturation, crop and rotation of
+/// the destination untouched.
 ///
-/// Paste Overlays Only **replaces** the destination's overlays (it never
+/// Paste Text & Overlays Only **replaces** the destination's layers (it never
 /// appends), so pasting the same clipboard twice is idempotent and can never
 /// silently accumulate duplicates.
-pub fn paste_overlays_only(destination: &str, clipboard: &str) -> String {
+pub fn paste_layers_only(destination: &str, clipboard: &str) -> String {
     let mut merged = EditRecipe::decode(destination);
-    merged.overlays = EditRecipe::decode(clipboard).overlays;
+    let source = EditRecipe::decode(clipboard);
+    merged.overlays = source.overlays;
+    merged.text_layers = source.text_layers;
     merged.encode()
 }
 
@@ -479,6 +734,9 @@ pub struct EditRecipe {
     /// Non-destructive image overlays, painted after crop, rotation and tone.
     /// Paint order follows vector order (later entries stack on top).
     pub overlays: Vec<OverlaySpec>,
+    /// Non-destructive editable text layers, painted above the image
+    /// overlays. Vector order is the stacking order among text layers.
+    pub text_layers: Vec<TextLayerSpec>,
 }
 
 impl Default for EditRecipe {
@@ -500,6 +758,7 @@ impl Default for EditRecipe {
             filter: super::filters::FilterPreset::None,
             sharpen: 0.0,
             overlays: Vec::new(),
+            text_layers: Vec::new(),
         }
     }
 }
@@ -547,6 +806,7 @@ impl EditRecipe {
                 "filter" => recipe.filter = super::filters::FilterPreset::decode(value),
                 "sharpen" => recipe.sharpen = number().unwrap_or(0.0).clamp(0.0, 1.0),
                 "ov" => recipe.overlays = decode_overlays(value),
+                "tl" => recipe.text_layers = decode_text_layers(value),
                 _ => {}
             }
         }
@@ -582,6 +842,10 @@ impl EditRecipe {
             encoded.push_str("|ov=");
             encoded.push_str(&encode_overlays(&self.overlays));
         }
+        if !self.text_layers.is_empty() {
+            encoded.push_str("|tl=");
+            encoded.push_str(&encode_text_layers(&self.text_layers));
+        }
         encoded
     }
 
@@ -602,6 +866,7 @@ impl EditRecipe {
             && self.filter == super::filters::FilterPreset::None
             && self.sharpen.abs() < 0.0001
             && self.overlays.is_empty()
+            && self.text_layers.is_empty()
     }
 }
 
@@ -624,6 +889,7 @@ impl EditSession {
     }
 
     pub fn replace(&mut self, next: EditRecipe) {
+        self.end_action();
         if self.recipe == next {
             return;
         }
@@ -643,11 +909,11 @@ impl EditSession {
 
     /// Begin one continuous UI action, such as dragging a slider. Intermediate
     /// values update the preview immediately, but only the recipe that existed
-    /// before the drag is added to Undo when the action finishes.
+    /// before the drag is added to Undo when the action finishes. Any pending
+    /// continuous action is closed first so every action stays its own step.
     pub fn begin_action(&mut self) {
-        if self.active_action.is_none() {
-            self.active_action = Some(self.recipe.clone());
-        }
+        self.end_action();
+        self.active_action = Some(self.recipe.clone());
     }
 
     pub fn mutate_active(&mut self, update: impl FnOnce(&mut EditRecipe)) {
@@ -1048,11 +1314,11 @@ mod tests {
     }
 
     #[test]
-    fn paste_overlays_only_replaces_overlays_and_preserves_tone() {
+    fn paste_layers_only_replaces_overlays_and_preserves_tone() {
         let source = "v=1|exposure=1.0000|ov=[{\"a\":\"hash1\",\"n\":\"br\",\"x\":0.9,\"y\":0.9,\"w\":0.2,\"o\":1,\"r\":0,\"v\":true}]";
         let destination = "v=1|exposure=-0.5000|sat=0.3000|crop=0.10000,0.10000,0.90000,0.90000|ov=[{\"a\":\"old\",\"n\":\"c\",\"x\":0.5,\"y\":0.5,\"w\":0.5,\"o\":1,\"r\":0,\"v\":true}]";
 
-        let merged = EditRecipe::decode(&paste_overlays_only(destination, source));
+        let merged = EditRecipe::decode(&paste_layers_only(destination, source));
 
         // Destination tone and crop untouched…
         assert!((merged.exposure + 0.5).abs() < 0.001);
@@ -1065,15 +1331,91 @@ mod tests {
     }
 
     #[test]
-    fn paste_overlays_only_is_idempotent() {
+    fn paste_layers_only_is_idempotent() {
         let source = "v=1|ov=[{\"a\":\"hash1\",\"n\":\"br\",\"x\":0.9,\"y\":0.9,\"w\":0.2,\"o\":1,\"r\":0,\"v\":true}]";
         let destination = "v=1|exposure=0.2500";
 
-        let once = paste_overlays_only(destination, source);
-        let twice = paste_overlays_only(&once, source);
+        let once = paste_layers_only(destination, source);
+        let twice = paste_layers_only(&once, source);
 
         assert_eq!(once, twice);
         assert_eq!(EditRecipe::decode(&twice).overlays.len(), 1);
+    }
+
+    #[test]
+    fn paste_layers_only_replaces_text_layers_without_accumulating() {
+        let mut clipboard = EditRecipe::default();
+        clipboard.text_layers.push(TextLayerSpec::new_default());
+        let mut destination = EditRecipe::default();
+        destination.exposure = 0.4;
+        let destination = destination.encode();
+        let clipboard = clipboard.encode();
+
+        let once = paste_layers_only(&destination, &clipboard);
+        let twice = paste_layers_only(&once, &clipboard);
+
+        assert_eq!(EditRecipe::decode(&once).text_layers.len(), 1);
+        assert_eq!(EditRecipe::decode(&twice).text_layers.len(), 1);
+        assert!((EditRecipe::decode(&twice).exposure - 0.4).abs() < 0.001);
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn pasted_text_and_overlays_land_in_the_same_relative_place_on_a_differently_shaped_destination() {
+        // Brand a landscape photo at the bottom-right with the 3% margin,
+        // paste onto a portrait destination, and require the same relative
+        // placement with the pixel aspect of both layer kinds preserved.
+        let mut clipboard = EditRecipe::default();
+        let mut overlay = OverlaySpec::new_centered("logo");
+        overlay.anchor = OverlayAnchor::BottomRight;
+        overlay.x = 1.0 - OverlaySpec::POSITION_MARGIN;
+        overlay.y = 1.0 - OverlaySpec::POSITION_MARGIN;
+        overlay.width = 0.2;
+        clipboard.overlays.push(overlay);
+        let mut text = TextLayerSpec::new_default();
+        text.anchor = OverlayAnchor::BottomRight;
+        text.x = 1.0 - TextLayerSpec::POSITION_MARGIN;
+        text.y = 1.0 - TextLayerSpec::POSITION_MARGIN;
+        text.size = 0.05;
+        clipboard.text_layers.push(text);
+
+        let destination = EditRecipe {
+            exposure: 0.3,
+            ..EditRecipe::default()
+        }
+        .encode();
+        let pasted = EditRecipe::decode(&paste_layers_only(&destination, &clipboard.encode()));
+
+        // Destination tone survives; layers are replaced, not accumulated.
+        assert!((pasted.exposure - 0.3).abs() < 0.001);
+        assert_eq!(pasted.overlays.len(), 1);
+        assert_eq!(pasted.text_layers.len(), 1);
+
+        let overlay = &pasted.overlays[0];
+        let text = &pasted.text_layers[0];
+        let landscape = overlay.rect(6000.0, 4000.0, 2.0);
+        let portrait = overlay.rect(4000.0, 6000.0, 2.0);
+        assert!((landscape.right() - portrait.right()).abs() < 1e-6);
+        assert!((landscape.bottom() - portrait.bottom()).abs() < 1e-6);
+        assert!((landscape.right() - (1.0 - OverlaySpec::POSITION_MARGIN)).abs() < 1e-6);
+        let landscape_aspect = (landscape.width * 6000.0) / (landscape.height * 4000.0);
+        let portrait_aspect = (portrait.width * 4000.0) / (portrait.height * 6000.0);
+        assert!((landscape_aspect - 2.0).abs() < 1e-4);
+        assert!((portrait_aspect - 2.0).abs() < 1e-4);
+
+        // Text size is a height fraction, so its normalized box is
+        // identical across destinations; its bottom-right corner keeps
+        // the same relative margin.
+        let landscape_text = text.rect_with_size(0.2, text.size);
+        let portrait_text = text.rect_with_size(0.2, text.size);
+        assert!((landscape_text.right() - portrait_text.right()).abs() < 1e-6);
+        assert!((landscape_text.bottom() - portrait_text.bottom()).abs() < 1e-6);
+        assert!(
+            (landscape_text.right() - (1.0 - TextLayerSpec::POSITION_MARGIN)).abs() < 1e-6
+        );
+        assert!(
+            (landscape_text.bottom() - (1.0 - TextLayerSpec::POSITION_MARGIN)).abs() < 1e-6
+        );
     }
 
     #[test]
@@ -1151,6 +1493,187 @@ mod tests {
         // A very wide logo on a square photo is limited by photo width.
         let max = OverlaySpec::max_fitting_width(4000.0, 4000.0, 4.0);
         assert!((max - 1.0).abs() < 1e-5, "width bound applies: {max}");
+    }
+
+    #[test]
+    fn text_layer_recipe_round_trips_every_field() {
+        let mut recipe = EditRecipe::default();
+        recipe.exposure = 0.25;
+        let mut layer = TextLayerSpec::new_default();
+        layer.text = "Line one\nLine two".to_string();
+        layer.font_family = "DejaVu Sans".to_string();
+        layer.size = 0.07;
+        layer.bold = true;
+        layer.italic = true;
+        layer.set_color_rgba(0.2, 0.4, 0.6, 0.8);
+        layer.align = TextAlign::Right;
+        layer.anchor = OverlayAnchor::BottomRight;
+        layer.x = 0.97;
+        layer.y = 0.97;
+        layer.opacity = 0.55;
+        layer.visible = false;
+        recipe.text_layers.push(layer.clone());
+
+        let decoded = EditRecipe::decode(&recipe.encode());
+
+        assert!((decoded.exposure - 0.25).abs() < 0.001);
+        assert_eq!(decoded.text_layers.len(), 1);
+        assert_eq!(decoded, recipe);
+        let restored = &decoded.text_layers[0];
+        assert_eq!(restored.id, layer.id);
+        assert_eq!(restored.text, "Line one\nLine two");
+        assert_eq!(restored.font_family, "DejaVu Sans");
+        assert!((restored.size - 0.07).abs() < 1e-6);
+        assert!(restored.bold);
+        assert!(restored.italic);
+        assert_eq!(restored.align, TextAlign::Right);
+        assert_eq!(restored.anchor, OverlayAnchor::BottomRight);
+        assert!((restored.opacity - 0.55).abs() < 1e-6);
+        assert!(!restored.visible);
+        let (r, g, b, a) = restored.color_rgba();
+        assert!((r - 0.2).abs() < 0.01);
+        assert!((g - 0.4).abs() < 0.01);
+        assert!((b - 0.6).abs() < 0.01);
+        assert!((a - 0.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn multiline_text_with_recipe_metacharacters_survives_round_trip() {
+        let mut recipe = EditRecipe::default();
+        let mut layer = TextLayerSpec::new_default();
+        layer.text = "a|b=c\nd=e|f\n\"quoted\" \\ backslash".to_string();
+        recipe.text_layers.push(layer);
+
+        let encoded = recipe.encode();
+        assert!(!encoded.is_empty());
+        let decoded = EditRecipe::decode(&encoded);
+
+        assert_eq!(decoded.text_layers.len(), 1);
+        assert_eq!(
+            decoded.text_layers[0].text,
+            "a|b=c\nd=e|f\n\"quoted\" \\ backslash"
+        );
+        assert_eq!(decoded, recipe);
+    }
+
+    #[test]
+    fn old_recipes_without_text_layers_decode_to_an_empty_list() {
+        let old_overlay_recipe =
+            EditRecipe::decode("v=1|exposure=0.2500|ov=[{\"a\":\"h\",\"n\":\"c\",\"x\":0.5,\"y\":0.5,\"w\":0.2,\"o\":1,\"r\":0,\"v\":true}]");
+        assert!(old_overlay_recipe.text_layers.is_empty());
+        assert_eq!(old_overlay_recipe.overlays.len(), 1);
+
+        let legacy = EditRecipe::decode("v=1|bw=1");
+        assert!(legacy.text_layers.is_empty());
+        assert!(!legacy.is_default());
+    }
+
+    #[test]
+    fn text_layers_make_a_recipe_non_default_and_encode_is_non_empty() {
+        let mut recipe = EditRecipe::default();
+        assert!(recipe.is_default());
+        assert_eq!(recipe.encode(), "");
+        recipe.text_layers.push(TextLayerSpec::new_default());
+        assert!(!recipe.is_default());
+        assert!(!recipe.encode().is_empty());
+        assert!(EditRecipe::decode(&recipe.encode()).text_layers.len() == 1);
+    }
+
+    #[test]
+    fn text_position_at_uses_a_uniform_three_percent_margin() {
+        let mut layer = TextLayerSpec::new_default();
+
+        layer.position_at(OverlayAnchor::TopLeft);
+        assert!((layer.x - 0.03).abs() < 1e-6);
+        assert!((layer.y - 0.03).abs() < 1e-6);
+
+        layer.position_at(OverlayAnchor::BottomRight);
+        assert!((layer.x - 0.97).abs() < 1e-6);
+        assert!((layer.y - 0.97).abs() < 1e-6);
+
+        layer.position_at(OverlayAnchor::Center);
+        assert!((layer.x - 0.5).abs() < 1e-6);
+        assert!((layer.y - 0.5).abs() < 1e-6);
+        assert_eq!(layer.text, "Your text");
+        assert!((layer.size - TextLayerSpec::DEFAULT_SIZE).abs() < 1e-6);
+    }
+
+    #[test]
+    fn text_rect_mapping_matches_the_shared_anchor_model() {
+        let mut layer = TextLayerSpec::new_default();
+        layer.anchor = OverlayAnchor::TopRight;
+        layer.x = 0.9;
+        layer.y = 0.2;
+        let rect = layer.rect_with_size(0.3, 0.1);
+        assert!((rect.right() - 0.9).abs() < 1e-6);
+        assert!((rect.top - 0.2).abs() < 1e-6);
+
+        layer.set_position_from_rect(rect);
+        assert!((layer.x - 0.9).abs() < 1e-6);
+        assert!((layer.y - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn text_editing_flow_is_one_undo_step_per_operation() {
+        let mut session = EditSession::new(EditRecipe::default());
+
+        session.mutate(|recipe| recipe.text_layers.push(TextLayerSpec::new_default()));
+        assert_eq!(session.recipe.text_layers.len(), 1);
+        let after_add = session.recipe.clone();
+
+        session.begin_action();
+        session.mutate_active(|recipe| recipe.text_layers[0].text = "Y".to_string());
+        session.mutate_active(|recipe| recipe.text_layers[0].text = "Your".to_string());
+        session.mutate_active(|recipe| recipe.text_layers[0].text = "Your words".to_string());
+        session.end_action();
+
+        session.mutate(|recipe| {
+            recipe.text_layers[0].font_family = "Serif".to_string();
+        });
+
+        assert_eq!(session.recipe.text_layers[0].font_family, "Serif");
+        assert!(session.undo());
+        assert_eq!(session.recipe.text_layers[0].text, "Your words");
+        assert_eq!(session.recipe.text_layers[0].font_family, "Sans");
+        assert!(session.undo());
+        assert_eq!(session.recipe, after_add);
+        assert!(session.undo());
+        assert!(session.recipe.text_layers.is_empty());
+        assert!(!session.undo());
+
+        assert!(session.redo());
+        assert!(session.redo());
+        assert!(session.redo());
+        assert_eq!(session.recipe.text_layers[0].font_family, "Serif");
+    }
+
+    #[test]
+    fn pending_text_action_flushes_before_a_new_discrete_mutation() {
+        let mut session = EditSession::new(EditRecipe::default());
+        session.mutate(|recipe| recipe.text_layers.push(TextLayerSpec::new_default()));
+
+        session.begin_action();
+        session.mutate_active(|recipe| recipe.text_layers[0].text = "typed".to_string());
+        session.mutate(|recipe| recipe.text_layers[0].bold = true);
+
+        assert!(session.recipe.text_layers[0].bold);
+        assert_eq!(session.recipe.text_layers[0].text, "typed");
+        assert!(session.undo(), "bold toggle is its own step");
+        assert!(!session.recipe.text_layers[0].bold);
+        assert_eq!(session.recipe.text_layers[0].text, "typed");
+        assert!(session.undo());
+        assert_eq!(session.recipe.text_layers[0].text, "Your text");
+        assert!(session.undo());
+        assert!(session.recipe.text_layers.is_empty());
+    }
+
+    #[test]
+    fn reset_all_edits_removes_text_layers() {
+        let mut session = EditSession::new(EditRecipe::default());
+        session.mutate(|recipe| recipe.text_layers.push(TextLayerSpec::new_default()));
+        session.reset();
+        assert!(session.recipe.text_layers.is_empty());
+        assert_eq!(session.recipe, EditRecipe::default());
     }
 
     #[test]

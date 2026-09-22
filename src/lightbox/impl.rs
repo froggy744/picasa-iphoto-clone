@@ -1096,6 +1096,20 @@ impl Lightbox {
         self.root.set_visible(false);
     }
 
+    /// Apply a freshly written edit recipe to this lightbox's own photo
+    /// objects. Gallery paste handlers update `current_photos` and
+    /// `selected_photo`, but `refresh_current` re-decodes from `self.photos`,
+    /// which is a separate vec captured at `open()`. Without this, a paste
+    /// that lands while the viewer is open re-renders the stale recipe until
+    /// the photo is closed and reopened.
+    pub fn update_edit_recipe(&self, id: i64, recipe: &str) {
+        for photo in self.photos.borrow().iter() {
+            if photo.id() == id {
+                photo.set_edit_recipe(recipe.to_string());
+            }
+        }
+    }
+
     /// Re-decode the visible photo after presentation metadata such as the
     /// user's rotation changes. The current full image stays in place until
     /// its correctly rotated replacement is ready.

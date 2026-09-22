@@ -9,7 +9,9 @@ use libadwaita as adw;
 use rusqlite::Connection;
 
 use super::filters::FilterPreset;
-use super::model::{CropRect, EditRecipe, EditSession, OverlayAnchor, OverlaySpec};
+use super::model::{
+    CropRect, EditRecipe, EditSession, OverlayAnchor, OverlaySpec, TextAlign, TextLayerSpec,
+};
 
 pub struct EditEditor {
     pub root: gtk::Box,
@@ -69,6 +71,7 @@ include!("controls.rs");
 include!("undo.rs");
 include!("export.rs");
 include!("overlays_ui.rs");
+include!("text_ui.rs");
 
 pub fn build(
     parent: &gtk::Window,
@@ -164,10 +167,15 @@ pub fn build(
     overlays_toggle.set_group(Some(&tools_toggle));
     overlays_toggle.set_hexpand(true);
     overlays_toggle.set_tooltip_text(Some("Place PNG/JPG logos, badges and banners on the photo"));
+    let text_toggle = gtk::ToggleButton::with_label("Text");
+    text_toggle.set_group(Some(&tools_toggle));
+    text_toggle.set_hexpand(true);
+    text_toggle.set_tooltip_text(Some("Place editable text layers on the photo"));
     panel_tabs.append(&tools_toggle);
     panel_tabs.append(&filters_toggle);
     panel_tabs.append(&crop_toggle);
     panel_tabs.append(&overlays_toggle);
+    panel_tabs.append(&text_toggle);
     sidebar.append(&panel_tabs);
 
     let tools_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -196,6 +204,13 @@ pub fn build(
     overlays_box.set_margin_bottom(16);
     overlays_box.set_margin_start(14);
     overlays_box.set_margin_end(14);
+    let text_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    text_box.set_hexpand(true);
+    text_box.set_vexpand(true);
+    text_box.set_margin_top(12);
+    text_box.set_margin_bottom(16);
+    text_box.set_margin_start(14);
+    text_box.set_margin_end(14);
     let tools_scroll = gtk::ScrolledWindow::new();
     tools_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     tools_scroll.set_child(Some(&tools_box));
@@ -208,6 +223,9 @@ pub fn build(
     let overlays_scroll = gtk::ScrolledWindow::new();
     overlays_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     overlays_scroll.set_child(Some(&overlays_box));
+    let text_scroll = gtk::ScrolledWindow::new();
+    text_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    text_scroll.set_child(Some(&text_box));
     let panel_stack = gtk::Stack::new();
     panel_stack.set_hexpand(true);
     panel_stack.set_vexpand(true);
@@ -216,6 +234,7 @@ pub fn build(
     panel_stack.add_named(&filters_scroll, Some("filters"));
     panel_stack.add_named(&crop_scroll, Some("crop"));
     panel_stack.add_named(&overlays_scroll, Some("overlays"));
+    panel_stack.add_named(&text_scroll, Some("text"));
     panel_stack.set_visible_child(&tools_scroll);
     sidebar.append(&panel_stack);
     body.set_start_child(Some(&sidebar));
@@ -287,9 +306,14 @@ pub fn build(
     // Index into recipe.overlays of the overlay selected for canvas/panel
     // editing; None when nothing is selected.
     let selected_overlay: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
+    // Index into recipe.text_layers of the text layer selected while the Text
+    // tab owns the canvas; per-tab selection so switching tabs restores each
+    // tab's own selected layer.
+    let selected_text: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
     // Filled once the Overlays panel is built so sync_controls (undo/redo,
     // reset, crop commits) can refresh the list without a dependency cycle.
     let sync_overlays_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let sync_text_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let pending_crop = Rc::new(RefCell::new(CropRect::default()));
     let crop_aspect_preset = Rc::new(Cell::new(CropAspectPreset::Free));
     let crop_portrait = Rc::new(Cell::new(false));
@@ -1098,18 +1122,30 @@ pub fn build(
             }
         });
     }
+    {
+        let panel_stack = panel_stack.clone();
+        text_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                panel_stack.set_visible_child_name("text");
+            }
+        });
+    }
 
     let sync_controls: Rc<dyn Fn()> = {
         let controls = controls.clone();
         let session = session.clone();
         let syncing = syncing.clone();
         let sync_overlays_slot = sync_overlays_slot.clone();
+        let sync_text_slot = sync_text_slot.clone();
         Rc::new(move || {
             syncing.set(true);
             controls.sync(&session.borrow().recipe);
             syncing.set(false);
             if let Some(sync_overlays) = sync_overlays_slot.borrow().as_ref() {
                 sync_overlays();
+            }
+            if let Some(sync_text) = sync_text_slot.borrow().as_ref() {
+                sync_text();
             }
         })
     };
@@ -1142,9 +1178,11 @@ pub fn build(
         let native_one_to_one = native_one_to_one.clone();
         let one_to_one_sync = one_to_one_sync.clone();
         let selected_overlay = selected_overlay.clone();
+        let selected_text = selected_text.clone();
         reset.connect_clicked(move |_| {
             session.borrow_mut().reset();
             selected_overlay.set(None);
+            selected_text.set(None);
             sync_controls();
             update_history_buttons();
             pending_crop.replace(CropRect::default());
@@ -1694,14 +1732,17 @@ pub fn build(
     let update_canvas_input: Rc<dyn Fn()> = {
         let overlay_layer = overlay_layer.clone();
         let overlays_toggle = overlays_toggle.clone();
+        let text_toggle = text_toggle.clone();
         let crop_overlay = crop_overlay.clone();
         let session = session.clone();
         Rc::new(move || {
             let in_crop = crop_overlay.is_visible();
             overlay_layer.set_visible(!in_crop);
-            let enable = overlays_toggle.is_active()
-                && !session.borrow().recipe.overlays.is_empty()
+            let recipe = session.borrow();
+            let enable = (overlays_toggle.is_active() && !recipe.recipe.overlays.is_empty()
+                || text_toggle.is_active() && !recipe.recipe.text_layers.is_empty())
                 && !in_crop;
+            drop(recipe);
             overlay_layer.set_can_target(enable);
             if enable {
                 overlay_layer.set_cursor_from_name(Some("default"));
@@ -1714,6 +1755,14 @@ pub fn build(
     {
         let update_canvas_input = update_canvas_input.clone();
         overlays_toggle.connect_toggled(move |button| {
+            if button.is_active() {
+                update_canvas_input();
+            }
+        });
+    }
+    {
+        let update_canvas_input = update_canvas_input.clone();
+        text_toggle.connect_toggled(move |button| {
             if button.is_active() {
                 update_canvas_input();
             }
@@ -1751,19 +1800,34 @@ pub fn build(
     );
     sync_overlays_slot.replace(Some(sync_overlays_panel.clone()));
 
+    let sync_text_panel = build_text_panel(
+        &text_box,
+        session.clone(),
+        selected_text.clone(),
+        syncing.clone(),
+        update_history_buttons.clone(),
+        redraw_overlay_canvas.clone(),
+        update_canvas_input.clone(),
+        text_toggle.clone(),
+    );
+    sync_text_slot.replace(Some(sync_text_panel.clone()));
+
     configure_overlay_canvas(
         &overlay_layer,
         session.clone(),
         selected_overlay.clone(),
+        selected_text.clone(),
         preview_dimensions.clone(),
         canvas_zoom.clone(),
         native_one_to_one.clone(),
         picture_scroll.clone(),
         overlays_toggle.clone(),
+        text_toggle.clone(),
         zoom_in_action.clone(),
         zoom_out_action.clone(),
         update_history_buttons.clone(),
         sync_overlays_panel.clone(),
+        sync_text_panel.clone(),
         update_canvas_input.clone(),
     );
     update_canvas_input();
@@ -2161,7 +2225,8 @@ mod panel_tests {
                 "Tools".to_string(),
                 "Filters".to_string(),
                 "Crop".to_string(),
-                "Overlays".to_string()
+                "Overlays".to_string(),
+                "Text".to_string()
             ]
         );
 
@@ -2175,6 +2240,18 @@ mod panel_tests {
             stack.visible_child_name().as_deref(),
             Some("overlays"),
             "Overlays tab must show its panel page"
+        );
+
+        let text_tab = buttons
+            .iter()
+            .find(|button| button.label().as_deref() == Some("Text"))
+            .unwrap();
+        text_tab.emit_clicked();
+        settle_gtk();
+        assert_eq!(
+            stack.visible_child_name().as_deref(),
+            Some("text"),
+            "Text tab must show its panel page"
         );
 
         let crop_tab = buttons
