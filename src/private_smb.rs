@@ -11,6 +11,9 @@ unsafe extern "C" {
     fn pic_smb_stat(uri:*const c_char,size:*mut u64,mtime:*mut i64,
         is_dir:*mut c_int,error:*mut c_char,cap:usize)->c_int;
     fn pic_smb_free(bytes: *mut c_void);
+    fn pic_smb_scan_hosts(prefix: *const c_char,
+        cb: extern "C" fn(*mut c_void,*const c_char,c_uint)->c_int,
+        ctx: *mut c_void, error: *mut c_char, capacity: usize) -> c_int;
 }
 fn c_error(buf: &[c_char]) -> String {
     unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned()
@@ -78,4 +81,24 @@ pub fn stat(uri:&str)->anyhow::Result<crate::network_shares::Metadata>{
     let status=unsafe{pic_smb_stat(uri.as_ptr(),&mut size,&mut mtime,&mut dir,buffer.as_mut_ptr(),buffer.len())};
     if status<0 {anyhow::bail!("{}",c_error(&buffer))}
     Ok(crate::network_shares::Metadata{size,mtime:Some(mtime),is_dir:dir!=0})
+}
+extern "C" fn receive_scan_host(context:*mut c_void, name:*const c_char, kind:c_uint)->c_int {
+    if context.is_null() || name.is_null(){return -1;}
+    let results=unsafe{&mut *(context as *mut Vec<(String,u32)>)};
+    let name=unsafe{CStr::from_ptr(name)}.to_string_lossy().into_owned();
+    crate::network_shares::trace("PRIVATE_SMB",format!("scan_host name={name} kind={kind}"));
+    results.push((name,kind));0
+}
+/// Discover SMB/NFS servers on `prefix` (e.g. "10.0.0") or, when `None`, the
+/// local subnet. Returns `(ip, kind)` pairs where kind 3 means SMB reachable
+/// and 7 means NFS only. Pure port probe, no authentication.
+pub fn scan_hosts(prefix: Option<&str>) -> anyhow::Result<Vec<(String,u32)>> {
+    let c_prefix=prefix.and_then(|p|CString::new(p).ok());
+    let mut results: Vec<(String,u32)> = Vec::new();
+    let mut error=[0 as c_char;512];
+    let prefix_ptr=c_prefix.as_deref().map_or(std::ptr::null(),|p|p.as_ptr());
+    let count=unsafe{pic_smb_scan_hosts(prefix_ptr,receive_scan_host,
+        &mut results as *mut _ as *mut c_void,error.as_mut_ptr(),error.len())};
+    if count<0 {anyhow::bail!("{}",c_error(&error));}
+    Ok(results)
 }

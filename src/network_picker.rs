@@ -28,12 +28,14 @@ pub fn open(parent: &gtk::Window, on_import: Rc<dyn Fn(String)>) {
     content.append(&heading);
     let toolbar=gtk::Box::new(gtk::Orientation::Horizontal,6);
     let discovery=gtk::Button::with_label("Find Network Shares");
+    let scan=gtk::Button::with_label("Scan Subnet");
     let up=gtk::Button::with_label("Up");
     let address=gtk::Entry::new();
     address.set_hexpand(true);
-    address.set_placeholder_text(Some("smb://server/share/Photos or nfs://server/export/Photos"));
+    address.set_placeholder_text(Some("smb://server/share/Photos, nfs://server/export, or just server"));
     let go=gtk::Button::with_label("Open URL");
     toolbar.append(&discovery);
+    toolbar.append(&scan);
     toolbar.append(&up);
     toolbar.append(&address);
     toolbar.append(&go);
@@ -43,6 +45,11 @@ pub fn open(parent: &gtk::Window, on_import: Rc<dyn Fn(String)>) {
     location.set_selectable(true);
     location.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     content.append(&location);
+    let hint=gtk::Label::new(Some("Scan Subnet probes the local network for SMB/NFS servers, including ones mDNS/WSD does not advertise."));
+    hint.set_xalign(0.0);
+    hint.set_wrap(true);
+    hint.set_opacity(0.7);
+    content.append(&hint);
     let scroll=gtk::ScrolledWindow::new();
     scroll.set_vexpand(true);
     let rows=gtk::ListBox::new();
@@ -68,6 +75,9 @@ pub fn open(parent: &gtk::Window, on_import: Rc<dyn Fn(String)>) {
     let status_for_poll=status.clone();
     let location_for_poll=location.clone();
     let address_for_poll=address.clone();
+    let generation_for_scan=generation.clone();
+    let status_for_scan=status.clone();
+    let sender_for_scan=sender.clone();
     let dialog_for_poll=dialog.downgrade();
     glib::timeout_add_local(Duration::from_millis(30),move || {
         if dialog_for_poll.upgrade().is_none() {return glib::ControlFlow::Break}
@@ -76,9 +86,14 @@ pub fn open(parent: &gtk::Window, on_import: Rc<dyn Fn(String)>) {
             match result {
                 Ok(new_entries)=>{
                     *current_for_poll.borrow_mut()=uri.clone();
-                    address_for_poll.set_text(if uri=="network:///" {""}else{&uri});
-                    location_for_poll.set_text(if uri=="network:///" {"Network shares"}else{&uri});
-                    status_for_poll.set_text(&format!("{} folders and photos found — double-click a folder to open it",new_entries.len()));
+                    let scan_results=uri=="scan:///";
+                    address_for_poll.set_text(if uri=="network:///" || scan_results {""}else{&uri});
+                    location_for_poll.set_text(if uri=="network:///" {"Network shares"}else if scan_results {"Scan results: shares found across servers"}else{&uri});
+                    status_for_poll.set_text(&if scan_results {
+                        format!("{} shares found by probing the subnet — double-click a folder, or Up to return",new_entries.len())
+                    } else {
+                        format!("{} folders and photos found — double-click a folder to open it",new_entries.len())
+                    });
                     *entries_for_poll.borrow_mut()=new_entries;
                     while let Some(child)=rows_for_poll.first_child(){rows_for_poll.remove(&child)}
                     for entry in entries_for_poll.borrow().iter(){
@@ -100,6 +115,17 @@ pub fn open(parent: &gtk::Window, on_import: Rc<dyn Fn(String)>) {
     });
 
     let load:Rc<dyn Fn(String)>=Rc::new(move |uri:String|{
+        let uri=if uri=="network:///"{
+            uri
+        }else{
+            match network_shares::normalize_input(&uri){
+                Some(normalized)=>normalized,
+                None=>{
+                    status.set_text("That is not a network address. Try smb://server/share or a bare hostname like Ella.local.");
+                    return;
+                }
+            }
+        };
         if uri!="network:///" && !network_shares::private(&uri){return}
         let next=generation.get().wrapping_add(1);
         generation.set(next);
@@ -119,6 +145,16 @@ pub fn open(parent: &gtk::Window, on_import: Rc<dyn Fn(String)>) {
     });
     let load_for_discovery=load.clone();
     discovery.connect_clicked(move |_|load_for_discovery("network:///".to_string()));
+    scan.connect_clicked(move |_|{
+        let next=generation_for_scan.get().wrapping_add(1);
+        generation_for_scan.set(next);
+        status_for_scan.set_text("Probing the local subnet for SMB/NFS servers…");
+        let tx=sender_for_scan.clone();
+        std::thread::spawn(move || {
+            let result=network_shares::scan_subnet().map_err(|error|error.to_string());
+            let _=tx.send((next,String::from("scan:///"),result));
+        });
+    });
     let load_for_go=load.clone();
     let address_for_go=address.clone();
     go.connect_clicked(move |_|load_for_go(address_for_go.text().trim().to_string()));
@@ -128,7 +164,7 @@ pub fn open(parent: &gtk::Window, on_import: Rc<dyn Fn(String)>) {
     let current_for_up=current.clone();
     up.connect_clicked(move |_|{
         let here=current_for_up.borrow().clone();
-        if here=="network:///"{return}
+        if here=="network:///" || here=="scan:///"{return}
         let before=here.trim_end_matches('/');
         let parent=before.rsplit_once('/').map(|(p,_)|p.to_string()).unwrap_or_default();
         if parent=="smb:/" || parent=="nfs:/" || parent.is_empty() {
