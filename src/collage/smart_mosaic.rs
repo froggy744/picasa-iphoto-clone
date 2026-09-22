@@ -35,6 +35,7 @@ struct Score {
     edge_bias: f32,
     mismatch: f32,
     hierarchy: f32,
+    visual_priority: f32,
 }
 
 impl Score {
@@ -48,6 +49,7 @@ impl Score {
             + self.edge_bias * 1.2
             + self.mismatch * 3.0
             + self.hierarchy * 3.0
+            + self.visual_priority * 4.5
     }
 }
 
@@ -70,6 +72,24 @@ pub(super) fn apply(project: &mut CollageProject) {
         item.height = rect.h.min(1.0 - item.y);
         item.rotation = 0.0;
         item.z = index;
+    }
+}
+
+/// Aspect-aware packing for Mosaic's Fit mode. Mosaic intentionally remains
+/// neutral about which photo is the hero, unlike Smart AI, so visual-interest
+/// weights are temporarily equalized while its geometry is chosen.
+pub(super) fn apply_fit_mosaic(project: &mut CollageProject) {
+    let original_weights = project
+        .items
+        .iter()
+        .map(|item| item.photo.visual_weight)
+        .collect::<Vec<_>>();
+    for item in &mut project.items {
+        item.photo.visual_weight = 0.5;
+    }
+    apply(project);
+    for (item, weight) in project.items.iter_mut().zip(original_weights) {
+        item.photo.visual_weight = weight;
     }
 }
 
@@ -241,6 +261,12 @@ fn score(project: &CollageProject, rectangles: &[Rect]) -> Score {
         .collect::<Vec<_>>();
     let total = area.iter().sum::<f32>();
     let average = total / count;
+    let visual_average = project
+        .items
+        .iter()
+        .map(|item| item.photo.visual_weight)
+        .sum::<f32>()
+        / count;
     let mut visible = 0.0;
     let mut focal_mass = 0.0;
     let mut focal_center = (0.0, 0.0);
@@ -266,6 +292,12 @@ fn score(project: &CollageProject, rectangles: &[Rect]) -> Score {
         }
         result.mismatch += (mismatch.powi(2) + (mismatch - 0.5).max(0.0).powi(2)) / count;
         let relative = visible_area / average;
+        // The on-device vision model makes the clearest, most distinctive
+        // selected photos more likely to receive a focal tile. It remains a
+        // soft preference so aspect fit and minimum tile size still win when
+        // the composition requires it.
+        let desired_relative = project.items[i].photo.visual_weight / visual_average.max(0.01);
+        result.visual_priority += (desired_relative - relative).max(0.0).powi(2) / count;
         result.tiny += (0.35 - relative).max(0.0).powi(2) * 1.15 / count;
         worst_tiny = worst_tiny.max((0.25 - relative).max(0.0).powi(2));
         let short = (rect.w / ratio.sqrt()).min(rect.h * ratio.sqrt());
@@ -349,6 +381,7 @@ mod tests {
                     library_rotation: 0,
                     edit_recipe: String::new(),
                     aspect_ratio: aspects[i % aspects.len()],
+                    visual_weight: 0.5,
                 },
                 x: 0.0,
                 y: 0.0,
@@ -467,6 +500,49 @@ mod tests {
         let covered = score(&project, &grid);
         assert_eq!(covered.empty, 0.0);
         assert!(covered.crop > 0.5);
+    }
+
+    #[test]
+    fn visual_model_reserves_focal_space_for_the_best_selected_photo() {
+        let mut project = fixture(4, false, false);
+        for item in &mut project.items {
+            item.photo.aspect_ratio = 1.0;
+            item.photo.visual_weight = 0.2;
+        }
+        project.items[0].photo.visual_weight = 1.0;
+        let ratio = project.effective_aspect_ratio();
+        let focal_first = vec![
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: ratio * 0.5,
+                h: 1.0,
+            },
+            Rect {
+                x: ratio * 0.5,
+                y: 0.0,
+                w: ratio * 0.5,
+                h: 1.0 / 3.0,
+            },
+            Rect {
+                x: ratio * 0.5,
+                y: 1.0 / 3.0,
+                w: ratio * 0.5,
+                h: 1.0 / 3.0,
+            },
+            Rect {
+                x: ratio * 0.5,
+                y: 2.0 / 3.0,
+                w: ratio * 0.5,
+                h: 1.0 / 3.0,
+            },
+        ];
+        let mut focal_last = focal_first.clone();
+        focal_last.swap(0, 3);
+        assert!(
+            score(&project, &focal_first).visual_priority
+                < score(&project, &focal_last).visual_priority
+        );
     }
 
     #[test]
