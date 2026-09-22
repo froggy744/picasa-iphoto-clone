@@ -236,11 +236,20 @@ fn show_photo_context_menu(
     }
     let copy_edits = add_action("Copy Edits");
     let paste_edits = add_action("Paste Edits");
+    let paste_overlays = add_action("Paste Overlays Only");
     let reset_edits = add_action("Reset Edits");
     let clicked_recipe = photo.edit_recipe();
     let clicked_is_edited = !crate::edit::EditRecipe::decode(&clicked_recipe).is_default();
     copy_edits.set_sensitive(clicked_is_edited);
     paste_edits.set_sensitive(context.edit_clipboard.borrow().is_some());
+    // Only enable when the clipboard carries at least one overlay.
+    paste_overlays.set_sensitive(
+        context
+            .edit_clipboard
+            .borrow()
+            .as_deref()
+            .is_some_and(|recipe| !crate::edit::EditRecipe::decode(recipe).overlays.is_empty()),
+    );
     reset_edits.set_sensitive(clicked_is_edited || selection_ids.iter().any(|id| {
         db::photo(&context.connection.borrow(), *id)
             .ok()
@@ -276,6 +285,56 @@ fn show_photo_context_menu(
                 let selected = {
                     paste_context.selected_photo.borrow().as_ref().cloned()
                 };
+                if let Some(selected) = selected {
+                    if selected.id() == *id {
+                        selected.set_edit_recipe(recipe.clone());
+                        paste_context.selected_photo.replace(Some(selected.clone()));
+                        paste_context.info.set_photo(Some(&selected));
+                    }
+                }
+            }
+            if let Some(lightbox) = paste_context.lightbox.upgrade() {
+                lightbox.refresh_current();
+            }
+            dismiss_menu();
+        });
+    }
+    {
+        let paste_context = context.clone();
+        let paste_selection = selection_ids.clone();
+        let dismiss_menu = dismiss_menu.clone();
+        paste_overlays.connect_clicked(move |button| {
+            let Some(clipboard) = paste_context.edit_clipboard.borrow().clone() else {
+                return;
+            };
+            for id in &paste_selection {
+                let destination = match db::photo(&paste_context.connection.borrow(), *id) {
+                    Ok(Some(item)) => item.edit_recipe,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        show_error(
+                            button.upcast_ref(),
+                            "Could not paste overlays",
+                            &error.to_string(),
+                        );
+                        return;
+                    }
+                };
+                let recipe = crate::edit::model::paste_overlays_only(&destination, &clipboard);
+                if let Err(error) =
+                    db::set_edit_recipe(&paste_context.connection.borrow(), *id, &recipe)
+                {
+                    show_error(
+                        button.upcast_ref(),
+                        "Could not paste overlays",
+                        &error.to_string(),
+                    );
+                    return;
+                }
+                if let Some(gallery) = paste_context.gallery.borrow().upgrade() {
+                    gallery.update_edit_recipe(*id, &recipe);
+                }
+                let selected = { paste_context.selected_photo.borrow().as_ref().cloned() };
                 if let Some(selected) = selected {
                     if selected.id() == *id {
                         selected.set_edit_recipe(recipe.clone());

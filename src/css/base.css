@@ -15,6 +15,12 @@
     .crop-straighten { margin-bottom: 2px; }
     .crop-straighten .edit-adjustment-row { margin-bottom: 0; }
     .crop-reset-button, .crop-apply-button { min-height: 32px; margin-top: 4px; }
+    .overlay-list { background: alpha(@theme_fg_color, 0.03); border: 1px solid alpha(@theme_fg_color, 0.07); border-radius: 8px; }
+    .overlay-list row { min-height: 34px; padding: 4px 8px; }
+    .overlay-list row:selected { background: alpha(@accent_bg_color, 0.18); }
+    .overlay-selected-section { margin-top: 4px; }
+    .overlay-anchor-row { margin-top: 2px; }
+    .overlay-anchor-row button { min-height: 30px; padding: 3px 4px; font-size: 11px; }
     .quick-fix-row button { min-height: 30px; padding: 4px 8px; }
     .filter-grid > flowboxchild { padding: 0; margin: 0; min-width: 0; background: transparent; }
     button.filter-tile, button.filter-tile:hover, button.filter-tile:active, button.filter-tile:checked { min-width: 0; padding: 0; border: none; background: transparent; box-shadow: none; outline: none; }

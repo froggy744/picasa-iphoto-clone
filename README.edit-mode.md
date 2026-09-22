@@ -22,9 +22,9 @@ The whole window becomes the editor: controls on the left, your photo big on the
 
 At the top you'll find **back arrow** (return to the library), **Undo / Redo**, **zoom − / +**, **Reset**, **Tools**, **Export** and the big blue **Done** button when you're finished.
 
-## The Three Tabs: Tools · Filters · Crop
+## The Four Tabs: Tools · Filters · Crop · Overlays
 
-The left panel has three tabs:
+The left panel has four tabs:
 
 ### 🛠 Tools — sliders and one-click fixes
 
@@ -67,6 +67,22 @@ The Filters tab shows your photo as a grid of **live preview tiles** — every f
 
 Full details in the next guide: [Crop Mode →](README.crop-mode.md)
 
+### 🖼 Overlays — logos, badges & banners
+
+Drop a PNG or JPG on top of your photo without touching the original file. Click **Import Overlay Image…**, pick a logo or banner, then **drag** it into place on the canvas and use the corner handle to resize (aspect ratio stays locked).
+
+The panel lists every overlay on the photo. Select one to adjust:
+
+- **Opacity** — fade the graphic in or out
+- **Anchor** — choose which point stays pinned while you resize (the handle sits on the opposite corner)
+- **Fit to Width / Fit to Screen** — stretch across the photo, or shrink until fully visible
+- **Reset Placement** — back to centre at full opacity
+- **Remove Overlay** — delete it from this photo
+
+Overlays composite last — after crop, rotation and tone — so they sit cleanly on top of every edit. Export and Print include them; the live editor preview draws them interactively on the canvas.
+
+Edits are still non-destructive: import, move, and opacity all live in the edit recipe.
+
 ---
 
 ## Undo, Redo, Reset — Experiment Freely
@@ -80,6 +96,8 @@ Because nothing touches the original file, you can experiment as wildly as you l
 ## Copy Edits Between Photos
 
 Fixed ten sunset photos from the same shoot? Edit one, **copy its edits**, select the others and **paste**. Consistent looks across a whole batch in seconds.
+
+Right-click also offers **Paste Overlays Only** — when the clipboard holds at least one overlay, this swaps only the overlay list onto the selected photos and leaves exposure, crop, and the rest of each photo's recipe alone. Pasting twice is safe: the destination overlays are *replaced*, never duplicated.
 
 ## Export — Save Your Edited Photo
 

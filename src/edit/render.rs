@@ -24,8 +24,15 @@ pub fn apply_geometry(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
     image
 }
 
+/// Apply a recipe end-to-end: geometry (straighten, crop), tone, then image
+/// overlays. This is the single chokepoint used by thumbnails, the lightbox,
+/// the main viewer, export, printing, collage and filter preview tiles, so an
+/// overlay appears identically everywhere the photo is rendered.
+///
+/// The editor's live preview intentionally skips the overlay step and draws
+/// overlays on a dedicated canvas layer instead, so dragging stays smooth.
 pub fn apply_recipe(image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
-    apply_tone(apply_geometry(image, recipe), recipe)
+    super::overlays::composite_overlays(apply_tone(apply_geometry(image, recipe), recipe), recipe)
 }
 
 pub fn apply_recipe_without_crop(mut image: RgbaImage, recipe: &EditRecipe) -> RgbaImage {
