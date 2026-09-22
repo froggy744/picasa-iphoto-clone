@@ -12,7 +12,7 @@ unsafe extern "C" {
         is_dir:*mut c_int,error:*mut c_char,cap:usize)->c_int;
     fn pic_smb_free(bytes: *mut c_void);
     fn pic_smb_scan_hosts(prefix: *const c_char,
-        cb: extern "C" fn(*mut c_void,*const c_char,c_uint)->c_int,
+        cb: extern "C" fn(*mut c_void,*const c_char,c_uint,*const c_char)->c_int,
         ctx: *mut c_void, error: *mut c_char, capacity: usize) -> c_int;
 }
 fn c_error(buf: &[c_char]) -> String {
@@ -34,7 +34,7 @@ extern "C" fn receive_entry(context:*mut c_void, name:*const c_char, kind:c_uint
     let is_dir=matches!(kind,3|7);
     if !(is_dir || kind==8 && crate::image_format::supported(std::path::Path::new(&name))) { return 0; }
     let uri=format!("{}/{}",parent.trim_end_matches('/'),encoded_segment(&name));
-    entries.push(Entry {name,uri,is_dir});
+    entries.push(Entry {name,uri,is_dir,server:String::new()});
     0
 }
 pub fn list(uri:&str)->anyhow::Result<Vec<Entry>> {
@@ -82,19 +82,20 @@ pub fn stat(uri:&str)->anyhow::Result<crate::network_shares::Metadata>{
     if status<0 {anyhow::bail!("{}",c_error(&buffer))}
     Ok(crate::network_shares::Metadata{size,mtime:Some(mtime),is_dir:dir!=0})
 }
-extern "C" fn receive_scan_host(context:*mut c_void, name:*const c_char, kind:c_uint)->c_int {
-    if context.is_null() || name.is_null(){return -1;}
-    let results=unsafe{&mut *(context as *mut Vec<(String,u32)>)};
+extern "C" fn receive_scan_host(context:*mut c_void, name:*const c_char, kind:c_uint, hostname:*const c_char)->c_int {
+    if context.is_null() || name.is_null() || hostname.is_null(){return -1;}
+    let results=unsafe{&mut *(context as *mut Vec<(String,String,u32)>)};
     let name=unsafe{CStr::from_ptr(name)}.to_string_lossy().into_owned();
-    crate::network_shares::trace("PRIVATE_SMB",format!("scan_host name={name} kind={kind}"));
-    results.push((name,kind));0
+    let hostname=unsafe{CStr::from_ptr(hostname)}.to_string_lossy().into_owned();
+    crate::network_shares::trace("PRIVATE_SMB",format!("scan_host ip={name} hostname={hostname} kind={kind}"));
+    results.push((name,hostname,kind));0
 }
 /// Discover SMB/NFS servers on `prefix` (e.g. "10.0.0") or, when `None`, the
-/// local subnet. Returns `(ip, kind)` pairs where kind 3 means SMB reachable
-/// and 7 means NFS only. Pure port probe, no authentication.
-pub fn scan_hosts(prefix: Option<&str>) -> anyhow::Result<Vec<(String,u32)>> {
+/// local subnet. Returns `(ip, pc_name, kind)` triples where kind 3 means SMB
+/// reachable and 7 means NFS only. Pure port probe, no authentication.
+pub fn scan_hosts(prefix: Option<&str>) -> anyhow::Result<Vec<(String,String,u32)>> {
     let c_prefix=prefix.and_then(|p|CString::new(p).ok());
-    let mut results: Vec<(String,u32)> = Vec::new();
+    let mut results: Vec<(String,String,u32)> = Vec::new();
     let mut error=[0 as c_char;512];
     let prefix_ptr=c_prefix.as_deref().map_or(std::ptr::null(),|p|p.as_ptr());
     let count=unsafe{pic_smb_scan_hosts(prefix_ptr,receive_scan_host,

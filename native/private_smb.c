@@ -18,6 +18,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <fcntl.h>
+#include <netdb.h>
 
 static int trace_enabled(void);
 
@@ -88,10 +89,12 @@ int pic_smb_list(const char *uri, entry_callback cb, void *context, char *error,
 
 /* Automatic SMB/NFS server discovery on a subnet (e.g. "10.0.0"), or the
  * local subnet when prefix is empty/NULL. One batched non-blocking connect
- * pass for ports 445 and 2049; callbacks receive each live host's IP as kind
- * 3 (SMB reachable) or 7 (NFS only). Does not mount or authenticate, so it is
- * safe to run from the picker thread. */
-int pic_smb_scan_hosts(const char *prefix, entry_callback cb, void *context,
+ * pass for ports 445 and 2049; each reachable host's IP, kind (3 = SMB,
+ * 7 = NFS) and best-effort reverse-DNS PC name reach the callback. Does not
+ * mount or authenticate, so it is safe to run from the picker thread. */
+typedef int (*scan_host_callback)(void *context, const char *ip,
+                                  unsigned int kind, const char *hostname);
+int pic_smb_scan_hosts(const char *prefix, scan_host_callback cb, void *context,
                        char *error, size_t cap) {
     char base[24] = {0};
     if (prefix && prefix[0]) {
@@ -185,8 +188,30 @@ int pic_smb_scan_hosts(const char *prefix, entry_callback cb, void *context,
         if (!smb_up[index] && !nfs_up[index]) continue;
         char ip[16];
         snprintf(ip, sizeof ip, "%s%d", base, index);
-        if (cb(context, ip, smb_up[index] ? 3 : 7) != 0) break;
-        found++;
+        /* Best-effort PC name from reverse DNS (works for DHCP-registered
+         * Windows hosts and mDNS-resolving .local/.lan names). */
+        char hostname[NI_MAXHOST] = "";
+        struct sockaddr_in peer;
+        memset(&peer, 0, sizeof peer);
+        peer.sin_family = AF_INET;
+        peer.sin_port = 0;
+        if (inet_pton(AF_INET, ip, &peer.sin_addr) == 1) {
+            socklen_t peer_len = sizeof peer;
+            if (getnameinfo((struct sockaddr *)&peer, peer_len, hostname,
+                            sizeof hostname, NULL, 0, NI_NAMEREQD) != 0) {
+                hostname[0] = '\0';
+            }
+        }
+        /* Report one entry per open service: a host with both SMB and NFS
+         * advertises shares AND exports. */
+        if (smb_up[index]) {
+            if (cb(context, ip, 3, hostname[0] ? hostname : ip) != 0) break;
+            found++;
+        }
+        if (nfs_up[index]) {
+            if (cb(context, ip, 7, hostname[0] ? hostname : ip) != 0) break;
+            found++;
+        }
     }
     if (trace_enabled()) fprintf(stderr, "PIC_SMB_SCAN done hosts=%d base=%s\n", found, base);
     return found;
