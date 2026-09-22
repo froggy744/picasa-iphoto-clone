@@ -284,13 +284,18 @@ int main(int argc, char **argv) {
     char auto_prefix[24] = {0};
     if (scan_mode) {
         char prefix[24] = {0};
-        if (scan_prefix) snprintf(prefix, sizeof prefix, "%s", scan_prefix);
+        if (scan_prefix) {
+            snprintf(prefix, sizeof prefix, "%s", scan_prefix);
+            size_t length = strlen(prefix);
+            if (length && prefix[length - 1] != '.' && length + 1 < sizeof prefix)
+                strcat(prefix, ".");
+        }
         else if (detect_subnet_prefix(prefix, sizeof prefix) != 0) {
             fprintf(stderr, "Cannot detect the local subnet; pass one: %s --scan a.b.c\n", argv[0]);
             return 2;
         }
         if (strstr(prefix, ".")) snprintf(auto_prefix, sizeof auto_prefix, "%s", prefix);
-        fprintf(stderr, "Probing for SMB/NFS servers on %s.hosts (user=%s)\n",
+        fprintf(stderr, "Probing for SMB/NFS servers on %s0/24 (user=%s)\n",
                 auto_prefix[0] ? auto_prefix : prefix,
                 anonymous ? "<anonymous>" : (custom_user[0] ? custom_user : "<os-user/empty-pass>"));
         scan_subnet(auto_prefix[0] ? auto_prefix : prefix, max_depth, max_entries);

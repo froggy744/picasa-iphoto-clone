@@ -2,10 +2,15 @@
  * PIC private-NFS read probe. Read-only, no desktop/GVfs/kernel mount.
  * Fedora: sudo dnf install libnfs-devel gcc pkgconf-pkg-config
  * Build:  cc -O2 -Wall -Wextra pic-nfs-probe.c -o pic-nfs-probe $(pkg-config --cflags --libs libnfs)
- * Run:    ./pic-nfs-probe 3 10.0.0.1 /mnt/4TBP '/Other/Tat Sing/20190917_184453.jpg'
+ * Run:    ./pic-nfs-probe --exports 10.0.0.1
+ *         ./pic-nfs-probe --list 3 10.0.0.1 /mnt/4TBP /
+ *         ./pic-nfs-probe 3 10.0.0.1 /mnt/4TBP '/Other/Tat Sing/20190917_184453.jpg'
  *         ./pic-nfs-probe 4 10.0.0.1 / '/mnt/4TBP/Other/Tat Sing/20190917_184453.jpg'
  */
+#define _DEFAULT_SOURCE
+
 #include <nfsc/libnfs.h>
+#include <nfsc/libnfs-raw-mount.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -17,11 +22,73 @@ static void print_failure(struct nfs_context *nfs, const char *op, int rc) {
     const char *detail = nfs_get_error(nfs);
     fprintf(stderr, "%s: rc=%d; libnfs=%s\n", op, rc,
             (detail && *detail) ? detail : "<empty>");
+    if (rc == -5 || rc == -13) {
+        fprintf(stderr,
+                "NFS compatibility hint: if the NAS requires reserved client source ports, add the server-side 'insecure' export option; this probe is intentionally unprivileged.\n");
+    }
+}
+
+static int print_exports(const char *host) {
+    struct exportnode *exports = mount_getexports(host);
+    if (!exports) {
+        fprintf(stderr, "export discovery failed for %s\n", host);
+        return 1;
+    }
+    int count = 0;
+    for (struct exportnode *entry = exports; entry; entry = entry->ex_next) {
+        if (entry->ex_dir) {
+            puts(entry->ex_dir);
+            count++;
+        }
+    }
+    mount_free_export_list(exports);
+    fprintf(stderr, "EXPORTS OK: %d export(s)\n", count);
+    return count ? 0 : 1;
+}
+
+static int list_directory(const char *version_text, const char *host,
+                          const char *export_path, const char *path) {
+    struct nfs_context *nfs = nfs_init_context();
+    if (!nfs) return 1;
+    int version = atoi(version_text);
+    int rc = nfs_set_version(nfs, version);
+    if (rc == 0) rc = nfs_mount(nfs, host, export_path);
+    if (rc != 0) {
+        print_failure(nfs, "nfs_mount", rc);
+        nfs_destroy_context(nfs);
+        return 1;
+    }
+    struct nfsdir *dir = NULL;
+    rc = nfs_opendir(nfs, path, &dir);
+    if (rc != 0) {
+        print_failure(nfs, "nfs_opendir", rc);
+        nfs_destroy_context(nfs);
+        return 1;
+    }
+    int count = 0;
+    struct nfsdirent *entry;
+    while ((entry = nfs_readdir(nfs, dir)) != NULL) {
+        if (entry->name && strcmp(entry->name, ".") && strcmp(entry->name, "..")) {
+            printf("%c %s\n", entry->type == 2 ? 'd' : 'f', entry->name);
+            count++;
+        }
+    }
+    nfs_closedir(nfs, dir);
+    nfs_destroy_context(nfs);
+    fprintf(stderr, "LIST OK: %d entr%s\n", count, count == 1 ? "y" : "ies");
+    return 0;
 }
 
 int main(int argc, char **argv) {
+    if (argc == 3 && strcmp(argv[1], "--exports") == 0)
+        return print_exports(argv[2]);
+    if (argc == 6 && strcmp(argv[1], "--list") == 0 &&
+        (strcmp(argv[2], "3") == 0 || strcmp(argv[2], "4") == 0))
+        return list_directory(argv[2], argv[3], argv[4], argv[5]);
     if (argc != 5 || (strcmp(argv[1], "3") != 0 && strcmp(argv[1], "4") != 0)) {
-        fprintf(stderr, "usage: %s <3|4> <host> <export-to-mount> <file-path-inside-mount>\n", argv[0]);
+        fprintf(stderr, "usage: %s --exports <host>\n"
+                       "       %s --list <3|4> <host> <export> <directory>\n"
+                       "       %s <3|4> <host> <export> <file>\n", argv[0], argv[0], argv[0]);
         return 2;
     }
     struct nfs_context *nfs = nfs_init_context();

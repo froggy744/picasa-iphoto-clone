@@ -1,5 +1,7 @@
 /* Direct userspace NFS backend. nfs_mount is libnfs's session setup,
  * NOT a Linux kernel mount nor a GVfs mount. Read-only operations only. */
+#define _DEFAULT_SOURCE
+
 #include <stddef.h>
 #include <nfsc/libnfs.h>
 #include <nfsc/libnfs-raw.h>
@@ -111,7 +113,8 @@ static struct nfs_context *open_session(const char *host, const char *export_pat
                                      host, export_path, line);
         nfs_destroy_context(nfs);
     }
-    snprintf(error, cap, "NFS session failed host=%s export=%s; %.370s",
+    snprintf(error, cap,
+             "NFS session failed host=%s export=%s; %.250s; if the NAS requires reserved client source ports, add the server-side 'insecure' export option for this read-only export",
              host, export_path, attempts);
     return NULL;
 }

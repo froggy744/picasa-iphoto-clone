@@ -680,6 +680,14 @@ build_appimage() {
     chmod +x "$real_bin"
     write_runtime_launcher "$deployed_bin"
 
+    if find "$appdir" -type f -name 'pic-nfs-helper*' -print -quit | grep -q .; then
+        die "AppImage staging unexpectedly contains a separate NFS helper"
+    fi
+    if ldd "$real_bin" | grep -q 'libnfs'; then
+        find "$appdir" -type f -name 'libnfs.so*' -print -quit | grep -q . || \
+            die "AppImage is missing the libnfs runtime required by direct PIC NFS"
+    fi
+
     resource_root="$appdir/usr/share/$BIN_NAME"
     copy_runtime_resources "$resource_root"
 
@@ -776,9 +784,6 @@ EOF_CARGO
     "--filesystem=host",
     "--filesystem=xdg-data/picasa-rs:create",
     "--filesystem=xdg-cache/picasa-rs:create",
-    "--filesystem=xdg-run/gvfsd",
-    "--filesystem=xdg-run/gvfs",
-    "--talk-name=org.gtk.vfs.*",
     "--system-talk-name=org.freedesktop.Avahi"
   ],
   "build-options": {
@@ -859,6 +864,13 @@ EOF_MANIFEST
         "${download_args[@]}" \
         --repo="$fp_repo" \
         "$fp_build" "$manifest" || return 1
+
+    if find "$fp_build/files" -type f -name 'pic-nfs-helper*' -print -quit | grep -q .; then
+        die "Flatpak staging unexpectedly contains a separate NFS helper"
+    fi
+    if ! find "$fp_build/files" -type f -name 'libnfs.so*' -print -quit | grep -q .; then
+        die "Flatpak staging is missing the libnfs runtime required by direct PIC NFS"
+    fi
 
     bundle_name="PIC-${BUILD_LABEL}-${ARCH_NAME}.flatpak"
     rm -f "$DIST_DIR/$bundle_name"

@@ -320,6 +320,13 @@ mod tests {
     }
 
     #[test]
+    fn nfs_uris_use_the_private_direct_transport() {
+        assert!(private("nfs://10.0.0.1/mnt/4TBP"));
+        assert_eq!(normalize_input("nfs://10.0.0.1/mnt/4TBP"),
+                   Some("nfs://10.0.0.1/mnt/4TBP".into()));
+    }
+
+    #[test]
     fn normalizes_typed_addresses_to_canonical_smb_uris() {
         assert_eq!(normalize_input("Ella.local"), Some("smb://Ella.local/".into()));
         assert_eq!(
