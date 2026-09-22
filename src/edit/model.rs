@@ -313,6 +313,58 @@ impl OverlaySpec {
         let by_height = photo_height * aspect / photo_width;
         Self::MAX_WIDTH.min(by_height).max(Self::MIN_WIDTH)
     }
+
+    pub fn fit_to_width(&mut self, photo_width: f32, photo_height: f32, asset_aspect: f32) {
+        let photo_width = photo_width.max(1.0);
+        let photo_height = photo_height.max(1.0);
+        let aspect = if asset_aspect.is_finite() && asset_aspect > 1.0e-6 {
+            asset_aspect
+        } else {
+            1.0
+        };
+        let current = self.rect(photo_width, photo_height, aspect);
+        let centre_y = current.top + current.height * 0.5;
+        let height = Self::MAX_WIDTH * photo_width / photo_height / aspect;
+        let top = if height >= 1.0 {
+            (1.0 - height) * 0.5
+        } else {
+            (centre_y - height * 0.5).clamp(0.0, 1.0 - height)
+        };
+        self.set_rect(
+            NormRect {
+                left: 0.0,
+                top,
+                width: Self::MAX_WIDTH,
+                height,
+            },
+            photo_width,
+            photo_height,
+            asset_aspect,
+        );
+    }
+
+    pub fn fit_to_screen(&mut self, photo_width: f32, photo_height: f32, asset_aspect: f32) {
+        let photo_width = photo_width.max(1.0);
+        let photo_height = photo_height.max(1.0);
+        let aspect = if asset_aspect.is_finite() && asset_aspect > 1.0e-6 {
+            asset_aspect
+        } else {
+            1.0
+        };
+        let width = Self::max_fitting_width(photo_width, photo_height, aspect);
+        let height = width * photo_width / photo_height / aspect;
+        self.set_rect(
+            NormRect {
+                left: (1.0 - width) * 0.5,
+                top: (1.0 - height) * 0.5,
+                width,
+                height,
+            },
+            photo_width,
+            photo_height,
+            asset_aspect,
+        );
+    }
 }
 
 /// Compact JSON wire form for one overlay inside the edit-recipe string.
@@ -1056,5 +1108,33 @@ mod tests {
         // A very wide logo on a square photo is limited by photo width.
         let max = OverlaySpec::max_fitting_width(4000.0, 4000.0, 4.0);
         assert!((max - 1.0).abs() < 1e-5, "width bound applies: {max}");
+    }
+
+    #[test]
+    fn fit_to_width_spans_the_photo_and_keeps_vertical_centre() {
+        let mut overlay = OverlaySpec::new_centered("banner");
+        overlay.width = 0.2;
+        overlay.x = 0.5;
+        overlay.y = 0.75;
+        overlay.fit_to_width(1600.0, 900.0, 4.0);
+        let rect = overlay.rect(1600.0, 900.0, 4.0);
+        assert!(rect.left.abs() < 1e-5);
+        assert!((rect.right() - 1.0).abs() < 1e-5);
+        let centre_y = rect.top + rect.height * 0.5;
+        assert!((centre_y - 0.75).abs() < 1e-5);
+    }
+
+    #[test]
+    fn fit_to_screen_contains_the_overlay_and_centres_it() {
+        let mut overlay = OverlaySpec::new_centered("badge");
+        overlay.width = 0.9;
+        overlay.x = 0.2;
+        overlay.y = 0.2;
+        overlay.fit_to_screen(1600.0, 900.0, 0.5);
+        let rect = overlay.rect(1600.0, 900.0, 0.5);
+        assert!((rect.width - 0.28125).abs() < 1e-5);
+        assert!((rect.height - 1.0).abs() < 1e-5);
+        assert!((rect.left - (1.0 - 0.28125) * 0.5).abs() < 1e-5);
+        assert!(rect.top.abs() < 1e-5);
     }
 }

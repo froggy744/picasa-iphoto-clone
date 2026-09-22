@@ -74,7 +74,8 @@ Drop a PNG or JPG on top of your photo without touching the original file. Click
 The panel lists every overlay on the photo. Select one to adjust:
 
 - **Opacity** — fade the graphic in or out
-- **Anchor** — pin it to a corner or centre of the photo (placement stays correct when you crop)
+- **Anchor** — choose which point stays pinned while you resize (the handle sits on the opposite corner)
+- **Fit to Width / Fit to Screen** — stretch across the photo, or shrink until fully visible
 - **Reset Placement** — back to centre at full opacity
 - **Remove Overlay** — delete it from this photo
 

@@ -20,6 +20,7 @@ struct OverlayDragState {
     /// Overlay rectangle at drag begin, in normalized photo coordinates.
     start_rect: super::model::NormRect,
     start_index: usize,
+    anchor: super::model::OverlayAnchor,
     pan_origin_h: f64,
     pan_origin_v: f64,
 }
@@ -36,6 +37,7 @@ impl Default for OverlayDragState {
                 height: 0.0,
             },
             start_index: 0,
+            anchor: super::model::OverlayAnchor::Center,
             pan_origin_h: 0.0,
             pan_origin_v: 0.0,
         }
@@ -83,33 +85,46 @@ fn screen_to_normalized(display: (f64, f64, f64, f64), px: f64, py: f64) -> (f64
     )
 }
 
-/// True when the screen point sits within `radius` of the overlay's
-/// bottom-right resize handle (the only handle; resize is aspect-locked).
+fn resize_handle_point(rect: super::model::NormRect, anchor: OverlayAnchor) -> (f32, f32) {
+    match anchor {
+        OverlayAnchor::TopLeft => (rect.right(), rect.bottom()),
+        OverlayAnchor::TopRight => (rect.left, rect.bottom()),
+        OverlayAnchor::BottomLeft => (rect.right(), rect.top),
+        OverlayAnchor::BottomRight => (rect.left, rect.top),
+        OverlayAnchor::Center => (rect.right(), rect.bottom()),
+    }
+}
+
+/// True when the screen point sits within `radius` of the overlay's resize
+/// handle (the only handle; resize is aspect-locked around the anchor).
 fn hits_resize_handle(
     display: (f64, f64, f64, f64),
     rect: super::model::NormRect,
     px: f64,
     py: f64,
     radius: f64,
+    anchor: OverlayAnchor,
 ) -> bool {
     let (x, y, w, h) = display;
-    let handle_x = x + rect.right() as f64 * w;
-    let handle_y = y + rect.bottom() as f64 * h;
+    let (handle_norm_x, handle_norm_y) = resize_handle_point(rect, anchor);
+    let handle_x = x + handle_norm_x as f64 * w;
+    let handle_y = y + handle_norm_y as f64 * h;
     let dx = px - handle_x;
     let dy = py - handle_y;
     dx * dx + dy * dy <= radius * radius
 }
 
-/// Aspect-locked resize anchored at the rectangle's top-left corner: width
+/// Aspect-locked resize anchored at the rectangle's pinned corner: width
 /// follows the pointer, height is derived from the asset's pixel aspect and
 /// the photo's aspect, then both are clamped so the overlay stays inside the
 /// photo without shifting the fixed corner.
-fn resize_rect_from_top_left(
+fn resize_rect_from_anchor(
     start: super::model::NormRect,
     pointer_norm: (f64, f64),
     photo_w: f32,
     photo_h: f32,
     asset_aspect: f32,
+    anchor: OverlayAnchor,
 ) -> super::model::NormRect {
     let photo_w = photo_w.max(1.0e-6);
     let photo_h = photo_h.max(1.0e-6);
@@ -118,18 +133,41 @@ fn resize_rect_from_top_left(
     } else {
         1.0
     };
-    let max_width = 1.0 - start.left;
-    let desired_width =
-        (pointer_norm.0 as f32 - start.left).clamp(OverlaySpec::MIN_WIDTH, max_width);
+    let px = pointer_norm.0 as f32;
+    let center_x = start.left + start.width * 0.5;
+    let center_y = start.top + start.height * 0.5;
+    let max_width = match anchor {
+        OverlayAnchor::TopLeft | OverlayAnchor::BottomLeft => 1.0 - start.left,
+        OverlayAnchor::TopRight | OverlayAnchor::BottomRight => start.right(),
+        OverlayAnchor::Center => center_x.min(1.0 - center_x) * 2.0,
+    }
+    .max(OverlaySpec::MIN_WIDTH);
+    let desired_width = match anchor {
+        OverlayAnchor::TopLeft | OverlayAnchor::BottomLeft => px - start.left,
+        OverlayAnchor::TopRight | OverlayAnchor::BottomRight => start.right() - px,
+        OverlayAnchor::Center => (px - center_x).abs() * 2.0,
+    }
+    .clamp(OverlaySpec::MIN_WIDTH, max_width);
     // Height in normalized units for a photo-width fraction `desired_width`.
     let height_for_width = desired_width * photo_w / photo_h / aspect;
-    let max_height = 1.0 - start.top;
+    let max_height = match anchor {
+        OverlayAnchor::TopLeft | OverlayAnchor::TopRight => 1.0 - start.top,
+        OverlayAnchor::BottomLeft | OverlayAnchor::BottomRight => start.bottom(),
+        OverlayAnchor::Center => center_y.min(1.0 - center_y) * 2.0,
+    };
     let height = height_for_width.min(max_height).max(OverlaySpec::MIN_WIDTH);
     // Re-derive width so a height-clamped size keeps the same pixel aspect.
     let width = (height * photo_h * aspect / photo_w).clamp(OverlaySpec::MIN_WIDTH, max_width);
+    let (left, top) = match anchor {
+        OverlayAnchor::TopLeft => (start.left, start.top),
+        OverlayAnchor::TopRight => (start.right() - width, start.top),
+        OverlayAnchor::BottomLeft => (start.left, start.bottom() - height),
+        OverlayAnchor::BottomRight => (start.right() - width, start.bottom() - height),
+        OverlayAnchor::Center => (center_x - width * 0.5, center_y - height * 0.5),
+    };
     super::model::NormRect {
-        left: start.left,
-        top: start.top,
+        left,
+        top,
         width,
         height,
     }
@@ -373,12 +411,15 @@ fn configure_overlay_canvas(
             let _ = context.rectangle(x, y, w, h);
             let _ = context.stroke();
             let handle = OVERLAY_HANDLE_RADIUS;
+            let (handle_norm_x, handle_norm_y) = resize_handle_point(rect, overlay.anchor);
+            let handle_x = dx + handle_norm_x as f64 * dw - handle;
+            let handle_y = dy + handle_norm_y as f64 * dh - handle;
             let _ = context.set_source_rgba(1.0, 1.0, 1.0, 0.95);
-            let _ = context.rectangle(x + w - handle, y + h - handle, handle * 2.0, handle * 2.0);
+            let _ = context.rectangle(handle_x, handle_y, handle * 2.0, handle * 2.0);
             let _ = context.fill();
             let _ = context.set_source_rgba(0.25, 0.62, 1.0, 1.0);
             let _ = context.set_line_width(1.5);
-            let _ = context.rectangle(x + w - handle, y + h - handle, handle * 2.0, handle * 2.0);
+            let _ = context.rectangle(handle_x, handle_y, handle * 2.0, handle * 2.0);
             let _ = context.stroke();
             let _ = context.restore();
         });
@@ -436,13 +477,16 @@ fn configure_overlay_canvas(
                             start_x,
                             start_y,
                             OVERLAY_HANDLE_RADIUS,
+                            overlay.anchor,
                         ) {
+                            let anchor = overlay.anchor;
                             drop(recipe);
                             drag_state.replace(OverlayDragState {
                                 mode: OverlayDragMode::Resize,
                                 start_norm,
                                 start_rect: rect,
                                 start_index: index,
+                                anchor,
                                 pan_origin_h: 0.0,
                                 pan_origin_v: 0.0,
                             });
@@ -473,20 +517,25 @@ fn configure_overlay_canvas(
             match hit {
                 Some(index) => {
                     selected.set(Some(index));
-                    let start_rect = {
+                    let (start_rect, anchor) = {
                         let recipe = session.borrow();
-                        recipe
-                            .recipe
-                            .overlays
-                            .get(index)
+                        let overlay = recipe.recipe.overlays.get(index);
+                        let rect = overlay
                             .and_then(|overlay| overlay_norm_rect(overlay, photo_w, photo_h))
-                            .unwrap_or_default_for_test()
+                            .unwrap_or_default_for_test();
+                        (
+                            rect,
+                            overlay
+                                .map(|overlay| overlay.anchor)
+                                .unwrap_or(OverlayAnchor::Center),
+                        )
                     };
                     drag_state.replace(OverlayDragState {
                         mode: OverlayDragMode::Move,
                         start_norm,
                         start_rect,
                         start_index: index,
+                        anchor,
                         pan_origin_h: 0.0,
                         pan_origin_v: 0.0,
                     });
@@ -506,6 +555,7 @@ fn configure_overlay_canvas(
                             height: 0.0,
                         },
                         start_index: 0,
+                        anchor: OverlayAnchor::Center,
                         pan_origin_h: hadj,
                         pan_origin_v: vadj,
                     });
@@ -563,12 +613,13 @@ fn configure_overlay_canvas(
                             return;
                         };
                         let rect = if state.mode == OverlayDragMode::Resize {
-                            resize_rect_from_top_left(
+                            resize_rect_from_anchor(
                                 state.start_rect,
                                 pointer_norm,
                                 photo_w,
                                 photo_h,
                                 aspect,
+                                state.anchor,
                             )
                         } else {
                             move_rect(state.start_rect, state.start_norm, pointer_norm)
@@ -723,6 +774,22 @@ fn build_overlays_panel(
         anchor_buttons.push((anchor, button));
     }
     selected_section.append(&anchor_row);
+
+    let fit_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    fit_row.set_margin_top(6);
+    let fit_width = gtk::Button::with_label("Fit to Width");
+    fit_width.set_hexpand(true);
+    fit_width.set_tooltip_text(Some("Stretch this overlay across the full photo width"));
+    fit_width.add_css_class("crop-reset-button");
+    let fit_screen = gtk::Button::with_label("Fit to Screen");
+    fit_screen.set_hexpand(true);
+    fit_screen.set_tooltip_text(Some(
+        "Scale this overlay down until it fits entirely inside the photo",
+    ));
+    fit_screen.add_css_class("crop-reset-button");
+    fit_row.append(&fit_width);
+    fit_row.append(&fit_screen);
+    selected_section.append(&fit_row);
 
     let action_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     action_row.set_margin_top(6);
@@ -941,6 +1008,48 @@ fn build_overlays_panel(
                         photo_h.max(1) as f32,
                         aspect,
                     ));
+                }
+            });
+            update_history_buttons();
+            sync();
+        });
+    }
+    {
+        let session = session.clone();
+        let selected = selected.clone();
+        let update_history_buttons = update_history_buttons.clone();
+        let sync = sync.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        fit_width.connect_clicked(move |_| {
+            let Some(index) = selected.get() else {
+                return;
+            };
+            let (photo_w, photo_h) = preview_dimensions.get();
+            session.borrow_mut().mutate(move |recipe| {
+                if let Some(overlay) = recipe.overlays.get_mut(index) {
+                    let aspect = asset_aspect(&overlay.asset).unwrap_or(1.0);
+                    overlay.fit_to_width(photo_w.max(1) as f32, photo_h.max(1) as f32, aspect);
+                }
+            });
+            update_history_buttons();
+            sync();
+        });
+    }
+    {
+        let session = session.clone();
+        let selected = selected.clone();
+        let update_history_buttons = update_history_buttons.clone();
+        let sync = sync.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        fit_screen.connect_clicked(move |_| {
+            let Some(index) = selected.get() else {
+                return;
+            };
+            let (photo_w, photo_h) = preview_dimensions.get();
+            session.borrow_mut().mutate(move |recipe| {
+                if let Some(overlay) = recipe.overlays.get_mut(index) {
+                    let aspect = asset_aspect(&overlay.asset).unwrap_or(1.0);
+                    overlay.fit_to_screen(photo_w.max(1) as f32, photo_h.max(1) as f32, aspect);
                 }
             });
             update_history_buttons();
@@ -1175,20 +1284,43 @@ mod overlay_geometry_tests {
     fn resize_handle_hit_test_uses_a_screen_space_radius() {
         let display = (0.0, 0.0, 400.0, 400.0);
         let overlay_rect = rect(0.5, 0.5, 0.25, 0.25);
-        assert!(hits_resize_handle(display, overlay_rect, 305.0, 296.0, 9.0));
+        assert!(hits_resize_handle(
+            display,
+            overlay_rect,
+            305.0,
+            296.0,
+            9.0,
+            OverlayAnchor::TopLeft
+        ));
         assert!(!hits_resize_handle(
             display,
             overlay_rect,
             320.0,
             300.0,
-            9.0
+            9.0,
+            OverlayAnchor::TopLeft
+        ));
+        assert!(hits_resize_handle(
+            display,
+            overlay_rect,
+            204.0,
+            197.0,
+            9.0,
+            OverlayAnchor::BottomRight
         ));
     }
 
     #[test]
     fn resize_keeps_the_top_left_corner_and_asset_aspect() {
         let start = rect(0.25, 0.25, 0.2, 0.1);
-        let resized = resize_rect_from_top_left(start, (0.65, 0.9), 800.0, 600.0, 1.0);
+        let resized = resize_rect_from_anchor(
+            start,
+            (0.65, 0.9),
+            800.0,
+            600.0,
+            1.0,
+            OverlayAnchor::TopLeft,
+        );
         assert!((resized.left - 0.25).abs() < 1e-6);
         assert!((resized.top - 0.25).abs() < 1e-6);
         let expected_height = resized.width * 800.0 / 600.0;
@@ -1205,12 +1337,61 @@ mod overlay_geometry_tests {
     #[test]
     fn resize_clamps_to_the_photo_edge_without_moving_the_fixed_corner() {
         let start = rect(0.8, 0.8, 0.05, 0.05);
-        let resized = resize_rect_from_top_left(start, (5.0, 5.0), 1000.0, 500.0, 2.0);
+        let resized = resize_rect_from_anchor(
+            start,
+            (5.0, 5.0),
+            1000.0,
+            500.0,
+            2.0,
+            OverlayAnchor::TopLeft,
+        );
         assert!((resized.left - 0.8).abs() < 1e-6);
         assert!((resized.top - 0.8).abs() < 1e-6);
         assert!(resized.right() <= 1.0 + 1e-5);
         assert!(resized.bottom() <= 1.0 + 1e-5);
         assert!(resized.width >= OverlaySpec::MIN_WIDTH - 1e-6);
+    }
+
+    #[test]
+    fn resize_with_bottom_right_anchor_keeps_that_corner_fixed() {
+        let start = rect(0.25, 0.25, 0.2, 0.2);
+        let resized = resize_rect_from_anchor(
+            start,
+            (0.05, 0.1),
+            800.0,
+            600.0,
+            1.0,
+            OverlayAnchor::BottomRight,
+        );
+        assert!((resized.right() - start.right()).abs() < 1e-6);
+        assert!((resized.bottom() - start.bottom()).abs() < 1e-6);
+        let expected_height = resized.width * 800.0 / 600.0;
+        assert!((resized.height - expected_height).abs() < 1e-5);
+        assert!(resized.left >= -1e-6);
+        assert!(resized.top >= -1e-6);
+    }
+
+    #[test]
+    fn resize_with_center_anchor_keeps_the_centre_fixed() {
+        let start = rect(0.4, 0.4, 0.2, 0.2);
+        let resized = resize_rect_from_anchor(
+            start,
+            (0.9, 0.5),
+            1000.0,
+            1000.0,
+            1.0,
+            OverlayAnchor::Center,
+        );
+        let before = (
+            start.left + start.width * 0.5,
+            start.top + start.height * 0.5,
+        );
+        let after = (
+            resized.left + resized.width * 0.5,
+            resized.top + resized.height * 0.5,
+        );
+        assert!((after.0 - before.0).abs() < 1e-6);
+        assert!((after.1 - before.1).abs() < 1e-6);
     }
 
     #[test]
