@@ -94,6 +94,184 @@ fn unfocus_submenu(popover: &gtk::Popover) {
     }
 }
 
+const BULK_RECIPE_CHUNK: usize = 64;
+
+enum BulkRecipePlan {
+    Fixed(String),
+    LayersOnly(String),
+    Reset,
+}
+
+impl BulkRecipePlan {
+    fn operation_name(&self) -> &'static str {
+        match self {
+            Self::Fixed(_) => "Applying edits",
+            Self::LayersOnly(_) => "Applying text & overlays",
+            Self::Reset => "Resetting edits",
+        }
+    }
+}
+
+struct BulkRecipeState {
+    context: PhotoActionContext,
+    plan: BulkRecipePlan,
+    ids: Vec<i64>,
+    index: usize,
+    failed: usize,
+    touched_selected: bool,
+    refresh_grid_when_done: bool,
+    last_filename: String,
+}
+
+/// Apply recipe changes to many photos without blocking the GTK main loop.
+///
+/// Work is sliced into small chunks; each chunk commits one SQLite
+/// transaction and does one batched gallery/lightbox refresh, then yields
+/// back to the event loop so GNOME never sees the app as hung. Progress is
+/// reported through the shared top-notification bar (throttled there).
+fn start_bulk_recipe_update(
+    context: &PhotoActionContext,
+    plan: BulkRecipePlan,
+    ids: Vec<i64>,
+    refresh_grid_when_done: bool,
+) {
+    if ids.is_empty() {
+        return;
+    }
+    let name = plan.operation_name();
+    let total = ids.len();
+    context.operation_progress.begin(name, total);
+    let state = Rc::new(RefCell::new(Some(BulkRecipeState {
+        context: context.clone(),
+        plan,
+        ids,
+        index: 0,
+        failed: 0,
+        touched_selected: false,
+        refresh_grid_when_done,
+        last_filename: String::new(),
+    })));
+    glib::timeout_add_local(Duration::from_millis(1), move || {
+        let Some(mut work) = state.borrow_mut().take() else {
+            return glib::ControlFlow::Break;
+        };
+        run_bulk_recipe_chunk(&mut work);
+        let finished = work.index >= work.ids.len();
+        work.context.operation_progress.update(
+            name,
+            work.index.min(total),
+            total,
+            &work.last_filename,
+            work.failed,
+        );
+        if finished {
+            finish_bulk_recipe(work, name, total);
+            return glib::ControlFlow::Break;
+        }
+        *state.borrow_mut() = Some(work);
+        glib::ControlFlow::Continue
+    });
+}
+
+fn run_bulk_recipe_chunk(work: &mut BulkRecipeState) {
+    let end = (work.index + BULK_RECIPE_CHUNK).min(work.ids.len());
+    let chunk_ids = work.ids[work.index..end].to_vec();
+    if chunk_ids.is_empty() {
+        work.index = end;
+        return;
+    }
+
+    let mut updates: Vec<(i64, String)> = Vec::with_capacity(chunk_ids.len());
+    match &work.plan {
+        BulkRecipePlan::Fixed(recipe) => {
+            for id in &chunk_ids {
+                updates.push((*id, recipe.clone()));
+            }
+        }
+        BulkRecipePlan::Reset => {
+            for id in &chunk_ids {
+                updates.push((*id, String::new()));
+            }
+        }
+        BulkRecipePlan::LayersOnly(clipboard) => {
+            for id in &chunk_ids {
+                match db::photo(&work.context.connection.borrow(), *id) {
+                    Ok(Some(item)) => {
+                        if let Some(path) = std::path::Path::new(&item.path).file_name() {
+                            if let Some(name) = path.to_str() {
+                                work.last_filename = name.to_string();
+                            }
+                        }
+                        updates.push((
+                            *id,
+                            crate::edit::model::paste_layers_only(&item.edit_recipe, clipboard),
+                        ));
+                    }
+                    Ok(None) => work.failed += 1,
+                    Err(_) => work.failed += 1,
+                }
+            }
+        }
+    }
+
+    if !updates.is_empty() {
+        if let Err(error) = db::set_edit_recipes(&work.context.connection.borrow(), &updates) {
+            work.failed = work.failed.saturating_add(updates.len());
+            eprintln!("Could not apply bulk edit recipes: {error:#}");
+        } else {
+            if let Some(gallery) = work.context.gallery.borrow().upgrade() {
+                gallery.update_edit_recipes_batch(&updates);
+            }
+            if let Some(lightbox) = work.context.lightbox.upgrade() {
+                lightbox.update_edit_recipes_batch(&updates);
+            }
+            let selected_id = work
+                .context
+                .selected_photo
+                .borrow()
+                .as_ref()
+                .map(|photo| photo.id());
+            for (id, recipe) in &updates {
+                if selected_id == Some(*id) {
+                    if let Some(selected) = work.context.selected_photo.borrow().as_ref().cloned()
+                    {
+                        selected.set_edit_recipe(recipe.clone());
+                        work.context.selected_photo.replace(Some(selected));
+                        work.touched_selected = true;
+                    }
+                }
+            }
+        }
+    }
+
+    work.index = end;
+}
+
+fn finish_bulk_recipe(work: BulkRecipeState, name: &'static str, total: usize) {
+    if let Some(lightbox) = work.context.lightbox.upgrade() {
+        lightbox.refresh_current();
+    }
+    if work.touched_selected {
+        if let Some(selected) = work.context.selected_photo.borrow().as_ref().cloned() {
+            work.context.info.set_photo(Some(&selected));
+        }
+    }
+    if work.refresh_grid_when_done {
+        refresh_photo_actions_grid(&work.context);
+    }
+    let succeeded = total.saturating_sub(work.failed);
+    let summary = if work.failed == 0 {
+        match name {
+            "Resetting edits" => format!("Edits reset on {total} photos"),
+            "Applying text & overlays" => format!("Text & overlays applied to {total} photos"),
+            _ => format!("Edits applied to {total} photos"),
+        }
+    } else {
+        format!("{succeeded} / {total} photos updated · {} failed", work.failed)
+    };
+    work.context.operation_progress.finish(name, &summary);
+}
+
 fn show_photo_context_menu(
     photo: crate::photo_object::PhotoObject,
     anchor: gtk::Widget,
@@ -253,12 +431,9 @@ fn show_photo_context_menu(
                 !decoded.overlays.is_empty() || !decoded.text_layers.is_empty()
             }),
     );
-    reset_edits.set_sensitive(clicked_is_edited || selection_ids.iter().any(|id| {
-        db::photo(&context.connection.borrow(), *id)
-            .ok()
-            .flatten()
-            .is_some_and(|item| !crate::edit::EditRecipe::decode(&item.edit_recipe).is_default())
-    }));
+    reset_edits.set_sensitive(clicked_is_edited || {
+        db::any_edited(&context.connection.borrow(), &selection_ids).unwrap_or(false)
+    });
 
     {
         let clipboard = context.edit_clipboard.clone();
@@ -273,123 +448,48 @@ fn show_photo_context_menu(
         let paste_context = context.clone();
         let paste_selection = selection_ids.clone();
         let dismiss_menu = dismiss_menu.clone();
-        paste_edits.connect_clicked(move |button| {
+        paste_edits.connect_clicked(move |_| {
             let Some(recipe) = paste_context.edit_clipboard.borrow().clone() else {
                 return;
             };
-            for id in &paste_selection {
-                if let Err(error) = db::set_edit_recipe(&paste_context.connection.borrow(), *id, &recipe) {
-                    show_error(button.upcast_ref(), "Could not paste edits", &error.to_string());
-                    return;
-                }
-                if let Some(gallery) = paste_context.gallery.borrow().upgrade() {
-                    gallery.update_edit_recipe(*id, &recipe);
-                }
-                let selected = {
-                    paste_context.selected_photo.borrow().as_ref().cloned()
-                };
-                if let Some(selected) = selected {
-                    if selected.id() == *id {
-                        selected.set_edit_recipe(recipe.clone());
-                        paste_context.selected_photo.replace(Some(selected.clone()));
-                        paste_context.info.set_photo(Some(&selected));
-                    }
-                }
-                if let Some(lightbox) = paste_context.lightbox.upgrade() {
-                    lightbox.update_edit_recipe(*id, &recipe);
-                }
-            }
-            if let Some(lightbox) = paste_context.lightbox.upgrade() {
-                lightbox.refresh_current();
-            }
             dismiss_menu();
+            start_bulk_recipe_update(
+                &paste_context,
+                BulkRecipePlan::Fixed(recipe),
+                paste_selection.clone(),
+                false,
+            );
         });
     }
     {
         let paste_context = context.clone();
         let paste_selection = selection_ids.clone();
         let dismiss_menu = dismiss_menu.clone();
-        paste_overlays.connect_clicked(move |button| {
+        paste_overlays.connect_clicked(move |_| {
             let Some(clipboard) = paste_context.edit_clipboard.borrow().clone() else {
                 return;
             };
-            for id in &paste_selection {
-                let destination = match db::photo(&paste_context.connection.borrow(), *id) {
-                    Ok(Some(item)) => item.edit_recipe,
-                    Ok(None) => continue,
-                    Err(error) => {
-                        show_error(
-                            button.upcast_ref(),
-                            "Could not paste text or overlays",
-                            &error.to_string(),
-                        );
-                        return;
-                    }
-                };
-                let recipe = crate::edit::model::paste_layers_only(&destination, &clipboard);
-                if let Err(error) =
-                    db::set_edit_recipe(&paste_context.connection.borrow(), *id, &recipe)
-                {
-                    show_error(
-                        button.upcast_ref(),
-                        "Could not paste text or overlays",
-                        &error.to_string(),
-                    );
-                    return;
-                }
-                if let Some(gallery) = paste_context.gallery.borrow().upgrade() {
-                    gallery.update_edit_recipe(*id, &recipe);
-                }
-                let selected = { paste_context.selected_photo.borrow().as_ref().cloned() };
-                if let Some(selected) = selected {
-                    if selected.id() == *id {
-                        selected.set_edit_recipe(recipe.clone());
-                        paste_context.selected_photo.replace(Some(selected.clone()));
-                        paste_context.info.set_photo(Some(&selected));
-                    }
-                }
-                if let Some(lightbox) = paste_context.lightbox.upgrade() {
-                    lightbox.update_edit_recipe(*id, &recipe);
-                }
-            }
-            if let Some(lightbox) = paste_context.lightbox.upgrade() {
-                lightbox.refresh_current();
-            }
             dismiss_menu();
+            start_bulk_recipe_update(
+                &paste_context,
+                BulkRecipePlan::LayersOnly(clipboard),
+                paste_selection.clone(),
+                false,
+            );
         });
     }
     {
         let reset_context = context.clone();
         let reset_selection = selection_ids.clone();
         let dismiss_menu = dismiss_menu.clone();
-        reset_edits.connect_clicked(move |button| {
-            for id in &reset_selection {
-                if let Err(error) = db::set_edit_recipe(&reset_context.connection.borrow(), *id, "") {
-                    show_error(button.upcast_ref(), "Could not reset edits", &error.to_string());
-                    return;
-                }
-                if let Some(gallery) = reset_context.gallery.borrow().upgrade() {
-                    gallery.update_edit_recipe(*id, "");
-                }
-                let selected = {
-                    reset_context.selected_photo.borrow().as_ref().cloned()
-                };
-                if let Some(selected) = selected {
-                    if selected.id() == *id {
-                        selected.set_edit_recipe(String::new());
-                        reset_context.selected_photo.replace(Some(selected.clone()));
-                        reset_context.info.set_photo(Some(&selected));
-                    }
-                }
-                if let Some(lightbox) = reset_context.lightbox.upgrade() {
-                    lightbox.update_edit_recipe(*id, "");
-                }
-            }
-            if let Some(lightbox) = reset_context.lightbox.upgrade() {
-                lightbox.refresh_current();
-            }
+        reset_edits.connect_clicked(move |_| {
             dismiss_menu();
-            refresh_photo_actions_grid(&reset_context);
+            start_bulk_recipe_update(
+                &reset_context,
+                BulkRecipePlan::Reset,
+                reset_selection.clone(),
+                true,
+            );
         });
     }
 
@@ -1398,6 +1498,7 @@ mod photo_actions_tests {
             edit_clipboard: Rc::new(RefCell::new(None)),
             window: glib::WeakRef::new(),
             context_menu_host: Rc::new(RefCell::new(None)),
+            operation_progress: OperationProgressUi::new(),
         };
 
         let popover = build_album_popover(
@@ -1483,6 +1584,7 @@ mod photo_actions_tests {
             edit_clipboard: Rc::new(RefCell::new(None)),
             window: glib::WeakRef::new(),
             context_menu_host: Rc::new(RefCell::new(Some(overlay.clone().downgrade()))),
+            operation_progress: OperationProgressUi::new(),
         };
 
         // Inside the album the action targets the album being viewed, with no

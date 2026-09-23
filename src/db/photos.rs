@@ -657,6 +657,48 @@ pub fn set_edit_recipe(connection: &Connection, id: i64, recipe: &str) -> Result
     Ok(())
 }
 
+pub fn set_edit_recipes(connection: &Connection, updates: &[(i64, String)]) -> Result<()> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+    let transaction = connection.unchecked_transaction()?;
+    for (id, recipe) in updates {
+        transaction.execute(
+            "UPDATE photos SET edit_recipe = ?1 WHERE id = ?2",
+            params![recipe, id],
+        )?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn any_edited(connection: &Connection, ids: &[i64]) -> Result<bool> {
+    if ids.is_empty() {
+        return Ok(false);
+    }
+    for chunk in ids.chunks(500) {
+        let placeholders = (0..chunk.len())
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT 1 FROM photos WHERE id IN ({placeholders}) AND edit_recipe != '' LIMIT 1"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let found = statement
+            .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                row.get::<_, i64>(0)
+            })?
+            .next()
+            .transpose()?
+            .is_some();
+        if found {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn set_rotation(connection: &Connection, id: i64, rotation: i32) -> Result<()> {
     let normalized = rotation.rem_euclid(360);
     if ![0, 90, 180, 270].contains(&normalized) {

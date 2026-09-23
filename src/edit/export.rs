@@ -15,11 +15,14 @@ fn connect_export_action(
             Some("Export"),
             Some("Cancel"),
         );
-        let filename = std::path::Path::new(&photo.filename())
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .map(|stem| format!("{stem}-edited.jpg"))
-            .unwrap_or_else(|| "export-edited.jpg".to_string());
+        let filename = {
+            let original = photo.filename();
+            let edited = {
+                let recipe = session.borrow().recipe.encode();
+                super::export_batch::recipe_is_edited(&recipe)
+            };
+            super::export_batch::export_file_name(&original, edited)
+        };
         dialog.set_current_name(&filename);
 
         let reference = photo.path();

@@ -1010,4 +1010,85 @@ mod tests {
         assert_eq!(loaded.name, "Spar ladies 20");
         assert_eq!(loaded.path, path);
     }
+
+    #[test]
+    fn bulk_set_edit_recipes_applies_to_every_id_and_any_edited_detects_them() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection
+            .execute(
+                "INSERT INTO folders(path, name) VALUES ('/photos', 'Photos')",
+                [],
+            )
+            .unwrap();
+        for index in 0..120 {
+            connection
+                .execute(
+                    "INSERT INTO photos(path, folder_id, edit_recipe, trashed)
+                     VALUES (?1, 1, '', 0)",
+                    rusqlite::params![format!("/photos/img-{index:03}.jpg")],
+                )
+                .unwrap();
+        }
+        let ids: Vec<i64> = connection
+            .prepare("SELECT id FROM photos ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert_eq!(ids.len(), 120);
+        assert!(!any_edited(&connection, &ids).unwrap());
+
+        let recipe = "v=1|exposure=0.5000".to_string();
+        let updates: Vec<(i64, String)> = ids
+            .iter()
+            .map(|id| (*id, recipe.clone()))
+            .collect();
+        set_edit_recipes(&connection, &updates).unwrap();
+
+        for id in &ids {
+            let stored: String = connection
+                .query_row(
+                    "SELECT edit_recipe FROM photos WHERE id = ?1",
+                    [*id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored, recipe);
+        }
+        assert!(any_edited(&connection, &ids).unwrap());
+        assert!(!any_edited(&connection, &[]).unwrap());
+    }
+
+    #[test]
+    fn bulk_set_edit_recipes_can_reset_every_photo() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection
+            .execute(
+                "INSERT INTO folders(path, name) VALUES ('/photos', 'Photos')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO photos(path, folder_id, edit_recipe, trashed)
+                 VALUES ('/photos/a.jpg', 1, 'v=1|exposure=0.5000', 0)",
+                [],
+            )
+            .unwrap();
+        let id: i64 = connection
+            .query_row("SELECT id FROM photos", [], |row| row.get(0))
+            .unwrap();
+        assert!(any_edited(&connection, &[id]).unwrap());
+        set_edit_recipes(&connection, &[(id, String::new())]).unwrap();
+        let stored: String = connection
+            .query_row("SELECT edit_recipe FROM photos WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, "");
+        assert!(!any_edited(&connection, &[id]).unwrap());
+    }
 }

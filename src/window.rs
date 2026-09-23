@@ -463,8 +463,10 @@ struct PhotoActionContext {
     edit_clipboard: Rc<RefCell<Option<String>>>,
     window: glib::WeakRef<gtk::Window>,
     context_menu_host: Rc<RefCell<Option<glib::WeakRef<gtk::Overlay>>>>,
+    operation_progress: Rc<OperationProgressUi>,
 }
 
+include!("window/operation_progress.rs");
 include!("window/build.rs");
 
 /// Folder scrollbar-scrub sampling state.

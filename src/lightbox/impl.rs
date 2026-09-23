@@ -1103,8 +1103,19 @@ impl Lightbox {
     /// that lands while the viewer is open re-renders the stale recipe until
     /// the photo is closed and reopened.
     pub fn update_edit_recipe(&self, id: i64, recipe: &str) {
+        self.update_edit_recipes_batch(&[(id, recipe.to_string())]);
+    }
+
+    pub fn update_edit_recipes_batch(&self, updates: &[(i64, String)]) {
+        if updates.is_empty() {
+            return;
+        }
+        let wanted: std::collections::HashMap<i64, &str> = updates
+            .iter()
+            .map(|(id, recipe)| (*id, recipe.as_str()))
+            .collect();
         for photo in self.photos.borrow().iter() {
-            if photo.id() == id {
+            if let Some(recipe) = wanted.get(&photo.id()) {
                 photo.set_edit_recipe(recipe.to_string());
             }
         }

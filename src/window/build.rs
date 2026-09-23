@@ -381,6 +381,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     };
     let context_menu_host: Rc<RefCell<Option<glib::WeakRef<gtk::Overlay>>>> =
         Rc::new(RefCell::new(None));
+    let operation_progress = OperationProgressUi::new();
     let action_context = PhotoActionContext {
         connection: connection.clone(),
         gallery: gallery_for_actions.clone(),
@@ -409,6 +410,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         },
         window: window.clone().upcast::<gtk::Window>().downgrade(),
         context_menu_host: context_menu_host.clone(),
+        operation_progress: operation_progress.clone(),
     };
     let saved_grid_thumbnail_size = grid_thumbnail_size_from_setting(&connection.borrow());
 
@@ -1334,6 +1336,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let refresh_status_stop = gtk::Button::with_label("Stop");
     refresh_status_box.append(&refresh_status_stop);
     content.append(&refresh_status_box);
+    content.append(operation_progress.root());
 
     let grid_scroll = gtk::ScrolledWindow::new();
     grid_scroll.set_vexpand(true);
@@ -2429,64 +2432,283 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         
     });
 
+fn show_photo_export_dialog(
+    window: &gtk::Window,
+    jobs: Vec<crate::edit::export_batch::ExportJob>,
+    progress: Rc<OperationProgressUi>,
+) {
+    let dialog = gtk::Dialog::new();
+    if jobs.len() == 1 {
+        dialog.set_title(Some("Export Photo"));
+    } else {
+        dialog.set_title(Some("Export Photos"));
+    }
+    dialog.set_transient_for(Some(window));
+    dialog.set_modal(true);
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    let export_button = dialog.add_button("Export", gtk::ResponseType::Ok);
+    export_button.add_css_class("suggested-action");
+    dialog.set_default_response(gtk::ResponseType::Ok);
+
+    let content = dialog.content_area();
+    content.set_spacing(12);
+    content.set_margin_top(18);
+    content.set_margin_bottom(6);
+    content.set_margin_start(18);
+    content.set_margin_end(18);
+
+    let grid = gtk::Grid::new();
+    grid.set_row_spacing(12);
+    grid.set_column_spacing(12);
+
+    if jobs.len() > 1 {
+        let count = gtk::Label::new(Some(&format!("{} photos selected", jobs.len())));
+        count.set_xalign(0.0);
+        grid.attach(&count, 0, 0, 2, 1);
+    }
+
+    let size_label = gtk::Label::new(Some("Size"));
+    size_label.set_xalign(0.0);
+    let size = gtk::DropDown::from_strings(&[
+        "Original size",
+        "4K (3840 px)",
+        "2048 px",
+        "Full HD (1920 px)",
+        "HD (1280 px)",
+    ]);
+    size.set_selected(0);
+    let size_row = if jobs.len() > 1 { 1 } else { 0 };
+    grid.attach(&size_label, 0, size_row, 1, 1);
+    grid.attach(&size, 1, size_row, 1, 1);
+    content.append(&grid);
+
+    {
+        let dialog_for_response = dialog.clone();
+        let window = window.clone();
+        let size = size.clone();
+        dialog.connect_response(move |_, response| {
+            if response != gtk::ResponseType::Ok {
+                dialog_for_response.destroy();
+                return;
+            }
+            let max_edge = match size.selected() {
+                1 => 3840,
+                2 => 2048,
+                3 => 1920,
+                4 => 1280,
+                _ => 0,
+            };
+            dialog_for_response.destroy();
+            choose_photo_export_destination(&window, jobs.clone(), max_edge, progress.clone());
+        });
+    }
+    dialog.show();
+}
+
+fn choose_photo_export_destination(
+    window: &gtk::Window,
+    jobs: Vec<crate::edit::export_batch::ExportJob>,
+    max_edge: u32,
+    progress: Rc<OperationProgressUi>,
+) {
+    let multiple = jobs.len() > 1;
+    let dialog = gtk::FileChooserNative::new(
+        Some(if multiple {
+            "Export Photos to Folder"
+        } else {
+            "Export Photo"
+        }),
+        Some(window),
+        if multiple {
+            gtk::FileChooserAction::SelectFolder
+        } else {
+            gtk::FileChooserAction::Save
+        },
+        Some("Export"),
+        Some("Cancel"),
+    );
+    if !multiple {
+        if let Some(job) = jobs.first() {
+            dialog.set_current_name(&job.file_name);
+        }
+    }
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            if let Some(path) = dialog.file().and_then(|file| file.path()) {
+                if multiple {
+                    start_photo_export_folder(progress.clone(), jobs.clone(), path, max_edge);
+                } else if let Some(job) = jobs.first().cloned() {
+                    start_photo_export_single(progress.clone(), job, path, max_edge);
+                }
+            }
+        }
+        dialog.destroy();
+    });
+    dialog.show();
+}
+
+enum ExportProgressMessage {
+    Update {
+        done: usize,
+        total: usize,
+        filename: String,
+        failed: usize,
+    },
+    Done(crate::edit::export_batch::BatchExportOutcome),
+}
+
+fn watch_export_progress(
+    progress: Rc<OperationProgressUi>,
+    receiver: std::sync::mpsc::Receiver<ExportProgressMessage>,
+    total: usize,
+) {
+    glib::timeout_add_local(Duration::from_millis(80), move || {
+        let mut flow = glib::ControlFlow::Continue;
+        while let Ok(message) = receiver.try_recv() {
+            match message {
+                ExportProgressMessage::Update {
+                    done,
+                    filename,
+                    failed,
+                    ..
+                } => {
+                    progress.update("Exporting photos", done, total, &filename, failed);
+                }
+                ExportProgressMessage::Done(outcome) => {
+                    let summary = if outcome.failed == 0 && outcome.skipped == 0 {
+                        format!("Export complete — {} exported", outcome.exported)
+                    } else {
+                        format!(
+                            "Export complete — {} exported · {} skipped · {} failed",
+                            outcome.exported, outcome.skipped, outcome.failed
+                        )
+                    };
+                    for error in outcome.errors.iter().take(5) {
+                        eprintln!("Export issue: {error}");
+                    }
+                    progress.finish("Export complete", &summary);
+                    flow = glib::ControlFlow::Break;
+                }
+            }
+        }
+        flow
+    });
+}
+
+fn start_photo_export_folder(
+    progress: Rc<OperationProgressUi>,
+    jobs: Vec<crate::edit::export_batch::ExportJob>,
+    folder: std::path::PathBuf,
+    max_edge: u32,
+) {
+    let total = jobs.len();
+    progress.begin("Exporting photos", total);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    watch_export_progress(progress, receiver, total);
+    std::thread::spawn(move || {
+        let outcome = crate::edit::export_batch::run_batch_export(
+            &jobs,
+            &folder,
+            max_edge,
+            crate::edit::export_batch::default_export_quality(),
+            |job| crate::edit::export_batch::render_job(job),
+            |done, total, filename, failed| {
+                let _ = sender.send(ExportProgressMessage::Update {
+                    done,
+                    total,
+                    filename: filename.to_string(),
+                    failed,
+                });
+            },
+        );
+        let _ = sender.send(ExportProgressMessage::Done(outcome));
+    });
+}
+
+fn start_photo_export_single(
+    progress: Rc<OperationProgressUi>,
+    job: crate::edit::export_batch::ExportJob,
+    destination: std::path::PathBuf,
+    max_edge: u32,
+) {
+    progress.begin("Exporting photos", 1);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    watch_export_progress(progress, receiver, 1);
+    std::thread::spawn(move || {
+        let file_name = job.file_name.clone();
+        let outcome = if !std::path::Path::new(&job.source_path).is_file() {
+            crate::edit::export_batch::BatchExportOutcome {
+                skipped: 1,
+                errors: vec![format!("skipped (missing): {}", job.source_path)],
+                ..Default::default()
+            }
+        } else {
+            let result = crate::edit::export_batch::export_job_to(
+                &job,
+                &destination,
+                max_edge,
+                crate::edit::export_batch::default_export_quality(),
+                &|job| crate::edit::export_batch::render_job(job),
+            );
+            match result {
+                Ok(()) => crate::edit::export_batch::BatchExportOutcome {
+                    exported: 1,
+                    ..Default::default()
+                },
+                Err(error) => crate::edit::export_batch::BatchExportOutcome {
+                    failed: 1,
+                    errors: vec![format!("{}: {error:#}", job.source_path)],
+                    ..Default::default()
+                },
+            }
+        };
+        let _ = sender.send(ExportProgressMessage::Update {
+            done: 1,
+            total: 1,
+            filename: file_name,
+            failed: outcome.failed,
+        });
+        let _ = sender.send(ExportProgressMessage::Done(outcome));
+    });
+}
+
     let selected_for_export = selected_photo.clone();
     let parent_for_export = window.clone();
+    let gallery_for_export = gallery.clone();
+    let progress_for_export = operation_progress.clone();
 
     info.export.connect_clicked(move |_| {
         let Some(photo) = selected_for_export.borrow().clone() else {
             return;
         };
-
-        let dialog = gtk::FileChooserNative::new(
-            Some("Export Photo"),
-            Some(&parent_for_export),
-            gtk::FileChooserAction::Save,
-            Some("Export"),
-            Some("Cancel"),
+        let ids = gallery_for_export.selected_photo_ids(Some(photo.id()));
+        let known: std::collections::HashMap<i64, _> = gallery_for_export
+            .photo_objects()
+            .into_iter()
+            .map(|object| (object.id(), object))
+            .collect();
+        let jobs = ids
+            .iter()
+            .filter_map(|id| known.get(id))
+            .map(|object| {
+                crate::edit::export_batch::ExportJob::from_record(
+                    object.path(),
+                    object.rotation(),
+                    object.edit_recipe(),
+                    object.width(),
+                    object.height(),
+                    &object.filename(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if jobs.is_empty() {
+            return;
+        }
+        show_photo_export_dialog(
+            parent_for_export.upcast_ref::<gtk::Window>(),
+            jobs,
+            progress_for_export.clone(),
         );
-
-        let filename = std::path::Path::new(&photo.filename())
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .map(|stem| format!("{stem}.jpg"))
-            .unwrap_or_else(|| "export.jpg".to_string());
-        dialog.set_current_name(&filename);
-
-        dialog.connect_response(move |dialog, response| {
-            if response == gtk::ResponseType::Accept {
-                if let Some(file) = dialog.file() {
-                    if let Some(destination) = file.path() {
-                        // PhotoObject is a GTK object and must stay on the GTK
-                        // thread. Copy only Send-safe scalar/string values into
-                        // the export worker.
-                        let reference = photo.path();
-                        let rotation = photo.rotation();
-                        let edit_recipe = photo.edit_recipe();
-                        let source_width = photo.width();
-                        let source_height = photo.height();
-                        std::thread::spawn(move || {
-                            let result = crate::edit::render::render_for_export(
-                                &reference,
-                                rotation,
-                                &edit_recipe,
-                                source_width,
-                                source_height,
-                            )
-                            .and_then(|image| {
-                                crate::edit::render::save_jpeg(&image, &destination, 92)
-                            });
-                            if let Err(error) = result {
-                                eprintln!("Could not export photo: {error:#}");
-                            }
-                        });
-                    }
-                }
-            }
-
-            dialog.destroy();
-        });
-
-        dialog.show();
     });
 
     let selected_for_print = selected_photo.clone();
