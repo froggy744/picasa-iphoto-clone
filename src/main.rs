@@ -23,6 +23,7 @@ mod platform;
 mod scanner;
 mod settings;
 mod sidebar;
+mod smooth_scroll;
 mod source;
 mod thumbnail;
 mod thumbnail_display;

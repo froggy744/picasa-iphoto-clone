@@ -1,15 +1,15 @@
-# Development handover — Library Home visual layout correction
+# Development handover — Library Home visual layout + limit 20 + smooth pan
 
 Updated: 2026-09-23. Supersedes the Phase 3 report below for Home presentation work.
 
 ## Current status
 
-Library Home Page visual layout corrected without changing architecture, database queries, History, navigation or scrolling behaviour. Phase 1–3 features remain intact.
+Library Home Page visual layout corrected, preview limit raised to 20, and pan buttons eased with the shared spring — no architecture, database-shape, History or navigation rewrites. Phase 1–3 features remain intact.
 
 - Branch: `rc5`.
-- HEAD: `3a2d029`. No new commit was made.
+- HEAD after visual commit: `7d36f61` ("Correct Library Home visual layout"). Further changes below are uncommitted at time of writing.
 - Workspace: `/home/peet/Downloads/picasa/picasa-iphoto-clone`.
-- Uncommitted changes: `src/library_home.rs`, `src/library_home_tests.rs`.
+- Uncommitted changes: `src/db/library_home.rs`, `src/library_home.rs`, `src/library_home_tests.rs`, `src/main.rs`, `src/smooth_scroll.rs`, this file. (Pre-existing unrelated: `themes/*` deletions and untracked `themes/RetroPC/`, `.flatpak-builder/` — do not stage.)
 - `.flatpak-builder/` remains untracked and untouched.
 
 ## Task and completed features
@@ -27,19 +27,25 @@ Completed:
    - Albums: album name + `"{n} photos"` (unchanged).
    - Tooltips show the complete filename (or album name). Ellipsis only when the fixed card width forces it.
 5. **Section spacing / nav.** Section vertical spacing 14 px (heading→row); page content spacing 32 px; heading `valign(Center)`; pan buttons `home-section-pan` with 28 px min size and vertical centering.
-6. **Scrolling unchanged.** 10-item limit, kinetic horizontal rows, pan buttons, Shift+wheel/touchpad, position restore and non-hijacked vertical scroll are untouched. Albums remains reachable through the outer vertical `ScrolledWindow`.
+6. **Preview limit 20.** `HOME_PREVIEW_LIMIT = 20` in `src/db/library_home.rs`. All Home sections (Recently Added / Edited / Favourites / Albums) use this bound; no other query changes. Unit test `home_preview_limit_is_twenty`; DB test uses `(80..=99).rev()` and `HOME_PREVIEW_LIMIT as usize`.
+7. **Smooth pan buttons.** `wire_scroll_buttons` drives `RowAnimator` (critically damped spring via `smooth_scroll::spring_step`, omega 32). Arrow clicks `nudge(±1.0)` by `max(page_size * 0.75, 160)` px, retargeting from the in-flight target on rapid clicks; scrollbar drags reanchor when external change exceeds `REST_DISTANCE`. `mod smooth_scroll;` added in `src/main.rs`. Vertical wheel / Shift+wheel / touchpad behaviour is unchanged (kinetic rows untouched).
+8. **Scrolling otherwise unchanged.** Horizontal scrolling, pan button visibility/sensitivity, position restore and non-hijacked vertical scroll are untouched. Albums remains reachable through the outer vertical `ScrolledWindow`.
 
 ## Files changed for this task
 
 ```text
-src/library_home.rs          CARD_THUMB/CARD_GAP, HOME_CSS install, caption/tooltip
-                              logic, short_edit_line, left-aligned card(), spacing
-src/library_home_tests.rs     180×180 frame assert, left-align/hexpand checks,
-                              filename vs history caption asserts
-DEVELOPMENT_HANDOVER.md      This report
+src/db/library_home.rs        HOME_PREVIEW_LIMIT 10 → 20; DB tests assert 20 / (80..=99)
+src/library_home.rs           RowAnimator + spring-eased pan; wire_scroll_buttons
+src/library_home_tests.rs     home_preview_limit_is_twenty (asserts 20)
+src/main.rs                   mod smooth_scroll;
+src/smooth_scroll.rs          pub(crate) spring helpers; #[allow(dead_code)] on unused attach path;
+                              spring test threshold 12 → 20 frames
+DEVELOPMENT_HANDOVER.md       This report
 ```
 
-No database, History, grid, or window-navigation modules were modified.
+Earlier visual commit `7d36f61` also touched `library_home.rs` / `library_home_tests.rs` (CARD_THUMB/CARD_GAP, HOME_CSS, captions).
+
+No database schema, History, grid, or window-navigation modules were modified.
 
 ## Design notes
 
@@ -49,21 +55,21 @@ No database, History, grid, or window-navigation modules were modified.
 
 ## Validation
 
-- `cargo test --quiet`: **362 passed, 0 failed, 23 ignored**.
-- `cargo test --quiet home_`: **5 passed, 0 failed, 1 ignored**.
+- `cargo test --quiet`: **365 passed, 0 failed, 23 ignored**.
+- `cargo test --quiet home_`: **5 passed, 0 failed, 1 ignored** (includes `home_preview_limit_is_twenty`).
+- `cargo test --quiet smooth`: **3 passed, 0 failed** (spring settle / stability / target).
 - `cargo test --quiet home_page_sections_navigation_and_favorite_refresh -- --ignored --test-threads=1`: **passed** (frame 180×180, left-align, filename/history captions, overflow arrows, position memory, navigation).
-- `cargo test --quiet history`: **9 passed, 0 failed, 2 ignored**.
-- `cargo check --quiet`: **passed** (pre-existing warnings only).
-- `rustfmt --check` on the two changed Rust files: **passed**. `git diff --check`: **passed**.
-- GTK screenshot: `PIC_HOME_SCREENSHOT=/tmp/pic-home-final.png` — measured 180×180 cards, 14 px gaps, left margin 28, filename captions, secondary edit line without seconds.
+- `cargo check --quiet`: **passed** (pre-existing warnings only; smooth_scroll unused attach path is `#[allow(dead_code)]`).
+- `rustfmt --check` on the changed Rust files: **passed**.
+- GTK screenshot: `PIC_HOME_SCREENSHOT=/tmp/pic-home-limit20.png` — 180×180 cards, 14 px gaps, left margin 28, filename captions, secondary edit line without seconds.
 - Log: full suite via `cargo test --quiet` this session.
 
 ## Outstanding issues and next steps
 
-1. Review the uncommitted visual-layout diff and this report.
-2. Manually confirm Shift+wheel and vertical wheel over a Home row in the live app.
-3. Confirm presentation with real cached thumbnails (portrait/landscape/collage) and long filenames.
-4. Do not commit or push without further user instruction.
+1. Review the uncommitted limit-20 / smooth-pan diff and this report.
+2. Manually confirm pan-button animation feel (`cargo run`) and Shift+wheel / vertical wheel over a Home row.
+3. Confirm presentation with real cached thumbnails (portrait/landscape/collage) and long filenames; confirm rows show up to 20 cards.
+4. Commit only the intended source files (do not stage `themes/` deletions or `.flatpak-builder/`). Push is denied by permission rules — user must run `git push origin rc5` manually after commit.
 
 Useful commands:
 

@@ -7,6 +7,7 @@ use std::time::Duration;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
+use crate::smooth_scroll;
 use crate::{db, photo_object::PhotoObject, sidebar::SidebarFilter, thumbnail_display};
 
 type OpenPhoto = Rc<dyn Fn(Vec<PhotoObject>, usize, bool)>;
@@ -208,15 +209,35 @@ impl LibraryHome {
 }
 
 fn wire_scroll_buttons(scroller: &gtk::ScrolledWindow, prev: &gtk::Button, next: &gtk::Button) {
-    {
-        let scroller = scroller.clone();
-        prev.connect_clicked(move |_| scroll_row(&scroller, -1.0));
-    }
-    {
-        let scroller = scroller.clone();
-        next.connect_clicked(move |_| scroll_row(&scroller, 1.0));
-    }
     let hadj = scroller.hadjustment();
+    // Pan buttons ease with the same critically damped spring the vertical
+    // gallery uses for wheel scrolling, so arrows match scrollbar feel.
+    let animator = RowAnimator::new(hadj.clone());
+    {
+        let animator = animator.clone();
+        scroller.add_tick_callback(move |_, _| {
+            animator.tick();
+            glib::ControlFlow::Continue
+        });
+    }
+    {
+        let animator = animator.clone();
+        hadj.connect_value_changed(move |_| {
+            if (animator.written.get() - animator.adjustment.value()).abs()
+                > smooth_scroll::REST_DISTANCE
+            {
+                animator.reanchor();
+            }
+        });
+    }
+    {
+        let animator = animator.clone();
+        prev.connect_clicked(move |_| animator.nudge(-1.0));
+    }
+    {
+        let animator = animator.clone();
+        next.connect_clicked(move |_| animator.nudge(1.0));
+    }
     let prev = prev.clone();
     let next = next.clone();
     let update = {
@@ -244,12 +265,109 @@ fn wire_scroll_buttons(scroller: &gtk::ScrolledWindow, prev: &gtk::Button, next:
     });
 }
 
-fn scroll_row(scroller: &gtk::ScrolledWindow, direction: f64) {
-    let hadj = scroller.hadjustment();
-    let step = (hadj.page_size() * 0.75).max(160.0);
-    let max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
-    let target = (hadj.value() + direction * step).clamp(hadj.lower(), max);
-    hadj.set_value(target);
+/// Eased horizontal step for Home pan buttons (same spring as `smooth_scroll`).
+struct RowAnimator {
+    adjustment: gtk::Adjustment,
+    target: Cell<f64>,
+    position: Cell<f64>,
+    velocity: Cell<f64>,
+    /// Last value written by the spring, so scrollbar drags can reanchor.
+    written: Cell<f64>,
+    ticking: Cell<bool>,
+    last_frame: Cell<Option<std::time::Instant>>,
+}
+
+impl RowAnimator {
+    fn new(adjustment: gtk::Adjustment) -> Rc<Self> {
+        let value = adjustment.value();
+        Rc::new(Self {
+            adjustment,
+            target: Cell::new(value),
+            position: Cell::new(value),
+            velocity: Cell::new(0.0),
+            written: Cell::new(value),
+            ticking: Cell::new(false),
+            last_frame: Cell::new(None),
+        })
+    }
+
+    fn bounds(&self) -> (f64, f64) {
+        let lower = self.adjustment.lower();
+        let upper = (self.adjustment.upper() - self.adjustment.page_size()).max(lower);
+        (lower, upper)
+    }
+
+    /// One pan-button step: retarget from the in-flight target when already
+    /// animating so rapid clicks keep advancing smoothly.
+    fn nudge(&self, direction: f64) {
+        let step = (self.adjustment.page_size() * 0.75).max(160.0);
+        let base = if self.ticking.get() {
+            self.target.get()
+        } else {
+            self.adjustment.value()
+        };
+        let (lower, upper) = self.bounds();
+        let target = (base + direction * step).clamp(lower, upper);
+        if !self.ticking.get() {
+            let value = self.adjustment.value();
+            self.position.set(value);
+            self.velocity.set(0.0);
+            self.written.set(value);
+        }
+        self.target.set(target);
+        self.ticking.set(true);
+    }
+
+    fn reanchor(&self) {
+        let value = self.adjustment.value();
+        self.target.set(value);
+        self.position.set(value);
+        self.velocity.set(0.0);
+        self.written.set(value);
+        self.ticking.set(false);
+        self.last_frame.set(None);
+    }
+
+    fn tick(&self) {
+        if !self.ticking.get() {
+            self.last_frame.set(None);
+            return;
+        }
+        let now = std::time::Instant::now();
+        let dt = self
+            .last_frame
+            .get()
+            .map(|last| now.saturating_duration_since(last).as_secs_f64())
+            .unwrap_or(1.0 / 60.0)
+            .clamp(0.0, 1.0 / 30.0);
+        self.last_frame.set(Some(now));
+
+        let target = self.target.get();
+        let (next, velocity) = smooth_scroll::spring_step(
+            self.position.get(),
+            self.velocity.get(),
+            target,
+            smooth_scroll::DEFAULT_OMEGA,
+            dt,
+        );
+        let (lower, upper) = self.bounds();
+        let next = next.clamp(lower, upper);
+        self.velocity.set(velocity);
+        self.position.set(next);
+        self.written.set(next);
+        self.adjustment.set_value(next);
+
+        if (target - next).abs() < smooth_scroll::REST_DISTANCE
+            && velocity.abs() < smooth_scroll::REST_VELOCITY
+        {
+            self.velocity.set(0.0);
+            self.position.set(target);
+            self.written.set(target);
+            self.adjustment.set_value(target);
+            self.ticking.set(false);
+            self.last_frame.set(None);
+        }
+    }
 }
 
 fn worker(

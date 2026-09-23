@@ -1,4 +1,4 @@
-pub const HOME_PREVIEW_LIMIT: i64 = 10;
+pub const HOME_PREVIEW_LIMIT: i64 = 20;
 
 pub struct LibraryHomeData {
     pub added: Vec<Photo>,
@@ -96,16 +96,16 @@ mod home_tests {
         let data = library_home_data(&c).unwrap();
         assert_eq!(
             data.added.iter().map(|p| p.id).collect::<Vec<_>>(),
-            vec![99, 98, 97, 96, 95, 94, 93, 92, 91, 90]
+            (80..=99).rev().collect::<Vec<_>>()
         );
         assert_eq!(
             data.edited.iter().map(|p| p.id).collect::<Vec<_>>(),
-            vec![99, 98, 97, 96, 95, 94, 93, 92, 91, 90]
+            (80..=99).rev().collect::<Vec<_>>()
         );
         let expected = photos(&c, None, true, None)
             .unwrap()
             .into_iter()
-            .take(10)
+            .take(HOME_PREVIEW_LIMIT as usize)
             .map(|p| p.id)
             .collect::<Vec<_>>();
         assert_eq!(
@@ -115,7 +115,7 @@ mod home_tests {
         let removed = data.favorites[0].id;
         set_favorite(&c, removed, false).unwrap();
         let refreshed = library_home_data(&c).unwrap();
-        assert_eq!(refreshed.favorites.len(), 10);
+        assert_eq!(refreshed.favorites.len(), HOME_PREVIEW_LIMIT as usize);
         assert!(!refreshed.favorites.iter().any(|p| p.id == removed));
         assert_eq!(
             c.query_row("SELECT count(*) FROM editing_events", [], |r| r

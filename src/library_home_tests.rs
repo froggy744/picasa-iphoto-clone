@@ -108,8 +108,8 @@ fn home_cached_thumbnail_does_not_delete_or_regenerate_corrupt_cache() {
 }
 
 #[test]
-fn home_preview_limit_is_ten() {
-    assert_eq!(db::HOME_PREVIEW_LIMIT, 10);
+fn home_preview_limit_is_twenty() {
+    assert_eq!(db::HOME_PREVIEW_LIMIT, 20);
 }
 
 fn collect<T: IsA<gtk::Widget> + glib::object::ObjectType>(
