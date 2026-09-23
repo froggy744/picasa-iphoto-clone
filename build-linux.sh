@@ -391,8 +391,8 @@ ensure_flatpak_module_sources() {
         fi
         if ((ONLINE)); then
             printf '  Downloading %s\n' "$name"
-            if ! download_file "$url" "$durable" || ! verify_sha256 "$durable" "$sha"; then
-                rm -f "$durable" "$durable.tmp"
+            if ! download_file "$url" "$durable" "$sha"; then
+                rm -f "$durable.tmp"
                 die "Could not download or verify Flatpak module source: $name ($url)"
             fi
             mkdir -p "$(dirname "$dest")"
@@ -413,15 +413,32 @@ ensure_flatpak_module_sources() {
 }
 
 download_file() {
-    local url="$1" dest="$2"
+    local url="$1" dest="$2" expected_sha="${3:-}"
+    local parent tmp
+    parent="$(dirname "$dest")"
+    mkdir -p "$parent"
+    tmp="$dest.tmp"
+    rm -f "$tmp"
     if have curl; then
-        curl -fL --retry 3 --connect-timeout 20 -o "$dest.tmp" "$url"
+        if ! curl -fL --retry 3 --connect-timeout 20 -o "$tmp" "$url"; then
+            rm -f "$tmp"
+            return 1
+        fi
     elif have wget; then
-        wget -O "$dest.tmp" "$url"
+        if ! wget -O "$tmp" "$url"; then
+            rm -f "$tmp"
+            return 1
+        fi
     else
         die "Need curl or wget to download $url"
     fi
-    mv -f "$dest.tmp" "$dest"
+    if [[ -n "$expected_sha" ]]; then
+        if ! verify_sha256 "$tmp" "$expected_sha"; then
+            rm -f "$tmp"
+            return 1
+        fi
+    fi
+    mv -f "$tmp" "$dest"
 }
 
 linuxdeploy_path() {
