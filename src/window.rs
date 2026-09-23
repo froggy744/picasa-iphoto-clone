@@ -184,6 +184,7 @@ fn sidebar_filter_setting(filter: sidebar::SidebarFilter) -> String {
         sidebar::SidebarFilter::All => "all".into(),
         sidebar::SidebarFilter::Favorites => "favorites".into(),
         sidebar::SidebarFilter::RecentlyAdded => "recently-added".into(),
+        sidebar::SidebarFilter::History => "history".into(),
         sidebar::SidebarFilter::Albums => "albums".into(),
         sidebar::SidebarFilter::Folder(id) => format!("folder:{id}"),
         sidebar::SidebarFilter::Album(id) => format!("album:{id}"),
@@ -203,6 +204,7 @@ fn sidebar_filter_from_setting(
         "favorites" => sidebar::SidebarFilter::Favorites,
         "albums" => sidebar::SidebarFilter::Albums,
         "recently-added" => sidebar::SidebarFilter::RecentlyAdded,
+        "history" => sidebar::SidebarFilter::History,
         value if value.starts_with("folder:") => value[7..]
             .parse::<i64>()
             .ok()
@@ -237,6 +239,11 @@ mod session_restore_tests {
             "recently-added"
         );
         assert_eq!(sidebar_filter_setting(SidebarFilter::Albums), "albums");
+        assert_eq!(sidebar_filter_setting(SidebarFilter::History), "history");
+        assert_eq!(
+            sidebar_filter_from_setting(Some("history"), &[], &[]),
+            SidebarFilter::History
+        );
         assert_eq!(sidebar_filter_setting(SidebarFilter::Folder(42)), "folder:42");
         assert_eq!(sidebar_filter_setting(SidebarFilter::Album(17)), "album:17");
     }

@@ -650,25 +650,12 @@ pub fn set_favorite_for_folder(
 
 
 pub fn set_edit_recipe(connection: &Connection, id: i64, recipe: &str) -> Result<()> {
-    connection.execute(
-        "UPDATE photos SET edit_recipe = ?1 WHERE id = ?2",
-        params![recipe, id],
+    commit_edit_recipes(
+        connection,
+        &[(id, recipe.to_owned())],
+        if recipe.is_empty() { "reset" } else { "edit" },
+        None,
     )?;
-    Ok(())
-}
-
-pub fn set_edit_recipes(connection: &Connection, updates: &[(i64, String)]) -> Result<()> {
-    if updates.is_empty() {
-        return Ok(());
-    }
-    let transaction = connection.unchecked_transaction()?;
-    for (id, recipe) in updates {
-        transaction.execute(
-            "UPDATE photos SET edit_recipe = ?1 WHERE id = ?2",
-            params![recipe, id],
-        )?;
-    }
-    transaction.commit()?;
     Ok(())
 }
 
@@ -704,9 +691,14 @@ pub fn set_rotation(connection: &Connection, id: i64, rotation: i32) -> Result<(
     if ![0, 90, 180, 270].contains(&normalized) {
         anyhow::bail!("invalid rotation: {rotation}");
     }
-    connection.execute(
-        "UPDATE photos SET rotation = ?1 WHERE id = ?2",
+    let transaction = connection.unchecked_transaction()?;
+    let changed = transaction.execute(
+        "UPDATE photos SET rotation = ?1 WHERE id = ?2 AND rotation != ?1 AND trashed=0",
         params![normalized, id],
     )?;
+    if changed > 0 {
+        record_edit(&transaction, id, "edit", None)?;
+    }
+    transaction.commit()?;
     Ok(())
 }

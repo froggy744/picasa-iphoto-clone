@@ -468,7 +468,28 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         {
             let availability_refresh = availability_refresh.clone();
             let clear_search_after_result = clear_search_after_result.clone();
+            let filter = filter.clone();
+            let search_text = search_text.clone();
+            let connection = connection.clone();
+            let open_edit = open_edit.clone();
+            let open_collage = open_collage.clone();
             move |photos, selected_index| {
+                if filter.get() == sidebar::SidebarFilter::History
+                    && search_text.borrow().is_empty()
+                {
+                    if let Some(photo) = photos.get(selected_index) {
+                        let is_collage = db::collage_project(&connection.borrow(), photo.id())
+                            .ok()
+                            .flatten()
+                            .is_some();
+                        if is_collage {
+                            open_collage(vec![photo.id()]);
+                        } else {
+                            open_edit(photo.id());
+                        }
+                    }
+                    return;
+                }
                 if photos
                     .get(selected_index)
                     .is_some_and(|photo| !photo.original_available())
@@ -1310,6 +1331,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     candidate += step;
                 }
             }
+            sidebar::SidebarFilter::History => {}
             sidebar::SidebarFilter::Albums => {
                 // The Albums home view is not a photo thumbnail grid.
             }
@@ -2115,8 +2137,22 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let collage_editing = collage_editing.clone();
         let gallery = gallery.clone();
         let connection_for_teardown = connection.clone();
+        let filter_for_history = filter.clone();
+        let search_for_history = search_text.clone();
+        let sort_for_history = sort.clone();
         main_stack_for_teardown.connect_visible_child_notify(move |stack| {
             let visible = stack.visible_child_name();
+            if visible.as_deref() == Some("photos")
+                && filter_for_history.get() == sidebar::SidebarFilter::History
+            {
+                refresh_grid(
+                    &connection_for_teardown,
+                    filter_for_history.get(),
+                    &search_for_history.borrow(),
+                    sort_for_history.get(),
+                    &gallery,
+                );
+            }
             if visible.as_deref() != Some("collage")
                 && !collage_add_mode.get()
                 && !collage_editing.get()

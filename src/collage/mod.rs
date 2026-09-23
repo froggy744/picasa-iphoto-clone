@@ -1,6 +1,7 @@
 mod editor;
 mod layout;
 mod model;
+mod persistence;
 mod render;
 mod smart_mosaic;
 
@@ -27,6 +28,44 @@ pub fn open(
     ids: Vec<i64>,
     on_open: Rc<dyn Fn(Vec<PhotoObject>, Option<CollageDraft>)>,
 ) {
+    // A History activation names one saved project explicitly; it must not
+    // fall through to the unrelated last-draft resume prompt.
+    if let [id] = ids.as_slice() {
+        match db::collage_project(&connection.borrow(), *id) {
+            Ok(Some(json)) => {
+                if let Some(mut draft) = draft_from_json(&json) {
+                    draft.saved_photo_id = Some(*id);
+                    let photos = draft
+                        .items
+                        .iter()
+                        .filter_map(|item| db::photo(&connection.borrow(), item.id).ok().flatten())
+                        .map(|photo| PhotoObject::from_photo(&photo))
+                        .collect();
+                    on_open(photos, Some(draft));
+                } else {
+                    let dialog = adw::AlertDialog::builder()
+                        .heading("Could not open collage")
+                        .body("The saved project has an unsupported or invalid format.")
+                        .close_response("close")
+                        .build();
+                    dialog.add_response("close", "Close");
+                    dialog.present(Some(parent));
+                }
+                return;
+            }
+            Err(error) => {
+                let dialog = adw::AlertDialog::builder()
+                    .heading("Could not open collage")
+                    .body(error.to_string())
+                    .close_response("close")
+                    .build();
+                dialog.add_response("close", "Close");
+                dialog.present(Some(parent));
+                return;
+            }
+            Ok(None) => {}
+        }
+    }
     let had_selection = !ids.is_empty();
     let photos: Vec<PhotoObject> = ids
         .into_iter()

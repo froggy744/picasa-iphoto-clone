@@ -13,6 +13,10 @@ use gtk4 as gtk;
 use crate::db::{Folder, Photo};
 use crate::photo_object::PhotoObject;
 
+#[cfg(test)]
+#[path = "grid/history_tests.rs"]
+mod history_tests;
+
 // EDIT THESE TWO VALUES to set your default thumbnail width and height.
 // They are independent. Example: 180 x 120, 200 x 140, 220 x 160.
 const DEFAULT_TILE_WIDTH: i32 = 180;

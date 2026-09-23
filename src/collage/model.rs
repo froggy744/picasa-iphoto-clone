@@ -383,6 +383,7 @@ impl CollageProject {
     pub fn to_draft(&self) -> CollageDraft {
         CollageDraft {
             version: COLLAGE_DRAFT_VERSION,
+            saved_photo_id: None,
             layout: self.layout,
             orientation: self.orientation,
             aspect: self.aspect,
@@ -469,6 +470,8 @@ pub const COLLAGE_DRAFT_VERSION: u32 = 1;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CollageDraft {
     pub version: u32,
+    #[serde(default)]
+    pub saved_photo_id: Option<i64>,
     pub layout: LayoutKind,
     pub orientation: CollageOrientation,
     pub aspect: AspectRatio,

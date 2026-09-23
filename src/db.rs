@@ -52,6 +52,27 @@ CREATE TABLE IF NOT EXISTS overlay_assets (
   original_name TEXT NOT NULL,
   added_at INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS editing_events (
+  id INTEGER PRIMARY KEY,
+  action TEXT NOT NULL,
+  edited_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS editing_event_items (
+  event_id INTEGER NOT NULL REFERENCES editing_events(id) ON DELETE CASCADE,
+  photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+  PRIMARY KEY(event_id, photo_id)
+);
+CREATE TABLE IF NOT EXISTS recently_edited (
+  photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+  event_id INTEGER NOT NULL REFERENCES editing_events(id),
+  edited_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS collage_projects (
+  photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+  draft TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recently_edited_time ON recently_edited(edited_at DESC, event_id DESC);
+CREATE INDEX IF NOT EXISTS idx_editing_event_items_photo ON editing_event_items(photo_id);
 CREATE INDEX IF NOT EXISTS idx_photos_taken_at ON photos(taken_at DESC);
 CREATE INDEX IF NOT EXISTS idx_photos_folder ON photos(folder_id);
 CREATE INDEX IF NOT EXISTS idx_album_photos_photo ON album_photos(photo_id);
@@ -105,6 +126,8 @@ pub struct Photo {
     pub edit_recipe: String,
     pub favorite: bool,
     pub trashed: bool,
+    /// Presentation metadata populated only by the History query.
+    pub history_caption: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -134,6 +157,7 @@ pub struct SidebarCounts {
 include!("db/core.rs");
 include!("db/albums.rs");
 include!("db/photos.rs");
+include!("db/history.rs");
 include!("db/settings.rs");
 include!("db/overlay_assets.rs");
 include!("db/tests.rs");

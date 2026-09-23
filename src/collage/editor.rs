@@ -121,6 +121,7 @@ pub struct CollageEditor {
     frames: Rc<RefCell<Vec<PreviewFrame>>>,
     status: gtk::Label,
     hooks: TileHooks,
+    saved_photo_id: Rc<Cell<Option<i64>>>,
 }
 
 impl CollageEditor {
@@ -149,7 +150,9 @@ impl CollageEditor {
 
     /// Serialized draft snapshot for persistence (see DRAFT_SETTING_KEY).
     pub fn draft_json(&self) -> String {
-        super::model::draft_to_json(&self.project.borrow())
+        let mut draft = self.project.borrow().to_draft();
+        draft.saved_photo_id = self.saved_photo_id.get();
+        serde_json::to_string(&draft).unwrap_or_default()
     }
 
     /// Refresh embedded photo metadata for the given ids (used when
@@ -181,6 +184,9 @@ pub fn build(
         COLLAGE_CSS_INSTALLED.with(|cell| cell.set(true));
     }
     let project = Rc::new(RefCell::new(CollageProject::new(photos.clone())));
+    let saved_photo_id = Rc::new(Cell::new(
+        draft.as_ref().and_then(|draft| draft.saved_photo_id),
+    ));
     // A resumed draft restores settings and the saved arrangement before
     // any widget reads project state, so every control reflects it.
     if let Some(draft) = draft.as_ref() {
@@ -674,6 +680,9 @@ pub fn build(
     primary_grid.set_hexpand(true);
     primary_grid.add_css_class("collage-tabs");
     let export = gtk::Button::with_label("Create Collage…");
+    if saved_photo_id.get().is_some() {
+        export.set_label("Save Collage…");
+    }
     export.add_css_class("suggested-action");
     export.set_tooltip_text(Some("Render and export the collage as a JPEG"));
     let close = icon_label_button("application-exit-symbolic", "Exit", "Exit collage");
@@ -683,7 +692,10 @@ pub fn build(
     {
         let project = project.clone();
         let parent = parent.clone();
-        export.connect_clicked(move |_| choose_export_path(&parent, project.clone()));
+        let saved_photo_id = saved_photo_id.clone();
+        export.connect_clicked(move |_| {
+            choose_export_path(&parent, project.clone(), saved_photo_id.clone())
+        });
     }
     add_photos.connect_clicked(move |_| on_add_photos());
     close.connect_clicked(move |_| on_close());
@@ -714,6 +726,7 @@ pub fn build(
     root.append(&body);
     CollageEditor {
         root,
+        saved_photo_id,
         project,
         canvas,
         frames,
@@ -1328,7 +1341,11 @@ mod sizing_tests {
 
 /// Export options dialog (format, quality, size), then the destination
 /// file chooser, then the background render with a completion dialog.
-fn choose_export_path(window: &gtk::Window, project: Rc<RefCell<CollageProject>>) {
+fn choose_export_path(
+    window: &gtk::Window,
+    project: Rc<RefCell<CollageProject>>,
+    saved_photo_id: Rc<Cell<Option<i64>>>,
+) {
     let dialog = gtk::Dialog::new();
     dialog.set_title(Some("Export Collage"));
     dialog.set_transient_for(Some(window));
@@ -1432,7 +1449,7 @@ fn choose_export_path(window: &gtk::Window, project: Rc<RefCell<CollageProject>>
                 jpeg_quality: quality_scale.value().round().clamp(60.0, 100.0) as u8,
             };
             dialog_for_response.destroy();
-            choose_export_destination(&window, project.clone(), options);
+            choose_export_destination(&window, project.clone(), options, saved_photo_id.clone());
         });
     }
     dialog.show();
@@ -1442,6 +1459,7 @@ fn choose_export_destination(
     window: &gtk::Window,
     project: Rc<RefCell<CollageProject>>,
     options: super::render::ExportOptions,
+    saved_photo_id: Rc<Cell<Option<i64>>>,
 ) {
     let extension = match options.format {
         super::render::ExportFormat::Jpeg => "jpg",
@@ -1455,6 +1473,7 @@ fn choose_export_destination(
         Some("Cancel"),
     );
     dialog.set_current_name(&format!("collage.{extension}"));
+    dialog.set_modal(true);
     let filter = gtk::FileFilter::new();
     filter.set_name(Some(match options.format {
         super::render::ExportFormat::Jpeg => "JPEG image",
@@ -1476,18 +1495,37 @@ fn choose_export_destination(
             path
         };
         let project = project.borrow().clone();
+        let photo_id = saved_photo_id.get();
+        let progress = adw::AlertDialog::builder()
+            .heading("Saving collage…")
+            .body("Rendering the image and saving its editable project.")
+            .build();
+        progress.set_can_close(false);
+        progress.present(Some(&window));
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let result = super::render::export(&project, &path, &options);
+            let result = (|| -> anyhow::Result<i64> {
+                let connection = crate::db::open_default()?;
+                let id = super::persistence::export_project(&connection, &project, photo_id, &path, &options)?;
+                if let Some(photo) = crate::db::photo(&connection, id)? {
+                    if let Err(error) = crate::thumbnail::create(&photo.path,photo.mtime,photo.size_bytes) {
+                        eprintln!("Could not cache collage thumbnail: {error}");
+                    }
+                }
+                Ok(id)
+            })();
             let _ = sender.send(result.map_err(|error| error.to_string()));
         });
         let window = window.clone();
+        let saved_photo_id = saved_photo_id.clone();
         glib::timeout_add_local(Duration::from_millis(50), move || {
             match receiver.try_recv() {
-                Ok(Ok(())) => {
+                Ok(Ok(id)) => {
+                    saved_photo_id.set(Some(id));
+                    progress.force_close();
                     let dialog = adw::AlertDialog::builder()
                         .heading("Collage exported")
-                        .body("The collage was saved successfully.")
+                        .body("The collage and its editable project were saved. Reopen it from History.")
                         .close_response("close")
                         .build();
                     dialog.add_response("close", "Close");
@@ -1495,6 +1533,7 @@ fn choose_export_destination(
                     glib::ControlFlow::Break
                 }
                 Ok(Err(error)) => {
+                    progress.force_close();
                     let dialog = adw::AlertDialog::builder()
                         .heading("Could not export collage")
                         .body(error)
@@ -1505,7 +1544,10 @@ fn choose_export_destination(
                     glib::ControlFlow::Break
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    progress.force_close();
+                    glib::ControlFlow::Break
+                }
             }
         });
     });

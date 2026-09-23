@@ -122,6 +122,7 @@ struct BulkRecipeState {
     refresh_grid_when_done: bool,
     last_filename: String,
     notify: bool,
+    history_event: Option<i64>,
 }
 
 /// Apply recipe changes to many photos without blocking the GTK main loop.
@@ -157,6 +158,7 @@ fn start_bulk_recipe_update(
         refresh_grid_when_done,
         last_filename: String::new(),
         notify,
+        history_event: None,
     })));
     glib::timeout_add_local(Duration::from_millis(1), move || {
         let Some(mut work) = state.borrow_mut().take() else {
@@ -230,10 +232,22 @@ fn run_bulk_recipe_chunk(work: &mut BulkRecipeState) {
     }
 
     if !updates.is_empty() {
-        if let Err(error) = db::set_edit_recipes(&work.context.connection.borrow(), &updates) {
+        let action = match work.plan {
+            BulkRecipePlan::Reset => "reset",
+            _ if work.ids.len() > 1 => "batch_paste",
+            _ => "paste",
+        };
+        let result = db::commit_edit_recipes(
+            &work.context.connection.borrow(),
+            &updates,
+            action,
+            work.history_event,
+        );
+        if let Err(error) = result {
             work.failed = work.failed.saturating_add(updates.len());
             eprintln!("Could not apply bulk edit recipes: {error:#}");
         } else {
+            work.history_event = result.unwrap();
             if let Some(gallery) = work.context.gallery.borrow().upgrade() {
                 gallery.update_edit_recipes_batch(&updates);
             }
@@ -265,7 +279,7 @@ fn finish_bulk_recipe(work: BulkRecipeState, name: &'static str, total: usize) {
             work.context.info.set_photo(Some(&selected));
         }
     }
-    if work.refresh_grid_when_done {
+    if work.refresh_grid_when_done || work.context.filter.get() == sidebar::SidebarFilter::History {
         refresh_photo_actions_grid(&work.context);
     }
     let succeeded = total.saturating_sub(work.failed);

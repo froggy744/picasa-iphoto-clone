@@ -85,6 +85,8 @@ fn refresh_grid_inner(
             // An active search is a library-wide view, regardless of the
             // destination that was selected before typing began.
             db::photos(&connection, None, false, Some(&search)).unwrap_or_default()
+        } else if filter == sidebar::SidebarFilter::History {
+            db::history_photos(&connection).unwrap_or_default()
         } else if let sidebar::SidebarFilter::Album(album_id) = filter {
             db::photos_in_album(&connection, album_id, None).unwrap_or_default()
         } else {
@@ -99,6 +101,7 @@ fn refresh_grid_inner(
                 sidebar::SidebarFilter::Folder(_) => (None, false),
                 sidebar::SidebarFilter::Albums => return,
                 sidebar::SidebarFilter::Album(_) => unreachable!(),
+                sidebar::SidebarFilter::History => unreachable!(),
             };
             db::photos(&connection, folder_id, favorites, None).unwrap_or_default()
         };
@@ -114,7 +117,7 @@ fn refresh_grid_inner(
                     .as_deref(),
             );
             sort_folder_stream(&mut photos, &folders, sort, display_mode);
-        } else {
+        } else if filter != sidebar::SidebarFilter::History || !search.is_empty() {
             sort_photos(&mut photos, sort);
         }
         let _ = sender.send(Some(photos));
@@ -447,6 +450,7 @@ mod photo_action_tests {
             edit_recipe: String::new(),
             favorite: false,
             trashed: false,
+            history_caption: None,
         }
     }
 

@@ -262,10 +262,11 @@ impl SquareTile {
             .borrow()
             .as_ref()
             .is_some_and(|current| current.id() == photo.id());
-        if same_photo {
-            return;
+        let same_visual = same_photo
+            && *self.imp().applied_visual_key.borrow() == photo_presentation_key(photo);
+        if !same_visual {
+            self.unload_visual();
         }
-        self.unload_visual();
         self.imp().photo.replace(Some(photo.clone()));
     }
 
@@ -347,6 +348,28 @@ impl SquareTile {
             return;
         };
 
+        if let Some(caption) = photo.history_caption() {
+            let label = find_overlay_child(&frame, "history-caption")
+                .and_then(|child| child.downcast::<gtk::Label>().ok())
+                .unwrap_or_else(|| {
+                    let label = gtk::Label::new(None);
+                    label.add_css_class("history-caption");
+                    label.add_css_class("osd");
+                    label.set_valign(gtk::Align::End);
+                    label.set_halign(gtk::Align::Fill);
+                    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                    label.set_margin_bottom(30);
+                    label.set_can_target(false);
+                    frame.add_overlay(&label);
+                    label
+                });
+            label.set_text(&caption);
+            label.set_tooltip_text(Some(&caption));
+            label.set_visible(true);
+        } else if let Some(label) = find_overlay_child(&frame, "history-caption") {
+            label.set_visible(false);
+        }
+
         let unavailable = !photo.original_available();
         if unavailable {
             let badge = self.ensure_offline_badge(&frame);
@@ -414,13 +437,13 @@ impl SquareTile {
     }
 
     fn load_visual(&self) {
+        self.refresh_badges_from_model();
         if self.imp().visual_loaded.get() {
             return;
         }
         let Some(photo) = self.imp().photo.borrow().as_ref().cloned() else {
             return;
         };
-        self.refresh_badges_from_model();
         let cache_hit = if let Some(key) = photo_presentation_key(&photo) {
             if let Some(paintable) = folder_thumbnail_cache_get(&key) {
                 self.apply_presentation_paintable(&key, &paintable);

@@ -12,6 +12,7 @@ pub enum SidebarFilter {
     All,
     Favorites,
     RecentlyAdded,
+    History,
     Albums,
     Folder(i64),
     Album(i64),
@@ -1671,7 +1672,10 @@ pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) 
     }
 
     match filter {
-        SidebarFilter::All | SidebarFilter::Favorites | SidebarFilter::RecentlyAdded => {
+        SidebarFilter::All
+        | SidebarFilter::Favorites
+        | SidebarFilter::RecentlyAdded
+        | SidebarFilter::History => {
             select_matching_row(scrolled, LIBRARY_LIST_KEY, filter);
         }
         SidebarFilter::Albums => {}
@@ -2077,6 +2081,16 @@ fn populate_library(list: &gtk::ListBox, counts: SidebarCounts, on_unavailable: 
         None,
         Some(counts.recently_added),
         SidebarFilter::RecentlyAdded,
+        false,
+        on_unavailable,
+    );
+    append_filter(
+        list,
+        "document-open-recent-symbolic",
+        "History",
+        None,
+        None,
+        SidebarFilter::History,
         false,
         on_unavailable,
     );

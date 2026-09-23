@@ -1290,7 +1290,14 @@ impl Gallery {
                 && current
                     .iter()
                     .zip(photos)
-                    .all(|(object, photo)| object.id() == photo.id)
+                    .all(|(object, photo)| {
+                        object.id() == photo.id
+                            && object.history_caption() == photo.history_caption
+                            && object.edit_recipe() == photo.edit_recipe
+                            && object.path() == photo.path
+                            && object.mtime() == photo.mtime.unwrap_or_default()
+                            && object.size_bytes() == photo.size_bytes.unwrap_or_default()
+                    })
         };
         if unchanged {
             // Entering Folder mode can intentionally clear the transient
@@ -1328,7 +1335,11 @@ impl Gallery {
                 .collect::<std::collections::HashMap<_, _>>();
             let reordered = photos
                 .iter()
-                .filter_map(|photo| by_id.remove(&photo.id))
+                .filter_map(|photo| {
+                    let object = by_id.remove(&photo.id)?;
+                    object.set_from_photo(photo);
+                    Some(object)
+                })
                 .collect::<Vec<_>>();
             if !self.collage_selection_mode.get() {
                 (self.selected)(None);

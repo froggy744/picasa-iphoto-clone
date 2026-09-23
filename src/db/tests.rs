@@ -15,6 +15,7 @@ fn photo_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
         favorite: row.get(12)?,
         trashed: row.get(13)?,
         folder_path: row.get(14)?,
+        history_caption: None,
     })
 }
 
@@ -23,6 +24,247 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    #[test]
+    fn history_records_only_changed_commits_and_reorders_unique_items() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        c.execute(
+            "INSERT INTO photos(id,path) VALUES (1,'/a.jpg'),(2,'/b.jpg')",
+            [],
+        )
+        .unwrap();
+        set_edit_recipe(&c, 1, "").unwrap();
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM editing_events", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        set_edit_recipe(&c, 1, "first").unwrap();
+        set_edit_recipe(&c, 2, "second").unwrap();
+        set_edit_recipe(&c, 1, "third").unwrap();
+        set_edit_recipe(&c, 1, "third").unwrap();
+        let ids = c
+            .prepare("SELECT photo_id FROM recently_edited ORDER BY event_id DESC")
+            .unwrap()
+            .query_map([], |r| r.get::<_, i64>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM editing_events", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+        set_edit_recipe(&c, 1, "").unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT action FROM editing_events ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "reset"
+        );
+    }
+
+    #[test]
+    fn history_persists_across_reopen_and_imports_do_not_count() {
+        let path = std::env::temp_dir().join(format!(
+            "pic-history-{}-{}.db",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            let c = open(&path).unwrap();
+            let id =
+                upsert_photo(&c, Path::new("/photo.jpg"), None, &PhotoMetadata::default()).unwrap();
+            assert_eq!(
+                c.query_row("SELECT count(*) FROM editing_events", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            set_edit_recipe(&c, id, "edited").unwrap();
+        }
+        {
+            let c = open(&path).unwrap();
+            assert_eq!(
+                c.query_row("SELECT count(*) FROM recently_edited", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                c.query_row("SELECT edit_recipe FROM photos", [], |r| r
+                    .get::<_, String>(0))
+                    .unwrap(),
+                "edited"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn history_failure_rolls_back_recipe_change() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        c.execute("INSERT INTO photos(id,path) VALUES (1,'/a.jpg')", [])
+            .unwrap();
+        c.execute_batch("CREATE TRIGGER reject_history BEFORE INSERT ON editing_events BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        assert!(set_edit_recipe(&c, 1, "edited").is_err());
+        assert_eq!(photo(&c, 1).unwrap().unwrap().edit_recipe, "");
+    }
+
+    #[test]
+    fn history_batch_paste_has_one_event_for_one_hundred_photos() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        for id in 1..=100 {
+            c.execute(
+                "INSERT INTO photos(id,path) VALUES (?1,?2)",
+                params![id, format!("/{id}.jpg")],
+            )
+            .unwrap();
+        }
+        let updates = (1..=100)
+            .map(|id| (id, "edited".to_owned()))
+            .collect::<Vec<_>>();
+        commit_edit_recipes(&c, &updates, "batch_paste", None).unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT count(*) FROM editing_events WHERE action = 'batch_paste'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM editing_event_items", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            100
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM recently_edited", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            100
+        );
+    }
+
+    #[test]
+    fn history_chunks_reuse_event_and_skip_missing_unchanged_or_trashed_photos() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        for id in 1..=100 {
+            c.execute(
+                "INSERT INTO photos(id,path) VALUES (?1,?2)",
+                params![id, format!("/{id}.jpg")],
+            )
+            .unwrap();
+        }
+        let updates = (1..=100)
+            .map(|id| (id, "edited".to_owned()))
+            .collect::<Vec<_>>();
+        let event = commit_edit_recipes(&c, &updates[..64], "batch_paste", None).unwrap();
+        assert!(commit_edit_recipes(&c, &updates[64..], "reset", event).is_err());
+        assert_eq!(photo(&c, 65).unwrap().unwrap().edit_recipe, "");
+        assert_eq!(
+            commit_edit_recipes(&c, &updates[64..], "batch_paste", event).unwrap(),
+            event
+        );
+        c.execute("UPDATE photos SET trashed=1 WHERE id=100", [])
+            .unwrap();
+        commit_edit_recipes(
+            &c,
+            &[
+                (1, "edited".into()),
+                (100, "other".into()),
+                (101, "other".into()),
+            ],
+            "paste",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM editing_events", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM editing_event_items", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            100
+        );
+        assert_eq!(history_photos(&c).unwrap().len(), 99);
+    }
+
+    #[test]
+    fn history_collage_save_keeps_identity_and_editable_project() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        let metadata = PhotoMetadata::default();
+        let id = save_collage_project(
+            &c,
+            None,
+            Path::new("/collage.jpg"),
+            &metadata,
+            r#"{"name":"project one"}"#,
+        )
+        .unwrap();
+        let saved = save_collage_project(
+            &c,
+            Some(id),
+            Path::new("/collage-new.jpg"),
+            &metadata,
+            r#"{"name":"project two"}"#,
+        )
+        .unwrap();
+        assert_eq!(saved, id);
+        save_collage_project(
+            &c,
+            Some(id),
+            Path::new("/collage-new.jpg"),
+            &metadata,
+            r#"{"name":"project two"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            collage_project(&c, id).unwrap().as_deref(),
+            Some(r#"{"name":"project two"}"#)
+        );
+        let resumed: serde_json::Value = serde_json::from_str(
+            &setting(&c, crate::collage::DRAFT_SETTING_KEY)
+                .unwrap()
+                .expect("saved identity must survive restart"),
+        )
+        .unwrap();
+        assert_eq!(resumed["saved_photo_id"], id);
+        let recent = history_photos(&c).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert!(recent[0]
+            .history_caption
+            .as_ref()
+            .unwrap()
+            .starts_with("Collage · "));
+        assert_eq!(recent[0].path, "/collage-new.jpg");
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM editing_events", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+    }
 
 
     #[test]
@@ -1045,7 +1287,7 @@ mod tests {
             .iter()
             .map(|id| (*id, recipe.clone()))
             .collect();
-        set_edit_recipes(&connection, &updates).unwrap();
+        commit_edit_recipes(&connection, &updates, "batch_paste", None).unwrap();
 
         for id in &ids {
             let stored: String = connection
@@ -1082,7 +1324,7 @@ mod tests {
             .query_row("SELECT id FROM photos", [], |row| row.get(0))
             .unwrap();
         assert!(any_edited(&connection, &[id]).unwrap());
-        set_edit_recipes(&connection, &[(id, String::new())]).unwrap();
+        commit_edit_recipes(&connection, &[(id, String::new())], "reset", None).unwrap();
         let stored: String = connection
             .query_row("SELECT edit_recipe FROM photos WHERE id = ?1", [id], |row| {
                 row.get(0)
