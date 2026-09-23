@@ -121,6 +121,7 @@ struct BulkRecipeState {
     touched_selected: bool,
     refresh_grid_when_done: bool,
     last_filename: String,
+    notify: bool,
 }
 
 /// Apply recipe changes to many photos without blocking the GTK main loop.
@@ -140,7 +141,12 @@ fn start_bulk_recipe_update(
     }
     let name = plan.operation_name();
     let total = ids.len();
-    context.operation_progress.begin(name, total);
+    // Small pastes are instant; flashing the notification bar for them is
+    // noise. Only selections larger than 9 photos get progress feedback.
+    let notify = total > 9;
+    if notify {
+        context.operation_progress.begin(name, total);
+    }
     let state = Rc::new(RefCell::new(Some(BulkRecipeState {
         context: context.clone(),
         plan,
@@ -150,6 +156,7 @@ fn start_bulk_recipe_update(
         touched_selected: false,
         refresh_grid_when_done,
         last_filename: String::new(),
+        notify,
     })));
     glib::timeout_add_local(Duration::from_millis(1), move || {
         let Some(mut work) = state.borrow_mut().take() else {
@@ -157,13 +164,15 @@ fn start_bulk_recipe_update(
         };
         run_bulk_recipe_chunk(&mut work);
         let finished = work.index >= work.ids.len();
-        work.context.operation_progress.update(
-            name,
-            work.index.min(total),
-            total,
-            &work.last_filename,
-            work.failed,
-        );
+        if work.notify {
+            work.context.operation_progress.update(
+                name,
+                work.index.min(total),
+                total,
+                &work.last_filename,
+                work.failed,
+            );
+        }
         if finished {
             finish_bulk_recipe(work, name, total);
             return glib::ControlFlow::Break;
@@ -269,7 +278,11 @@ fn finish_bulk_recipe(work: BulkRecipeState, name: &'static str, total: usize) {
     } else {
         format!("{succeeded} / {total} photos updated · {} failed", work.failed)
     };
-    work.context.operation_progress.finish(name, &summary);
+    // Small selections skip the bar entirely, but failures still surface so
+    // a broken paste never fails silently.
+    if work.notify || work.failed > 0 {
+        work.context.operation_progress.finish(name, &summary);
+    }
 }
 
 fn show_photo_context_menu(
