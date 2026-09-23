@@ -45,8 +45,19 @@ fn decode_raw_thumbnail(reference: &str) -> Result<DecodedThumbnailSource> {
 }
 
 fn decode_raw_thumbnail_inner(reference: &str) -> Result<DecodedThumbnailSource> {
-    #[cfg(target_os="linux")]
-    if crate::network_shares::private(reference){anyhow::ensure!(is_nikon_raw(reference),"Remote RAW preview is unsupported for this format; original was not downloaded");let bytes=remote_nef_embedded_jpeg(reference,false)?.ok_or_else(||anyhow::anyhow!("Remote NEF has no embedded JPEG thumbnail; original was not downloaded"))?;return decode_jpeg_turbo(&bytes).or_else(|_|decode_with_image(&bytes));}
+    #[cfg(target_os = "linux")]
+    if crate::network_shares::private(reference) {
+        anyhow::ensure!(
+            is_nikon_raw(reference),
+            "Remote RAW preview is unsupported for this format; original was not downloaded"
+        );
+        let bytes = remote_nef_embedded_jpeg(reference, false)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Remote NEF has no embedded JPEG thumbnail; original was not downloaded"
+            )
+        })?;
+        return decode_jpeg_turbo(&bytes).or_else(|_| decode_with_image(&bytes));
+    }
     let local_path = crate::source::materialize(reference)?;
     let mut failures = Vec::new();
 
@@ -69,7 +80,6 @@ fn decode_raw_thumbnail_inner(reference: &str) -> Result<DecodedThumbnailSource>
         }
         Err(error) => {
             failures.push(format!("preview extraction: {error}"));
-
         }
     }
 
@@ -131,16 +141,21 @@ fn decode_raw_thumbnail_inner(reference: &str) -> Result<DecodedThumbnailSource>
 fn decode_dng_sensor_thumbnail(path: &Path) -> Result<DecodedThumbnailSource> {
     // Serialize full-sensor recovery across bulk and visible workers, and
     // keep rawler's internal Rayon work off the unbounded global pool.
-    static POOL: OnceLock<std::result::Result<Mutex<rayon::ThreadPool>, rayon::ThreadPoolBuildError>> =
-        OnceLock::new();
+    static POOL: OnceLock<
+        std::result::Result<Mutex<rayon::ThreadPool>, rayon::ThreadPoolBuildError>,
+    > = OnceLock::new();
     let pool = POOL.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
             .map(Mutex::new)
     });
-    let pool = pool.as_ref().map_err(|error| anyhow::anyhow!("DNG recovery pool: {error}"))?;
-    let pool = pool.lock().map_err(|_| anyhow::anyhow!("DNG recovery pool poisoned"))?;
+    let pool = pool
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("DNG recovery pool: {error}"))?;
+    let pool = pool
+        .lock()
+        .map_err(|_| anyhow::anyhow!("DNG recovery pool poisoned"))?;
     let path = path.to_owned();
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     pool.spawn(move || {
@@ -177,6 +192,81 @@ pub fn decode_for_viewer(
     decode_for_viewer_with_cancel(reference, viewport_width, viewport_height, None, || false)
 }
 
+/// Decode a local RAW file for the lightbox: prefer the embedded NEF preview,
+/// then rawler's preview/full decode as fallbacks. Returns the image plus the
+/// already-computed viewer target dimensions (before EXIF orientation is
+/// applied, matching every other viewer branch).
+fn decode_local_raw_for_viewer<F>(
+    reference: &str,
+    orientation: u16,
+    viewport_width: u32,
+    viewport_height: u32,
+    cancelled: &F,
+) -> Result<(DynamicImage, u32, u32)>
+where
+    F: Fn() -> bool,
+{
+    let local_path = crate::source::materialize(reference)?;
+    check_viewer_cancelled(cancelled, "after_materialize")?;
+
+    if let Some(bytes) = nef_embedded_preview(&local_path)? {
+        check_viewer_cancelled(cancelled, "after_embedded_preview_read")?;
+        let (source_width, source_height) = jpeg_dimensions(&bytes)?;
+        let (target_width, target_height) = viewer_target_dimensions(
+            source_width,
+            source_height,
+            orientation,
+            viewport_width,
+            viewport_height,
+        );
+
+        check_viewer_cancelled(cancelled, "before_turbojpeg_decode")?;
+        let decoded = match decode_jpeg_turbo_with_target(&bytes, target_width, target_height) {
+            Ok(decoded) => decoded,
+            Err(_) => decode_with_image(&bytes)?,
+        };
+        check_viewer_cancelled(cancelled, "after_turbojpeg_decode")?;
+        return Ok((
+            DynamicImage::ImageRgb8(decoded.image),
+            target_width,
+            target_height,
+        ));
+    }
+
+    check_viewer_cancelled(cancelled, "before_raw_preview_decode")?;
+    let raw_params = rawler::decoders::RawDecodeParams::default();
+    let image = match rawler::analyze::extract_preview_pixels(&local_path, &raw_params) {
+        Ok(image) => image,
+        Err(preview_error) => {
+            // Some DNG files have a truncated embedded preview while
+            // their sensor data is still readable. Develop the RAW
+            // image as a viewer fallback. DNG thumbnails have a
+            // separate bounded recovery path after preview failure.
+            check_viewer_cancelled(cancelled, "before_full_raw_decode")?;
+            let full = rawler::analyze::extract_full_pixels(&local_path, &raw_params).map_err(
+                |full_error| {
+                    anyhow::anyhow!(
+                        "RAW viewer strategies failed: preview: {preview_error}; full RAW: {full_error}"
+                    )
+                },
+            )?;
+            check_viewer_cancelled(cancelled, "after_full_raw_decode")?;
+            full
+        }
+    };
+    check_viewer_cancelled(cancelled, "after_raw_preview_decode")?;
+    let source_width = image.width();
+    let source_height = image.height();
+    let (target_width, target_height) = viewer_target_dimensions(
+        source_width,
+        source_height,
+        orientation,
+        viewport_width,
+        viewport_height,
+    );
+    Ok((image, target_width, target_height))
+}
+
 pub fn decode_for_viewer_with_cancel<F>(
     reference: &str,
     viewport_width: u32,
@@ -199,13 +289,19 @@ where
     check_viewer_cancelled(&cancelled, "after_orientation_metadata")?;
 
     let (image, target_width, target_height) = if is_raw(reference) {
-        #[cfg(target_os="linux")]
-        if crate::network_shares::private(reference){anyhow::ensure!(is_nikon_raw(reference),"Remote RAW preview is unsupported for this format; original was not downloaded");check_viewer_cancelled(&cancelled,"before_remote_embedded_preview")?;let bytes=remote_nef_embedded_jpeg(reference,true)?.ok_or_else(||anyhow::anyhow!("Remote NEF has no embedded JPEG preview; original was not downloaded"))?;check_viewer_cancelled(&cancelled,"after_remote_embedded_preview")?;let(source_width,source_height)=jpeg_dimensions(&bytes)?;let(target_width,target_height)=viewer_target_dimensions(source_width,source_height,orientation,viewport_width,viewport_height);let decoded=decode_jpeg_turbo_with_target(&bytes,target_width,target_height).or_else(|_|decode_with_image(&bytes))?;(DynamicImage::ImageRgb8(decoded.image),target_width,target_height)}else {
-        let local_path = crate::source::materialize(reference)?;
-        check_viewer_cancelled(&cancelled, "after_materialize")?;
-
-        if let Some(bytes) = nef_embedded_preview(&local_path)? {
-            check_viewer_cancelled(&cancelled, "after_embedded_preview_read")?;
+        #[cfg(target_os = "linux")]
+        if crate::network_shares::private(reference) {
+            anyhow::ensure!(
+                is_nikon_raw(reference),
+                "Remote RAW preview is unsupported for this format; original was not downloaded"
+            );
+            check_viewer_cancelled(&cancelled, "before_remote_embedded_preview")?;
+            let bytes = remote_nef_embedded_jpeg(reference, true)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Remote NEF has no embedded JPEG preview; original was not downloaded"
+                )
+            })?;
+            check_viewer_cancelled(&cancelled, "after_remote_embedded_preview")?;
             let (source_width, source_height) = jpeg_dimensions(&bytes)?;
             let (target_width, target_height) = viewer_target_dimensions(
                 source_width,
@@ -214,51 +310,30 @@ where
                 viewport_width,
                 viewport_height,
             );
-
-            check_viewer_cancelled(&cancelled, "before_turbojpeg_decode")?;
-            let decoded = match decode_jpeg_turbo_with_target(&bytes, target_width, target_height) {
-                Ok(decoded) => decoded,
-                Err(_) => decode_with_image(&bytes)?,
-            };
-            check_viewer_cancelled(&cancelled, "after_turbojpeg_decode")?;
+            let decoded = decode_jpeg_turbo_with_target(&bytes, target_width, target_height)
+                .or_else(|_| decode_with_image(&bytes))?;
             (
                 DynamicImage::ImageRgb8(decoded.image),
                 target_width,
                 target_height,
             )
         } else {
-            check_viewer_cancelled(&cancelled, "before_raw_preview_decode")?;
-            let raw_params = rawler::decoders::RawDecodeParams::default();
-            let image = match rawler::analyze::extract_preview_pixels(&local_path, &raw_params) {
-                Ok(image) => image,
-                Err(preview_error) => {
-                    // Some DNG files have a truncated embedded preview while
-                    // their sensor data is still readable. Develop the RAW
-                    // image as a viewer fallback. DNG thumbnails have a
-                    // separate bounded recovery path after preview failure.
-                    check_viewer_cancelled(&cancelled, "before_full_raw_decode")?;
-                    let full = rawler::analyze::extract_full_pixels(&local_path, &raw_params)
-                        .map_err(|full_error| {
-                            anyhow::anyhow!(
-                                "RAW viewer strategies failed: preview: {preview_error}; full RAW: {full_error}"
-                            )
-                        })?;
-                    check_viewer_cancelled(&cancelled, "after_full_raw_decode")?;
-                    full
-                }
-            };
-            check_viewer_cancelled(&cancelled, "after_raw_preview_decode")?;
-            let source_width = image.width();
-            let source_height = image.height();
-            let (target_width, target_height) = viewer_target_dimensions(
-                source_width,
-                source_height,
+            decode_local_raw_for_viewer(
+                reference,
                 orientation,
                 viewport_width,
                 viewport_height,
-            );
-            (image, target_width, target_height)
-        }}
+                &cancelled,
+            )?
+        }
+        #[cfg(not(target_os = "linux"))]
+        decode_local_raw_for_viewer(
+            reference,
+            orientation,
+            viewport_width,
+            viewport_height,
+            &cancelled,
+        )?
     } else if is_jpeg(reference) {
         // A network read is synchronous and the SMB/NFS backends serialize
         // their sessions. Bail out before entering that lock when navigation
@@ -365,7 +440,10 @@ fn viewer_trace_reference(reference: &str) -> String {
     let Some((scheme, rest)) = reference.split_once("://") else {
         return reference.to_owned();
     };
-    let safe_rest = rest.rsplit_once('@').map(|(_, value)| value).unwrap_or(rest);
+    let safe_rest = rest
+        .rsplit_once('@')
+        .map(|(_, value)| value)
+        .unwrap_or(rest);
     format!("{scheme}://{safe_rest}")
 }
 
@@ -374,7 +452,6 @@ where
     F: Fn() -> bool,
 {
     if cancelled() {
-
         anyhow::bail!("cancelled at {stage}");
     }
     Ok(())
@@ -438,7 +515,7 @@ fn resize_viewer_rgba(
 }
 
 pub fn exif_orientation(reference: &str) -> u16 {
-    #[cfg(target_os="linux")]
+    #[cfg(target_os = "linux")]
     if crate::network_shares::private(reference) && is_nikon_raw(reference) {
         return remote_nef_orientation(reference).unwrap_or(1);
     }
@@ -455,21 +532,24 @@ pub fn exif_orientation(reference: &str) -> u16 {
     let key = (local.clone(), modified);
     let cache = VIEWER_ORIENTATION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(orientation) = cache.lock().unwrap().get(&key).copied() {
-
         return orientation;
     }
 
     let orientation = fs::File::open(local)
         .ok()
-        .and_then(|file| exif::Reader::new().read_from_container(&mut BufReader::new(file)).ok())
+        .and_then(|file| {
+            exif::Reader::new()
+                .read_from_container(&mut BufReader::new(file))
+                .ok()
+        })
         .and_then(|exif| {
             exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
-        .and_then(|field| match &field.value {
-            exif::Value::Short(values) => values.first().copied(),
-            exif::Value::Long(values) => values.first().copied().map(|value| value as u16),
-            _ => None,
-        })
-        .filter(|orientation| (1..=8).contains(orientation))
+                .and_then(|field| match &field.value {
+                    exif::Value::Short(values) => values.first().copied(),
+                    exif::Value::Long(values) => values.first().copied().map(|value| value as u16),
+                    _ => None,
+                })
+                .filter(|orientation| (1..=8).contains(orientation))
         })
         .unwrap_or(1);
     let mut cache = cache.lock().unwrap();
@@ -519,7 +599,9 @@ mod tests {
             },
         )
         .expect_err("cancelled request must not attempt a network read");
-        assert!(error.to_string().contains("cancelled at before_source_read"));
+        assert!(error
+            .to_string()
+            .contains("cancelled at before_source_read"));
         assert_eq!(checks.get(), 3);
     }
 }
@@ -530,7 +612,13 @@ mod raw_thumbnail_tests {
 
     #[test]
     fn non_nikon_raw_never_uses_nikon_thumbnail_fallbacks() {
-        for path in ["photo.dng", "photo.DNG", "photo.CR2", "photo.ARW", "photo.RAF"] {
+        for path in [
+            "photo.dng",
+            "photo.DNG",
+            "photo.CR2",
+            "photo.ARW",
+            "photo.RAF",
+        ] {
             assert!(is_raw(path));
             assert!(!is_nikon_raw(path));
         }
@@ -547,17 +635,26 @@ mod raw_thumbnail_tests {
         let directory = std::env::temp_dir().join(format!(
             "picasa-broken-dng-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir(&directory).unwrap();
         let path = directory.join("broken.DNG");
         fs::write(&path, b"II\x2a\x00\x08\x00\x00\x00").unwrap();
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
         // Exercise callers from a parallel bulk pool as well as repeated
         // failures, so an error cannot leave the recovery mutex held.
         pool.install(|| {
             (0..4).into_par_iter().for_each(|_| {
-                let error = decode_raw_thumbnail(path.to_str().unwrap()).err().unwrap().to_string();
+                let error = decode_raw_thumbnail(path.to_str().unwrap())
+                    .err()
+                    .unwrap()
+                    .to_string();
                 assert!(error.contains("preview extraction:"), "{error}");
                 assert!(error.contains("thumbnail extraction:"), "{error}");
                 assert!(error.contains("full RAW recovery:"), "{error}");
@@ -580,9 +677,13 @@ mod raw_thumbnail_tests {
         assert_eq!(decoded.scale, "full RAW recovery");
         assert!(decoded.source_width > THUMBNAIL_SIZE);
         assert!(decoded.source_height > THUMBNAIL_SIZE);
-        assert_eq!(decoded.image.width().max(decoded.image.height()), THUMBNAIL_SIZE);
+        assert_eq!(
+            decoded.image.width().max(decoded.image.height()),
+            THUMBNAIL_SIZE
+        );
 
-        let destination = std::env::temp_dir().join(format!("picasa-dng-test-{}.jpg", std::process::id()));
+        let destination =
+            std::env::temp_dir().join(format!("picasa-dng-test-{}.jpg", std::process::id()));
         create_uncached(&path, &destination).unwrap();
         let cached = image::open(&destination).unwrap();
         assert_eq!(cached.width().max(cached.height()), THUMBNAIL_SIZE);
