@@ -84,10 +84,11 @@
 - Fix: `catch_unwind` around `SourceId::remove` in `operation_progress.rs`; also scope the LayersOnly `connection.borrow()` so it cannot span nested re-entry.
 
 ### Export progress + Stop (fixed)
-- Multi-export progress now always repaints when the file counter advances (live `n / total` + `%`), not only on the 100 ms time throttle.
+- Multi-export progress lives in the **same single row** as the library refresh notification bar (spinner · label · inline bar · Stop) — not a second card.
+- Live `n / total` + `%` + filename in the label; always repaints when the file counter advances.
 - `run_batch_export` takes `Option<&AtomicBool>` and stops before the next job when cancelled; outcome gains a `cancelled after n / total` error.
-- Top notification bar has a **Stop** button (`OperationProgressUi`): sets the shared cancel flag, shows "Stopping…", worker polls and exits with "Export stopped — n exported…".
-- Wired the same way as the existing refresh Stop button (`refresh_status_stop`).
+- Shared **Stop** on that bar: cancels export when a batch is running, otherwise cancels library refresh (priority: export → scan).
+- Stop stays enabled while either a scan or an export is active.
 
 ### Remaining limitations / notes
 - Export size dialog uses deprecated `gtk::Dialog`/`FileChooserNative` deliberately for consistency with Collage export (adw::AlertDialog migration left as future work).

@@ -1,16 +1,20 @@
 const PROGRESS_THROTTLE: Duration = Duration::from_millis(100);
 const FINISH_HIDE_AFTER: Duration = Duration::from_secs(4);
 
-/// One reusable top-of-window notification for long batch operations
-/// (multi-photo export, bulk paste edits, bulk paste text & overlays).
+/// The one top-of-window notification bar (single row).
 ///
-/// A single instance updates in place — never one notification per photo.
+/// Shared by library refresh and long batch operations (multi-photo export,
+/// bulk paste edits, bulk paste text & overlays). Refresh writes the label /
+/// spinner / visibility directly; batch ops use `begin`/`update`/`finish`,
+/// which also drive the inline progress bar and live `n / total` counts.
+///
 /// Visual refreshes are throttled so a 4000-item batch does not redraw the
-/// GTK main loop thousands of times per second.
+/// GTK main loop thousands of times per second — except when the file counter
+/// advances, which always repaints.
 pub struct OperationProgressUi {
     root: gtk::Box,
-    title: gtk::Label,
-    detail: gtk::Label,
+    spinner: gtk::Spinner,
+    label: gtk::Label,
     bar: gtk::ProgressBar,
     stop: gtk::Button,
     last_paint: Cell<Option<Instant>>,
@@ -22,44 +26,42 @@ pub struct OperationProgressUi {
 
 impl OperationProgressUi {
     pub fn new() -> Rc<Self> {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let root = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         root.set_margin_start(12);
         root.set_margin_end(12);
         root.set_margin_top(8);
-        root.set_margin_bottom(4);
+        root.set_margin_bottom(8);
         root.add_css_class("toolbar");
         root.add_css_class("card");
         root.set_visible(false);
 
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let title = gtk::Label::new(None);
-        title.set_xalign(0.0);
-        title.set_hexpand(true);
-        title.add_css_class("heading");
-        header.append(&title);
-        let stop = gtk::Button::with_label("Stop");
-        stop.add_css_class("flat");
-        stop.set_visible(false);
-        stop.set_tooltip_text(Some("Stop this operation"));
-        header.append(&stop);
-        root.append(&header);
+        let spinner = gtk::Spinner::new();
+        spinner.set_spinning(false);
+        root.append(&spinner);
 
-        let detail = gtk::Label::new(None);
-        detail.set_xalign(0.0);
-        detail.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        detail.add_css_class("dim-label");
-        root.append(&detail);
+        let label = gtk::Label::new(Some("Refreshing library…"));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        root.append(&label);
 
+        // Inline fraction bar for batch ops only; hidden for plain refresh text.
         let bar = gtk::ProgressBar::new();
-        bar.set_show_text(true);
-        bar.set_hexpand(true);
+        bar.set_show_text(false);
+        bar.set_valign(gtk::Align::Center);
+        bar.set_width_request(160);
+        bar.set_visible(false);
         root.append(&bar);
+
+        let stop = gtk::Button::with_label("Stop");
+        stop.set_tooltip_text(Some("Stop the current operation"));
+        root.append(&stop);
 
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         Rc::new(Self {
             root,
-            title,
-            detail,
+            spinner,
+            label,
             bar,
             stop,
             last_paint: Cell::new(None),
@@ -72,6 +74,22 @@ impl OperationProgressUi {
 
     pub fn root(&self) -> &gtk::Box {
         &self.root
+    }
+
+    pub fn spinner(&self) -> &gtk::Spinner {
+        &self.spinner
+    }
+
+    pub fn label(&self) -> &gtk::Label {
+        &self.label
+    }
+
+    pub fn stop(&self) -> &gtk::Button {
+        &self.stop
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.get()
     }
 
     /// Fire `callback` when the user hits Stop on this notification bar.
@@ -89,7 +107,8 @@ impl OperationProgressUi {
             .store(true, std::sync::atomic::Ordering::Relaxed);
         if self.running.get() {
             self.stop.set_sensitive(false);
-            self.detail.set_text("Stopping…");
+            self.label
+                .set_text("Stopping…");
         }
     }
 
@@ -117,11 +136,12 @@ impl OperationProgressUi {
         self.cancel_hide();
         self.clear_cancel();
         self.running.set(true);
-        self.title.set_text(name);
         let total = total.max(1);
-        self.detail.set_text(&format!("0 / {total}    0%"));
+        self.label
+            .set_text(&format!("{name}    0 / {total}    0%"));
         self.bar.set_fraction(0.0);
-        self.bar.set_text(Some(&format!("0 / {total}")));
+        self.bar.set_visible(true);
+        self.spinner.set_spinning(true);
         self.stop.set_visible(true);
         self.stop.set_sensitive(true);
         self.root.set_visible(true);
@@ -146,33 +166,37 @@ impl OperationProgressUi {
         self.last_done.set(done);
         self.last_paint.set(Some(Instant::now()));
         if !self.root.is_visible() {
-            self.title.set_text(name);
+            self.label.set_text(name);
             self.root.set_visible(true);
         }
         let percent = done * 100 / total;
-        let mut detail = format!("{done} / {total}    {percent}%");
+        let mut text = format!("{name}    {done} / {total}    {percent}%");
         if !filename.is_empty() {
-            detail.push_str("    ");
-            detail.push_str(filename);
+            text.push_str("    ");
+            text.push_str(filename);
         }
         if failed > 0 {
-            detail.push_str(&format!("    ({failed} failed)"));
+            text.push_str(&format!("    ({failed} failed)"));
         }
-        self.detail.set_text(&detail);
+        self.label.set_text(&text);
         self.bar.set_fraction(done as f64 / total as f64);
-        self.bar
-            .set_text(Some(&format!("{done} / {total}    {percent}%")));
+        self.bar.set_visible(true);
     }
 
     pub fn finish(&self, name: &str, summary: &str) {
         self.cancel_hide();
         self.running.set(false);
         self.clear_cancel();
-        self.title.set_text(name);
-        self.detail.set_text(summary);
+        // Summary already carries the outcome ("Export complete — 3 exported").
+        if summary.is_empty() {
+            self.label.set_text(name);
+        } else {
+            self.label.set_text(summary);
+        }
         self.bar.set_fraction(1.0);
-        self.bar.set_text(Some(summary));
-        self.stop.set_visible(false);
+        self.bar.set_visible(false);
+        self.spinner.set_spinning(false);
+        self.stop.set_sensitive(false);
         self.root.set_visible(true);
         self.last_paint.set(Some(Instant::now()));
         self.last_done.set(0);

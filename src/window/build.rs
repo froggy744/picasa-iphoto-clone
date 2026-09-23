@@ -382,13 +382,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let context_menu_host: Rc<RefCell<Option<glib::WeakRef<gtk::Overlay>>>> =
         Rc::new(RefCell::new(None));
     let operation_progress = OperationProgressUi::new();
-    {
-        // Top-bar Stop cancels the active export (or any other batch using
-        // this progress card). Same affordance as the refresh Stop button.
-        // Cancellation is the shared AtomicBool; the worker polls it.
-        let progress_for_stop = operation_progress.clone();
-        operation_progress.connect_stop(move || progress_for_stop.request_cancel());
-    }
     let action_context = PhotoActionContext {
         connection: connection.clone(),
         gallery: gallery_for_actions.clone(),
@@ -1325,25 +1318,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    let refresh_status_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    refresh_status_box.set_margin_start(12);
-    refresh_status_box.set_margin_end(12);
-    refresh_status_box.set_margin_top(8);
-    refresh_status_box.set_margin_bottom(8);
-    refresh_status_box.add_css_class("toolbar");
-    refresh_status_box.add_css_class("card");
-    refresh_status_box.set_visible(false);
-    let refresh_status_spinner = gtk::Spinner::new();
-    refresh_status_spinner.set_spinning(false);
-    refresh_status_box.append(&refresh_status_spinner);
-    let refresh_status_label = gtk::Label::new(Some("Refreshing library…"));
-    refresh_status_label.set_xalign(0.0);
-    refresh_status_label.set_hexpand(true);
-    refresh_status_box.append(&refresh_status_label);
-    let refresh_status_stop = gtk::Button::with_label("Stop");
-    refresh_status_box.append(&refresh_status_stop);
+    // One notification row for the whole app: library refresh text and
+    // export/bulk progress share the same bar (spinner · label · bar · Stop).
+    let refresh_status_box = operation_progress.root().clone();
+    let refresh_status_spinner = operation_progress.spinner().clone();
+    let refresh_status_label = operation_progress.label().clone();
+    let refresh_status_stop = operation_progress.stop().clone();
     content.append(&refresh_status_box);
-    content.append(operation_progress.root());
 
     let grid_scroll = gtk::ScrolledWindow::new();
     grid_scroll.set_vexpand(true);
@@ -2912,6 +2893,7 @@ fn start_photo_export_single(
         let job = scan_job.clone();
         let refresh = refresh.downgrade();
         let stop = refresh_status_stop.clone();
+        let progress = operation_progress.clone();
         // Includes preparation and cancellation acknowledgement, not merely
         // the time an individual folder worker is active.
         glib::timeout_add_local(Duration::from_millis(50), move || {
@@ -2919,8 +2901,9 @@ fn start_photo_export_single(
                 return glib::ControlFlow::Break;
             };
             let busy = job.borrow().kind.is_some();
+            let exporting = progress.is_running();
             refresh.set_sensitive(!busy);
-            stop.set_sensitive(busy);
+            stop.set_sensitive(busy || exporting);
             glib::ControlFlow::Continue
         });
     }
@@ -3061,7 +3044,14 @@ fn start_photo_export_single(
     }
     {
         let cancel = cancel_scan_job.clone();
-        refresh_status_stop.connect_clicked(move |_| cancel());
+        let progress = operation_progress.clone();
+        refresh_status_stop.connect_clicked(move |_| {
+            if progress.is_running() {
+                progress.request_cancel();
+            } else {
+                cancel();
+            }
+        });
     }
 
     // Recover existing indexed photos at startup, on mount changes, or after
