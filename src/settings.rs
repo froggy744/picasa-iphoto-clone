@@ -70,10 +70,12 @@ impl SettingsWindow {
             });
         }
 
-        let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let header = adw::HeaderBar::new();
-        header.set_title_widget(Some(&gtk::Label::new(Some("Settings"))));
-        layout.append(&header);
+    let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    layout.set_hexpand(true);
+    layout.set_vexpand(true);
+    let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&gtk::Label::new(Some("Settings"))));
+    layout.append(&header);
 
         let stack = gtk::Stack::new();
         stack.set_hexpand(true);
@@ -126,7 +128,12 @@ impl SettingsWindow {
         split.set_position(190);
         split.set_resize_start_child(false);
         split.set_shrink_start_child(false);
+        // The content pane must be free to shrink into the space the window
+        // actually has; otherwise page min-width pushes past the window edge.
+        split.set_resize_end_child(true);
+        split.set_shrink_end_child(true);
         split.set_wide_handle(true);
+        split.set_hexpand(true);
         split.set_vexpand(true);
         layout.append(&split);
         window.set_content(Some(&layout));
@@ -402,6 +409,7 @@ fn library_page(
         .as_deref(),
     );
     updated.set_xalign(1.0);
+    updated.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
     append_row(
         &list,
@@ -493,7 +501,9 @@ fn library_page(
 
     let clean_status = gtk::Label::new(None);
     clean_status.set_xalign(0.0);
+    clean_status.set_hexpand(true);
     clean_status.set_wrap(true);
+    clean_status.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     clean_status.add_css_class("dim-label");
     content.append(&clean_status);
 
@@ -1067,6 +1077,7 @@ fn themes_page(
     // section is rebuilt from a fresh scan every time the settings window is
     // presented, so new folders appear without a restart.
     let appearance_section = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    appearance_section.set_hexpand(true);
     content.append(&appearance_section);
     let rebuild_appearance: Rc<dyn Fn()> = {
         let engine = theme_engine.clone();
@@ -1078,6 +1089,8 @@ fn themes_page(
 
             let heading = gtk::Label::new(Some("Appearance"));
             heading.set_halign(gtk::Align::Start);
+            heading.set_hexpand(true);
+            heading.set_ellipsize(gtk::pango::EllipsizeMode::End);
             heading.add_css_class("heading");
             section.append(&heading);
 
@@ -1085,7 +1098,11 @@ fn themes_page(
             let list = settings_list();
             let mut group_leader: Option<gtk::CheckButton> = None;
             for theme in &themes {
-                let check = gtk::CheckButton::with_label(&theme.name);
+                // Radio indicator only: the row title already shows the name.
+                // A second label here doubles the row min-width and overflows
+                // the Settings window on long theme names.
+                let check = gtk::CheckButton::new();
+                check.set_valign(gtk::Align::Center);
                 check.set_tooltip_text(Some(&theme.id));
                 if let Some(leader) = group_leader.as_ref() {
                     check.set_group(Some(leader));
@@ -1126,6 +1143,8 @@ fn interface_page(
     // and are re-read at startup.
     let thumbnail_heading = gtk::Label::new(Some("Thumbnails"));
     thumbnail_heading.set_halign(gtk::Align::Start);
+    thumbnail_heading.set_hexpand(true);
+    thumbnail_heading.set_ellipsize(gtk::pango::EllipsizeMode::End);
     thumbnail_heading.add_css_class("heading");
     content.append(&thumbnail_heading);
 
@@ -1193,6 +1212,8 @@ fn interface_page(
 
     let heading = gtk::Label::new(Some("Albums"));
     heading.set_halign(gtk::Align::Start);
+    heading.set_hexpand(true);
+    heading.set_ellipsize(gtk::pango::EllipsizeMode::End);
     heading.add_css_class("heading");
     content.append(&heading);
 
@@ -1381,16 +1402,21 @@ fn interface_page(
 
 fn page_content(title: &str, subtitle: &str) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    content.set_hexpand(true);
     content.set_margin_top(28);
     content.set_margin_bottom(28);
     content.set_margin_start(28);
     content.set_margin_end(28);
     let title = gtk::Label::new(Some(title));
     title.set_xalign(0.0);
+    title.set_hexpand(true);
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     title.add_css_class("title-1");
     let subtitle = gtk::Label::new(Some(subtitle));
     subtitle.set_xalign(0.0);
+    subtitle.set_hexpand(true);
     subtitle.set_wrap(true);
+    subtitle.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     subtitle.add_css_class("dim-label");
     content.append(&title);
     content.append(&subtitle);
@@ -1400,6 +1426,7 @@ fn page_content(title: &str, subtitle: &str) -> gtk::Box {
 fn settings_list() -> gtk::ListBox {
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::None);
+    list.set_hexpand(true);
     list.add_css_class("boxed-list");
     list
 }
@@ -1413,6 +1440,7 @@ fn append_row(
     let row = gtk::ListBoxRow::new();
     row.set_activatable(false);
     let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    box_.set_hexpand(true);
     box_.set_margin_top(10);
     box_.set_margin_bottom(10);
     box_.set_margin_start(12);
@@ -1421,11 +1449,15 @@ fn append_row(
     labels.set_hexpand(true);
     let title = gtk::Label::new(Some(title));
     title.set_xalign(0.0);
+    title.set_hexpand(true);
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     labels.append(&title);
     let subtitle_label = if let Some(subtitle) = subtitle {
         let subtitle = gtk::Label::new(Some(subtitle));
         subtitle.set_xalign(0.0);
+        subtitle.set_hexpand(true);
         subtitle.set_wrap(true);
+        subtitle.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         subtitle.set_selectable(true);
         subtitle.add_css_class("dim-label");
         labels.append(&subtitle);
@@ -1435,6 +1467,7 @@ fn append_row(
     };
     box_.append(&labels);
     if let Some(action) = action {
+        action.set_valign(gtk::Align::Center);
         box_.append(action);
     }
     row.set_child(Some(&box_));
@@ -1456,7 +1489,10 @@ fn stat_row(list: &gtk::ListBox, name: &str) -> gtk::Label {
 
 fn scroll_page(content: gtk::Box) -> gtk::ScrolledWindow {
     let scroll = gtk::ScrolledWindow::new();
+    // Vertical scrolling only: horizontal space is whatever the pane has.
     scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_hexpand(true);
+    scroll.set_vexpand(true);
     scroll.set_child(Some(&content));
     scroll
 }
