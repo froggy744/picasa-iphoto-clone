@@ -696,6 +696,8 @@ impl Gallery {
             });
         });
 
+        Gallery::install_folder_keyboard(&folder_root, &selection, &current_photos);
+
         let gallery = Self {
             root,
             folder_root,

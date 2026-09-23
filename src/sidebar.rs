@@ -1007,27 +1007,38 @@ pub fn build(
 }
 
 /// Set the widget that receives focus when Tab leaves the sidebar.
-pub fn set_keyboard_grid_target(scrolled: &gtk::ScrolledWindow, target: &gtk::Widget) {
+/// The resolver is called on each Tab so Folder mode can target `folder_root`
+/// instead of the hidden GridView. Also installs the Tab handler that returns
+/// focus from the grid into the sidebar — attach it to every grid root.
+pub fn set_keyboard_grid_target(
+    scrolled: &gtk::ScrolledWindow,
+    target: Rc<dyn Fn() -> gtk::Widget>,
+    grid_roots: &[gtk::Widget],
+) {
     unsafe {
-        scrolled.set_data(KEYBOARD_GRID_TARGET_KEY, target.clone());
+        scrolled.set_data(KEYBOARD_GRID_TARGET_KEY, target);
     }
 
-    let sidebar_for_grid = scrolled.clone();
-    let grid_keyboard = gtk::EventControllerKey::new();
-    grid_keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
-    grid_keyboard.connect_key_pressed(move |_, key, _, _| {
-        if key != gtk::gdk::Key::Tab && key != gtk::gdk::Key::ISO_Left_Tab {
-            return glib::Propagation::Proceed;
-        }
-        let sections = navigation_sections(&sidebar_for_grid);
-        if let Some(row) = selected_navigation_row(&sections)
-            .or_else(|| sections.last().and_then(|(_, rows)| rows.first().cloned()))
-        {
-            select_navigation_row(&sections, &row);
-        }
-        glib::Propagation::Stop
-    });
-    target.add_controller(grid_keyboard);
+    for grid in grid_roots {
+        let sidebar_for_grid = scrolled.clone();
+        let grid_keyboard = gtk::EventControllerKey::new();
+        grid_keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
+        grid_keyboard.connect_key_pressed(move |_, key, _, _| {
+            if key != gtk::gdk::Key::Tab && key != gtk::gdk::Key::ISO_Left_Tab {
+                return glib::Propagation::Proceed;
+            }
+            let sections = navigation_sections(&sidebar_for_grid);
+            if let Some(row) = selected_navigation_row(&sections).or_else(|| {
+                sections
+                    .last()
+                    .and_then(|(_, rows)| rows.first().cloned())
+            }) {
+                select_navigation_row(&sections, &row);
+            }
+            glib::Propagation::Stop
+        });
+        grid.add_controller(grid_keyboard);
+    }
 }
 
 fn handle_keyboard_navigation(
@@ -1043,12 +1054,15 @@ fn handle_keyboard_navigation(
     if key == gtk::gdk::Key::Tab {
         let target = unsafe {
             scrolled
-                .data::<gtk::Widget>(KEYBOARD_GRID_TARGET_KEY)
+                .data::<Rc<dyn Fn() -> gtk::Widget>>(KEYBOARD_GRID_TARGET_KEY)
                 .map(|target| target.as_ref().clone())
         };
-        if let Some(target) = target {
-            target.grab_focus();
-            return glib::Propagation::Stop;
+        if let Some(resolve) = target {
+            let widget = resolve();
+            if widget.is_visible() {
+                widget.grab_focus();
+                return glib::Propagation::Stop;
+            }
         }
     }
 

@@ -479,6 +479,60 @@ impl Gallery {
         }
     }
 
+    /// The list widget that currently owns gallery keyboard input. Folder mode
+    /// shows `folder_root` and hides `gallery.root`, so focus helpers must not
+    /// hardcode the GridView.
+    pub fn visible_root(&self) -> gtk::Widget {
+        if self.group_mode.get() == GroupMode::Folder {
+            self.folder_root.clone().upcast()
+        } else {
+            self.root.clone().upcast()
+        }
+    }
+
+    /// Drive Folder-stream keyboard navigation from the photo model. GtkListView
+    /// is backed by NoSelection over virtual rows, so GTK's built-in Ctrl+A and
+    /// move-cursor bindings never touch the photo MultiSelection.
+    pub(crate) fn install_folder_keyboard(
+        folder_root: &gtk::ListView,
+        selection: &gtk::MultiSelection,
+        current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
+    ) {
+        let keyboard = gtk::EventControllerKey::new();
+        keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let selection = selection.clone();
+        let current_photos = current_photos.clone();
+        let folder_root_for_key = folder_root.clone();
+        keyboard.connect_key_pressed(move |_, key, _, modifiers| {
+            let control = modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            if control && matches!(key, gtk::gdk::Key::a | gtk::gdk::Key::A) {
+                selection.select_all();
+                return glib::Propagation::Stop;
+            }
+            if control || modifiers.contains(gtk::gdk::ModifierType::ALT_MASK) {
+                return glib::Propagation::Proceed;
+            }
+            let (dx, dy) = match key {
+                gtk::gdk::Key::Left => (-1.0, 0.0),
+                gtk::gdk::Key::Right => (1.0, 0.0),
+                gtk::gdk::Key::Up => (0.0, -1.0),
+                gtk::gdk::Key::Down => (0.0, 1.0),
+                _ => return glib::Propagation::Proceed,
+            };
+            if folder_keyboard_move(
+                &folder_root_for_key,
+                &selection,
+                &current_photos,
+                dx,
+                dy,
+            ) {
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        folder_root.add_controller(keyboard);
+    }
+
     /// True while the gallery is still constructing a progressive replacement.
     /// Folder navigation uses this to keep retrying folder/photo reveal until
     /// the virtualized Folder rows exist.
@@ -1082,6 +1136,211 @@ fn refresh_folder_selection_styles(root: &gtk::ListView, selection: &gtk::MultiS
             .is_some_and(|photo| selected_ids.contains(&photo.id()));
         tile.set_manual_selected(selected);
     }
+}
+
+/// Move Folder keyboard focus one photo in `(dx, dy)` and sync the photo
+/// MultiSelection. Prefers a realized tile in that direction (so Up/Down match
+/// the visual grid, including header gaps); falls back to model order at the
+/// viewport edge so the stream can scroll.
+fn folder_keyboard_move(
+    root: &gtk::ListView,
+    selection: &gtk::MultiSelection,
+    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
+    dx: f64,
+    dy: f64,
+) -> bool {
+    let root_widget: gtk::Widget = root.clone().upcast();
+    let mut tiles = Vec::new();
+    collect_tiles(&root_widget, &mut tiles);
+
+    let mut candidates = Vec::new();
+    for tile in tiles {
+        if !tile.is_mapped() || !tile.is_visible() || !tile.can_target() {
+            continue;
+        }
+        let Some(photo) = tile.photo() else {
+            continue;
+        };
+        let Some(bounds) = tile.compute_bounds(&root_widget) else {
+            continue;
+        };
+        if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+            continue;
+        }
+        let cx = f64::from(bounds.x()) + f64::from(bounds.width()) * 0.5;
+        let cy = f64::from(bounds.y()) + f64::from(bounds.height()) * 0.5;
+        candidates.push((tile, photo, cx, cy));
+    }
+    if candidates.is_empty() {
+        return false;
+    }
+
+    // Anchor: focused tile → selected photo tile → viewport centre.
+    let focus = root.root().and_then(|window| window.focus());
+    let focus_tile = focus.as_ref().and_then(tile_ancestor);
+    let focus_photo_id = focus_tile.as_ref().and_then(|tile| tile.photo().map(|photo| photo.id()));
+    let selected_ids = selected_photo_id_set(selection);
+
+    let (anchor_cx, anchor_cy) = if let Some((cx, cy)) = focus_tile.as_ref().and_then(|tile| {
+        candidates
+            .iter()
+            .find(|(candidate, ..)| candidate == tile)
+            .map(|(_, _, cx, cy)| (*cx, *cy))
+    }) {
+        (cx, cy)
+    } else if let Some((_, _, cx, cy)) = candidates
+        .iter()
+        .find(|(_, photo, ..)| selected_ids.contains(&photo.id()))
+    {
+        (*cx, *cy)
+    } else {
+        (
+            f64::from(root.width()) * 0.5,
+            f64::from(root.height()) * 0.5,
+        )
+    };
+
+    let best = candidates
+        .iter()
+        .filter_map(|entry @ (tile, photo, cx, cy)| {
+            let ax = cx - anchor_cx;
+            let ay = cy - anchor_cy;
+            if focus_photo_id == Some(photo.id())
+                && focus_tile.as_ref().is_some_and(|focus| focus == tile)
+            {
+                return None;
+            }
+            let along = if dx != 0.0 { ax } else { ay };
+            let across = if dx != 0.0 { ay } else { ax };
+            // Require real progress on the primary axis; prefer same-row/column.
+            if along * if dx != 0.0 { dx } else { dy } <= 1.0 {
+                return None;
+            }
+            let score = along.abs() + across.abs() * 4.0;
+            Some((score, entry))
+        })
+        .min_by(|left, right| left.0.total_cmp(&right.0));
+
+    if let Some((_, (tile, photo, _, _))) = best {
+        if let Some(position) = position_for_photo(selection, current_photos, photo.id()) {
+            selection.unselect_all();
+            selection.select_item(position, true);
+        }
+        tile.grab_focus();
+        return true;
+    }
+
+    // Viewport edge: step the photo model and reveal the destination tile.
+    let photos = current_photos.borrow();
+    if photos.is_empty() {
+        return false;
+    }
+    let current_id = focus_photo_id.or_else(|| {
+        candidates
+            .iter()
+            .find(|(_, photo, ..)| selected_ids.contains(&photo.id()))
+            .map(|(_, photo, ..)| photo.id())
+    });
+    // Prefer the realized row length; otherwise fall back to a single step.
+    let row_len = candidates
+        .iter()
+        .filter(|(_, _, _, cy)| (cy - anchor_cy).abs() < 8.0)
+        .count();
+    let columns = row_len.max(1);
+    let current_pos = current_id
+        .and_then(|id| photos.iter().position(|photo| photo.id() == id))
+        .unwrap_or_else(|| {
+            selected_ids
+                .iter()
+                .find_map(|id| photos.iter().position(|photo| photo.id() == *id))
+                .unwrap_or(0)
+        });
+    let next = if dx < 0.0 {
+        match current_pos.checked_sub(1) {
+            Some(next) => next,
+            None => return false,
+        }
+    } else if dx > 0.0 {
+        let next = current_pos + 1;
+        if next >= photos.len() {
+            return false;
+        }
+        next
+    } else if dy < 0.0 {
+        match current_pos.checked_sub(columns) {
+            Some(next) => next,
+            None => return false,
+        }
+    } else {
+        let next = current_pos + columns;
+        if next >= photos.len() {
+            // Near the end: allow a one-step walk to the final photo.
+            if current_pos + 1 < photos.len() && columns > 1 {
+                current_pos + 1
+            } else {
+                return false;
+            }
+        } else {
+            next
+        }
+    };
+    let photo_id = photos[next].id();
+    drop(photos);
+    if let Some(position) = position_for_photo(selection, current_photos, photo_id) {
+        selection.unselect_all();
+        selection.select_item(position, true);
+    }
+    if let Some(row) = folder_row_index_for_photo_id(root, photo_id) {
+        root.scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+    }
+    let root_for_timer = root.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+        let mut revealed = Vec::new();
+        collect_tiles(root_for_timer.upcast_ref(), &mut revealed);
+        if let Some(tile) = revealed.into_iter().find(|tile| {
+            tile.photo()
+                .as_ref()
+                .is_some_and(|photo| photo.id() == photo_id)
+        }) {
+            tile.grab_focus();
+        }
+        glib::ControlFlow::Break
+    });
+    true
+}
+
+fn position_for_photo(
+    selection: &gtk::MultiSelection,
+    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
+    photo_id: i64,
+) -> Option<u32> {
+    if let Some(position) = current_photos
+        .borrow()
+        .iter()
+        .position(|photo| photo.id() == photo_id)
+    {
+        return Some(position as u32);
+    }
+    let model = selection.model()?;
+    (0..model.n_items()).find(|&position| {
+        model
+            .item(position)
+            .and_downcast::<PhotoObject>()
+            .is_some_and(|photo| photo.id() == photo_id)
+    })
+}
+
+fn folder_row_index_for_photo_id(root: &gtk::ListView, photo_id: i64) -> Option<u32> {
+    let model = root.model()?;
+    for position in 0..model.n_items() {
+        let Some(row) = model.item(position).and_downcast::<FolderRowObject>() else {
+            continue;
+        };
+        if row.contains_photo(photo_id) {
+            return Some(position);
+        }
+    }
+    None
 }
 
 fn folder_id_from_named_ancestor(widget: &gtk::Widget) -> Option<i64> {

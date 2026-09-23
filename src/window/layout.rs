@@ -408,7 +408,17 @@
         },
         sidebar::SidebarVisibility::from_connection(&connection.borrow()),
     );
-    sidebar::set_keyboard_grid_target(&sidebar, gallery.root.upcast_ref());
+    {
+        let gallery_for_tab = gallery.clone();
+        sidebar::set_keyboard_grid_target(
+            &sidebar,
+            Rc::new(move || gallery_for_tab.visible_root()),
+            &[
+                gallery.root.clone().upcast::<gtk::Widget>(),
+                gallery.folder_root.clone().upcast::<gtk::Widget>(),
+            ],
+        );
+    }
     sidebar_for_unavailable.replace(Some(sidebar.clone()));
     sidebar_selection_slot.replace(Some(sidebar.clone()));
     sidebar::set_active_filter(&sidebar, filter.get());
@@ -1315,13 +1325,9 @@
         {
             return glib::Propagation::Proceed;
         }
-        gallery_for_search_navigation.root.grab_focus();
-        
-        let _ = controller.forward(
-            gallery_for_search_navigation
-                .root
-                .upcast_ref::<gtk::Widget>(),
-        );
+        let grid_target = gallery_for_search_navigation.visible_root();
+        grid_target.grab_focus();
+        let _ = controller.forward(&grid_target);
         glib::Propagation::Stop
     });
     window.add_controller(search_navigation);

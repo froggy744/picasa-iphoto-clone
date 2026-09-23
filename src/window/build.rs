@@ -1450,6 +1450,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 "grid"
             });
             if folder_mode {
+                // Keep keyboard focus on the widget that is actually shown.
+                // Tab/search helpers used to target the hidden GridView.
+                let had_grid_focus = gallery_for_folder_view.root.has_focus();
+                if had_grid_focus {
+                    gallery_for_folder_view.folder_root.grab_focus();
+                }
                 // The Folder model rebuild is synchronous. This timeout runs
                 // after that work returns to GTK and paints only the final
                 // visible viewport instead of every intermediate bound row.
