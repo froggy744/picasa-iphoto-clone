@@ -1330,13 +1330,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    // One notification row for the whole app: library refresh text and
-    // export/bulk progress share the same bar (spinner · label · bar · Stop).
+    // Status/progress is embedded in the header title area (next to the
+    // search entry) instead of its own row above the grid: appearing or
+    // hiding it must never resize the photo grid.
     let refresh_status_box = operation_progress.root().clone();
     let refresh_status_spinner = operation_progress.spinner().clone();
     let refresh_status_label = operation_progress.label().clone();
     let refresh_status_stop = operation_progress.stop().clone();
-    content.append(&refresh_status_box);
 
     let grid_scroll = gtk::ScrolledWindow::new();
     grid_scroll.set_vexpand(true);
