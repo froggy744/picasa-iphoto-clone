@@ -10,8 +10,59 @@ use super::model::EditRecipe;
 pub const EDIT_SUFFIX: &str = "_edit";
 const DEFAULT_EXPORT_QUALITY: u8 = 92;
 
+/// Output format chosen in the export dialog (shared by gallery and editor).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFormat {
+    Jpeg,
+    Png,
+    Webp,
+}
+
+impl ExportFormat {
+    pub const ALL: [ExportFormat; 3] = [ExportFormat::Jpeg, ExportFormat::Png, ExportFormat::Webp];
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            ExportFormat::Jpeg => "jpg",
+            ExportFormat::Png => "png",
+            ExportFormat::Webp => "webp",
+        }
+    }
+
+    pub fn dialog_label(self) -> &'static str {
+        match self {
+            ExportFormat::Jpeg => "JPEG",
+            ExportFormat::Png => "PNG",
+            ExportFormat::Webp => "WebP",
+        }
+    }
+
+    pub fn from_dialog_index(index: u32) -> Self {
+        match index {
+            1 => ExportFormat::Png,
+            2 => ExportFormat::Webp,
+            _ => ExportFormat::Jpeg,
+        }
+    }
+
+    pub fn dialog_labels() -> Vec<&'static str> {
+        Self::ALL.iter().map(|format| format.dialog_label()).collect()
+    }
+}
+
 pub fn recipe_is_edited(recipe: &str) -> bool {
     !EditRecipe::decode(recipe).is_default()
+}
+
+/// Force `file_name` to end with `format`'s extension (stem and any
+/// `_edit` suffix preserved).
+pub fn file_name_for_format(file_name: &str, format: ExportFormat) -> String {
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("export");
+    format!("{stem}.{}", format.extension())
 }
 
 /// Build the on-disk file name for an export.
@@ -157,13 +208,14 @@ pub fn export_job_to<F>(
     destination: &Path,
     max_edge: u32,
     quality: u8,
+    format: ExportFormat,
     render: &F,
 ) -> Result<()>
 where
     F: Fn(&ExportJob) -> Result<RgbaImage>,
 {
     let image = fit_max_edge(render(job)?, max_edge);
-    super::render::save_jpeg(&image, destination, quality)
+    super::render::save_export(&image, destination, format, quality)
 }
 
 /// Export every job into `folder`, skipping missing sources, continuing after
@@ -177,6 +229,7 @@ pub fn run_batch_export<F, P>(
     folder: &Path,
     max_edge: u32,
     quality: u8,
+    format: ExportFormat,
     render: F,
     mut on_progress: P,
     cancel: Option<&AtomicBool>,
@@ -207,7 +260,7 @@ where
             continue;
         }
         let destination = unique_export_path(folder, &job.file_name, &mut reserved);
-        match export_job_to(job, &destination, max_edge, quality, &render) {
+        match export_job_to(job, &destination, max_edge, quality, format, &render) {
             Ok(()) => outcome.exported += 1,
             Err(error) => {
                 outcome.failed += 1;
@@ -262,6 +315,23 @@ mod tests {
     fn missing_extension_still_gets_suffix() {
         assert_eq!(export_file_name("noextension", true), "noextension_edit");
         assert_eq!(export_file_name("noextension", false), "noextension");
+    }
+
+    #[test]
+    fn file_name_for_format_swaps_extension_and_keeps_edit_suffix() {
+        assert_eq!(
+            file_name_for_format("DSC_1001_edit.jpg", ExportFormat::Png),
+            "DSC_1001_edit.png"
+        );
+        assert_eq!(
+            file_name_for_format("DSC_1001_edit.jpg", ExportFormat::Webp),
+            "DSC_1001_edit.webp"
+        );
+        assert_eq!(
+            file_name_for_format("photo.PNG", ExportFormat::Jpeg),
+            "photo.jpg"
+        );
+        assert_eq!(file_name_for_format("noextension", ExportFormat::Jpeg), "noextension.jpg");
     }
 
     #[test]
@@ -394,6 +464,7 @@ mod tests {
             &dir,
             0,
             92,
+            ExportFormat::Jpeg,
             |job| {
                 if job.source_path.ends_with("src-3.jpg") {
                     anyhow::bail!("simulated render failure");
@@ -444,6 +515,7 @@ mod tests {
             &dir,
             0,
             92,
+            ExportFormat::Jpeg,
             |_| Ok(RgbaImage::new(4, 4)),
             |done, total, _, failed| progress.push((done, total, failed)),
             Some(&cancel),
@@ -482,6 +554,7 @@ mod tests {
             &dir,
             0,
             92,
+            ExportFormat::Jpeg,
             |_| Ok(RgbaImage::new(4, 4)),
             |_, _, _, _| {},
             None,

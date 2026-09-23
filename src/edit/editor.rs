@@ -79,6 +79,7 @@ pub fn build(
     photo: crate::photo_object::PhotoObject,
     on_close: Rc<dyn Fn()>,
     on_saved: Rc<dyn Fn(crate::photo_object::PhotoObject)>,
+    start_export: Rc<dyn Fn(Vec<super::export_batch::ExportJob>)>,
 ) -> EditEditor {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.set_hexpand(true);
@@ -120,7 +121,7 @@ pub fn build(
     toolbar.append(&reset);
 
     let export = gtk::Button::with_label("Export");
-    export.set_tooltip_text(Some("Export the current edited photo as a new JPEG"));
+    export.set_tooltip_text(Some("Export the current edited photo (size and file type)"));
     toolbar.append(&export);
 
     let done = gtk::Button::with_label("Done");
@@ -1839,11 +1840,11 @@ pub fn build(
     }
     connect_export_action(
         &export,
-        parent.clone(),
         photo.clone(),
         session.clone(),
         active_rotation.clone(),
         apply_crop.clone(),
+        start_export.clone(),
     );
 
     {
@@ -2098,6 +2099,7 @@ mod panel_tests {
             Rc::new(RefCell::new(Connection::open_in_memory().unwrap())),
             photo,
             Rc::new(|| {}),
+            Rc::new(|_| {}),
             Rc::new(|_| {}),
         );
         parent.set_default_size(1500, 900);

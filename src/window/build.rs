@@ -2149,6 +2149,18 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let edit_space_slot = edit_space_slot.clone();
         let collage_editing = collage_editing.clone();
         let collage_editor = collage_editor.clone();
+        // Edit-mode Export uses the exact same dialog → destination → progress
+        // pipeline as the info-bar Export button (size + file type + Stop bar).
+        let export_for_editor: Rc<dyn Fn(Vec<crate::edit::export_batch::ExportJob>)> = {
+            let window = window.clone().upcast::<gtk::Window>();
+            let progress = operation_progress.clone();
+            Rc::new(move |jobs| {
+                if jobs.is_empty() {
+                    return;
+                }
+                show_photo_export_dialog(&window, jobs, progress.clone());
+            })
+        };
         edit_open_slot.replace(Some(Rc::new(move |id| {
             let Some(db_photo) = db::photo(&connection.borrow(), id).ok().flatten() else {
                 // The open failed; drop any pending collage-edit marker so
@@ -2222,6 +2234,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 photo,
                 close,
                 saved,
+                export_for_editor.clone(),
             );
             {
                 let one_to_one = info.one_to_one.clone();
@@ -2468,12 +2481,22 @@ fn show_photo_export_dialog(
     let size_row = if jobs.len() > 1 { 1 } else { 0 };
     grid.attach(&size_label, 0, size_row, 1, 1);
     grid.attach(&size, 1, size_row, 1, 1);
+
+    let type_label = gtk::Label::new(Some("File type"));
+    type_label.set_xalign(0.0);
+    let file_type = gtk::DropDown::from_strings(
+        &crate::edit::export_batch::ExportFormat::dialog_labels(),
+    );
+    file_type.set_selected(0);
+    grid.attach(&type_label, 0, size_row + 1, 1, 1);
+    grid.attach(&file_type, 1, size_row + 1, 1, 1);
     content.append(&grid);
 
     {
         let dialog_for_response = dialog.clone();
         let window = window.clone();
         let size = size.clone();
+        let file_type = file_type.clone();
         dialog.connect_response(move |_, response| {
             if response != gtk::ResponseType::Ok {
                 dialog_for_response.destroy();
@@ -2486,8 +2509,25 @@ fn show_photo_export_dialog(
                 4 => 1280,
                 _ => 0,
             };
+            let format =
+                crate::edit::export_batch::ExportFormat::from_dialog_index(file_type.selected());
+            let jobs = jobs
+                .iter()
+                .map(|job| {
+                    let mut job = job.clone();
+                    job.file_name =
+                        crate::edit::export_batch::file_name_for_format(&job.file_name, format);
+                    job
+                })
+                .collect::<Vec<_>>();
             dialog_for_response.destroy();
-            choose_photo_export_destination(&window, jobs.clone(), max_edge, progress.clone());
+            choose_photo_export_destination(
+                &window,
+                jobs,
+                max_edge,
+                format,
+                progress.clone(),
+            );
         });
     }
     dialog.show();
@@ -2497,6 +2537,7 @@ fn choose_photo_export_destination(
     window: &gtk::Window,
     jobs: Vec<crate::edit::export_batch::ExportJob>,
     max_edge: u32,
+    format: crate::edit::export_batch::ExportFormat,
     progress: Rc<OperationProgressUi>,
 ) {
     let multiple = jobs.len() > 1;
@@ -2524,9 +2565,9 @@ fn choose_photo_export_destination(
         if response == gtk::ResponseType::Accept {
             if let Some(path) = dialog.file().and_then(|file| file.path()) {
                 if multiple {
-                    start_photo_export_folder(progress.clone(), jobs.clone(), path, max_edge);
+                    start_photo_export_folder(progress.clone(), jobs.clone(), path, max_edge, format);
                 } else if let Some(job) = jobs.first().cloned() {
-                    start_photo_export_single(progress.clone(), job, path, max_edge);
+                    start_photo_export_single(progress.clone(), job, path, max_edge, format);
                 }
             }
         }
@@ -2602,6 +2643,7 @@ fn start_photo_export_folder(
     jobs: Vec<crate::edit::export_batch::ExportJob>,
     folder: std::path::PathBuf,
     max_edge: u32,
+    format: crate::edit::export_batch::ExportFormat,
 ) {
     let total = jobs.len();
     progress.begin("Exporting photos", total);
@@ -2614,6 +2656,7 @@ fn start_photo_export_folder(
             &folder,
             max_edge,
             crate::edit::export_batch::default_export_quality(),
+            format,
             |job| crate::edit::export_batch::render_job(job),
             |done, total, filename, failed| {
                 let _ = sender.send(ExportProgressMessage::Update {
@@ -2634,6 +2677,7 @@ fn start_photo_export_single(
     job: crate::edit::export_batch::ExportJob,
     destination: std::path::PathBuf,
     max_edge: u32,
+    format: crate::edit::export_batch::ExportFormat,
 ) {
     progress.begin("Exporting photos", 1);
     let cancel = progress.cancel_flag();
@@ -2658,6 +2702,7 @@ fn start_photo_export_single(
                 &destination,
                 max_edge,
                 crate::edit::export_batch::default_export_quality(),
+                format,
                 &|job| crate::edit::export_batch::render_job(job),
             );
             match result {

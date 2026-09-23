@@ -472,6 +472,24 @@ pub fn save_jpeg(image: &RgbaImage, destination: &std::path::Path, quality: u8) 
     Ok(())
 }
 
+/// Save an export in the chosen dialog format. `quality` applies to JPEG only.
+pub fn save_export(
+    image: &RgbaImage,
+    destination: &std::path::Path,
+    format: crate::edit::export_batch::ExportFormat,
+    quality: u8,
+) -> Result<()> {
+    match format {
+        crate::edit::export_batch::ExportFormat::Jpeg => save_jpeg(image, destination, quality),
+        crate::edit::export_batch::ExportFormat::Png => DynamicImage::ImageRgba8(image.clone())
+            .save_with_format(destination, image::ImageFormat::Png)
+            .with_context(|| format!("could not save {}", destination.display())),
+        crate::edit::export_batch::ExportFormat::Webp => DynamicImage::ImageRgba8(image.clone())
+            .save_with_format(destination, image::ImageFormat::WebP)
+            .with_context(|| format!("could not save {}", destination.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

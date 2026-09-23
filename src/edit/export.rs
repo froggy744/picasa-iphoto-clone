@@ -1,57 +1,22 @@
 fn connect_export_action(
     export: &gtk::Button,
-    parent: gtk::Window,
     photo: crate::photo_object::PhotoObject,
     session: Rc<RefCell<EditSession>>,
     active_rotation: Rc<Cell<i32>>,
     apply_crop: Rc<dyn Fn()>,
+    start_export: Rc<dyn Fn(Vec<super::export_batch::ExportJob>)>,
 ) {
     export.connect_clicked(move |_| {
         apply_crop();
-        let dialog = gtk::FileChooserNative::new(
-            Some("Export Edited Photo"),
-            Some(&parent),
-            gtk::FileChooserAction::Save,
-            Some("Export"),
-            Some("Cancel"),
+        let recipe = session.borrow().recipe.encode();
+        let job = super::export_batch::ExportJob::from_record(
+            photo.path(),
+            active_rotation.get(),
+            recipe,
+            photo.width(),
+            photo.height(),
+            &photo.filename(),
         );
-        let filename = {
-            let original = photo.filename();
-            let edited = {
-                let recipe = session.borrow().recipe.encode();
-                super::export_batch::recipe_is_edited(&recipe)
-            };
-            super::export_batch::export_file_name(&original, edited)
-        };
-        dialog.set_current_name(&filename);
-
-        let reference = photo.path();
-        let rotation = active_rotation.get();
-        let source_width = photo.width();
-        let source_height = photo.height();
-        let session = session.clone();
-        dialog.connect_response(move |dialog, response| {
-            if response == gtk::ResponseType::Accept {
-                if let Some(destination) = dialog.file().and_then(|file| file.path()) {
-                    let edit_recipe = session.borrow().recipe.encode();
-                    let reference = reference.clone();
-                    std::thread::spawn(move || {
-                        let result = super::render::render_for_export(
-                            &reference,
-                            rotation,
-                            &edit_recipe,
-                            source_width,
-                            source_height,
-                        )
-                        .and_then(|image| super::render::save_jpeg(&image, &destination, 92));
-                        if let Err(error) = result {
-                            eprintln!("Could not export edited photo: {error:#}");
-                        }
-                    });
-                }
-            }
-            dialog.destroy();
-        });
-        dialog.show();
+        start_export(vec![job]);
     });
 }

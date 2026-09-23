@@ -98,5 +98,11 @@
 - OpenCode permission config requires an OpenCode restart to take effect (already recorded earlier).
 - **OpenCode deny: `git push` / `git * push`** — local commits only unless user removes that rule.
 
+### Edit-mode Export unified + file type (this commit)
+- Editor toolbar **Export** no longer has its own FileChooser/save path. It builds an `ExportJob` from the live session recipe + active rotation and calls the same `show_photo_export_dialog` → destination chooser → `start_photo_export_*` → shared Stop/progress bar pipeline as the info-bar Export (`build.rs` `export_for_editor` → `edit::build(..., start_export)` → `connect_export_action`).
+- Export dialog gained a **File type** dropdown: JPEG (default) / PNG / WebP. Selection forces the output extension via `file_name_for_format` and is threaded through `choose_photo_export_destination` → `run_batch_export`/`export_job_to` → new `render::save_export` (JPEG quality 92; PNG/WebP via `image` crate).
+- New `ExportFormat` enum in `export_batch`; unit test `file_name_for_format_swaps_extension_and_keeps_edit_suffix` (+1 → **348 passed / 0 failed / 20 ignored**).
+- Editor Export tooltip no longer claims "JPEG only".
+
 ## Recovery pointer for a future session
-Read SESSION_PROGRESS.md for prior text-layer rules (never rustfmt model.rs / photo_actions.rs wholesale; 20 ignored GTK tests pre-existing). Latest commits: `d27c2e1`, `e179cbe`, `65449cc`, `9a8b3cc`, `cc083e7` (LayersOnly crash + export stop/count), plus single-row refresh/export bar merge. **LayersOnly crash root-caused to dead `SourceId::remove` in `operation_progress`.**
+Read SESSION_PROGRESS.md for prior text-layer rules (never rustfmt model.rs / photo_actions.rs wholesale; 20 ignored GTK tests pre-existing). Latest commits: `d27c2e1`, `e179cbe`, `65449cc`, `9a8b3cc`, `cc083e7` (LayersOnly crash + export stop/count), plus single-row refresh/export bar merge, plus this commit (edit-mode export shares info-bar path + file type dropdown). **LayersOnly crash root-caused to dead `SourceId::remove` in `operation_progress`.**
