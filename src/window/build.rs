@@ -203,6 +203,17 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             }
         })
     };
+    // Filled with the shared info-bar `export_clicked` once it is built;
+    // the context-menu Export item invokes this same callback.
+    let export_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let export_photos: Rc<dyn Fn()> = {
+        let slot = export_slot.clone();
+        Rc::new(move || {
+            if let Some(callback) = slot.borrow().as_ref() {
+                callback();
+            }
+        })
+    };
     let collage_open_slot: Rc<RefCell<Option<Rc<dyn Fn(Vec<i64>)>>>> =
         Rc::new(RefCell::new(None));
     let collage_add_mode_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
@@ -400,6 +411,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         open_collage: open_collage.clone(),
         open_edit: open_edit.clone(),
         edit_clipboard: edit_clipboard.clone(),
+        export: export_photos.clone(),
         refresh_albums_home: {
             let slot = albums_home_refresh_slot.clone();
             Rc::new(move |albums| {
@@ -2782,6 +2794,7 @@ fn start_photo_export_single(
         let export_clicked = export_clicked.clone();
         move |_| export_clicked()
     });
+    export_slot.replace(Some(export_clicked.clone()));
 
     let selected_for_print = selected_photo.clone();
     let window_for_print = window.clone();

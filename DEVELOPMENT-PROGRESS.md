@@ -104,5 +104,11 @@
 - New `ExportFormat` enum in `export_batch`; unit test `file_name_for_format_swaps_extension_and_keeps_edit_suffix` (+1 → **348 passed / 0 failed / 20 ignored**).
 - Editor Export tooltip no longer claims "JPEG only".
 
+### Context-menu Export (this commit)
+- Photo context menu (grid + lightbox) gains **Export…** next to Set as Wallpaper / Print.
+- It dismisses the menu, sets `selected_photo` to the right-clicked tile (so a single-tile export always anchors correctly), then calls the **same** `export_clicked` used by the info-bar Export button via `PhotoActionContext.export` / `export_slot`.
+- Multi-select still comes from `gallery.selected_photo_ids` inside that shared callback.
+- Assertion in the album-cover context-menu test: `find_action(..., "Export…")` is present.
+
 ## Recovery pointer for a future session
-Read SESSION_PROGRESS.md for prior text-layer rules (never rustfmt model.rs / photo_actions.rs wholesale; 20 ignored GTK tests pre-existing). Latest commits: `d27c2e1`, `e179cbe`, `65449cc`, `9a8b3cc`, `cc083e7` (LayersOnly crash + export stop/count), plus single-row refresh/export bar merge, plus this commit (edit-mode export shares info-bar path + file type dropdown). **LayersOnly crash root-caused to dead `SourceId::remove` in `operation_progress`.**
+Read SESSION_PROGRESS.md for prior text-layer rules (never rustfmt model.rs / photo_actions.rs wholesale; 20 ignored GTK tests pre-existing). Latest commits: `d27c2e1`, `e179cbe`, `65449cc`, `9a8b3cc`, `cc083e7` (LayersOnly crash + export stop/count), plus single-row refresh/export bar merge, plus `b3f20a4` (edit-mode export shares info-bar path + file type dropdown), plus this commit (context-menu Export… → same export_clicked). **LayersOnly crash root-caused to dead `SourceId::remove` in `operation_progress`.**

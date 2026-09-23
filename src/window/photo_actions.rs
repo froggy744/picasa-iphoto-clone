@@ -626,8 +626,24 @@ fn show_photo_context_menu(
     let rename = add_action("Rename…");
     let file_manager = add_action("Open in File Manager");
     let wallpaper = add_action("Set as Wallpaper");
+    let export = add_action("Export…");
     let print = add_action("Print");
     let properties = add_action("Properties");
+    {
+        let export_context = context.clone();
+        let export_photo = photo.clone();
+        let dismiss_menu_for_export = dismiss_menu.clone();
+        export.connect_clicked(move |_| {
+            dismiss_menu_for_export();
+            // Info-bar export anchors on the current photo slot; make the
+            // right-clicked photo current so a single-tile export always works
+            // (multi-select still comes from the gallery selection).
+            export_context
+                .selected_photo
+                .replace(Some(export_photo.clone()));
+            (export_context.export)();
+        });
+    }
     {
         let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
         separator.add_css_class("photo-context-separator");
@@ -1496,6 +1512,7 @@ mod photo_actions_tests {
             open_collage: Rc::new(|_| {}),
             open_edit: Rc::new(|_| {}),
             edit_clipboard: Rc::new(RefCell::new(None)),
+            export: Rc::new(|| {}),
             window: glib::WeakRef::new(),
             context_menu_host: Rc::new(RefCell::new(None)),
             operation_progress: OperationProgressUi::new(),
@@ -1582,6 +1599,7 @@ mod photo_actions_tests {
             open_collage: Rc::new(|_| {}),
             open_edit: Rc::new(|_| {}),
             edit_clipboard: Rc::new(RefCell::new(None)),
+            export: Rc::new(|| {}),
             window: glib::WeakRef::new(),
             context_menu_host: Rc::new(RefCell::new(Some(overlay.clone().downgrade()))),
             operation_progress: OperationProgressUi::new(),
@@ -1597,6 +1615,7 @@ mod photo_actions_tests {
             10.0,
         );
         let open_menu = menu();
+        assert!(find_action(&open_menu, "Export…").is_some());
         assert!(find_action(&open_menu, "Set as Album Cover").is_some());
         assert!(find_action(&open_menu, "Remove from Album").is_some());
 

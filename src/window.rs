@@ -461,6 +461,8 @@ struct PhotoActionContext {
     open_collage: Rc<dyn Fn(Vec<i64>)>,
     open_edit: Rc<dyn Fn(i64)>,
     edit_clipboard: Rc<RefCell<Option<String>>>,
+    /// Same pipeline as the info-bar Export button (size + file type + Stop bar).
+    export: Rc<dyn Fn()>,
     window: glib::WeakRef<gtk::Window>,
     context_menu_host: Rc<RefCell<Option<glib::WeakRef<gtk::Overlay>>>>,
     operation_progress: Rc<OperationProgressUi>,
