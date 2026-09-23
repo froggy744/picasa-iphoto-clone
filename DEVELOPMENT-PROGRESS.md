@@ -71,14 +71,23 @@
 ### Manual test status (2026-06-23 GUI run)
 - App launched (4116 photos). Editor opened; **Add Text** + text set to `PASTE TEST` via AT-SPI worked.
 - **Paste Edits** (full recipe): works.
-- **Paste Text & Overlays Only** (`BulkRecipePlan::LayersOnly`): **CRASHES**.
-  - Panic: `panic in a function that cannot unwind` at `core/src/panicking.rs:225:5`
-  - Hook: `src/main.rs:51` (`set_hook`); backtrace truncated in terminal log.
-  - Path: `photo_actions.rs` LayersOnly arm → `db::photo` + `crate::edit::model::paste_layers_only` per id, then same chunk/finish path as Fixed.
-  - **Next session: reproduce LayersOnly crash, get full backtrace (RUST_BACKTRACE=full), inspect `paste_layers_only` / overlay asset handling for non-unwind panic (likely drop glue or FFI).**
+- **Paste Text & Overlays Only** (`BulkRecipePlan::LayersOnly`): **was crashing** — root cause found and fixed (see below).
 - Header-bar Export button present in AT-SPI (`Export selected photos`); not fully GUI-driven yet.
 - Multi-select + context-menu copy/paste automation incomplete (Wayland: xdotool cannot move pointer; uinput partial; AT-SPI cache broke mid-run).
-- Automated tests still green before commit: **346 passed / 0 failed / 20 ignored**.
+- Automated tests green after export/progress fix: **347 passed / 0 failed / 20 ignored**.
+
+### LayersOnly crash root cause (fixed)
+- Core dumps (PID 237981/237740) showed panic in GTK `clicked_trampoline` of `show_photo_context_menus` with payload:
+  `called Result::unwrap() on an Err value: BoolError { message: "Failed to remove source" }` from `glib::source::SourceId::remove`.
+- `OperationProgressUi::finish` schedules a 4 s auto-hide timeout and stores its `SourceId`. When that source fires (or is already gone), the next `begin()` → `cancel_hide()` called `source.remove()` on a dead id → glib unwraps → abort (cannot unwind across FFI).
+- Sequence matching the user report: first paste (or any finish) auto-hides; second paste (Text & Overlays) hits `begin()` → panic.
+- Fix: `catch_unwind` around `SourceId::remove` in `operation_progress.rs`; also scope the LayersOnly `connection.borrow()` so it cannot span nested re-entry.
+
+### Export progress + Stop (fixed)
+- Multi-export progress now always repaints when the file counter advances (live `n / total` + `%`), not only on the 100 ms time throttle.
+- `run_batch_export` takes `Option<&AtomicBool>` and stops before the next job when cancelled; outcome gains a `cancelled after n / total` error.
+- Top notification bar has a **Stop** button (`OperationProgressUi`): sets the shared cancel flag, shows "Stopping…", worker polls and exits with "Export stopped — n exported…".
+- Wired the same way as the existing refresh Stop button (`refresh_status_stop`).
 
 ### Remaining limitations / notes
 - Export size dialog uses deprecated `gtk::Dialog`/`FileChooserNative` deliberately for consistency with Collage export (adw::AlertDialog migration left as future work).
@@ -89,4 +98,4 @@
 - **OpenCode deny: `git push` / `git * push`** — local commits only unless user removes that rule.
 
 ## Recovery pointer for a future session
-Read SESSION_PROGRESS.md for prior text-layer rules (never rustfmt model.rs / photo_actions.rs wholesale; 20 ignored GTK tests pre-existing). Latest commits: `d27c2e1`, `e179cbe`, `65449cc`, plus pending paste/header commit. **Priority bug: LayersOnly paste crash.**
+Read SESSION_PROGRESS.md for prior text-layer rules (never rustfmt model.rs / photo_actions.rs wholesale; 20 ignored GTK tests pre-existing). Latest commits: `d27c2e1`, `e179cbe`, `65449cc`, `9a8b3cc`, plus this export/progress/crash fix. **LayersOnly crash root-caused to dead `SourceId::remove` in `operation_progress`.**

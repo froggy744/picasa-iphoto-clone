@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use image::RgbaImage;
@@ -168,7 +169,9 @@ where
 /// Export every job into `folder`, skipping missing sources, continuing after
 /// failures, and uniquifying names so nothing is silently overwritten.
 ///
-/// `on_progress(done, total, file_name, failed)` runs after each item.
+/// `on_progress(done, total, file_name, failed)` runs after each item so the
+/// UI can show a live `n / total` count. When `cancel` is set, the batch stops
+/// before the next job; already-written files stay on disk.
 pub fn run_batch_export<F, P>(
     jobs: &[ExportJob],
     folder: &Path,
@@ -176,6 +179,7 @@ pub fn run_batch_export<F, P>(
     quality: u8,
     render: F,
     mut on_progress: P,
+    cancel: Option<&AtomicBool>,
 ) -> BatchExportOutcome
 where
     F: Fn(&ExportJob) -> Result<RgbaImage>,
@@ -185,6 +189,14 @@ where
     let mut outcome = BatchExportOutcome::default();
     let mut reserved = HashSet::new();
     for (index, job) in jobs.iter().enumerate() {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            let done = index;
+            outcome
+                .errors
+                .push(format!("cancelled after {done} / {total}"));
+            on_progress(done, total, "", outcome.failed);
+            break;
+        }
         let done = index + 1;
         if !Path::new(&job.source_path).is_file() {
             outcome.skipped += 1;
@@ -389,6 +401,7 @@ mod tests {
                 Ok(RgbaImage::new(4, 4))
             },
             |done, total, name, failed| progress.push((done, total, name.to_string(), failed)),
+            None,
         );
         assert_eq!(outcome.exported, 3);
         assert_eq!(outcome.skipped, 1);
@@ -399,6 +412,45 @@ mod tests {
         assert!(dir.join("photo-1.jpg").is_file());
         assert!(dir.join("photo-4_edit.jpg").is_file());
         assert!(!dir.join("photo-2_edit.jpg").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn batch_stops_when_cancel_flag_is_set() {
+        let dir = std::env::temp_dir().join(format!(
+            "pic-export-cancel-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("src.jpg"), b"x").unwrap();
+        let jobs: Vec<ExportJob> = (0..4)
+            .map(|index| ExportJob {
+                source_path: dir.join("src.jpg").display().to_string(),
+                rotation: 0,
+                edit_recipe: String::new(),
+                source_width: 4,
+                source_height: 4,
+                file_name: format!("photo-{index}.jpg"),
+            })
+            .collect();
+        let cancel = AtomicBool::new(true);
+        let mut progress = Vec::new();
+        let outcome = run_batch_export(
+            &jobs,
+            &dir,
+            0,
+            92,
+            |_| Ok(RgbaImage::new(4, 4)),
+            |done, total, _, failed| progress.push((done, total, failed)),
+            Some(&cancel),
+        );
+        assert_eq!(outcome.exported, 0);
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0], (0, 4, 0));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -425,7 +477,15 @@ mod tests {
             })
             .collect();
         std::fs::write(dir.join("src.jpg"), b"x").unwrap();
-        let outcome = run_batch_export(&jobs, &dir, 0, 92, |_| Ok(RgbaImage::new(4, 4)), |_, _, _, _| {});
+        let outcome = run_batch_export(
+            &jobs,
+            &dir,
+            0,
+            92,
+            |_| Ok(RgbaImage::new(4, 4)),
+            |_, _, _, _| {},
+            None,
+        );
         assert_eq!(outcome.exported, 2);
         assert_eq!(
             std::fs::read(dir.join("same_edit.jpg")).unwrap(),

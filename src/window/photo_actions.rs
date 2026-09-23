@@ -195,7 +195,13 @@ fn run_bulk_recipe_chunk(work: &mut BulkRecipeState) {
         }
         BulkRecipePlan::LayersOnly(clipboard) => {
             for id in &chunk_ids {
-                match db::photo(&work.context.connection.borrow(), *id) {
+                // Scope the connection borrow to this statement so a nested
+                // RefCell borrow (thumbnail/gallery refresh) cannot panic.
+                let photo = {
+                    let connection = work.context.connection.borrow();
+                    db::photo(&connection, *id)
+                };
+                match photo {
                     Ok(Some(item)) => {
                         if let Some(path) = std::path::Path::new(&item.path).file_name() {
                             if let Some(name) = path.to_str() {

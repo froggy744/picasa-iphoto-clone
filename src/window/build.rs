@@ -382,6 +382,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let context_menu_host: Rc<RefCell<Option<glib::WeakRef<gtk::Overlay>>>> =
         Rc::new(RefCell::new(None));
     let operation_progress = OperationProgressUi::new();
+    {
+        // Top-bar Stop cancels the active export (or any other batch using
+        // this progress card). Same affordance as the refresh Stop button.
+        // Cancellation is the shared AtomicBool; the worker polls it.
+        let progress_for_stop = operation_progress.clone();
+        operation_progress.connect_stop(move || progress_for_stop.request_cancel());
+    }
     let action_context = PhotoActionContext {
         connection: connection.clone(),
         gallery: gallery_for_actions.clone(),
@@ -2575,7 +2582,16 @@ fn watch_export_progress(
                     progress.update("Exporting photos", done, total, &filename, failed);
                 }
                 ExportProgressMessage::Done(outcome) => {
-                    let summary = if outcome.failed == 0 && outcome.skipped == 0 {
+                    let cancelled = outcome
+                        .errors
+                        .iter()
+                        .any(|error| error.contains("cancelled"));
+                    let summary = if cancelled {
+                        format!(
+                            "Export stopped — {} exported · {} skipped · {} failed",
+                            outcome.exported, outcome.skipped, outcome.failed
+                        )
+                    } else if outcome.failed == 0 && outcome.skipped == 0 {
                         format!("Export complete — {} exported", outcome.exported)
                     } else {
                         format!(
@@ -2586,7 +2602,12 @@ fn watch_export_progress(
                     for error in outcome.errors.iter().take(5) {
                         eprintln!("Export issue: {error}");
                     }
-                    progress.finish("Export complete", &summary);
+                    let title = if cancelled {
+                        "Export stopped"
+                    } else {
+                        "Export complete"
+                    };
+                    progress.finish(title, &summary);
                     flow = glib::ControlFlow::Break;
                 }
             }
@@ -2603,6 +2624,7 @@ fn start_photo_export_folder(
 ) {
     let total = jobs.len();
     progress.begin("Exporting photos", total);
+    let cancel = progress.cancel_flag();
     let (sender, receiver) = std::sync::mpsc::channel();
     watch_export_progress(progress, receiver, total);
     std::thread::spawn(move || {
@@ -2620,6 +2642,7 @@ fn start_photo_export_folder(
                     failed,
                 });
             },
+            Some(&cancel),
         );
         let _ = sender.send(ExportProgressMessage::Done(outcome));
     });
@@ -2632,11 +2655,17 @@ fn start_photo_export_single(
     max_edge: u32,
 ) {
     progress.begin("Exporting photos", 1);
+    let cancel = progress.cancel_flag();
     let (sender, receiver) = std::sync::mpsc::channel();
     watch_export_progress(progress, receiver, 1);
     std::thread::spawn(move || {
         let file_name = job.file_name.clone();
-        let outcome = if !std::path::Path::new(&job.source_path).is_file() {
+        let outcome = if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            crate::edit::export_batch::BatchExportOutcome {
+                errors: vec!["cancelled".into()],
+                ..Default::default()
+            }
+        } else if !std::path::Path::new(&job.source_path).is_file() {
             crate::edit::export_batch::BatchExportOutcome {
                 skipped: 1,
                 errors: vec![format!("skipped (missing): {}", job.source_path)],
