@@ -9,6 +9,8 @@ CACHE_ROOT="${PIC_BUILD_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/pic-linux-build}"
 TOOLS_DIR="$CACHE_ROOT/tools"
 GITHUB_CACHE="$CACHE_ROOT/github-source"
 WORK_ROOT="$CACHE_ROOT/work"
+FLATPAK_STATE_DIR="${PIC_FLATPAK_STATE_DIR:-$SCRIPT_DIR/.flatpak-builder}"
+FLATPAK_SOURCE_CACHE="$CACHE_ROOT/flatpak-sources"
 DIST_DIR="${PIC_DIST_DIR:-$SCRIPT_DIR/dist}"
 REPO_URL="${PIC_REPO_URL:-https://github.com/froggy744/picasa-iphoto-clone.git}"
 DEFAULT_BRANCH="${PIC_BRANCH:-main}"
@@ -260,7 +262,8 @@ fedora_hint() {
     cat >&2 <<'HINT'
 
 On Fedora, the usual build prerequisites are:
-  sudo dnf install -y cargo rust git gtk4-devel libadwaita-devel flatpak flatpak-builder \
+  sudo dnf install -y cargo rust git gtk4-devel libadwaita-devel \
+      libsmbclient-devel libnfs-devel flatpak flatpak-builder \
       cmake gcc gcc-c++ make pkgconf-pkg-config file patchelf nasm curl tar ImageMagick
 
 Then run this script again.
@@ -289,6 +292,15 @@ check_host_tools() {
     if [[ "$BUILD_TARGET" != flatpak ]] && \
        ! pkg-config --exists 'gtk4 >= 4.12' 'libadwaita-1 >= 1.5'; then
         printf 'GTK4/libadwaita development packages are missing or too old.\n' >&2
+        fedora_hint
+        exit 1
+    fi
+    # Native/AppImage builds compile native/private_smb.c and native/private_nfs.c
+    # via build.rs, which hard-requires both pkg-config packages. Flatpak builds
+    # get them from the libnfs/samba modules inside the SDK instead.
+    if [[ "$BUILD_TARGET" != flatpak ]] && \
+       ! pkg-config --exists 'smbclient' 'libnfs'; then
+        printf 'SMB/NFS development packages are missing: need smbclient (libsmbclient-devel) and libnfs (libnfs-devel).\n' >&2
         fedora_hint
         exit 1
     fi
@@ -343,6 +355,61 @@ prepare_github_source() {
     # Prime Cargo's normal cache now. Every actual build below uses --offline.
     log "Caching Rust dependencies for future offline builds"
     (cd "$SOURCE_DIR" && cargo fetch --locked)
+}
+
+# Module archives required by the generated Flatpak manifest (name|sha256|url).
+# Cached durably so 'local' builds work offline with --disable-download.
+FLATPAK_MODULE_SOURCES=(
+    "libnfs-6.0.2.tar.gz|4e5459cc3e0242447879004e9ad28286d4d27daa42cbdcde423248fad911e747|https://github.com/sahlberg/libnfs/archive/libnfs-6.0.2.tar.gz"
+    "samba-4.24.7.tar.gz|45b7747a47452eff2b2159a44cc63eb43690d339fd1069088e023a015fed06c7|https://download.samba.org/pub/samba/stable/samba-4.24.7.tar.gz"
+    "Parse-Yapp-1.21.tar.gz|3810e998308fba2e0f4f26043035032b027ce51ce5c8a52a8b8e340ca65f13e5|https://cpan.metacpan.org/authors/id/W/WB/WBRASWELL/Parse-Yapp-1.21.tar.gz"
+)
+
+verify_sha256() {
+    local file="$1" expected="$2" actual
+    actual="$(sha256sum "$file" | awk '{print $1}')" || return 1
+    [[ "$actual" == "$expected" ]]
+}
+
+ensure_flatpak_module_sources() {
+    log "Caching Flatpak module source archives"
+    local entry name sha url durable dest missing=()
+    mkdir -p "$FLATPAK_SOURCE_CACHE" "$FLATPAK_STATE_DIR/downloads"
+
+    for entry in "${FLATPAK_MODULE_SOURCES[@]}"; do
+        IFS='|' read -r name sha url <<<"$entry"
+        durable="$FLATPAK_SOURCE_CACHE/$sha/$name"
+        dest="$FLATPAK_STATE_DIR/downloads/$sha/$name"
+
+        if [[ -f "$dest" ]] && verify_sha256 "$dest" "$sha"; then
+            continue
+        fi
+        if [[ -f "$durable" ]] && verify_sha256 "$durable" "$sha"; then
+            mkdir -p "$(dirname "$dest")"
+            cp -f "$durable" "$dest"
+            continue
+        fi
+        if ((ONLINE)); then
+            printf '  Downloading %s\n' "$name"
+            if ! download_file "$url" "$durable" || ! verify_sha256 "$durable" "$sha"; then
+                rm -f "$durable" "$durable.tmp"
+                die "Could not download or verify Flatpak module source: $name ($url)"
+            fi
+            mkdir -p "$(dirname "$dest")"
+            cp -f "$durable" "$dest"
+        else
+            missing+=("$name")
+        fi
+    done
+
+    if ((${#missing[@]})); then
+        printf '\nOffline Flatpak build is missing module source archives:\n' >&2
+        printf '  %s\n' "${missing[@]}" >&2
+        printf '\nCache location: %s\n' "$FLATPAK_SOURCE_CACHE" >&2
+        printf "Run '%s github --branch %s' once while online to fetch them, then local builds work offline.\n" \
+            "$0" "$BRANCH" >&2
+        return 1
+    fi
 }
 
 download_file() {
@@ -680,12 +747,17 @@ build_appimage() {
     chmod +x "$real_bin"
     write_runtime_launcher "$deployed_bin"
 
-    if find "$appdir" -type f -name 'pic-nfs-helper*' -print -quit | grep -q .; then
-        die "AppImage staging unexpectedly contains a separate NFS helper"
+    if find "$appdir" -type f \( -name 'pic-nfs-helper*' -o -name 'pic-nfs-probe*' -o -name 'pic-smb-probe*' \) \
+        -print -quit | grep -q .; then
+        die "AppImage staging unexpectedly contains a diagnostic helper/probe binary"
     fi
     if ldd "$real_bin" | grep -q 'libnfs'; then
         find "$appdir" -type f -name 'libnfs.so*' -print -quit | grep -q . || \
             die "AppImage is missing the libnfs runtime required by direct PIC NFS"
+    fi
+    if ldd "$real_bin" | grep -q 'libsmbclient'; then
+        find "$appdir" -type f -name 'libsmbclient.so*' -print -quit | grep -q . || \
+            die "AppImage is missing the libsmbclient runtime required by direct PIC SMB"
     fi
 
     resource_root="$appdir/usr/share/$BIN_NAME"
@@ -735,6 +807,7 @@ build_flatpak() {
     manifest="$fp_work/$APP_ID.json"
     rm -rf "$fp_work"
     mkdir -p "$fp_work"
+    ensure_flatpak_module_sources || return 1
     copy_source_tree "$fp_src"
 
     mkdir -p "$fp_src/packaging-generated" "$fp_src/.cargo"
@@ -861,15 +934,20 @@ EOF_MANIFEST
     fi
     flatpak-builder \
         --force-clean \
+        --state-dir="$FLATPAK_STATE_DIR" \
         "${download_args[@]}" \
         --repo="$fp_repo" \
         "$fp_build" "$manifest" || return 1
 
-    if find "$fp_build/files" -type f -name 'pic-nfs-helper*' -print -quit | grep -q .; then
-        die "Flatpak staging unexpectedly contains a separate NFS helper"
+    if find "$fp_build/files" -type f \( -name 'pic-nfs-helper*' -o -name 'pic-nfs-probe*' -o -name 'pic-smb-probe*' \) \
+        -print -quit | grep -q .; then
+        die "Flatpak staging unexpectedly contains a diagnostic helper/probe binary"
     fi
     if ! find "$fp_build/files" -type f -name 'libnfs.so*' -print -quit | grep -q .; then
         die "Flatpak staging is missing the libnfs runtime required by direct PIC NFS"
+    fi
+    if ! find "$fp_build/files" -type f -name 'libsmbclient.so*' -print -quit | grep -q .; then
+        die "Flatpak staging is missing the libsmbclient runtime required by direct PIC SMB"
     fi
 
     bundle_name="PIC-${BUILD_LABEL}-${ARCH_NAME}.flatpak"
