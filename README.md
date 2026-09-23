@@ -4,6 +4,32 @@
 
 ---
 
+## New in Release Candidate 2
+
+**PIC: Picasa iPhoto Clone has grown into a much more capable photo workspace.** RC2 adds network share browsing, richer editing, resumable collages and flexible photo printing, alongside a refreshed interface and smoother everyday use.
+
+### Browse network shares
+
+Find and browse SMB and NFS shared folders on your local network from inside PIC. Navigate share folders and reconnect registered shares when you launch the app.
+
+<img src="samples/Browse%20Network.jpg" alt="Browsing network shares in PIC" width="900">
+
+### Add text and image overlays to edits
+
+Place text or image overlays on a photo and adjust their position, size, rotation and style. Editing remains non-destructive, so your original stays safe.
+
+<img src="samples/Edit%20Mode-Text.jpg" alt="Text overlays in Edit Mode" width="900">
+
+### Save your collage work and print your photos
+
+Save and resume collage projects, explore layouts with undo and redo, then export a high-resolution collage. Print one or many photos with control over page size, orientation, fit or crop, and the number of photos on each page.
+
+<img src="samples/Collage-SmartAI.jpg" alt="Smart collage in PIC" width="900">
+
+Themes, settings, sidebar controls, photo navigation and operation progress have also been improved. See the full [Release Candidate 2 notes](README.ReleaseCandidate2.md) for more.
+
+---
+
 ## What is PIC?
 
 PIC is a photo manager for people who just want to **see their photos**.
@@ -99,7 +125,7 @@ Need to trim a photo? **Crop Mode** gives you a simple drag-anywhere crop box wi
 
 ### Create collages
 
-Select a few photos and PIC can combine them into a **collage**: a clean **Grid**, a playful **Mosaic**, or a **Smart Mosaic** with one dominant photo. Shuffle the arrangement, tweak spacing, background and shape, then export the finished collage as a high-resolution image.
+Select a few photos and PIC can combine them into a **collage**: a clean **Grid**, a playful **Mosaic**, or a **Smart Mosaic** with one dominant photo. Shuffle the arrangement, tweak spacing, background and shape, save your work to resume later, then export the finished collage as a high-resolution image.
 
 ### Never lose track of disconnected drives
 
@@ -155,16 +181,17 @@ PIC ships with several complete looks — including a friendly **Aqua** style…
 
 **Creating**
 - Collage maker: Grid, Mosaic and Smart Mosaic layouts
-- Shuffle arrangements, adjust spacing, background and shape
+- Save and resume collages, undo and redo, shuffle arrangements, adjust spacing, background and shape
 - Export high-resolution collages
-- Print your photos
+- Print one or many photos with page size, orientation, fit or crop, and per-page layout options
 
 **Practical extras**
 - Works with photos on external and removable drives — with clear offline markers
+- Browse local network shares over SMB and NFS
 - Smart caching so revisiting your library is instant
 - Modern formats: **JPEG, PNG, WebP, GIF, BMP, TIFF, AVIF, HEIC/HEIF**
 - Camera **RAW** files: **NEF, NRW, CR2, CR3, ARW, DNG, RAF, ORF, RW2, PEF, SRW, RAW**
-- Multiple interface themes
+- Discoverable interface themes, including community themes
 - Hideable sidebar and a window that adapts to any size
 
 ---
