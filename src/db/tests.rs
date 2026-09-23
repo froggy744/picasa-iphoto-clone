@@ -16,6 +16,7 @@ fn photo_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
         trashed: row.get(13)?,
         folder_path: row.get(14)?,
         history_caption: None,
+        edited_at: 0,
     })
 }
 

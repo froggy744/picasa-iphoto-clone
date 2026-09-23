@@ -1,4 +1,4 @@
-pub const HOME_PREVIEW_LIMIT: i64 = 6;
+pub const HOME_PREVIEW_LIMIT: i64 = 10;
 
 pub struct LibraryHomeData {
     pub added: Vec<Photo>,
@@ -96,16 +96,16 @@ mod home_tests {
         let data = library_home_data(&c).unwrap();
         assert_eq!(
             data.added.iter().map(|p| p.id).collect::<Vec<_>>(),
-            vec![99, 98, 97, 96, 95, 94]
+            vec![99, 98, 97, 96, 95, 94, 93, 92, 91, 90]
         );
         assert_eq!(
             data.edited.iter().map(|p| p.id).collect::<Vec<_>>(),
-            vec![99, 98, 97, 96, 95, 94]
+            vec![99, 98, 97, 96, 95, 94, 93, 92, 91, 90]
         );
         let expected = photos(&c, None, true, None)
             .unwrap()
             .into_iter()
-            .take(6)
+            .take(10)
             .map(|p| p.id)
             .collect::<Vec<_>>();
         assert_eq!(
@@ -115,7 +115,7 @@ mod home_tests {
         let removed = data.favorites[0].id;
         set_favorite(&c, removed, false).unwrap();
         let refreshed = library_home_data(&c).unwrap();
-        assert_eq!(refreshed.favorites.len(), 6);
+        assert_eq!(refreshed.favorites.len(), 10);
         assert!(!refreshed.favorites.iter().any(|p| p.id == removed));
         assert_eq!(
             c.query_row("SELECT count(*) FROM editing_events", [], |r| r
@@ -136,7 +136,7 @@ mod home_tests {
         add_photos_to_album(&c, 1, &[1, 2, 3]).unwrap();
         set_album_cover_photo(&c, 1, 2).unwrap();
         let data = library_home_data(&c).unwrap();
-        assert_eq!(data.albums.len(), 6);
+        assert_eq!(data.albums.len(), 10);
         assert_eq!(data.albums[0].0.photo_count, 2);
         assert_eq!(data.albums[0].1.as_ref().unwrap().id, 2);
         assert_eq!(data.albums[1].0.photo_count, 0);

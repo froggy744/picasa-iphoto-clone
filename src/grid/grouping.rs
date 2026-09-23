@@ -7,6 +7,10 @@ pub enum GroupMode {
     /// Library grouping preference; it divides the continuous Picasa-style
     /// Folder stream into real, non-sticky scrolling sections.
     Folder,
+    /// Internal sticky-date grouping for the History stream. Buckets are
+    /// Today / Yesterday / Earlier This Week / Earlier This Month / month-year
+    /// from `edited_at`, not EXIF or import dates. Not a user preference.
+    History,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -420,6 +424,9 @@ fn update_group_header_for_index_for(
 }
 
 fn group_label(photo: &PhotoObject, mode: GroupMode, date: GroupDate) -> String {
+    if mode == GroupMode::History {
+        return history_group_label(photo.edited_at());
+    }
     if mode == GroupMode::Folder {
         let folder_path = photo.folder_path().unwrap_or_default();
         if folder_path.is_empty() {
@@ -450,6 +457,7 @@ fn group_label(photo: &PhotoObject, mode: GroupMode, date: GroupDate) -> String 
     match mode {
         GroupMode::None => String::new(),
         GroupMode::Folder => unreachable!("folder grouping returns before date grouping"),
+        GroupMode::History => unreachable!("history grouping returns before date grouping"),
         GroupMode::Month => value.format("%b %Y").to_string(),
         GroupMode::Day => {
             let date = value.date_naive();
@@ -465,6 +473,35 @@ fn group_label(photo: &PhotoObject, mode: GroupMode, date: GroupDate) -> String 
             }
         }
     }
+}
+
+/// Sticky History heading buckets from the last edit time, newest bucket
+/// first. "Earlier This Week" is a rolling 7-day window (excluding today and
+/// yesterday); "Earlier This Month" is the rest of the current calendar month.
+fn history_group_label(edited_at: i64) -> String {
+    if edited_at <= 0 {
+        return "Unknown Date".to_string();
+    }
+    let Some(value) = chrono::DateTime::from_timestamp_millis(edited_at) else {
+        return "Unknown Date".to_string();
+    };
+    let value = value.with_timezone(&Local);
+    let date = value.date_naive();
+    let today = Local::now().date_naive();
+    if date == today {
+        return "Today".to_string();
+    }
+    if date == today.pred_opt().unwrap_or(today) {
+        return "Yesterday".to_string();
+    }
+    let age_days = (today - date).num_days();
+    if age_days <= 7 {
+        return "Earlier This Week".to_string();
+    }
+    if value.format("%Y-%m").to_string() == today.format("%Y-%m").to_string() {
+        return "Earlier This Month".to_string();
+    }
+    value.format("%b %Y").to_string()
 }
 
 fn parse_photo_date(value: &str) -> Option<chrono::DateTime<Local>> {

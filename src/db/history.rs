@@ -74,6 +74,7 @@ pub fn history_photos_limited(connection: &Connection, limit: i64) -> Result<Vec
     let rows = statement.query_map([limit], |row| {
         let mut photo = photo_from_row(row)?;
         let timestamp: i64 = row.get(15)?;
+        photo.edited_at = timestamp;
         let kind = if row.get::<_, bool>(16)? {
             "Collage"
         } else {

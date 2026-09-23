@@ -102,7 +102,9 @@
                 return;
             }
             main_stack.set_visible_child_name("photos");
-            apply_gallery_grouping(&gallery, new_filter, sort.get(), group_mode.get());
+            // destination_click clears the search entry above, so History
+            // grouping can safely re-enable here.
+            apply_gallery_grouping(&gallery, new_filter, sort.get(), group_mode.get(), true);
             match folder_destination_plan(exact_photo_target, reuse_folder_stream) {
                 FolderDestinationPlan::ReuseWithoutFolderScroll => {
                     // Open in Folder will select/scroll the exact photo below.
@@ -383,6 +385,7 @@
                         current_filter,
                         sort.get(),
                         group_mode.get(),
+                        true,
                     );
                     // A sidebar tree-mode change only reorders folder sections.
                     // Reorder the existing stream instead of a full database
@@ -1136,7 +1139,11 @@
             collage_add_mode.set(true);
             if filter.get() == sidebar::SidebarFilter::Library {
                 apply_gallery_grouping(
-                    &gallery, sidebar::SidebarFilter::All, sort.get(), grid::GroupMode::None,
+                    &gallery,
+                    sidebar::SidebarFilter::All,
+                    sort.get(),
+                    grid::GroupMode::None,
+                    true,
                 );
                 refresh_grid(&connection, sidebar::SidebarFilter::All, "", sort.get(), &gallery);
             }
@@ -1422,23 +1429,28 @@
                 gallery_for_search.cancel_progressive_build();
             }
             // Search is a global results view even when it was started from a
-            // folder. Temporarily leave the Folder stream while text is active;
-            // clearing the query restores the continuous Folder view.
-            if matches!(filter_for_search.get(), sidebar::SidebarFilter::Folder(_)) {
+            // folder. Temporarily leave the Folder/History stream while text
+            // is active; clearing the query restores the grouped view.
+            if matches!(filter_for_search.get(), sidebar::SidebarFilter::Folder(_))
+                || filter_for_search.get() == sidebar::SidebarFilter::History
+            {
                 if query.is_empty() {
                     apply_gallery_grouping(
                         &gallery_for_search,
                         filter_for_search.get(),
                         sort_for_search.get(),
                         group_mode_for_search.get(),
+                        true,
                     );
                 } else {
                     gallery_for_search.set_grouping(
                         grid::GroupMode::None,
                         grid::GroupDate::Taken,
                     );
-                    if let Some(sidebar) = sidebar_selection_for_search.borrow().as_ref() {
-                        sidebar::set_scroll_location(sidebar, None);
+                    if matches!(filter_for_search.get(), sidebar::SidebarFilter::Folder(_)) {
+                        if let Some(sidebar) = sidebar_selection_for_search.borrow().as_ref() {
+                            sidebar::set_scroll_location(sidebar, None);
+                        }
                     }
                 }
             }
@@ -1594,13 +1606,16 @@
             gallery_for_activate.set_grouping(grid::GroupMode::None, grid::GroupDate::Taken);
         }
         suggestion_popover_for_activate.popdown();
-        if matches!(filter_for_activate.get(), sidebar::SidebarFilter::Folder(_)) {
+        if matches!(filter_for_activate.get(), sidebar::SidebarFilter::Folder(_))
+            || filter_for_activate.get() == sidebar::SidebarFilter::History
+        {
             if query.is_empty() {
                 apply_gallery_grouping(
                     &gallery_for_activate,
                     filter_for_activate.get(),
                     sort_for_activate.get(),
                     group_mode_for_activate.get(),
+                    true,
                 );
             } else {
                 gallery_for_activate.set_grouping(grid::GroupMode::None, grid::GroupDate::Taken);

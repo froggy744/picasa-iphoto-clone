@@ -80,7 +80,9 @@
     group_day.set_group(Some(&group_none));
     group_month.set_group(Some(&group_none));
     match group_mode.get() {
-        grid::GroupMode::None | grid::GroupMode::Folder => group_none.set_active(true),
+        grid::GroupMode::None | grid::GroupMode::Folder | grid::GroupMode::History => {
+            group_none.set_active(true)
+        }
         grid::GroupMode::Day => group_day.set_active(true),
         grid::GroupMode::Month => group_month.set_active(true),
     }
@@ -122,7 +124,13 @@
             {
                 group_none.set_active(true);
             }
-            apply_gallery_grouping(&gallery, filter.get(), value, group_mode.get());
+            apply_gallery_grouping(
+                &gallery,
+                filter.get(),
+                value,
+                group_mode.get(),
+                search.borrow().is_empty(),
+            );
             if let Err(error) =
                 db::set_setting(&connection.borrow(), SORT_FIELD_SETTING_KEY, field.key())
             {
@@ -176,6 +184,7 @@
         let date_taken_sort = date_taken_sort.clone();
         let connection = connection.clone();
         let filter = filter.clone();
+        let search = search_text.clone();
         let gallery = gallery.clone();
         button.connect_toggled(move |button| {
             if !button.is_active() {
@@ -198,7 +207,13 @@
             ) {
                 eprintln!("Could not save photo group mode: {error}");
             }
-            apply_gallery_grouping(&gallery, filter.get(), sort.get(), mode);
+            apply_gallery_grouping(
+                &gallery,
+                filter.get(),
+                sort.get(),
+                mode,
+                search.borrow().is_empty(),
+            );
         });
     };
     connect_group_mode(&group_none, grid::GroupMode::None);

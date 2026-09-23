@@ -560,7 +560,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         .unwrap_or(false),
     );
     gallery_for_actions.replace(Rc::downgrade(&gallery));
-    apply_gallery_grouping(&gallery, filter.get(), sort.get(), group_mode.get());
+    apply_gallery_grouping(&gallery, filter.get(), sort.get(), group_mode.get(), true);
 
     // Reuse the gallery model for the Space shortcut. Re-querying the database
     // and rebuilding the complete library model here blocked the GTK thread.
@@ -898,6 +898,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             new_filter,
                             sort_for_collection_nav.get(),
                             group_mode_for_collection_nav.get(),
+                            search.is_empty(),
                         );
                         gallery_for_collection_nav.replace(&photos);
                         let objects = photos
@@ -973,6 +974,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             new_filter,
                             sort_for_collection_nav.get(),
                             group_mode_for_collection_nav.get(),
+                            search.is_empty(),
                         );
                         gallery_for_collection_nav.replace(&photos);
                         gallery_for_collection_nav.select_last_photo();
@@ -1020,6 +1022,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             new_filter,
                             sort_for_collection_nav.get(),
                             group_mode_for_collection_nav.get(),
+                            search.is_empty(),
                         );
                         gallery_for_collection_nav.replace(&photos);
                         let objects = photos
@@ -1056,6 +1059,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             new_filter,
                             sort_for_collection_nav.get(),
                             group_mode_for_collection_nav.get(),
+                            search.is_empty(),
                         );
                         gallery_for_collection_nav.replace(&photos);
                         let objects = photos
@@ -1096,6 +1100,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             new_filter,
                             sort_for_collection_nav.get(),
                             group_mode_for_collection_nav.get(),
+                            search.is_empty(),
                         );
                         gallery_for_collection_nav.replace(&photos);
                         let objects = photos
@@ -1135,6 +1140,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             new_filter,
                             sort_for_collection_nav.get(),
                             group_mode_for_collection_nav.get(),
+                            search.is_empty(),
                         );
                         gallery_for_collection_nav.replace(&photos);
                         gallery_for_collection_nav.select_last_photo();
@@ -1177,6 +1183,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             new_filter,
                             sort_for_collection_nav.get(),
                             group_mode_for_collection_nav.get(),
+                            search.is_empty(),
                         );
                         gallery_for_collection_nav.replace(&photos);
                         let objects = photos
@@ -1213,6 +1220,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             new_filter,
                             sort_for_collection_nav.get(),
                             group_mode_for_collection_nav.get(),
+                            search.is_empty(),
                         );
                         gallery_for_collection_nav.replace(&photos);
                         gallery_for_collection_nav.select_last_photo();
@@ -1256,6 +1264,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             new_filter,
                             sort_for_collection_nav.get(),
                             group_mode_for_collection_nav.get(),
+                            search.is_empty(),
                         );
                         gallery_for_collection_nav.replace(&photos);
                         let objects = photos
@@ -1323,6 +1332,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             new_filter,
                             sort_for_collection_nav.get(),
                             group_mode_for_collection_nav.get(),
+                            search.is_empty(),
                         );
                         gallery_for_collection_nav.replace(&photos);
                         let objects = photos

@@ -23,6 +23,13 @@ struct Snapshot {
     images: HashMap<i64, Arc<PreviewImage>>,
 }
 
+struct HomeSection {
+    scroller: gtk::ScrolledWindow,
+    track: gtk::Box,
+    prev: gtk::Button,
+    next: gtk::Button,
+}
+
 pub struct LibraryHome {
     pub root: gtk::ScrolledWindow,
 }
@@ -54,28 +61,49 @@ impl LibraryHome {
             ("Albums", "View All", SidebarFilter::Albums),
         ] {
             let section = gtk::Box::new(gtk::Orientation::Vertical, 12);
-            let heading = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+            let heading = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             let label = gtk::Label::new(Some(title));
             label.add_css_class("title-2");
             label.set_xalign(0.0);
             label.set_hexpand(true);
             heading.append(&label);
+
+            let scroller = gtk::ScrolledWindow::new();
+            scroller.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+            scroller.set_hexpand(true);
+            scroller.set_kinetic_scrolling(true);
+            scroller.add_css_class("home-section-row");
+            let track = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+            track.add_css_class("home-section-track");
+            track.set_valign(gtk::Align::Start);
+            scroller.set_child(Some(&track));
+
+            let prev = gtk::Button::from_icon_name("pan-start-symbolic");
+            prev.add_css_class("flat");
+            prev.set_tooltip_text(Some("Scroll left"));
+            prev.set_visible(false);
+            let next = gtk::Button::from_icon_name("pan-end-symbolic");
+            next.add_css_class("flat");
+            next.set_tooltip_text(Some("Scroll right"));
+            next.set_visible(false);
+            wire_scroll_buttons(&scroller, &prev, &next);
+            heading.append(&prev);
+            heading.append(&next);
+
             let button = gtk::Button::with_label(action);
             button.add_css_class("flat");
             let navigate = navigate.clone();
             button.connect_clicked(move |_| navigate(destination));
             heading.append(&button);
             section.append(&heading);
-            let row = gtk::FlowBox::new();
-            row.set_selection_mode(gtk::SelectionMode::None);
-            row.set_homogeneous(true);
-            row.set_min_children_per_line(1);
-            row.set_max_children_per_line(6);
-            row.set_column_spacing(12);
-            row.set_row_spacing(12);
-            section.append(&row);
+            section.append(&scroller);
             content.append(&section);
-            sections.push(row);
+            sections.push(HomeSection {
+                scroller,
+                track,
+                prev,
+                next,
+            });
         }
         let status = gtk::Label::new(Some("Loading library…"));
         status.add_css_class("dim-label");
@@ -126,6 +154,51 @@ impl LibraryHome {
         });
         Self { root }
     }
+}
+
+fn wire_scroll_buttons(scroller: &gtk::ScrolledWindow, prev: &gtk::Button, next: &gtk::Button) {
+    {
+        let scroller = scroller.clone();
+        prev.connect_clicked(move |_| scroll_row(&scroller, -1.0));
+    }
+    {
+        let scroller = scroller.clone();
+        next.connect_clicked(move |_| scroll_row(&scroller, 1.0));
+    }
+    let hadj = scroller.hadjustment();
+    let prev = prev.clone();
+    let next = next.clone();
+    let update = {
+        let hadj = hadj.clone();
+        let prev = prev.clone();
+        let next = next.clone();
+        Rc::new(move || {
+            let max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
+            let scrollable = max > hadj.lower() + 1.0;
+            let value = hadj.value();
+            prev.set_visible(scrollable);
+            next.set_visible(scrollable);
+            prev.set_sensitive(scrollable && value > hadj.lower() + 0.5);
+            next.set_sensitive(scrollable && value < max - 0.5);
+        })
+    };
+    update();
+    hadj.connect_value_changed({
+        let update = update.clone();
+        move |_| update()
+    });
+    hadj.connect_changed({
+        let update = update.clone();
+        move |_| update()
+    });
+}
+
+fn scroll_row(scroller: &gtk::ScrolledWindow, direction: f64) {
+    let hadj = scroller.hadjustment();
+    let step = (hadj.page_size() * 0.75).max(160.0);
+    let max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
+    let target = (hadj.value() + direction * step).clamp(hadj.lower(), max);
+    hadj.set_value(target);
 }
 
 fn worker(
@@ -210,10 +283,14 @@ fn worker(
     }
 }
 
-fn populate(sections: &[gtk::FlowBox], snapshot: &Snapshot, navigate: &Navigate, open: &OpenPhoto) {
+fn populate(sections: &[HomeSection], snapshot: &Snapshot, navigate: &Navigate, open: &OpenPhoto) {
+    let positions: Vec<f64> = sections
+        .iter()
+        .map(|section| section.scroller.hadjustment().value())
+        .collect();
     for section in sections {
-        while let Some(child) = section.first_child() {
-            section.remove(&child);
+        while let Some(child) = section.track.first_child() {
+            section.track.remove(&child);
         }
     }
     for (index, photos) in [
@@ -239,7 +316,7 @@ fn populate(sections: &[gtk::FlowBox], snapshot: &Snapshot, navigate: &Navigate,
             let open = open.clone();
             let objects = objects.clone();
             button.connect_clicked(move |_| open(objects.clone(), position, index == 1));
-            sections[index].insert(&button, -1);
+            sections[index].track.append(&button);
         }
     }
     for (album, cover) in &snapshot.data.albums {
@@ -253,7 +330,7 @@ fn populate(sections: &[gtk::FlowBox], snapshot: &Snapshot, navigate: &Navigate,
         let navigate = navigate.clone();
         let id = album.id;
         button.connect_clicked(move |_| navigate(SidebarFilter::Album(id)));
-        sections[3].insert(&button, -1);
+        sections[3].track.append(&button);
     }
     for (section, message) in sections.iter().zip([
         "No photos added yet",
@@ -261,13 +338,45 @@ fn populate(sections: &[gtk::FlowBox], snapshot: &Snapshot, navigate: &Navigate,
         "No favourites yet",
         "No albums yet",
     ]) {
-        if section.first_child().is_none() {
+        if section.track.first_child().is_none() {
             let label = gtk::Label::new(Some(message));
             label.add_css_class("dim-label");
             label.set_margin_top(24);
             label.set_margin_bottom(24);
-            section.insert(&label, -1);
+            section.track.append(&label);
         }
+    }
+    restore_row_positions(sections, &positions);
+}
+
+/// Reapply row scroll offsets after children are rebuilt. The adjustment upper
+/// is only correct once the new cards have been measured, so retry shortly
+/// after the rebuild instead of assuming the value sticks immediately.
+fn restore_row_positions(sections: &[HomeSection], positions: &[f64]) {
+    for (section, position) in sections.iter().zip(positions) {
+        let position = *position;
+        if position <= 0.0 {
+            continue;
+        }
+        let hadj = section.scroller.hadjustment();
+        apply_position(&hadj, position);
+        let apply = {
+            let hadj = hadj.clone();
+            Rc::new(move || apply_position(&hadj, position))
+        };
+        // One idle tick plus a later tick cover measure/allocate after rebuild.
+        glib::timeout_add_local_once(Duration::from_millis(16), {
+            let apply = apply.clone();
+            move || apply()
+        });
+        glib::timeout_add_local_once(Duration::from_millis(50), move || apply());
+    }
+}
+
+fn apply_position(hadj: &gtk::Adjustment, position: f64) {
+    let max = (hadj.upper() - hadj.page_size()).max(hadj.lower());
+    if position <= max {
+        hadj.set_value(position);
     }
 }
 
@@ -277,7 +386,12 @@ fn card(title: &str, subtitle: Option<&str>, image: Option<&Arc<PreviewImage>>) 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let frame = gtk::Overlay::new();
     frame.add_css_class("card");
-    frame.set_size_request(140, 100);
+    // Square thumbnail so every preview card shares one size.
+    frame.set_size_request(140, 140);
+    frame.set_hexpand(false);
+    frame.set_vexpand(false);
+    frame.set_halign(gtk::Align::Center);
+    frame.set_valign(gtk::Align::Start);
     let picture = gtk::Picture::new();
     picture.set_can_shrink(true);
     picture.set_content_fit(gtk::ContentFit::Cover);

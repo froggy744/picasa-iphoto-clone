@@ -22,6 +22,8 @@ mod imp {
         #[property(get, set)]
         pub history_caption: RefCell<Option<String>>,
         #[property(get, set)]
+        pub edited_at: Cell<i64>,
+        #[property(get, set)]
         pub taken_at: RefCell<Option<String>>,
         #[property(get, set)]
         pub camera: RefCell<Option<String>>,
@@ -108,6 +110,7 @@ impl PhotoObject {
         *imp.path.borrow_mut() = photo.path.clone();
         *imp.filename.borrow_mut() = crate::source::filename(&photo.path);
         *imp.history_caption.borrow_mut() = photo.history_caption.clone();
+        imp.edited_at.set(photo.edited_at);
         *imp.taken_at.borrow_mut() = photo.taken_at.clone();
         *imp.camera.borrow_mut() = photo.camera.clone();
         imp.width.set(photo.width.unwrap_or_default());

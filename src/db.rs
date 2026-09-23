@@ -128,6 +128,9 @@ pub struct Photo {
     pub trashed: bool,
     /// Presentation metadata populated only by the History query.
     pub history_caption: Option<String>,
+    /// Last edit time (epoch millis) from `recently_edited`. 0 for ordinary
+    /// library rows that have never been edited.
+    pub edited_at: i64,
 }
 
 #[derive(Debug, Clone, Default)]

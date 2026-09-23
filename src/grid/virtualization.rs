@@ -1293,6 +1293,7 @@ impl Gallery {
                     .all(|(object, photo)| {
                         object.id() == photo.id
                             && object.history_caption() == photo.history_caption
+                            && object.edited_at() == photo.edited_at
                             && object.edit_recipe() == photo.edit_recipe
                             && object.path() == photo.path
                             && object.mtime() == photo.mtime.unwrap_or_default()

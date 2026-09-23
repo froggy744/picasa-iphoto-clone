@@ -114,9 +114,9 @@ fn group_mode_key(mode: grid::GroupMode) -> &'static str {
         grid::GroupMode::None => "none",
         grid::GroupMode::Day => "day",
         grid::GroupMode::Month => "month",
-        // Folder is an internal presentation mode and is never persisted as
-        // the user's Library grouping preference.
-        grid::GroupMode::Folder => "none",
+        // Folder and History are internal presentation modes and are never
+        // persisted as the user's Library grouping preference.
+        grid::GroupMode::Folder | grid::GroupMode::History => "none",
     }
 }
 
@@ -150,6 +150,7 @@ fn apply_gallery_grouping(
     filter: sidebar::SidebarFilter,
     sort: PhotoSort,
     mode: grid::GroupMode,
+    search_is_empty: bool,
 ) {
     gallery.set_favorite_indicators_visible(filter != sidebar::SidebarFilter::Favorites);
 
@@ -157,6 +158,18 @@ fn apply_gallery_grouping(
     // rows inside that stream, so they scroll away naturally with the photos.
     if matches!(filter, sidebar::SidebarFilter::Folder(_)) {
         gallery.set_grouping(grid::GroupMode::Folder, grid::GroupDate::Taken);
+        return;
+    }
+
+    // History always buckets by last edit time. An active search replaces the
+    // stream with ordinary library photos that have no `edited_at`, so drop
+    // History grouping while the query is non-empty.
+    if filter == sidebar::SidebarFilter::History {
+        if search_is_empty {
+            gallery.set_grouping(grid::GroupMode::History, grid::GroupDate::Taken);
+        } else {
+            gallery.set_grouping(grid::GroupMode::None, grid::GroupDate::Taken);
+        }
         return;
     }
 

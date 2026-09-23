@@ -35,6 +35,9 @@ fn home_worker_refreshes_favorites_from_another_connection() {
             .collect::<Vec<_>>(),
         vec![1]
     );
+    assert_eq!(initial.data.added.len(), 2);
+    assert_eq!(initial.data.edited.len(), 1);
+    assert_eq!(initial.data.albums.len(), 1);
     assert!(initial.images.is_empty());
     db::set_favorite(&connection, 1, false).unwrap();
     db::set_favorite(&connection, 2, true).unwrap();
@@ -104,6 +107,11 @@ fn home_cached_thumbnail_does_not_delete_or_regenerate_corrupt_cache() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn home_preview_limit_is_ten() {
+    assert_eq!(db::HOME_PREVIEW_LIMIT, 10);
+}
+
 fn collect<T: IsA<gtk::Widget> + glib::object::ObjectType>(
     widget: &gtk::Widget,
     result: &mut Vec<T>,
@@ -116,6 +124,45 @@ fn collect<T: IsA<gtk::Widget> + glib::object::ObjectType>(
         child = item.next_sibling();
         collect(&item, result);
     }
+}
+
+fn collect_home_tracks(root: &gtk::Widget) -> Vec<gtk::Box> {
+    let mut tracks = Vec::<gtk::Box>::new();
+    collect(root, &mut tracks);
+    tracks.retain(|track| {
+        track
+            .css_classes()
+            .iter()
+            .any(|class| class == "home-section-track")
+    });
+    tracks
+}
+
+fn collect_home_rows(root: &gtk::Widget) -> Vec<gtk::ScrolledWindow> {
+    let mut rows = Vec::<gtk::ScrolledWindow>::new();
+    collect(root, &mut rows);
+    rows.retain(|row| {
+        row.css_classes()
+            .iter()
+            .any(|class| class == "home-section-row")
+    });
+    rows
+}
+
+fn arrow_visibles_from(root: &gtk::Widget) -> Vec<(String, bool, bool)> {
+    let mut buttons = Vec::<gtk::Button>::new();
+    collect(root, &mut buttons);
+    buttons
+        .iter()
+        .filter(|b| b.icon_name().is_some())
+        .map(|b| {
+            (
+                b.icon_name().map(|n| n.to_string()).unwrap_or_default(),
+                b.is_visible(),
+                b.is_sensitive(),
+            )
+        })
+        .collect()
 }
 
 #[test]
@@ -143,20 +190,82 @@ fn home_page_sections_navigation_and_favorite_refresh() {
     window.set_child(Some(&home.root));
     window.present();
     let context = glib::MainContext::default();
-    let mut sections = Vec::<gtk::FlowBox>::new();
-    collect(home.root.upcast_ref(), &mut sections);
-    let wait_for = |ready: &dyn Fn() -> bool| {
+    let sections = collect_home_tracks(home.root.upcast_ref());
+    let rows = collect_home_rows(home.root.upcast_ref());
+    assert_eq!(sections.len(), 4);
+    assert_eq!(rows.len(), 4);
+    for row in &rows {
+        let (h, v) = row.policy();
+        assert_eq!(h, gtk::PolicyType::Automatic);
+        assert_eq!(v, gtk::PolicyType::Never);
+        assert!(row.is_kinetic_scrolling());
+    }
+    let wait_for = |label: &str, ready: &dyn Fn() -> bool| {
         let start = std::time::Instant::now();
         while !ready() && start.elapsed() < Duration::from_secs(8) {
             context.iteration(false);
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(ready(), "Home Page did not update before timeout");
+        if !ready() {
+            let mut labels = Vec::<gtk::Label>::new();
+            collect(home.root.upcast_ref(), &mut labels);
+            let texts: Vec<_> = labels.iter().map(|l| l.text().to_string()).collect();
+            let mut tracks = Vec::<gtk::Box>::new();
+            collect(home.root.upcast_ref(), &mut tracks);
+            let counts: Vec<_> = tracks
+                .iter()
+                .filter(|t| t.css_classes().iter().any(|c| c == "home-section-track"))
+                .map(|t| {
+                    let mut n = 0;
+                    let mut child = t.first_child();
+                    while child.is_some() {
+                        n += 1;
+                        child = child.and_then(|c| c.next_sibling());
+                    }
+                    n
+                })
+                .collect();
+            let arrow_visibles = arrow_visibles_from(home.root.upcast_ref());
+            let hadj = rows[0].hadjustment();
+            panic!(
+                "timeout after {label}; track_child_counts={counts:?}; \
+                 arrows={arrow_visibles:?}; hadj=({}, {}, {}); labels={texts:?}",
+                hadj.upper(),
+                hadj.page_size(),
+                hadj.value(),
+            );
+        }
     };
-    wait_for(&|| sections[0].child_at_index(1).is_some());
+    wait_for("initial populate", &|| sections[0].first_child().is_some());
+    // Square preview cards keep a fixed frame size.
+    let mut buttons = Vec::<gtk::Button>::new();
+    collect(sections[0].upcast_ref(), &mut buttons);
+    assert!(!buttons.is_empty());
+    wait_for("card allocation", &|| {
+        buttons[0].width() > 0 && buttons[0].height() > 0
+    });
+    let frame = buttons[0]
+        .first_child()
+        .and_then(|child| child.downcast::<gtk::Box>().ok())
+        .and_then(|content| content.first_child())
+        .and_then(|child| child.downcast::<gtk::Overlay>().ok())
+        .expect("card frame");
+    assert_eq!(frame.width(), frame.height());
+    assert_eq!(frame.width(), 140);
+
+    // Scroll buttons appear only once a row overflows the viewport.
+    let arrow_visibles = || arrow_visibles_from(home.root.upcast_ref());
+    let scroll_buttons = arrow_visibles();
+    assert!(scroll_buttons
+        .iter()
+        .any(|(name, _, _)| name == "pan-start-symbolic"));
+    assert!(scroll_buttons
+        .iter()
+        .any(|(name, _, _)| name == "pan-end-symbolic"));
+    // Two photos fit in 900px, so no row is scrollable yet.
+    assert!(scroll_buttons.iter().all(|(_, visible, _)| !*visible));
+
     if let Some(path) = std::env::var_os("PIC_HOME_SCREENSHOT") {
-        // Let the newly populated FlowBoxes receive their first allocation.
-        wait_for(&|| sections[0].child_at_index(0).unwrap().width() > 0);
         let snapshot = gtk::Snapshot::new();
         gtk::WidgetPaintable::new(Some(&window)).snapshot(
             &snapshot,
@@ -171,9 +280,46 @@ fn home_page_sections_navigation_and_favorite_refresh() {
             .save_to_png(path)
             .unwrap();
     }
-    let mut buttons = Vec::<gtk::Button>::new();
-    collect(home.root.upcast_ref(), &mut buttons);
-    for button in buttons
+
+    // Overflow the first row and check horizontal scrolling plus position memory.
+    for id in 3..=12 {
+        connection
+            .execute(
+                "INSERT INTO photos(id,path) VALUES (?1,?2)",
+                rusqlite::params![id, format!("smb://offline/share/{id}.jpg")],
+            )
+            .unwrap();
+    }
+    wait_for("row overflow", &|| {
+        rows[0].hadjustment().upper() > rows[0].hadjustment().page_size() + 1.0
+    });
+    wait_for("scroll buttons visible", &|| {
+        // Only the overflowing first row should show its scroll arrows.
+        let arrows = arrow_visibles();
+        arrows.len() >= 8
+            && arrows.iter().take(2).all(|(_, visible, _)| *visible)
+            && arrows.iter().skip(2).all(|(_, visible, _)| !*visible)
+    });
+
+    let hadj = rows[0].hadjustment();
+    hadj.set_value(120.0);
+    assert_eq!(hadj.value(), 120.0);
+    // A card click in a later section forces a snapshot rebuild.
+    db::set_favorite(&connection, 2, true).unwrap();
+    wait_for("favorite row content", &|| {
+        let mut labels = Vec::<gtk::Label>::new();
+        collect(sections[2].upcast_ref(), &mut labels);
+        labels
+            .iter()
+            .any(|label| label.text() == "two.jpg" || label.text() == "one.jpg")
+    });
+    wait_for("scroll position memory", &|| {
+        (hadj.value() - 120.0).abs() < 0.5
+    });
+
+    let mut all_buttons = Vec::<gtk::Button>::new();
+    collect(home.root.upcast_ref(), &mut all_buttons);
+    for button in all_buttons
         .iter()
         .filter(|b| matches!(b.label().as_deref(), Some("View All" | "View History")))
     {
@@ -199,7 +345,8 @@ fn home_page_sections_navigation_and_favorite_refresh() {
     assert_eq!(*opened.borrow(), vec![(1, true), (1, false)]);
     assert_eq!(destinations.borrow().last(), Some(&SidebarFilter::Album(1)));
     db::set_favorite(&connection, 1, false).unwrap();
-    wait_for(&|| {
+    db::set_favorite(&connection, 2, false).unwrap();
+    wait_for("favourites cleared", &|| {
         let mut labels = Vec::<gtk::Label>::new();
         collect(sections[2].upcast_ref(), &mut labels);
         labels

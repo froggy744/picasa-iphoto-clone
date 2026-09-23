@@ -1,6 +1,176 @@
-# Development handover — Phase 2 Library Home Page
+# Development handover — Phase 3 History date grouping
 
-Updated: 2026-09-23. This section supersedes the archived Phase 1 report below.
+Updated: 2026-09-23. This section supersedes the horizontal-rows and Phase 2 reports below.
+
+## Current status
+
+Phase 3 (History grouped by last edit date) is implemented in the working tree. Phase 1 and Phase 2 remain implemented. Batch-event navigation from TODO-HISTORY.md is **not** started.
+
+- Branch: `rc5`.
+- HEAD: `1622a42` (Phase 2 commit). No new commit was made.
+- Workspace: `/home/peet/Downloads/picasa/picasa-iphoto-clone`.
+- Uncommitted work includes Phase 3 plus the earlier horizontal Home rows.
+- `.flatpak-builder/` remains untracked and untouched.
+
+## Task and completed features
+
+Group History entries by last editing date (newest-edited-first), without breaking virtualization, search, cached thumbnails, offline handling, or photo/collage navigation.
+
+Completed:
+
+1. `Photo.edited_at` (epoch millis, 0 for ordinary library rows) is populated from `recently_edited.edited_at` in the History query only.
+2. `PhotoObject.edited_at` GObject property mirrors the field; `Gallery::replace` equality includes it so History↔library swaps rebuild tiles.
+3. Internal sticky `GroupMode::History` (not user-selectable, never persisted — `group_mode_key` maps it to `"none"`).
+4. `history_group_label` buckets: **Today**, **Yesterday**, **Earlier This Week** (rolling 7 days excluding today/yesterday), **Earlier This Month** (same `%Y-%m` as today), then `%b %Y` for older; `<= 0`/invalid → **Unknown Date**.
+5. `apply_gallery_grouping(..., search_is_empty)` forces History mode when the History filter is active and search is empty; active search uses `GroupMode::None` (search results are ordinary photos).
+6. Search handlers treat History like Folder: restore grouping on empty query, leave the stream while text is active.
+7. Toolbar group control treats History like None/Folder (None active); sort/group toggles pass `search.borrow().is_empty()`.
+8. Collection navigation and other `apply_gallery_grouping` call sites pass `search.is_empty()` (or `true` where search is already cleared).
+
+## Files changed for Phase 3
+
+```text
+src/db.rs                  Photo.edited_at field
+src/db/history.rs          history_photos_limited sets photo.edited_at from row timestamp
+src/db/tests.rs            photo_from_row helper zeroes edited_at
+src/grid/grouping.rs       GroupMode::History, group_label branch, history_group_label
+src/grid/history_tests.rs  Label buckets, edited_at plumbing, range merge (display), caption reuse
+src/grid/virtualization.rs replace() equality includes edited_at
+src/photo_object.rs        edited_at property + set_from_photo
+src/window.rs              group_mode_key, apply_gallery_grouping(search_is_empty) + History branch
+src/window/build.rs        Call sites pass search.is_empty() / true
+src/window/layout.rs       Search activate/clear restore History grouping; destination/collage call sites
+src/window/library.rs      Test Photo helper zeroes edited_at
+src/window/toolbar.rs      History arm in group-mode match; sort/group pass search emptiness
+DEVELOPMENT_HANDOVER.md    This report
+```
+
+Horizontal Home rows (previous session, still uncommitted): `src/db/library_home.rs`, `src/library_home.rs`, `src/library_home_tests.rs`.
+
+## Design notes
+
+- Buckets use `recently_edited.edited_at`, not EXIF or import date.
+- `GroupMode::History` uses the sticky external heading like Day/Month (not Folder in-stream rows).
+- "Earlier This Week" is a rolling 7-day window (age_days <= 7 after Today/Yesterday), matching the Phase 3 wording; older same-month dates fall through to "Earlier This Month".
+- Month comparison uses `%Y-%m` string equality to avoid private chrono `year()`/`month()` without `Datelike`.
+- No schema migration.
+
+## Validation
+
+- `cargo test --quiet`: **362 passed, 0 failed, 23 ignored** (385 tests). Full suite run once after implementation.
+- `cargo check --quiet`: **passed**.
+- `cargo test --quiet history`: **9 passed, 0 failed, 2 ignored** (adds label bucket and `edited_at` unit tests).
+- `cargo test --quiet home_`: **5 passed, 0 failed, 1 ignored** (horizontal rows still pass).
+- `git diff --check`: **passed** after normalizing added lines to LF (repo has mixed CRLF; git flags CR on added lines).
+- Broad `cargo fmt` was **not** run; it reformatted unrelated files and was reverted. Only intentional files remain modified.
+- Log: `/tmp/pic-phase3-full-tests.log`.
+
+## Outstanding issues and next steps
+
+1. Review the uncommitted Phase 3 + horizontal-rows diff and this report.
+2. Manually verify History sticky headers, search enter/leave on History, and photo/editor/collage open from a History tile.
+3. Batch-event navigation (TODO Phase 3 second bullet) is still deferred.
+4. Do not commit or push without further user instruction.
+
+Useful commands:
+
+```bash
+cd /home/peet/Downloads/picasa/picasa-iphoto-clone
+git status --short
+git diff --stat
+cargo test --quiet history
+cargo test --quiet home_
+cargo check --quiet
+cargo run --quiet
+# Full suite after further substantive changes:
+cargo test --quiet
+```
+
+---
+
+# Archived handover — Library Home horizontal rows
+
+Updated: 2026-09-23. Superseded by the Phase 3 report above; itself superseded the Phase 2 report below.
+
+## Current status
+
+Phase 2 remains implemented. Horizontal scrolling rows were added to the Library Home Page. Phase 3 (History date grouping) was completed afterwards (see top section).
+
+- Branch: `rc5`.
+- HEAD: `1622a42` (Phase 2 commit). No new commit was made.
+- Workspace: `/home/peet/Downloads/picasa/picasa-iphoto-clone`.
+- Uncommitted changes: `src/db/library_home.rs`, `src/library_home.rs`, `src/library_home_tests.rs`.
+- `.flatpak-builder/` remains untracked and untouched.
+
+## Task and completed features
+
+Convert all four Home sections into horizontally scrollable thumbnail rows with more previews.
+
+Completed:
+
+1. Each section is a `GtkScrolledWindow` with horizontal `Automatic` / vertical `Never` policy, kinetic scrolling enabled, and a horizontal `GtkBox` track of cards (`home-section-row` / `home-section-track` CSS classes). The outer Home page remains a vertical `ScrolledWindow`.
+2. Per-section query limit increased from 6 to 10 (`HOME_PREVIEW_LIMIT = 10`) for Recently Added, Recently Edited, Favourites and Albums. Existing bounded SQL and cache-only thumbnail loading are unchanged.
+3. Preview frames are fixed 140×140 squares, independent of image/caption natural size.
+4. Compact flat `pan-start-symbolic` / `pan-end-symbolic` buttons sit in each section heading. They appear only when the row overflows and become insensitive at the ends (`connect_changed` on the horizontal adjustment).
+5. Touchpad horizontal scrolling uses native GTK kinetic/`Surface` handling. Shift+wheel is GTK’s built-in horizontal mapping on `ScrolledWindow`. Pure vertical wheel is not consumed by a horizontal-only row (`may_vscroll` is false, so GTK propagates to the outer vertical scroller).
+6. Row `hadjustment` values are saved before a snapshot rebuild and reapplied shortly after (`restore_row_positions`), so returning to Home or refreshing favourite data keeps horizontal offsets.
+7. View All / View History, photo/editor/collage open callbacks, album navigation, favourite refresh, placeholders and search/edit return paths are unchanged.
+
+## Files changed in this session
+
+```text
+src/db/library_home.rs        HOME_PREVIEW_LIMIT 6→10; DB tests expect 10
+src/library_home.rs           Horizontal rows, scroll buttons, square cards, position restore
+src/library_home_tests.rs     Row/policy/button/limit/overflow/position-memory coverage
+DEVELOPMENT_HANDOVER.md       This report
+```
+
+No other modules were modified. History and gallery behaviour outside Home are untouched.
+
+## Design notes
+
+- `HomeSection` owns the row scroller, track box and prev/next buttons.
+- Worker, `PRAGMA data_version` polling, read-only connection, thumbnail cache pruning and `load_cached_display_thumbnail` are unchanged aside from the higher LIMIT.
+- Scroll-button visibility: `scrollable = (upper - page_size) > lower + 1`; sensitive within 0.5 px of the ends.
+- Position restore: immediate `set_value` plus retries at 16 ms and 50 ms after rebuild so measure/allocate can update `upper` first.
+
+## Validation
+
+- `cargo test --quiet`: **360 passed, 0 failed, 22 ignored** (382 tests). Full suite run once after implementation.
+- `cargo check --quiet`: **passed**.
+- `cargo test --quiet home_`: **5 passed, 0 failed, 1 ignored**. Adds `home_preview_limit_is_ten`.
+- `cargo test --quiet home_page_sections_navigation_and_favorite_refresh -- --ignored --test-threads=1`: **passed**. Covers row policies (Automatic/Never, kinetic), square 140×140 frames, scroll-button show/hide on overflow, position memory across a favourite-driven rebuild, section actions, card/album navigation and favourite clearing.
+- `cargo test --quiet history_`: **7 passed, 0 failed, 1 ignored**.
+- `rustfmt --check` on the three changed Rust files: **passed**. `git diff --check`: **passed**.
+- `cargo fmt --all -- --check` still fails on pre-existing unrelated formatting (unchanged).
+- Log: `/tmp/pic-home-scroll-full-tests.log`.
+
+## Outstanding issues and next steps
+
+1. Review the uncommitted diff and this report.
+2. Manually check Shift+wheel and vertical wheel over a Home row in the live app; automated tests cover structure, overflow and position memory but not synthetic scroll events.
+3. Confirm layout with the real theme and many cached network photos.
+4. Horizontal-rows work remains uncommitted alongside Phase 3; do not commit or push without further user instruction.
+
+Useful commands:
+
+```bash
+cd /home/peet/Downloads/picasa/picasa-iphoto-clone
+git status --short
+git diff --stat
+cargo test --quiet home_
+cargo test --quiet home_page_sections_navigation_and_favorite_refresh -- --ignored --test-threads=1
+cargo check --quiet
+cargo run --quiet
+# Full suite after further substantive changes:
+cargo test --quiet
+```
+
+---
+
+# Archived handover — Phase 2 Library Home Page
+
+Updated: 2026-09-23. This section is superseded by the horizontal-rows report above.
 
 ## Current status
 

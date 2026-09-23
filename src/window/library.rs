@@ -454,6 +454,7 @@ mod photo_action_tests {
             favorite: false,
             trashed: false,
             history_caption: None,
+            edited_at: 0,
         }
     }
 
