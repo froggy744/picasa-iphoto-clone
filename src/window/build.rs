@@ -161,7 +161,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // is open, it toggles between fit and 1:1 viewing.
     // The actual open action is installed after Gallery exists.
     let space_open_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
-    let edit_space_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let edit_space_slot: Rc<RefCell<Option<Rc<dyn Fn() -> bool>>>> = Rc::new(RefCell::new(None));
     let collection_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i32)>>>> =
         Rc::new(RefCell::new(None));
     let search_popup_slot: Rc<RefCell<Option<gtk::Popover>>> = Rc::new(RefCell::new(None));
@@ -2260,16 +2260,23 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 editor.set_back_label("Back to Collage", "Return to the collage");
             }
             edit_page.append(&editor.root);
-            edit_editor.replace(Some(editor));
             {
+                let text_toggle = editor.text_toggle_handle();
+                edit_editor.replace(Some(editor));
                 let main_stack = main_stack.clone();
                 let one_to_one = info.one_to_one.clone();
                 let edit_space_slot = edit_space_slot.clone();
                 edit_space_slot.replace(Some(Rc::new(move || {
-                    if main_stack.visible_child_name().as_deref() == Some("edit") {
+                    if main_stack.visible_child_name().as_deref() != Some("edit") {
+                        // Editor left via the Edit toggle (slot not cleared);
+                        // let Space fall through to lightbox/grid open.
+                        return false;
+                    }
+                    if !text_toggle.is_active() {
                         one_to_one.set_active(!one_to_one.is_active());
                     }
-                })));
+                    true
+                }) as Rc<dyn Fn() -> bool>));
             }
             main_stack.set_visible_child_name("edit");
         })));

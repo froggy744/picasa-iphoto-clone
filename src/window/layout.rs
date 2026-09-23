@@ -1158,6 +1158,7 @@
         let one_to_one = info.one_to_one.clone();
         let collage_editing = collage_editing.clone();
         let collage_editor = collage_editor.clone();
+        let edit_space_slot_for_toggle = edit_space_slot.clone();
         info.edit.connect_clicked(move |_| {
             // The bottom Edit button is only for normal photo editing. Collage
             // photos use the collage editor's own Edit Photo action, which
@@ -1171,6 +1172,9 @@
             // Back/Done just to return to normal browsing.
             if main_stack.visible_child_name().as_deref() == Some("edit") {
                 one_to_one.set_active(false);
+                // Drop the edit Space slot so gallery/lightbox Space works
+                // again once the toggle leaves the edit page.
+                edit_space_slot_for_toggle.borrow_mut().take();
                 if collage_editing.get() {
                     // The edit session belongs to a collage: return there.
                     collage_editing.set(false);

@@ -23,6 +23,7 @@ pub struct EditEditor {
     one_to_one_action: Rc<dyn Fn(bool)>,
     set_library_rotation_action: Rc<dyn Fn(i32)>,
     one_to_one_sync: Rc<RefCell<Option<Box<dyn Fn(bool)>>>>,
+    text_toggle: gtk::ToggleButton,
 }
 
 impl EditEditor {
@@ -59,6 +60,18 @@ impl EditEditor {
 
     pub fn set_one_to_one_sync_handler(&self, handler: impl Fn(bool) + 'static) {
         self.one_to_one_sync.replace(Some(Box::new(handler)));
+    }
+
+    /// True while the sidebar Text tab is active. Space must not toggle
+    /// 1:1 in that section (text layers / in-field typing).
+    pub fn is_text_section_active(&self) -> bool {
+        self.text_toggle.is_active()
+    }
+
+    /// Shared handle to the Text tab toggle, for callers that need the
+    /// state after the editor has been moved into storage.
+    pub fn text_toggle_handle(&self) -> gtk::ToggleButton {
+        self.text_toggle.clone()
     }
 }
 
@@ -1938,6 +1951,7 @@ pub fn build(
         one_to_one_action,
         set_library_rotation_action,
         one_to_one_sync,
+        text_toggle,
     }
 }
 

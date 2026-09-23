@@ -25,12 +25,20 @@
             return glib::Propagation::Stop;
         }
 
-        // Editing text must not invoke gallery Space/arrow-key shortcuts.
-        if !lightbox_for_window_escape.root.is_visible()
-            && gtk::prelude::RootExt::focus(&window_for_fullscreen_key)
-                .is_some_and(|focus| focus.is::<gtk::Editable>())
-            && key != gtk::gdk::Key::F11
-        {
+        // Typing must never invoke gallery Space / 1:1 / open shortcuts.
+        // Walk the focus chain so both the search entry (Editable) and
+        // edit-mode TextView (not Editable) are covered. This must run even
+        // while the lightbox is open: type-to-search can focus the entry
+        // under the viewer, and Space would otherwise toggle 1:1 instead of
+        // inserting a space.
+        let typing = std::iter::successors(
+            gtk::prelude::RootExt::focus(&window_for_fullscreen_key),
+            |widget| widget.parent(),
+        )
+        .any(|widget| {
+            widget.is::<gtk::Editable>() || widget.is::<gtk::TextView>()
+        });
+        if typing && key != gtk::gdk::Key::F11 && key != gtk::gdk::Key::Escape {
             return glib::Propagation::Proceed;
         }
         if (key == gtk::gdk::Key::Escape || key == gtk::gdk::Key::BackSpace)
@@ -67,21 +75,27 @@
             lightbox_for_window_escape.navigate_collection(if key == gtk::gdk::Key::Up { -1 } else { 1 });
             glib::Propagation::Stop
         } else if key == gtk::gdk::Key::space {
-            if let Some(toggle_edit) = edit_space_slot_for_key.borrow().as_ref() {
-                toggle_edit();
-            } else if lightbox_for_window_escape.root.is_visible() {
+            // Edit-mode Space owns the key only while the edit page is
+            // visible (the slot can outlive the page via the Edit toggle).
+            // Text-section no-op still returns true so Space does not open
+            // the lightbox from inside the editor.
+            let edit_handled = edit_space_slot_for_key
+                .borrow()
+                .as_ref()
+                .is_some_and(|toggle_edit| toggle_edit());
+            if edit_handled {
+                return glib::Propagation::Stop;
+            }
+            if lightbox_for_window_escape.root.is_visible() {
                 if one_to_one_for_key.is_active() {
                     space_toggle_in_progress_for_key.set(true);
                     one_to_one_for_key.set_active(false);
-                    
                 } else {
                     space_toggle_in_progress_for_key.set(true);
                     one_to_one_for_key.set_active(true);
-                    
                 }
             } else if let Some(open_selected) = space_open_slot_for_key.borrow().as_ref() {
                 open_selected();
-                
             }
             glib::Propagation::Stop
         } else {
