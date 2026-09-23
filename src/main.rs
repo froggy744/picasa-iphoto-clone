@@ -8,6 +8,7 @@ mod grid;
 mod image_format;
 mod infobar;
 mod lightbox;
+mod library_home;
 #[cfg(target_os="linux")]
 mod private_smb;
 #[cfg(target_os="linux")]

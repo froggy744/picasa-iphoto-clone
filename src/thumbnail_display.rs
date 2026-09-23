@@ -359,6 +359,15 @@ fn worker_loop(queue: Arc<Queue>) {
 }
 
 fn load_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
+    load_thumbnail_with_policy(request, true)
+}
+
+/// Home previews must never regenerate a cache miss from an original.
+pub fn load_cached_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
+    load_thumbnail_with_policy(request, false)
+}
+
+fn load_thumbnail_with_policy(request: &DisplayRequest, regenerate: bool) -> DisplayOutcome {
     // Legacy flat-layout compatibility runs on this worker, never during GTK
     // model construction or ListView binding.
     // The request already carries the deterministic sharded path.  Probe it
@@ -378,6 +387,9 @@ fn load_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
         .unwrap_or(canonical)
     };
     if !path.is_file() {
+        if !regenerate {
+            return DisplayOutcome::Missing;
+        }
         crate::thumbnail::request_priority(
             request.source_path.clone(),
             Some(request.mtime),
@@ -389,6 +401,9 @@ fn load_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
     let mut image = match image::open(&path) {
         Ok(image) => image.to_rgba8(),
         Err(error) => {
+            if !regenerate {
+                return DisplayOutcome::Failed;
+            }
             // This is PIC's own cache file. A decode failure means the cache is
             // unusable, not that the original is corrupt. Remove it and let the
             // normal priority generator rebuild it from the source in the

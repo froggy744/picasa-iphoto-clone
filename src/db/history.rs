@@ -59,15 +59,19 @@ pub fn commit_edit_recipes(
 }
 
 pub fn history_photos(connection: &Connection) -> Result<Vec<Photo>> {
+    history_photos_limited(connection, -1)
+}
+
+pub fn history_photos_limited(connection: &Connection, limit: i64) -> Result<Vec<Photo>> {
     let mut statement = connection.prepare(
         "SELECT p.id,p.path,p.folder_id,p.taken_at,p.camera,p.width,p.height,p.size_bytes,p.mtime,p.added_at,p.rotation,p.edit_recipe,p.favorite,p.trashed,f.path,
                 h.edited_at, c.photo_id IS NOT NULL
          FROM recently_edited h JOIN photos p ON p.id=h.photo_id
          LEFT JOIN folders f ON f.id=p.folder_id
          LEFT JOIN collage_projects c ON c.photo_id=p.id
-         WHERE p.trashed=0 ORDER BY h.edited_at DESC,h.event_id DESC,p.id DESC",
+         WHERE p.trashed=0 ORDER BY h.edited_at DESC,h.event_id DESC,p.id DESC LIMIT ?1",
     )?;
-    let rows = statement.query_map([], |row| {
+    let rows = statement.query_map([limit], |row| {
         let mut photo = photo_from_row(row)?;
         let timestamp: i64 = row.get(15)?;
         let kind = if row.get::<_, bool>(16)? {

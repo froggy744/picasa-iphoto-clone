@@ -1,4 +1,130 @@
-# Development handover — Phase 1 History
+# Development handover — Phase 2 Library Home Page
+
+Updated: 2026-09-23. This section supersedes the archived Phase 1 report below.
+
+## Current status
+
+Phase 2 is implemented and validated in the working tree. Phase 1 was already implemented and manually tested by the user before this session; its editing behavior was preserved. Phase 3 has not been started.
+
+- Branch: `rc5`.
+- HEAD at the start/end of Phase 2 implementation: `ef8eb2b`.
+- Workspace: `/home/peet/Downloads/picasa/picasa-iphoto-clone`.
+- No commit or push was performed in this session.
+- The only untracked path present before Phase 2 was `.flatpak-builder/`; it remains untouched.
+- The five-hour usage quota is not exposed by available tools, so its remaining percentage could not be monitored. This report is saved at the completion of the authorized phase.
+
+## Task and completed features
+
+Implement a clickable Library heading and a themed overview with four sections, in order: Recently Added, Recently Edited, Favourites, Albums. Keep previews bounded, use existing database records/cached thumbnails, preserve existing destinations, refresh favourite changes, and implement only Phase 2.
+
+Completed:
+
+1. Clicking the Library heading opens the new Home Page. Its separate collapse control still works. The Home destination is saved/restored as `library`.
+2. Recently Added previews six non-trashed photos ordered by `added_at DESC, id DESC`; View All opens the existing Recently Added view.
+3. Recently Edited previews six items using the existing History query with an optional SQL limit. View History opens History. Clicking an edited photo opens its editor; clicking a saved collage opens its editable project through existing callbacks.
+4. Favourites previews six photos using the existing Favourites selection/order with a SQL limit. View All opens Favourites. Clicking a photo opens the existing viewer. Favourite changes refresh Home automatically without creating History events or duplicate records.
+5. Albums previews six albums with covers, names and non-trashed photo counts. An explicit chosen cover is respected; otherwise a first photo is selected in existing album ordering. Clicking an album opens it; View All opens Albums. Empty albums and empty sections have placeholders.
+6. All preview cards use theme-provided GTK/libadwaita styles, consistent dimensions, section headings and spacing.
+7. Global search can start from Home, show the ordinary photo results and return to Home when cleared. Returning from photo/collage editing goes back to Home. A collage opened from Home can use Add Photos to enter the existing gallery picker.
+
+## Files changed in Phase 2
+
+New files:
+
+```text
+src/library_home.rs              Home widgets, background loading and cache reuse
+src/library_home_tests.rs        Worker/cache and display-based Home tests
+src/db/library_home.rs           Bounded preview queries and database tests
+```
+
+Modified files:
+
+```text
+DEVELOPMENT_HANDOVER.md
+src/main.rs                     Registers the Home module
+src/db.rs                       Includes Home query module
+src/db/history.rs               Adds limited query entry point; existing full query remains unchanged in behavior
+src/db/photos.rs                Adds limited query entry point; existing full/Favourites queries retain behavior
+src/thumbnail_display.rs        Adds cache-only loading policy
+src/sidebar.rs                  Library destination and clickable heading
+src/window.rs                   Home destination persistence
+src/window/build.rs             Home page, viewer placement and editor return paths
+src/window/layout.rs            Home navigation, search and collage picker integration
+src/window/library.rs           Avoids ordinary grid queries for the Home destination
+```
+
+All listed changes remain uncommitted. `.flatpak-builder/` is unrelated and must be preserved.
+
+## Database and performance decisions
+
+- No schema migration or new database table was needed for Phase 2.
+- `db::library_home_data` returns at most six records per section; it does not construct the full photo library.
+- `history_photos` and `photos` retain their original public behavior by calling their limited forms with SQLite `LIMIT -1`. Home calls the same implementations with `LIMIT 6`; no History writes or sorting rules were refactored.
+- Album counts are aggregated for the selected preview albums. Cover queries fetch one candidate rather than materializing every photo in each album.
+- Home owns a background worker with a persistent read-only SQLite connection. It does not call `db::open`, folder availability probes, scanners or schema migrations.
+- While mapped, Home checks `PRAGMA data_version` approximately every two seconds. A changed database refreshes the small snapshot. Mapping Home forces a refresh; missing thumbnails are checked again so newly cached previews can appear.
+- Decoded thumbnails are reused by their existing presentation key and pruned to the currently previewed items. Unchanged snapshots do not rebuild the widgets.
+- `load_cached_display_thumbnail` reuses the normal thumbnail transforms but returns a placeholder on missing/corrupt cache entries. It never queues source decoding, deletes corrupt cache files or scans network locations. Existing gallery thumbnail loading retains its recovery behavior.
+- Starting directly on Home skips loading the full gallery and initially constructing the full Albums page. The existing Albums destination builds normally when opened.
+- The shared lightbox/context-menu overlay now wraps the page stack so Home previews can use the normal viewer. Switching into Albums or an editor closes the viewer. Existing gallery viewing continues to use the same lightbox.
+- No original photo files were modified.
+
+## Validation
+
+- `cargo test --quiet`: **359 passed, 0 failed, 22 ignored** (381 tests). Full suite run once after implementation.
+- `cargo check --quiet`: **passed**.
+- `cargo test --quiet home_`: **4 passed, 0 failed, 1 ignored**. Tests cover limits/ordering, album covers/counts, favourite changes from another connection, and cache-only behavior.
+- `cargo test --quiet home_cached_thumbnail`: **passed** after adding an additional cached-image rotation check with an unavailable original.
+- `cargo test --quiet home_page_sections_navigation_and_favorite_refresh -- --ignored --test-threads=1`: **passed** on the available GTK display. Covers all four section actions, edited/favourite photo callbacks, album navigation, and live favourite removal.
+- `cargo test --quiet history_`: **7 passed, 0 failed, 1 ignored**. Existing History regression tests still pass.
+- New Rust modules pass `rustfmt --check`; `git diff --check` passes.
+- `cargo fmt --all -- --check` still fails on existing formatting across unrelated files and pre-existing sections of shared files. Broad formatting changes were deliberately avoided.
+- The existing warnings remain. No unrelated warning cleanup was performed.
+- A standalone Home screenshot was captured and inspected; thumbnail dimensions were then made independent of image/caption natural size. The GTK test passed after that adjustment.
+
+Logs:
+
+```text
+/tmp/pic-home-full-tests.log
+/tmp/pic-home-final-check.log
+/tmp/pic-home-tests.log
+/tmp/pic-home-ui-tests.log
+/tmp/pic-home-cache-test.log
+/tmp/pic-home-history-regression.log
+/tmp/pic-home-format.log
+```
+
+## Outstanding issues and next steps
+
+No known failing Phase 2 test or build error remains. Automated GTK coverage exercises the Home component with callbacks; a full interactive application session covering sidebar/search/editor/viewer transitions is still advisable. Other ignored tests were not run. The user previously confirmed Phase 1 manually.
+
+1. Review the uncommitted Phase 2 diff and this report; do not repeat Phase 1 investigation or implementation.
+2. Manually check the complete application: click Library; open each View All/View History action; open a favourite in the viewer and toggle its favourite; search and clear search; reopen/edit a History photo/collage from Home; use Add Photos in a reopened collage; verify return to Home.
+3. Check the Home layout with the user's actual theme and cached network photos. Missing cache entries intentionally show placeholders; Home never downloads originals to fill them.
+4. Fix any concrete issue found with targeted validation. The full suite has already passed for the saved implementation.
+5. Do not start Phase 3, commit or push without further user instruction.
+
+Useful commands:
+
+```bash
+cd /home/peet/Downloads/picasa/picasa-iphoto-clone
+git status --short
+git diff --stat
+cargo test --quiet home_
+cargo test --quiet home_page_sections_navigation_and_favorite_refresh -- --ignored --test-threads=1
+cargo check --quiet
+cargo run --quiet
+# Optional standalone Home screenshot from the display test:
+PIC_HOME_SCREENSHOT=/tmp/pic-library-home.png cargo test --quiet home_page_sections_navigation_and_favorite_refresh -- --ignored --test-threads=1
+# Re-run the full suite after substantive further changes:
+cargo test --quiet
+```
+
+Normal app launch opens the user's actual library. Tests use temporary/in-memory databases. The display test requires a working GTK display.
+
+---
+
+# Archived handover — Phase 1 History
 
 Date: 2026-09-23
 

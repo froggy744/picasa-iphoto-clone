@@ -82,7 +82,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         grid::GroupMode::None
     }));
     let mut photos = match initial_filter {
-        sidebar::SidebarFilter::Albums => Vec::new(),
+        sidebar::SidebarFilter::Library | sidebar::SidebarFilter::Albums => Vec::new(),
         sidebar::SidebarFilter::Album(album_id) => {
             db::photos_in_album(&connection.borrow(), album_id, None).unwrap_or_default()
         }
@@ -377,6 +377,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         Rc::new(RefCell::new(None));
     let album_home_click_slot: Rc<RefCell<Option<Rc<dyn Fn(i64)>>>> =
         Rc::new(RefCell::new(None));
+    let library_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(sidebar::SidebarFilter)>>>> =
+        Rc::new(RefCell::new(None));
     let folder_navigation_slot: Rc<RefCell<Option<Rc<dyn Fn(i64, i64)>>>> =
         Rc::new(RefCell::new(None));
     // Open in Folder keeps this exact target alive briefly so a sidebar
@@ -567,8 +569,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let selected_photo = selected_photo.clone();
         let lightbox = lightbox.clone();
         let availability_refresh = availability_refresh.clone();
+        let filter = filter.clone();
+        let search_text = search_text.clone();
 
         space_open_slot.replace(Some(Rc::new(move || {
+            if filter.get() == sidebar::SidebarFilter::Library && search_text.borrow().is_empty() {
+                return;
+            }
             let photos = gallery.photo_objects();
             let selected_id = selected_photo
                 .borrow()
@@ -1331,7 +1338,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     candidate += step;
                 }
             }
-            sidebar::SidebarFilter::History => {}
+            sidebar::SidebarFilter::Library | sidebar::SidebarFilter::History => {}
             sidebar::SidebarFilter::Albums => {
                 // The Albums home view is not a photo thumbnail grid.
             }
@@ -1953,8 +1960,6 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     grid_overlay.set_vexpand(true);
     grid_overlay.set_child(Some(&grid_surface));
     grid_overlay.add_overlay(&scrub_date_label);
-    grid_overlay.add_overlay(&lightbox.root);
-    context_menu_host.borrow_mut().replace(grid_overlay.downgrade());
 
     // The context menu is a normal GtkOverlay child, so give it the
     // autohide behaviour GtkPopover used to provide. Any pointer press
@@ -1999,7 +2004,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // include below.
     let theme_post_apply = album_theme_changed.clone();
     let albums_home = albums_view::build(
-        &albums,
+        if initial_filter == sidebar::SidebarFilter::Library {
+            &[]
+        } else {
+            &albums
+        },
         connection.clone(),
         grid_thumbnail_size,
         {
@@ -2033,13 +2042,74 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     edit_page.set_hexpand(true);
     edit_page.set_vexpand(true);
     main_stack.add_named(&edit_page, Some("edit"));
-    main_stack.set_visible_child_name(if initial_filter == sidebar::SidebarFilter::Albums {
+    let library_home = crate::library_home::LibraryHome::new(
+        db::database_path().expect("The library database is already open"),
+        {
+            let slot = library_navigation_slot.clone();
+            Rc::new(move |destination| {
+                if let Some(navigate) = slot.borrow().as_ref() {
+                    navigate(destination);
+                }
+            })
+        },
+        {
+            let lightbox = lightbox.clone();
+            let connection = connection.clone();
+            let open_edit = open_edit.clone();
+            let open_collage = open_collage.clone();
+            Rc::new(move |photos, index, edited| {
+                let Some(photo) = photos.get(index) else {
+                    return;
+                };
+                if edited {
+                    let collage = db::collage_project(&connection.borrow(), photo.id())
+                        .ok()
+                        .flatten()
+                        .is_some();
+                    if collage {
+                        open_collage(vec![photo.id()]);
+                    } else {
+                        open_edit(photo.id());
+                    }
+                } else {
+                    lightbox.open(photos, index);
+                }
+            })
+        },
+    );
+    main_stack.add_named(&library_home.root, Some("library"));
+    main_stack.set_visible_child_name(if initial_filter == sidebar::SidebarFilter::Library {
+        "library"
+    } else if initial_filter == sidebar::SidebarFilter::Albums {
         "albums"
     } else {
         "photos"
     });
-    content.append(&main_stack);
+    // The shared viewer and its menus can cover either the gallery or Home.
+    let page_overlay = gtk::Overlay::new();
+    page_overlay.set_child(Some(&main_stack));
+    page_overlay.add_overlay(&lightbox.root);
+    context_menu_host.borrow_mut().replace(page_overlay.downgrade());
+    content.append(&page_overlay);
     content.append(&info.root);
+    {
+        let filter = filter.clone();
+        let search_text = search_text.clone();
+        let collage_add_mode = collage_add_mode.clone();
+        let lightbox = lightbox.clone();
+        main_stack.connect_visible_child_notify(move |stack| {
+            if !matches!(stack.visible_child_name().as_deref(), Some("photos" | "library")) {
+                lightbox.close();
+            }
+            if filter.get() == sidebar::SidebarFilter::Library
+                && search_text.borrow().is_empty()
+                && !collage_add_mode.get()
+                && stack.visible_child_name().as_deref() == Some("photos")
+            {
+                stack.set_visible_child_name("library");
+            }
+        });
+    }
 
     let collage_editor: Rc<RefCell<Option<crate::collage::CollageEditor>>> =
         Rc::new(RefCell::new(None));

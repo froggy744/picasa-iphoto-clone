@@ -561,6 +561,16 @@ pub fn photos(
     favorites_only: bool,
     search: Option<&str>,
 ) -> Result<Vec<Photo>> {
+    photos_limited(connection, folder_id, favorites_only, search, -1)
+}
+
+pub fn photos_limited(
+    connection: &Connection,
+    folder_id: Option<i64>,
+    favorites_only: bool,
+    search: Option<&str>,
+    limit: i64,
+) -> Result<Vec<Photo>> {
     let search = search.map(|value| format!("%{}%", value.replace('%', "\\%").replace('_', "\\_")));
     let mut statement = connection.prepare(
         "SELECT p.id,p.path,p.folder_id,p.taken_at,p.camera,p.width,p.height,p.size_bytes,p.mtime,p.added_at,p.rotation,p.edit_recipe,p.favorite,p.trashed,f.path
@@ -572,10 +582,10 @@ pub fn photos(
                 SELECT child.id FROM folders child JOIN descendants ON child.parent_id = descendants.id
               ) SELECT id FROM descendants))
            AND (?2 = 0 OR p.favorite = 1) AND (?3 IS NULL OR p.path LIKE ?3 ESCAPE '\\')
-         ORDER BY p.taken_at IS NULL, p.taken_at DESC, p.path COLLATE NOCASE",
+         ORDER BY p.taken_at IS NULL, p.taken_at DESC, p.path COLLATE NOCASE LIMIT ?4",
     )?;
     let rows = statement.query_map(
-        params![folder_id, favorites_only as i32, search],
+        params![folder_id, favorites_only as i32, search, limit],
         photo_from_row,
     )?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

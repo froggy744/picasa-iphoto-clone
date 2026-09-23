@@ -181,6 +181,7 @@ fn grid_thumbnail_size_from_setting(connection: &Connection) -> Option<i32> {
 
 fn sidebar_filter_setting(filter: sidebar::SidebarFilter) -> String {
     match filter {
+        sidebar::SidebarFilter::Library => "library".into(),
         sidebar::SidebarFilter::All => "all".into(),
         sidebar::SidebarFilter::Favorites => "favorites".into(),
         sidebar::SidebarFilter::RecentlyAdded => "recently-added".into(),
@@ -200,6 +201,7 @@ fn sidebar_filter_from_setting(
     albums: &[db::Album],
 ) -> sidebar::SidebarFilter {
     match value.unwrap_or_default() {
+        "library" => sidebar::SidebarFilter::Library,
         "all" => sidebar::SidebarFilter::All,
         "favorites" => sidebar::SidebarFilter::Favorites,
         "albums" => sidebar::SidebarFilter::Albums,

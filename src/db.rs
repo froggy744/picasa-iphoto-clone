@@ -158,6 +158,7 @@ include!("db/core.rs");
 include!("db/albums.rs");
 include!("db/photos.rs");
 include!("db/history.rs");
+include!("db/library_home.rs");
 include!("db/settings.rs");
 include!("db/overlay_assets.rs");
 include!("db/tests.rs");

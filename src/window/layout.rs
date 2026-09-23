@@ -77,6 +77,11 @@
             if let Some(sidebar) = sidebar_selection.borrow().as_ref() {
                 sidebar::set_active_filter(sidebar, new_filter);
             }
+            if new_filter == sidebar::SidebarFilter::Library {
+                gallery.set_selected_photo_ids(&[]);
+                main_stack.set_visible_child_name("library");
+                return;
+            }
             if new_filter == sidebar::SidebarFilter::Albums {
                 main_stack.set_visible_child_name("albums");
                 if let Ok(albums) = db::albums(&connection_for_albums.borrow()) {
@@ -145,6 +150,7 @@
         let destination_click_with_target = destination_click_with_target.clone();
         Rc::new(move |new_filter| destination_click_with_target(new_filter, false))
     };
+    library_navigation_slot.replace(Some(destination_click.clone()));
 
     album_home_click_slot.replace(Some({
         let destination_click = destination_click.clone();
@@ -1115,6 +1121,9 @@
         let gallery = gallery.clone();
         let collage_editor = collage_editor.clone();
         let collage_add_mode = collage_add_mode.clone();
+        let filter = filter.clone();
+        let connection = connection.clone();
+        let sort = sort.clone();
         Rc::new(move || {
             let editor_handle = collage_editor.borrow();
             let Some(editor) = editor_handle.as_ref() else {
@@ -1125,6 +1134,12 @@
             // Mark the detour before switching pages so the stack's
             // visible-child teardown spares the live editor.
             collage_add_mode.set(true);
+            if filter.get() == sidebar::SidebarFilter::Library {
+                apply_gallery_grouping(
+                    &gallery, sidebar::SidebarFilter::All, sort.get(), grid::GroupMode::None,
+                );
+                refresh_grid(&connection, sidebar::SidebarFilter::All, "", sort.get(), &gallery);
+            }
             main_stack.set_visible_child_name("photos");
             button.set_visible(true);
         })
@@ -1275,7 +1290,7 @@
             };
             // The current photo viewer remains open while the gallery behind
             // it updates to the new search results.
-            if stack.visible_child_name().as_deref() != Some("photos") {
+            if !matches!(stack.visible_child_name().as_deref(), Some("photos" | "library")) {
                 return false;
             }
             if split.is_collapsed() && split.shows_sidebar() {
@@ -1366,6 +1381,7 @@
     let sidebar_selection_for_search = sidebar_selection_slot.clone();
     let suggestion_popover_for_search = suggestion_popover.clone();
     let suggestion_list_for_search = suggestion_list.clone();
+    let stack_for_home_search = main_stack.clone();
 
     search.connect_search_changed(move |entry| {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1396,6 +1412,12 @@
             )
             .unwrap_or_default();
             search_text_for_search.replace(query.clone());
+            if filter_for_search.get() == sidebar::SidebarFilter::Library {
+                stack_for_home_search.set_visible_child_name(
+                    if query.is_empty() { "library" } else { "photos" },
+                );
+                gallery_for_search.set_grouping(grid::GroupMode::None, grid::GroupDate::Taken);
+            }
             if !query.is_empty() {
                 gallery_for_search.cancel_progressive_build();
             }
@@ -1558,12 +1580,19 @@
     let group_mode_for_activate = group_mode.clone();
     let gallery_for_activate = gallery.clone();
     let suggestion_popover_for_activate = suggestion_popover.clone();
+    let stack_for_home_activate = main_stack.clone();
     search.connect_activate(move |entry| {
         if let Some(source) = search_debounce_for_activate.borrow_mut().take() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.remove()));
         }
         let query = entry.text().to_string();
         search_text_for_activate.replace(query.clone());
+        if filter_for_activate.get() == sidebar::SidebarFilter::Library {
+            stack_for_home_activate.set_visible_child_name(
+                if query.is_empty() { "library" } else { "photos" },
+            );
+            gallery_for_activate.set_grouping(grid::GroupMode::None, grid::GroupDate::Taken);
+        }
         suggestion_popover_for_activate.popdown();
         if matches!(filter_for_activate.get(), sidebar::SidebarFilter::Folder(_)) {
             if query.is_empty() {

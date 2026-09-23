@@ -61,7 +61,9 @@ fn refresh_grid_inner(
     folder_target: Option<(i64, String)>,
 ) {
     let _ = connection;
-    if filter == sidebar::SidebarFilter::Albums {
+    if filter == sidebar::SidebarFilter::Albums
+        || (filter == sidebar::SidebarFilter::Library && search.is_empty())
+    {
         return;
     }
     let generation = REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -100,6 +102,7 @@ fn refresh_grid_inner(
                 // boundary, so load every indexed folder exactly once.
                 sidebar::SidebarFilter::Folder(_) => (None, false),
                 sidebar::SidebarFilter::Albums => return,
+                sidebar::SidebarFilter::Library => return,
                 sidebar::SidebarFilter::Album(_) => unreachable!(),
                 sidebar::SidebarFilter::History => unreachable!(),
             };

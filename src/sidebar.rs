@@ -9,6 +9,7 @@ use crate::db::{Album, Folder, SidebarCounts};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarFilter {
+    Library,
     All,
     Favorites,
     RecentlyAdded,
@@ -217,7 +218,16 @@ pub fn build(
     root.set_margin_bottom(12);
 
     // LIBRARY: collapsible.
-    let (library_heading, library_indicator) = collapsible_heading("Library", None, "", true, None);
+    let (library_heading, library_indicator) = collapsible_heading(
+        "Library",
+        None,
+        "",
+        true,
+        Some({
+            let on_filter = on_filter.clone();
+            Rc::new(move || on_filter(SidebarFilter::Library))
+        }),
+    );
     root.append(&library_heading);
 
     let library_list = section_list();
@@ -1678,7 +1688,7 @@ pub fn set_active_filter(scrolled: &gtk::ScrolledWindow, filter: SidebarFilter) 
         | SidebarFilter::History => {
             select_matching_row(scrolled, LIBRARY_LIST_KEY, filter);
         }
-        SidebarFilter::Albums => {}
+        SidebarFilter::Library | SidebarFilter::Albums => {}
         SidebarFilter::Album(_) => {
             select_matching_row(scrolled, ALBUM_LIST_KEY, filter);
         }
