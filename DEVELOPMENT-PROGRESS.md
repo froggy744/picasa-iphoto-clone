@@ -61,13 +61,24 @@
 - `cargo test --bin pic-rs`: **346 passed, 0 failed, 20 ignored** (baseline 332 → +14 new tests: export naming/collisions/aspect/failure-isolation ×10, db bulk ×2, plus existing paste idempotency tests still green).
 - `rustfmt`: not run wholesale on photo_actions.rs/build.rs (per repo rules). New files follow local style.
 
-### Local commits (NOT pushed)
+### Local commits (NOT pushed — push blocked by OpenCode deny rule)
 - `e179cbe` — Add rc4 overnight session recovery notes
 - `d27c2e1` — Fix multi-select export, bulk paste freeze, and _edit export names
-- Starting commit was `f436c40`; branch `rc4` is ahead of `origin/rc4` by 2. No push, no merge, no branch switch.
+- `65449cc` — Record final rc4 export and bulk-paste fix report
+- + pending commit: paste RefCell double-borrow fix + header-bar Export button
+- Starting commit was `f436c40`; branch `rc4` is ahead of `origin/rc4`. No merge, no branch switch.
 
-### Manual test status
-- **NOT performed** (no interactive GTK session driven for this run). Automated coverage only. Suggested manual checks when a display is available: select 5 photos → Export → size+folder → 5 outputs with `_edit` where edited and progress bar; bulk-select thousands → Paste Edits → top progress updates, UI scrollable, no Force Close.
+### Manual test status (2026-06-23 GUI run)
+- App launched (4116 photos). Editor opened; **Add Text** + text set to `PASTE TEST` via AT-SPI worked.
+- **Paste Edits** (full recipe): works.
+- **Paste Text & Overlays Only** (`BulkRecipePlan::LayersOnly`): **CRASHES**.
+  - Panic: `panic in a function that cannot unwind` at `core/src/panicking.rs:225:5`
+  - Hook: `src/main.rs:51` (`set_hook`); backtrace truncated in terminal log.
+  - Path: `photo_actions.rs` LayersOnly arm → `db::photo` + `crate::edit::model::paste_layers_only` per id, then same chunk/finish path as Fixed.
+  - **Next session: reproduce LayersOnly crash, get full backtrace (RUST_BACKTRACE=full), inspect `paste_layers_only` / overlay asset handling for non-unwind panic (likely drop glue or FFI).**
+- Header-bar Export button present in AT-SPI (`Export selected photos`); not fully GUI-driven yet.
+- Multi-select + context-menu copy/paste automation incomplete (Wayland: xdotool cannot move pointer; uinput partial; AT-SPI cache broke mid-run).
+- Automated tests still green before commit: **346 passed / 0 failed / 20 ignored**.
 
 ### Remaining limitations / notes
 - Export size dialog uses deprecated `gtk::Dialog`/`FileChooserNative` deliberately for consistency with Collage export (adw::AlertDialog migration left as future work).
@@ -75,6 +86,7 @@
 - Single-photo Save dialog still allows native overwrite confirmation (existing convention); batch folder export never overwrites (unique `_2`, `_3`…).
 - Suspend cancelled by user — no `systemctl suspend` was or will be run.
 - OpenCode permission config requires an OpenCode restart to take effect (already recorded earlier).
+- **OpenCode deny: `git push` / `git * push`** — local commits only unless user removes that rule.
 
 ## Recovery pointer for a future session
-Read SESSION_PROGRESS.md for prior text-layer rules (never rustfmt model.rs / photo_actions.rs wholesale; 20 ignored GTK tests pre-existing). Latest commits: `d27c2e1`, `e179cbe`.
+Read SESSION_PROGRESS.md for prior text-layer rules (never rustfmt model.rs / photo_actions.rs wholesale; 20 ignored GTK tests pre-existing). Latest commits: `d27c2e1`, `e179cbe`, `65449cc`, plus pending paste/header commit. **Priority bug: LayersOnly paste crash.**

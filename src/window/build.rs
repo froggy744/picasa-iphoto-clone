@@ -2677,38 +2677,55 @@ fn start_photo_export_single(
     let gallery_for_export = gallery.clone();
     let progress_for_export = operation_progress.clone();
 
-    info.export.connect_clicked(move |_| {
-        let Some(photo) = selected_for_export.borrow().clone() else {
-            return;
-        };
-        let ids = gallery_for_export.selected_photo_ids(Some(photo.id()));
-        let known: std::collections::HashMap<i64, _> = gallery_for_export
-            .photo_objects()
-            .into_iter()
-            .map(|object| (object.id(), object))
-            .collect();
-        let jobs = ids
-            .iter()
-            .filter_map(|id| known.get(id))
-            .map(|object| {
-                crate::edit::export_batch::ExportJob::from_record(
-                    object.path(),
-                    object.rotation(),
-                    object.edit_recipe(),
-                    object.width(),
-                    object.height(),
-                    &object.filename(),
-                )
-            })
-            .collect::<Vec<_>>();
-        if jobs.is_empty() {
-            return;
-        }
-        show_photo_export_dialog(
-            parent_for_export.upcast_ref::<gtk::Window>(),
-            jobs,
-            progress_for_export.clone(),
-        );
+    let export_clicked: Rc<dyn Fn()> = {
+        let selected_for_export = selected_for_export;
+        let parent_for_export = parent_for_export;
+        let gallery_for_export = gallery_for_export;
+        let progress_for_export = progress_for_export;
+        Rc::new(move || {
+            let Some(photo) = selected_for_export.borrow().clone() else {
+                return;
+            };
+            let ids = gallery_for_export.selected_photo_ids(Some(photo.id()));
+            let known: std::collections::HashMap<i64, _> = gallery_for_export
+                .photo_objects()
+                .into_iter()
+                .map(|object| (object.id(), object))
+                .collect();
+            let jobs = ids
+                .iter()
+                .filter_map(|id| known.get(id))
+                .map(|object| {
+                    crate::edit::export_batch::ExportJob::from_record(
+                        object.path(),
+                        object.rotation(),
+                        object.edit_recipe(),
+                        object.width(),
+                        object.height(),
+                        &object.filename(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if jobs.is_empty() {
+                return;
+            }
+            show_photo_export_dialog(
+                parent_for_export.upcast_ref::<gtk::Window>(),
+                jobs,
+                progress_for_export.clone(),
+            );
+        })
+    };
+    info.export.connect_clicked({
+        let export_clicked = export_clicked.clone();
+        move |_| export_clicked()
+    });
+    let header_export = gtk::Button::from_icon_name("document-save-symbolic");
+    header_export.set_tooltip_text(Some("Export selected photos"));
+    header_export.add_css_class("flat");
+    header_export.connect_clicked({
+        let export_clicked = export_clicked.clone();
+        move |_| export_clicked()
     });
 
     let selected_for_print = selected_photo.clone();
@@ -2778,6 +2795,7 @@ fn start_photo_export_single(
     }
     let refresh = include!("toolbar.rs");
 
+    right_header.pack_end(&header_export);
     right_column.append(&right_header);
     right_column.append(&content);
 

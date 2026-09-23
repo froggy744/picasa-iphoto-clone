@@ -225,20 +225,13 @@ fn run_bulk_recipe_chunk(work: &mut BulkRecipeState) {
             if let Some(lightbox) = work.context.lightbox.upgrade() {
                 lightbox.update_edit_recipes_batch(&updates);
             }
-            let selected_id = work
-                .context
-                .selected_photo
-                .borrow()
-                .as_ref()
-                .map(|photo| photo.id());
-            for (id, recipe) in &updates {
-                if selected_id == Some(*id) {
-                    if let Some(selected) = work.context.selected_photo.borrow().as_ref().cloned()
-                    {
-                        selected.set_edit_recipe(recipe.clone());
-                        work.context.selected_photo.replace(Some(selected));
-                        work.touched_selected = true;
-                    }
+            let selected = work.context.selected_photo.borrow().as_ref().cloned();
+            if let Some(selected) = selected {
+                if let Some((_, recipe)) = updates.iter().find(|(id, _)| *id == selected.id()) {
+                    let recipe = recipe.clone();
+                    selected.set_edit_recipe(recipe);
+                    work.context.selected_photo.replace(Some(selected));
+                    work.touched_selected = true;
                 }
             }
         }
@@ -252,7 +245,8 @@ fn finish_bulk_recipe(work: BulkRecipeState, name: &'static str, total: usize) {
         lightbox.refresh_current();
     }
     if work.touched_selected {
-        if let Some(selected) = work.context.selected_photo.borrow().as_ref().cloned() {
+        let selected = work.context.selected_photo.borrow().as_ref().cloned();
+        if let Some(selected) = selected {
             work.context.info.set_photo(Some(&selected));
         }
     }
