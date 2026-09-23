@@ -12,6 +12,47 @@ use crate::{db, photo_object::PhotoObject, sidebar::SidebarFilter, thumbnail_dis
 type OpenPhoto = Rc<dyn Fn(Vec<PhotoObject>, usize, bool)>;
 type Navigate = Rc<dyn Fn(SidebarFilter)>;
 
+/// Square thumbnail edge length for every Home preview card.
+const CARD_THUMB: i32 = 180;
+/// Fixed gap between cards in a horizontal row (spec: 12–16 px).
+const CARD_GAP: i32 = 14;
+
+/// Home cards need exact geometry independent of theme button padding, so the
+/// rules ship with the widget and load once per display (tests skip base.css).
+const HOME_CSS: &str = r#"
+button.home-card {
+  padding: 0;
+  min-width: 180px;
+}
+.home-thumb {
+  min-width: 180px;
+  min-height: 180px;
+}
+.home-card-caption { font-size: 12px; }
+.home-card-caption-secondary { font-size: 11px; }
+button.home-section-pan {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 2px;
+}
+"#;
+
+fn install_home_css(display: &gtk::gdk::Display) {
+    use std::sync::OnceLock;
+    static LOADED: OnceLock<()> = OnceLock::new();
+    if LOADED.get().is_some() {
+        return;
+    }
+    let provider = gtk::CssProvider::new();
+    provider.load_from_data(HOME_CSS);
+    gtk::style_context_add_provider_for_display(
+        display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 5,
+    );
+    let _ = LOADED.set(());
+}
+
 struct PreviewImage {
     width: i32,
     height: i32,
@@ -40,11 +81,14 @@ mod tests;
 
 impl LibraryHome {
     pub fn new(database: std::path::PathBuf, navigate: Navigate, open: OpenPhoto) -> Self {
+        if let Some(display) = gtk::gdk::Display::default() {
+            install_home_css(&display);
+        }
         let root = gtk::ScrolledWindow::new();
         root.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         root.set_hexpand(true);
         root.set_vexpand(true);
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 28);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 32);
         content.set_margin_top(24);
         content.set_margin_bottom(24);
         content.set_margin_start(28);
@@ -60,12 +104,14 @@ impl LibraryHome {
             ("Favourites", "View All", SidebarFilter::Favorites),
             ("Albums", "View All", SidebarFilter::Albums),
         ] {
-            let section = gtk::Box::new(gtk::Orientation::Vertical, 12);
+            let section = gtk::Box::new(gtk::Orientation::Vertical, 14);
             let heading = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            heading.set_valign(gtk::Align::Center);
             let label = gtk::Label::new(Some(title));
             label.add_css_class("title-2");
             label.set_xalign(0.0);
             label.set_hexpand(true);
+            label.set_valign(gtk::Align::Center);
             heading.append(&label);
 
             let scroller = gtk::ScrolledWindow::new();
@@ -73,17 +119,22 @@ impl LibraryHome {
             scroller.set_hexpand(true);
             scroller.set_kinetic_scrolling(true);
             scroller.add_css_class("home-section-row");
-            let track = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+            let track = gtk::Box::new(gtk::Orientation::Horizontal, CARD_GAP);
             track.add_css_class("home-section-track");
             track.set_valign(gtk::Align::Start);
+            track.set_halign(gtk::Align::Start);
             scroller.set_child(Some(&track));
 
             let prev = gtk::Button::from_icon_name("pan-start-symbolic");
             prev.add_css_class("flat");
+            prev.add_css_class("home-section-pan");
+            prev.set_valign(gtk::Align::Center);
             prev.set_tooltip_text(Some("Scroll left"));
             prev.set_visible(false);
             let next = gtk::Button::from_icon_name("pan-end-symbolic");
             next.add_css_class("flat");
+            next.add_css_class("home-section-pan");
+            next.set_valign(gtk::Align::Center);
             next.set_tooltip_text(Some("Scroll right"));
             next.set_visible(false);
             wire_scroll_buttons(&scroller, &prev, &next);
@@ -303,16 +354,26 @@ fn populate(sections: &[HomeSection], snapshot: &Snapshot, navigate: &Navigate, 
     {
         let objects: Vec<_> = photos.iter().map(PhotoObject::from_photo).collect();
         for (position, photo) in photos.iter().enumerate() {
-            let caption = photo
-                .history_caption
-                .clone()
-                .unwrap_or_else(|| crate::source::filename(&photo.path));
-            let button = card(&caption, None, snapshot.images.get(&photo.id));
-            button.set_tooltip_text(Some(&format!(
-                "{}\n{}",
-                crate::source::filename(&photo.path),
-                caption
-            )));
+            let filename = crate::source::filename(&photo.path);
+            let image = snapshot.images.get(&photo.id);
+            // Recently Edited keeps the filename as the primary caption and the
+            // history line ("Photo · …" / "Collage · …") as smaller secondary
+            // text so saved collages stay distinguishable from photographs.
+            let button = if index == 1 {
+                let secondary = photo.history_caption.as_deref().map(short_edit_line);
+                let collage = secondary
+                    .as_deref()
+                    .map(|line| line.starts_with("Collage"))
+                    .unwrap_or(false);
+                let button = card(&filename, secondary.as_deref(), image);
+                if collage {
+                    button.add_css_class("home-collage");
+                }
+                button
+            } else {
+                card(&filename, None, image)
+            };
+            button.set_tooltip_text(Some(&filename));
             let open = open.clone();
             let objects = objects.clone();
             button.connect_clicked(move |_| open(objects.clone(), position, index == 1));
@@ -327,6 +388,7 @@ fn populate(sections: &[HomeSection], snapshot: &Snapshot, navigate: &Navigate, 
                 .as_ref()
                 .and_then(|photo| snapshot.images.get(&photo.id)),
         );
+        button.set_tooltip_text(Some(&album.name));
         let navigate = navigate.clone();
         let id = album.id;
         button.connect_clicked(move |_| navigate(SidebarFilter::Album(id)));
@@ -383,18 +445,36 @@ fn apply_position(hadj: &gtk::Adjustment, position: f64) {
 fn card(title: &str, subtitle: Option<&str>, image: Option<&Arc<PreviewImage>>) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("flat");
+    button.add_css_class("home-card");
+    // Left-align in the track; never expand or distribute across the window.
+    button.set_hexpand(false);
+    button.set_vexpand(false);
+    button.set_halign(gtk::Align::Start);
+    button.set_valign(gtk::Align::Start);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    content.set_halign(gtk::Align::Start);
+    content.set_hexpand(false);
+    content.set_size_request(CARD_THUMB, -1);
     let frame = gtk::Overlay::new();
     frame.add_css_class("card");
-    // Square thumbnail so every preview card shares one size.
-    frame.set_size_request(140, 140);
+    frame.add_css_class("home-thumb");
+    // Square thumbnail so every preview card shares one size, regardless of
+    // the cached image's natural dimensions or the caption length.
+    frame.set_size_request(CARD_THUMB, CARD_THUMB);
     frame.set_hexpand(false);
     frame.set_vexpand(false);
-    frame.set_halign(gtk::Align::Center);
+    frame.set_halign(gtk::Align::Fill);
     frame.set_valign(gtk::Align::Start);
+    frame.set_overflow(gtk::Overflow::Hidden);
     let picture = gtk::Picture::new();
     picture.set_can_shrink(true);
     picture.set_content_fit(gtk::ContentFit::Cover);
+    picture.set_size_request(1, 1);
+    picture.set_hexpand(true);
+    picture.set_vexpand(true);
+    picture.set_halign(gtk::Align::Fill);
+    picture.set_valign(gtk::Align::Fill);
+    picture.add_css_class("thumbnail");
     if let Some(image) = image {
         let texture = gtk::gdk::MemoryTexture::new(
             image.width,
@@ -416,18 +496,40 @@ fn card(title: &str, subtitle: Option<&str>, image: Option<&Arc<PreviewImage>>) 
         frame.add_overlay(&placeholder);
     }
     content.append(&frame);
-    let label = gtk::Label::new(Some(title));
-    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    label.set_width_chars(18);
-    label.set_max_width_chars(18);
-    label.set_xalign(0.0);
-    content.append(&label);
+    content.append(&caption_label(title, false));
     if let Some(text) = subtitle {
-        let label = gtk::Label::new(Some(text));
-        label.add_css_class("dim-label");
-        label.set_xalign(0.0);
-        content.append(&label);
+        content.append(&caption_label(text, true));
     }
     button.set_child(Some(&content));
     button
+}
+
+/// Compact caption under a thumbnail. Ellipsizes only when the parent width
+/// forces it; the button tooltip carries the complete text.
+fn caption_label(text: &str, secondary: bool) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_xalign(0.0);
+    label.set_halign(gtk::Align::Fill);
+    label.set_hexpand(true);
+    // Cap natural width so long filenames cannot stretch the card past 180px.
+    label.set_max_width_chars(if secondary { 26 } else { 22 });
+    if secondary {
+        label.add_css_class("dim-label");
+        label.add_css_class("home-card-caption-secondary");
+    } else {
+        label.add_css_class("home-card-caption");
+    }
+    label
+}
+
+/// History lines arrive as "Photo · YYYY-MM-DD HH:MM:SS". Drop the seconds so
+/// the secondary caption fits the fixed card width while keeping the kind
+/// (Photo/Collage) that distinguishes saved collages from photographs.
+fn short_edit_line(line: &str) -> String {
+    if line.len() >= 3 && line.as_bytes()[line.len() - 3] == b':' {
+        line[..line.len() - 3].to_string()
+    } else {
+        line.to_string()
+    }
 }

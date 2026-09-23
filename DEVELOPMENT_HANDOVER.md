@@ -1,4 +1,89 @@
-# Development handover — Phase 3 History date grouping
+# Development handover — Library Home visual layout correction
+
+Updated: 2026-09-23. Supersedes the Phase 3 report below for Home presentation work.
+
+## Current status
+
+Library Home Page visual layout corrected without changing architecture, database queries, History, navigation or scrolling behaviour. Phase 1–3 features remain intact.
+
+- Branch: `rc5`.
+- HEAD: `3a2d029`. No new commit was made.
+- Workspace: `/home/peet/Downloads/picasa/picasa-iphoto-clone`.
+- Uncommitted changes: `src/library_home.rs`, `src/library_home_tests.rs`.
+- `.flatpak-builder/` remains untracked and untouched.
+
+## Task and completed features
+
+Fix Home thumbnail spacing, card size, captions and section presentation.
+
+Completed:
+
+1. **Cards 180×180.** `CARD_THUMB = 180`; frames use `set_size_request(180, 180)`, `ContentFit::Cover`, `can_shrink`, and `Overflow::Hidden`. Picture natural size never distorts or resizes the card (portrait, landscape and collage covers share one square frame).
+2. **Fixed 14 px gap, left-aligned.** `CARD_GAP = 14` on each `home-section-track`. Cards use `halign(Start)` / `hexpand(false)`; no `space-between`, spacers or per-card expansion. Measured in the GTK screenshot: cards at x=28 and x=222 (180 wide, 14 px gap).
+3. **Home CSS ships with the widget.** `HOME_CSS` is installed once per display from `LibraryHome::new` at `APPLICATION + 5` so tests (which skip `base.css`) get identical geometry. Rules: zero button padding, `min-width/min-height: 180px` on the thumb, compact caption font sizes, tighter pan buttons. GTK 4.22 has no `max-width`/`width` CSS properties; natural width is capped with `Label::set_max_width_chars`.
+4. **Captions.**
+   - Recently Added / Favourites: filename only.
+   - Recently Edited: filename primary + dim secondary history line via `short_edit_line` (drops seconds, keeps `Photo ·` / `Collage ·` kind). Saved collages also get the `home-collage` class.
+   - Albums: album name + `"{n} photos"` (unchanged).
+   - Tooltips show the complete filename (or album name). Ellipsis only when the fixed card width forces it.
+5. **Section spacing / nav.** Section vertical spacing 14 px (heading→row); page content spacing 32 px; heading `valign(Center)`; pan buttons `home-section-pan` with 28 px min size and vertical centering.
+6. **Scrolling unchanged.** 10-item limit, kinetic horizontal rows, pan buttons, Shift+wheel/touchpad, position restore and non-hijacked vertical scroll are untouched. Albums remains reachable through the outer vertical `ScrolledWindow`.
+
+## Files changed for this task
+
+```text
+src/library_home.rs          CARD_THUMB/CARD_GAP, HOME_CSS install, caption/tooltip
+                              logic, short_edit_line, left-aligned card(), spacing
+src/library_home_tests.rs     180×180 frame assert, left-align/hexpand checks,
+                              filename vs history caption asserts
+DEVELOPMENT_HANDOVER.md      This report
+```
+
+No database, History, grid, or window-navigation modules were modified.
+
+## Design notes
+
+- Visual-only change: worker, `PRAGMA data_version`, cache-only `load_cached_display_thumbnail`, open/navigate callbacks and `restore_row_positions` are unchanged.
+- `install_home_css` uses `OnceLock` so repeated `LibraryHome::new` (tests) does not stack providers.
+- `short_edit_line` strips a trailing `HH:MM:SS` seconds field only; kind prefix preserved for collage distinction.
+
+## Validation
+
+- `cargo test --quiet`: **362 passed, 0 failed, 23 ignored**.
+- `cargo test --quiet home_`: **5 passed, 0 failed, 1 ignored**.
+- `cargo test --quiet home_page_sections_navigation_and_favorite_refresh -- --ignored --test-threads=1`: **passed** (frame 180×180, left-align, filename/history captions, overflow arrows, position memory, navigation).
+- `cargo test --quiet history`: **9 passed, 0 failed, 2 ignored**.
+- `cargo check --quiet`: **passed** (pre-existing warnings only).
+- `rustfmt --check` on the two changed Rust files: **passed**. `git diff --check`: **passed**.
+- GTK screenshot: `PIC_HOME_SCREENSHOT=/tmp/pic-home-final.png` — measured 180×180 cards, 14 px gaps, left margin 28, filename captions, secondary edit line without seconds.
+- Log: full suite via `cargo test --quiet` this session.
+
+## Outstanding issues and next steps
+
+1. Review the uncommitted visual-layout diff and this report.
+2. Manually confirm Shift+wheel and vertical wheel over a Home row in the live app.
+3. Confirm presentation with real cached thumbnails (portrait/landscape/collage) and long filenames.
+4. Do not commit or push without further user instruction.
+
+Useful commands:
+
+```bash
+cd /home/peet/Downloads/picasa/picasa-iphoto-clone
+git status --short
+git diff --stat
+cargo test --quiet home_
+cargo test --quiet home_page_sections_navigation_and_favorite_refresh -- --ignored --test-threads=1
+PIC_HOME_SCREENSHOT=/tmp/pic-home.png cargo test --quiet home_page_sections_navigation_and_favorite_refresh -- --ignored --test-threads=1
+cargo check --quiet
+cargo run --quiet
+# Full suite after further substantive changes:
+cargo test --quiet
+```
+
+---
+
+# Archived handover — Phase 3 History date grouping
+
 
 Updated: 2026-09-23. This section supersedes the horizontal-rows and Phase 2 reports below.
 

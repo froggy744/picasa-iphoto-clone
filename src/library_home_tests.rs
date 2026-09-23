@@ -251,7 +251,57 @@ fn home_page_sections_navigation_and_favorite_refresh() {
         .and_then(|child| child.downcast::<gtk::Overlay>().ok())
         .expect("card frame");
     assert_eq!(frame.width(), frame.height());
-    assert_eq!(frame.width(), 140);
+    assert_eq!(frame.width(), CARD_THUMB);
+    assert_eq!(CARD_THUMB, 180);
+    // Cards stay left-aligned with a fixed gap; no even distribution.
+    let track = &sections[0];
+    assert!(track
+        .css_classes()
+        .iter()
+        .any(|class| class == "home-section-track"));
+    if let Some(button) = track.first_child() {
+        assert_eq!(button.halign(), gtk::Align::Start);
+        assert!(!button.hexpands());
+    }
+    // Recently Added captions are filenames, not history timestamps.
+    {
+        let mut labels = Vec::<gtk::Label>::new();
+        collect(sections[0].upcast_ref(), &mut labels);
+        let texts: Vec<String> = labels.iter().map(|l| l.text().to_string()).collect();
+        assert!(
+            texts.iter().any(|t| t == "two.jpg" || t == "one.jpg"),
+            "expected filenames in Recently Added, got {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|t| t.contains('·')),
+            "Recently Added must not show history captions: {texts:?}"
+        );
+    }
+    // Recently Edited: filename primary, history line as smaller secondary.
+    {
+        let mut labels = Vec::<gtk::Label>::new();
+        collect(sections[1].upcast_ref(), &mut labels);
+        let texts: Vec<String> = labels.iter().map(|l| l.text().to_string()).collect();
+        assert!(
+            texts.iter().any(|t| t == "one.jpg"),
+            "expected filename primary in Recently Edited, got {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("Photo ·") || t.starts_with("Collage ·")),
+            "expected history secondary text in Recently Edited, got {texts:?}"
+        );
+        let secondary: Vec<_> = labels
+            .iter()
+            .filter(|l| {
+                l.css_classes()
+                    .iter()
+                    .any(|c| c == "home-card-caption-secondary")
+            })
+            .collect();
+        assert!(!secondary.is_empty(), "edited card needs secondary caption");
+    }
 
     // Scroll buttons appear only once a row overflows the viewport.
     let arrow_visibles = || arrow_visibles_from(home.root.upcast_ref());
