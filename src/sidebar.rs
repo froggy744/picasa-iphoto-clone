@@ -1884,27 +1884,24 @@ pub fn is_pinned(scrolled: &gtk::ScrolledWindow) -> bool {
 
 /// Record that the sidebar was opened temporarily by the left-edge hover.
 ///
-/// This never overrides a pinned sidebar.
+/// The reveal decision (pinned vs collapsed peek) lives in the layout; this
+/// flag is the raw "opened by hover, auto-close on leave" state.
 pub fn set_hover_open(scrolled: &gtk::ScrolledWindow, hover_open: bool) {
     let Some(state) = sidebar_state(scrolled) else {
         return;
     };
 
     let state = state.borrow();
-    if state.pinned.get() {
-        state.hover_open.set(false);
-    } else {
-        state.hover_open.set(hover_open);
-    }
+    state.hover_open.set(hover_open);
 }
 
 /// Returns true only when the sidebar is currently open because of hover.
+///
+/// True even for a pinned sidebar that was only peeked open by the edge
+/// hover while the split view is collapsed (the breakpoint hides it anyway).
 pub fn is_hover_open(scrolled: &gtk::ScrolledWindow) -> bool {
     sidebar_state(scrolled)
-        .map(|state| {
-            let state = state.borrow();
-            state.hover_open.get() && !state.pinned.get()
-        })
+        .map(|state| state.borrow().hover_open.get())
         .unwrap_or(false)
 }
 

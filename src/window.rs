@@ -35,6 +35,13 @@ const WINDOW_WIDTH_SETTING_KEY: &str = "window-width";
 const WINDOW_HEIGHT_SETTING_KEY: &str = "window-height";
 const WINDOW_MAXIMIZED_SETTING_KEY: &str = "window-maximized";
 const SIDEBAR_WIDTH_FRACTION_SETTING_KEY: &str = "sidebar-width-fraction";
+const SIDEBAR_COLLAPSED_WIDTH_SETTING_KEY: &str = "sidebar-collapsed-width";
+const SIDEBAR_MIN_WIDTH: f64 = 200.0;
+const SIDEBAR_MAX_WIDTH: f64 = 600.0;
+// Overlay (collapsed) reveal width. libadwaita sizes the collapsed sidebar
+// from max-sidebar-width and ignores sidebar-width-fraction entirely, so the
+// compact window gets its own cap: half the expanded maximum.
+const SIDEBAR_COLLAPSED_DEFAULT_WIDTH: f64 = 300.0;
 // Fallback before the first real layout when no thumbnail size is stored.
 // A ladder level, so +/- from it stays on the canonical sizes.
 const DEFAULT_GRID_THUMBNAIL_SIZE: i32 = 160;

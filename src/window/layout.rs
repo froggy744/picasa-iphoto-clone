@@ -632,8 +632,8 @@
 
     main_split.set_sidebar(Some(&sidebar_shell));
     main_split.set_content(Some(&right_column));
-    main_split.set_min_sidebar_width(200.0);
-    main_split.set_max_sidebar_width(600.0);
+    main_split.set_min_sidebar_width(SIDEBAR_MIN_WIDTH);
+    main_split.set_max_sidebar_width(SIDEBAR_MAX_WIDTH);
     let saved_sidebar_fraction = numeric_setting::<f64>(
         &connection.borrow(),
         SIDEBAR_WIDTH_FRACTION_SETTING_KEY,
@@ -641,6 +641,36 @@
     .unwrap_or(0.22)
     .clamp(0.10, 0.70);
     main_split.set_sidebar_width_fraction(saved_sidebar_fraction);
+    // When collapsed, libadwaita clamps the sidebar to max-sidebar-width and
+    // ignores the fraction, so the compact overlay swaps in its own (narrower)
+    // cap. Expanding restores the normal maximum, leaving the wide-window
+    // layout untouched.
+    let collapsed_sidebar_width = Rc::new(Cell::new(
+        numeric_setting::<f64>(
+            &connection.borrow(),
+            SIDEBAR_COLLAPSED_WIDTH_SETTING_KEY,
+        )
+        .unwrap_or(SIDEBAR_COLLAPSED_DEFAULT_WIDTH)
+        .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+    ));
+    {
+        let collapsed_sidebar_width_for_notify = collapsed_sidebar_width.clone();
+        let sidebar_for_collapse_notify = sidebar.clone();
+        main_split.connect_collapsed_notify(move |split| {
+            if split.is_collapsed() {
+                split.set_max_sidebar_width(collapsed_sidebar_width_for_notify.get());
+            } else {
+                split.set_max_sidebar_width(SIDEBAR_MAX_WIDTH);
+                // A collapsed hover peek that was still open when the window
+                // widened must not leave stale auto-hide state behind: the
+                // expanded sidebar is persistent again (pin gate resumes).
+                sidebar::clear_hover_open(&sidebar_for_collapse_notify);
+            }
+        });
+        if main_split.is_collapsed() {
+            main_split.set_max_sidebar_width(collapsed_sidebar_width.get());
+        }
+    }
     main_split.set_enable_show_gesture(true);
     main_split.set_enable_hide_gesture(true);
 
@@ -668,8 +698,13 @@
     let sidebar_hover_layout_freeze_for_reveal = sidebar_hover_layout_freeze.clone();
     let sidebar_hover_freeze_generation_for_reveal = sidebar_hover_freeze_generation.clone();
     sidebar_hover_motion.connect_enter(move |_, _, _| {
+        // The breakpoint auto-hides even a pinned sidebar on narrow windows,
+        // so edge-hover must still peek it open while collapsed. In the
+        // expanded layout the pin gate still applies: a pinned sidebar the
+        // user explicitly hid stays hidden until they show it again.
         if !main_split_for_hover_reveal.shows_sidebar()
-            && !sidebar::is_pinned(&sidebar_for_hover_reveal)
+            && (!sidebar::is_pinned(&sidebar_for_hover_reveal)
+                || main_split_for_hover_reveal.is_collapsed())
         {
             // Hover reveal is intentionally presentation-only. Freeze the
             // gallery model before OverlaySplitView starts changing width.
@@ -685,8 +720,9 @@
     });
     sidebar_hover_reveal.add_controller(sidebar_hover_motion);
 
-    // Auto-close only a sidebar that was opened by hover. A pinned sidebar
-    // must remain open when the pointer leaves.
+    // Auto-close only a sidebar that was opened by hover (including a
+    // collapsed-mode peek of a pinned sidebar). A pinned sidebar in the
+    // expanded layout never hover-opens, so it never auto-hides here.
     let sidebar_leave_motion = gtk::EventControllerMotion::new();
     let main_split_for_hover_hide = main_split.clone();
     let sidebar_for_hover_hide = sidebar.clone();
@@ -771,16 +807,26 @@
     // resize feedback without making every GtkGridView cell reallocate.
     let pending_sidebar_fraction = Rc::new(Cell::new(main_split.sidebar_width_fraction()));
     let pending_sidebar_fraction_update = pending_sidebar_fraction.clone();
+    let pending_collapsed_width = Rc::new(Cell::new(collapsed_sidebar_width.get()));
+    let pending_collapsed_width_update = pending_collapsed_width.clone();
+    let main_split_for_drag_update = main_split.clone();
     let sidebar_drag_start_width_update = sidebar_drag_start_width.clone();
     let sidebar_drag_split_width_update = sidebar_drag_split_width.clone();
     let sidebar_resize_preview_update = sidebar_resize_preview.clone();
     sidebar_drag.connect_drag_update(move |_, offset_x, _| {
         let split_width = sidebar_drag_split_width_update.get().max(1.0);
         let target_width = (sidebar_drag_start_width_update.get() + offset_x)
-            .clamp(200.0, 600.0)
+            .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
             .min(split_width * 0.70);
-        let fraction = (target_width / split_width).clamp(0.10, 0.70);
-        pending_sidebar_fraction_update.set(fraction);
+        if main_split_for_drag_update.is_collapsed() {
+            // The collapsed allocator reads max-sidebar-width only; writing
+            // the fraction here would have no effect on the overlay width.
+            pending_collapsed_width_update.set(target_width);
+        } else {
+            let fraction =
+                (target_width / split_width).clamp(0.10, 0.70);
+            pending_sidebar_fraction_update.set(fraction);
+        }
 
         sidebar_resize_preview_update.set_margin_start(target_width.round() as i32 - 1);
         sidebar_resize_preview_update.set_visible(true);
@@ -788,14 +834,30 @@
 
     let main_split_for_drag_end = main_split.clone();
     let pending_sidebar_fraction_end = pending_sidebar_fraction.clone();
+    let pending_collapsed_width_end = pending_collapsed_width.clone();
+    let collapsed_sidebar_width_for_end = collapsed_sidebar_width.clone();
+    let connection_for_drag_end = connection.clone();
     let sidebar_resize_active_for_end = sidebar_resize_active.clone();
     let sidebar_resize_preview_end = sidebar_resize_preview.clone();
     let gallery_for_sidebar_drag_end = gallery.clone();
     let gallery_surface_for_sidebar_drag_end = gallery_scroll_stack.clone();
     sidebar_drag.connect_drag_end(move |_, _, _| {
         sidebar_resize_preview_end.set_visible(false);
-        main_split_for_drag_end
-            .set_sidebar_width_fraction(pending_sidebar_fraction_end.get());
+        if main_split_for_drag_end.is_collapsed() {
+            let width = pending_collapsed_width_end.get();
+            collapsed_sidebar_width_for_end.set(width);
+            main_split_for_drag_end.set_max_sidebar_width(width);
+            if let Err(error) = db::set_setting(
+                &connection_for_drag_end.borrow(),
+                SIDEBAR_COLLAPSED_WIDTH_SETTING_KEY,
+                &width.to_string(),
+            ) {
+                eprintln!("Could not save sidebar overlay width: {error}");
+            }
+        } else {
+            main_split_for_drag_end
+                .set_sidebar_width_fraction(pending_sidebar_fraction_end.get());
+        }
         sidebar_resize_active_for_end.set(false);
 
         // Wait until the split view has received its single final allocation,
