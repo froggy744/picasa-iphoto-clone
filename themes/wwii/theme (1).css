@@ -1,0 +1,167 @@
+/* picasa-theme
+   version: 1
+   name: WoW
+   dark: true
+   mode: overlay
+*/
+
+/* World of Warcraft-inspired appearance: dark stone/leather panels, ornate
+   gold trim, and warm amber highlights, echoing the game's own UI frames.
+   Typography is supplied separately by platform CSS. */
+
+window, .layout-left-column, .navigation-sidebar { background: #1B140C; color: #E8C888; }
+    .layout-left-column { border-right: 2px solid #A6791E; }
+    .layout-left-header, .layout-right-header { background: #241A0F; border-bottom: 2px solid #A6791E; color: #FFD700; }
+    .app-title { color: #FFD700; text-shadow: 1px 1px 1px rgba(0,0,0,0.7); font-weight: 800; letter-spacing: 0.3px; }
+    .layout-left-header button, .layout-right-header button { color: #E8C888; border-radius: 4px; }
+    .layout-left-header .sidebar-toggle-button, .layout-left-header .sidebar-toggle-button image { color: #FFD700; opacity: 1; }
+    .layout-left-header button:hover, .layout-right-header button:hover { background: alpha(#A6791E, 0.30); }
+    .search-field { min-height: 34px; border-radius: 5px; background: #12100C; border: 1px solid #6B4E1E; color: #E8C888; box-shadow: inset 0 1px 2px rgba(0,0,0,0.6); }
+    .search-field image { color: #A6791E; }
+    .search-field entry { background: transparent; color: #E8C888; }
+    .photo-grid { background: #17120B; }
+    listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }
+    listview.folder-stream > row {
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        background-image: none;
+        box-shadow: none;
+    }
+    listview.folder-stream > row:hover,
+    listview.folder-stream > row:selected,
+    listview.folder-stream > row:focus,
+    listview.folder-stream > row:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .folder-section-header { background: transparent; }
+    .folder-section-title { color: #FFD700; font-weight: 800; font-size: 14px; text-shadow: 1px 1px 1px rgba(0,0,0,0.7); }
+    .folder-section-count { color: #B89860; font-size: 12px; }
+    .folder-section-icon { color: #C9A24B; }
+    .folder-section-separator { margin-top: 7px; opacity: 0.6; background: #6B4E1E; }
+    .folder-photo-row { background: transparent; }
+    /* GtkGridView uses CSS child nodes for its cells. Keep the old `item`
+       selector too so this stays harmless across GTK minor-version styling. */
+    gridview.section-grid > child,
+    gridview.section-grid > item {
+        padding: 6px;
+        margin: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+    gridview.section-grid > child:hover,
+    gridview.section-grid > child:selected,
+    gridview.section-grid > child:focus,
+    gridview.section-grid > child:active,
+    gridview.section-grid > item:hover,
+    gridview.section-grid > item:selected,
+    gridview.section-grid > item:focus,
+    gridview.section-grid > item:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .group-heading-bar { background: transparent; padding: 0; }
+    .photo-frame { box-shadow: none; }
+    .photo-tile { border-radius: 4px; border: 2px solid #4A3416; background: #241A0F; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.5); }
+    .photo-tile:hover { border-color: #FFD700; box-shadow: 0 0 6px alpha(#FFD700, 0.55); }
+    .folder-photo-flow > flowboxchild { padding: 6px; margin: 0; min-height: 0; background: transparent; background-image: none; box-shadow: none; }
+    .folder-photo-flow > flowboxchild:hover,
+    .folder-photo-flow > flowboxchild:focus,
+    .folder-photo-flow > flowboxchild:active,
+    .folder-photo-flow > flowboxchild:selected { background: transparent; background-image: none; outline: none; box-shadow: none; }
+    .folder-photo-selected.photo-tile { border-color: #FFD700; box-shadow: 0 0 8px alpha(#FFD700, 0.75); }
+    .folder-photo-selected .selection-badge { opacity: 1; }
+    .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }
+    button.album-card { min-width: 0; padding: 0; margin: 0; background: transparent; background-image: none; border: none; box-shadow: none; border-radius: 4px; }
+    button.album-card:hover, button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }
+    gridview.section-grid > child:selected .photo-tile,
+    gridview.section-grid > item:selected .photo-tile {
+        border-color: #FFD700;
+        box-shadow: 0 0 6px alpha(#FFD700, 0.55);
+    }
+    .selection-badge { background: #A6791E; box-shadow: 0 1px 3px rgba(0,0,0,0.6); border: 1px solid #FFD700; border-radius: 9999px; }
+    .offline-badge { min-width: 20px; min-height: 20px; padding: 0; border-radius: 9999px; color: #241A0F; background: #C41E3A; font-weight: 800; }
+    .sidebar-offline-badge { min-width: 16px; min-height: 16px; padding: 0; border-radius: 9999px; color: #241A0F; background: #C41E3A; font-weight: 800; font-size: 10px; }
+    .folder-disclosure { opacity: 0.8; color: #C9A24B; }
+    .navigation-sidebar .folder-count { color: #B89860; }
+    .thumbnail { border-radius: 4px; }
+    .missing-thumbnail { background: #241A0F; }
+    .section-heading-box { margin-top: 16px; margin-bottom: 8px; }
+    .section-heading { color: #FFD700; font-size: 15px; text-shadow: 1px 1px 1px rgba(0,0,0,0.7); font-weight: 800; }
+    .section-more-btn { color: #C9A24B; border-radius: 4px; }
+    .section-more-btn:hover { background: alpha(#C9A24B, 0.20); }
+    .photo-info-bar { background: #1B140C; border-top: 2px solid #A6791E; color: #E8C888; }
+    .info-preview { border-radius: 6px; background: #241A0F; border: 1px solid #6B4E1E; }
+    .info-title, .metric-val { color: #FFD700; }
+    .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: #B89860; }
+    .photo-action-button { border-radius: 4px; color: #241A0F; background: #C9A24B; border: 1px solid #FFD700; box-shadow: none; font-weight: 700; }
+    .photo-action-button:hover { background: #E0BE6E; }
+    .photo-context-menu, .photo-context-menu viewport { background: #1B140C; }
+    .photo-context-menu { border: 2px solid #A6791E; border-radius: 6px; box-shadow: 0 5px 18px rgba(0,0,0,0.6); }
+    .photo-context-menu button { color: #E8C888; }
+    .photo-context-menu button:hover { background: alpha(#A6791E, 0.25); }
+    button.clear-action-button { color: #241A0F; background: #6B4E1E; border: 1px solid #A6791E; border-radius: 4px; font-weight: 700; }
+    button.clear-action-button:hover { color: #241A0F; background: #8A6526; border-color: #FFD700; }
+    button.clear-action-button:active { background: #4A3416; }
+    .favorite-btn.active, .favorite-btn.active image { color: #C41E3A; }
+    .favorite-badge { color: #C41E3A; }
+    .edited-badge { color: #3F8FE8; }
+    .one-to-one-btn:checked { color: #241A0F; background: #FFD700; }
+    .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; color: #C9A24B; }
+    .section-count { font-size: 13px; color: #B89860; }
+    .scroll-scrub-date {
+        padding: 7px 10px;
+        border-radius: 4px;
+        background: #241A0F;
+        color: #FFD700;
+        font-weight: 800;
+        border: 1px solid #A6791E;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    }
+    .navigation-sidebar row { color: #E8C888; }
+    .navigation-sidebar row:hover { background: alpha(#A6791E, 0.15); }
+    .navigation-sidebar .sidebar-section-heading { margin-top: 8px; padding-top: 0; }
+    .navigation-sidebar .sidebar-section-heading-title { color: #FFD700; font-size: inherit; font-weight: 800; text-shadow: 1px 1px 1px rgba(0,0,0,0.7); }
+    .navigation-sidebar row:selected { background: alpha(#A6791E, 0.35); color: #FFD700; box-shadow: inset 3px 0 0 0 #FFD700; }
+    .navigation-sidebar .heading { color: #B89860; }
+
+    /* Scroll-follow folder marker (sidebar.rs set_scroll_location). It is
+       deliberately not row:selected, so without its own rule the base
+       theme's blue marker shows through. */
+    .navigation-sidebar row.sidebar-scroll-location {
+        background: alpha(#3F8FE8, 0.15);
+        box-shadow: inset 3px 0 0 0 #3F8FE8;
+        color: #E8C888;
+    }
+
+    /* Segmented toggle groups: crop aspect presets (Free/Original/1:1…),
+       crop orientation (Landscape/Portrait), and the collage layout tiles
+       and fit/orientation row. Checked state follows the gold accent. */
+    .crop-aspect-button,
+    .crop-orientation-row button,
+    .collage-layout-tile,
+    .collage-tabs > button {
+        border-radius: 4px;
+        color: #E8C888;
+        background: #241A0F;
+        border: 1px solid #4A3416;
+    }
+    .crop-aspect-button:checked,
+    .crop-orientation-row button:checked,
+    .collage-layout-tile:checked,
+    .collage-tabs > button:checked {
+        background: #A6791E;
+        color: #1B140C;
+        border-color: #FFD700;
+    }
+    .crop-aspect-button:checked:hover,
+    .crop-orientation-row button:checked:hover,
+    .collage-layout-tile:checked:hover,
+    .collage-tabs > button:checked:hover {
+        background: #C9A24B;
+    }

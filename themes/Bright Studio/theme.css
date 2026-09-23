@@ -1,0 +1,168 @@
+/* picasa-theme
+   version: 1
+   name: Bright Studio
+   dark: false
+   mode: overlay
+*/
+
+/* The opposite of Premium Studio on every axis: a bright white base instead
+   of near-black, warm coral instead of cool indigo, flat minimal surfaces
+   instead of shadow-depth, and generous airy whitespace instead of dense
+   chrome. Grey still frames things neutrally so photos stay the subject;
+   the accent shows up only on selection and active states.
+   Typography is supplied separately by platform CSS. */
+
+window, .layout-left-column, .navigation-sidebar { background: #FFFFFF; color: #1C1C1E; }
+    .layout-left-column { border-right: 1px solid #EAEAEC; }
+    .layout-left-header, .layout-right-header { background: #FFFFFF; border-bottom: 1px solid #EAEAEC; color: #1C1C1E; }
+    .app-title { color: #1C1C1E; text-shadow: none; font-weight: 700; letter-spacing: -0.2px; }
+    .layout-left-header button, .layout-right-header button { color: #48484E; border-radius: 8px; }
+    .layout-left-header .sidebar-toggle-button, .layout-left-header .sidebar-toggle-button image { color: #48484E; opacity: 1; }
+    .layout-left-header button:hover, .layout-right-header button:hover { background: alpha(#000000, 0.05); }
+    .search-field { min-height: 36px; border-radius: 10px; background: #F4F4F5; border: 1px solid #E4E4E7; color: #1C1C1E; box-shadow: none; }
+    .search-field image { color: #8E8E96; }
+    .search-field entry { background: transparent; color: #1C1C1E; }
+    .photo-grid { background: #FFFFFF; }
+    listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }
+    listview.folder-stream > row {
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        background-image: none;
+        box-shadow: none;
+    }
+    listview.folder-stream > row:hover,
+    listview.folder-stream > row:selected,
+    listview.folder-stream > row:focus,
+    listview.folder-stream > row:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .folder-section-header { background: transparent; }
+    .folder-section-title { color: #1C1C1E; font-weight: 700; font-size: 14px; text-shadow: none; letter-spacing: -0.1px; }
+    .folder-section-count { color: #8E8E96; font-size: 12px; }
+    .folder-section-icon { color: #6E6E76; }
+    .folder-section-separator { margin-top: 7px; opacity: 0.6; background: #EAEAEC; }
+    .folder-photo-row { background: transparent; }
+    /* GtkGridView uses CSS child nodes for its cells. Keep the old `item`
+       selector too so this stays harmless across GTK minor-version styling. */
+    gridview.section-grid > child,
+    gridview.section-grid > item {
+        padding: 6px;
+        margin: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+    gridview.section-grid > child:hover,
+    gridview.section-grid > child:selected,
+    gridview.section-grid > child:focus,
+    gridview.section-grid > child:active,
+    gridview.section-grid > item:hover,
+    gridview.section-grid > item:selected,
+    gridview.section-grid > item:focus,
+    gridview.section-grid > item:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .group-heading-bar { background: transparent; padding: 0; }
+    .photo-frame { box-shadow: none; }
+    .photo-tile { border-radius: 10px; border: 1px solid #EEEEF0; background: #FAFAFA; box-shadow: none; }
+    .photo-tile:hover { border-color: #D4D4D8; box-shadow: none; }
+    .folder-photo-flow > flowboxchild { padding: 6px; margin: 0; min-height: 0; background: transparent; background-image: none; box-shadow: none; }
+    .folder-photo-flow > flowboxchild:hover,
+    .folder-photo-flow > flowboxchild:focus,
+    .folder-photo-flow > flowboxchild:active,
+    .folder-photo-flow > flowboxchild:selected { background: transparent; background-image: none; outline: none; box-shadow: none; }
+    .folder-photo-selected.photo-tile { border-color: #FF6B4A; box-shadow: 0 0 0 3px alpha(#FF6B4A, 0.16); }
+    .folder-photo-selected .selection-badge { opacity: 1; }
+    .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }
+    button.album-card { min-width: 0; padding: 0; margin: 0; background: transparent; background-image: none; border: none; box-shadow: none; border-radius: 10px; }
+    button.album-card:hover, button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }
+    gridview.section-grid > child:selected .photo-tile,
+    gridview.section-grid > item:selected .photo-tile {
+        border-color: #FF6B4A;
+        box-shadow: 0 0 0 3px alpha(#FF6B4A, 0.16);
+    }
+    .selection-badge { background: #FF6B4A; box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
+    .offline-badge { min-width: 20px; min-height: 20px; padding: 0; border-radius: 9999px; color: #FFFFFF; background: #3B3B40; font-weight: 700; }
+    .sidebar-offline-badge { min-width: 16px; min-height: 16px; padding: 0; border-radius: 9999px; color: #FFFFFF; background: #3B3B40; font-weight: 700; font-size: 10px; }
+    .folder-disclosure { opacity: 0.55; }
+    .navigation-sidebar .folder-count { color: #8E8E96; }
+    .thumbnail { border-radius: 10px; }
+    .missing-thumbnail { background: #F0F0F2; }
+    .section-heading-box { margin-top: 16px; margin-bottom: 8px; }
+    .section-heading { color: #1C1C1E; font-size: 15px; text-shadow: none; font-weight: 700; letter-spacing: -0.1px; }
+    .section-more-btn { color: #48484E; border-radius: 8px; }
+    .section-more-btn:hover { background: alpha(#000000, 0.05); }
+    .photo-info-bar { background: #FFFFFF; border-top: 1px solid #EAEAEC; color: #1C1C1E; }
+    .info-preview { border-radius: 10px; background: #FAFAFA; border: 1px solid #EEEEF0; }
+    .info-title, .metric-val { color: #1C1C1E; }
+    .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: #8E8E96; }
+    .photo-action-button { border-radius: 8px; color: #1C1C1E; background: #F4F4F5; border: 1px solid #E4E4E7; box-shadow: none; }
+    .photo-action-button:hover { background: #EBEBED; }
+    .photo-context-menu, .photo-context-menu viewport { background: #FFFFFF; }
+    .photo-context-menu { border: 1px solid #E4E4E7; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.12); }
+    .photo-context-menu button { color: #1C1C1E; }
+    .photo-context-menu button:hover { background: alpha(#000000, 0.05); }
+    button.clear-action-button { color: #1C1C1E; background: #F0F0F2; border: 1px solid #E0E0E3; border-radius: 8px; }
+    button.clear-action-button:hover { color: #000000; background: #E6E6E9; border-color: #D4D4D8; }
+    button.clear-action-button:active { background: #DADADD; }
+    .favorite-btn.active, .favorite-btn.active image { color: #E0304F; }
+    .favorite-badge { color: #E0304F; }
+    .edited-badge { color: #8E8E96; }
+    .one-to-one-btn:checked { color: #FFFFFF; background: #FF6B4A; }
+    .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; color: #8E8E96; }
+    .section-count { font-size: 13px; color: #8E8E96; }
+    .scroll-scrub-date {
+        padding: 7px 12px;
+        border-radius: 9999px;
+        background: alpha(#FFFFFF, 0.92);
+        color: #1C1C1E;
+        font-weight: 700;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.14);
+    }
+    .navigation-sidebar row { color: #1C1C1E; }
+    .navigation-sidebar row:hover { background: alpha(#000000, 0.04); }
+    .navigation-sidebar .sidebar-section-heading { margin-top: 8px; padding-top: 0; }
+    .navigation-sidebar .sidebar-section-heading-title { color: #8E8E96; font-size: inherit; font-weight: 700; letter-spacing: 0.2px; }
+    .navigation-sidebar row:selected { background: alpha(#FF6B4A, 0.12); color: #1C1C1E; border-radius: 8px; }
+    .navigation-sidebar .heading { color: #A8A8B0; }
+
+    /* Scroll-follow folder marker (sidebar.rs set_scroll_location). It is
+       deliberately not row:selected, so without its own rule the base
+       theme's blue marker shows through. */
+    .navigation-sidebar row.sidebar-scroll-location {
+        background: alpha(#FF6B4A, 0.08);
+        box-shadow: inset 3px 0 0 0 #FF6B4A;
+        color: #1C1C1E;
+    }
+
+    /* Segmented toggle groups: crop aspect presets (Free/Original/1:1…),
+       crop orientation (Landscape/Portrait), and the collage layout tiles
+       and fit/orientation row. Checked state carries the coral accent,
+       everything else stays flat and neutral. */
+    .crop-aspect-button,
+    .crop-orientation-row button,
+    .collage-layout-tile,
+    .collage-tabs > button {
+        border-radius: 9999px;
+        color: #48484E;
+        background: #F4F4F5;
+    }
+    .crop-aspect-button:checked,
+    .crop-orientation-row button:checked,
+    .collage-layout-tile:checked,
+    .collage-tabs > button:checked {
+        background: #FF6B4A;
+        color: #FFFFFF;
+    }
+    .crop-aspect-button:checked:hover,
+    .crop-orientation-row button:checked:hover,
+    .collage-layout-tile:checked:hover,
+    .collage-tabs > button:checked:hover {
+        background: #FF8266;
+    }

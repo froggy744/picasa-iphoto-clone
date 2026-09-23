@@ -1,0 +1,169 @@
+/* picasa-theme
+   version: 1
+   name: Premium Studio
+   dark: true
+   mode: overlay
+*/
+
+/* Premium/professional appearance: a near-black base with subtly elevated
+   card surfaces (soft shadow depth rather than borders), and one confident
+   indigo-to-violet accent gradient used sparingly for selection and hover
+   states. Grey still does the heavy lifting so photos stay the focal
+   color; the accent exists to feel premium, not to compete with them.
+   Typography is supplied separately by platform CSS. */
+
+window, .layout-left-column, .navigation-sidebar { background: #121214; color: #EDEDF0; }
+    .layout-left-column { border-right: 1px solid #26262A; }
+    .layout-left-header, .layout-right-header { background: #17171A; border-bottom: 1px solid #26262A; color: #EDEDF0; }
+    .app-title { color: #EDEDF0; text-shadow: none; font-weight: 700; letter-spacing: -0.2px; }
+    .layout-left-header button, .layout-right-header button { color: #C7C7CE; border-radius: 8px; }
+    .layout-left-header .sidebar-toggle-button, .layout-left-header .sidebar-toggle-button image { color: #C7C7CE; opacity: 1; }
+    .layout-left-header button:hover, .layout-right-header button:hover { background: alpha(#FFFFFF, 0.06); }
+    .search-field { min-height: 36px; border-radius: 10px; background: #1E1E22; border: 1px solid #2C2C31; color: #EDEDF0; box-shadow: none; }
+    .search-field image { color: #8C8C96; }
+    .search-field entry { background: transparent; color: #EDEDF0; }
+    .photo-grid { background: #0D0D0F; }
+    listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }
+    listview.folder-stream > row {
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        background-image: none;
+        box-shadow: none;
+    }
+    listview.folder-stream > row:hover,
+    listview.folder-stream > row:selected,
+    listview.folder-stream > row:focus,
+    listview.folder-stream > row:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .folder-section-header { background: transparent; }
+    .folder-section-title { color: #EDEDF0; font-weight: 700; font-size: 14px; text-shadow: none; letter-spacing: -0.1px; }
+    .folder-section-count { color: #8C8C96; font-size: 12px; }
+    .folder-section-icon { color: #9C9CA6; }
+    .folder-section-separator { margin-top: 7px; opacity: 0.5; background: #26262A; }
+    .folder-photo-row { background: transparent; }
+    /* GtkGridView uses CSS child nodes for its cells. Keep the old `item`
+       selector too so this stays harmless across GTK minor-version styling. */
+    gridview.section-grid > child,
+    gridview.section-grid > item {
+        padding: 6px;
+        margin: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+    gridview.section-grid > child:hover,
+    gridview.section-grid > child:selected,
+    gridview.section-grid > child:focus,
+    gridview.section-grid > child:active,
+    gridview.section-grid > item:hover,
+    gridview.section-grid > item:selected,
+    gridview.section-grid > item:focus,
+    gridview.section-grid > item:active {
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .group-heading-bar { background: transparent; padding: 0; }
+    .photo-frame { box-shadow: none; }
+    .photo-tile { border-radius: 10px; border: 1px solid transparent; background: #1A1A1D; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+    .photo-tile:hover { border-color: #3D3D46; box-shadow: 0 4px 14px rgba(0,0,0,0.55); }
+    .folder-photo-flow > flowboxchild { padding: 6px; margin: 0; min-height: 0; background: transparent; background-image: none; box-shadow: none; }
+    .folder-photo-flow > flowboxchild:hover,
+    .folder-photo-flow > flowboxchild:focus,
+    .folder-photo-flow > flowboxchild:active,
+    .folder-photo-flow > flowboxchild:selected { background: transparent; background-image: none; outline: none; box-shadow: none; }
+    .folder-photo-selected.photo-tile { border-color: #8B7CF6; box-shadow: 0 0 0 3px alpha(#8B7CF6, 0.25), 0 4px 14px rgba(0,0,0,0.55); }
+    .folder-photo-selected .selection-badge { opacity: 1; }
+    .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }
+    button.album-card { min-width: 0; padding: 0; margin: 0; background: transparent; background-image: none; border: none; box-shadow: none; border-radius: 10px; }
+    button.album-card:hover, button.album-card:focus, button.album-card:active { background: transparent; background-image: none; box-shadow: none; }
+    gridview.section-grid > child:selected .photo-tile,
+    gridview.section-grid > item:selected .photo-tile {
+        border-color: #8B7CF6;
+        box-shadow: 0 0 0 3px alpha(#8B7CF6, 0.25), 0 4px 14px rgba(0,0,0,0.55);
+    }
+    .selection-badge { background-image: linear-gradient(135deg, #6C63FF, #A78BFA); box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
+    .offline-badge { min-width: 20px; min-height: 20px; padding: 0; border-radius: 9999px; color: #121214; background: #D7D7DE; font-weight: 700; }
+    .sidebar-offline-badge { min-width: 16px; min-height: 16px; padding: 0; border-radius: 9999px; color: #121214; background: #D7D7DE; font-weight: 700; font-size: 10px; }
+    .folder-disclosure { opacity: 0.6; }
+    .navigation-sidebar .folder-count { color: #8C8C96; }
+    .thumbnail { border-radius: 10px; }
+    .missing-thumbnail { background: #1A1A1D; }
+    .section-heading-box { margin-top: 16px; margin-bottom: 8px; }
+    .section-heading { color: #EDEDF0; font-size: 15px; text-shadow: none; font-weight: 700; letter-spacing: -0.1px; }
+    .section-more-btn { color: #C7C7CE; border-radius: 8px; }
+    .section-more-btn:hover { background: alpha(#FFFFFF, 0.06); }
+    .photo-info-bar { background: #121214; border-top: 1px solid #26262A; color: #EDEDF0; }
+    .info-preview { border-radius: 10px; background: #1A1A1D; border: 1px solid #26262A; }
+    .info-title, .metric-val { color: #EDEDF0; }
+    .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: #8C8C96; }
+    .photo-action-button { border-radius: 8px; color: #EDEDF0; background: #1E1E22; border: 1px solid #2C2C31; box-shadow: none; }
+    .photo-action-button:hover { background: #26262B; border-color: #3A3A42; }
+    .photo-context-menu, .photo-context-menu viewport { background: #18181B; }
+    .photo-context-menu { border: 1px solid #2C2C31; border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.55); }
+    .photo-context-menu button { color: #EDEDF0; }
+    .photo-context-menu button:hover { background: alpha(#FFFFFF, 0.06); }
+    button.clear-action-button { color: #EDEDF0; background: #232327; border: 1px solid #34343B; border-radius: 8px; }
+    button.clear-action-button:hover { color: #FFFFFF; background: #2C2C32; border-color: #45454E; }
+    button.clear-action-button:active { background: #1A1A1D; }
+    .favorite-btn.active, .favorite-btn.active image { color: #F0567A; }
+    .favorite-badge { color: #F0567A; }
+    .edited-badge { color: #8C8C96; }
+    .one-to-one-btn:checked { color: #FFFFFF; background-image: linear-gradient(135deg, #6C63FF, #A78BFA); }
+    .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; color: #8C8C96; }
+    .section-count { font-size: 13px; color: #8C8C96; }
+    .scroll-scrub-date {
+        padding: 7px 12px;
+        border-radius: 9999px;
+        background: alpha(#18181B, 0.92);
+        color: #EDEDF0;
+        font-weight: 700;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+    }
+    .navigation-sidebar row { color: #EDEDF0; }
+    .navigation-sidebar row:hover { background: alpha(#FFFFFF, 0.04); }
+    .navigation-sidebar .sidebar-section-heading { margin-top: 8px; padding-top: 0; }
+    .navigation-sidebar .sidebar-section-heading-title { color: #9C9CA6; font-size: inherit; font-weight: 700; letter-spacing: 0.2px; }
+    .navigation-sidebar row:selected { background-image: linear-gradient(135deg, alpha(#6C63FF, 0.20), alpha(#A78BFA, 0.14)); color: #EDEDF0; border-radius: 8px; }
+    .navigation-sidebar .heading { color: #6E6E78; }
+
+    /* Scroll-follow folder marker (sidebar.rs set_scroll_location). It is
+       deliberately not row:selected, so without its own rule the base
+       theme's blue marker shows through. */
+    .navigation-sidebar row.sidebar-scroll-location {
+        background: alpha(#8B7CF6, 0.10);
+        box-shadow: inset 3px 0 0 0 #8B7CF6;
+        color: #EDEDF0;
+    }
+
+    /* Segmented toggle groups: crop aspect presets (Free/Original/1:1…),
+       crop orientation (Landscape/Portrait), and the collage layout tiles
+       and fit/orientation row. Checked state carries the accent gradient,
+       everything else stays neutral so it reads as premium rather than
+       busy. */
+    .crop-aspect-button,
+    .crop-orientation-row button,
+    .collage-layout-tile,
+    .collage-tabs > button {
+        border-radius: 9999px;
+        color: #C7C7CE;
+        background: #1E1E22;
+    }
+    .crop-aspect-button:checked,
+    .crop-orientation-row button:checked,
+    .collage-layout-tile:checked,
+    .collage-tabs > button:checked {
+        background-image: linear-gradient(135deg, #6C63FF, #A78BFA);
+        color: #FFFFFF;
+    }
+    .crop-aspect-button:checked:hover,
+    .crop-orientation-row button:checked:hover,
+    .collage-layout-tile:checked:hover,
+    .collage-tabs > button:checked:hover {
+        background-image: linear-gradient(135deg, #7A72FF, #B49BFB);
+    }

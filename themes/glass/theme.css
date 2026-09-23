@@ -9,9 +9,9 @@
  * Picasa / iPhoto Clone
  * APPLE LIQUID GLASS
  *
- * GTK4 / Qtrs
+ * GTK4 / libadwaita
  *
- * Complete glass.css replacement
+ * Glass theme overlay stylesheet
  *
  * Visual language:
  *   - translucent surfaces
@@ -26,9 +26,9 @@
  * GTK4 CSS does not provide browser-compatible
  * backdrop-filter/SVG filter composition.
  *
- * The CSS therefore creates the glass SURFACE.
- * A separate Rust/rendering layer can provide actual
- * background blur/displacement when available.
+ * This stylesheet creates translucent glass surfaces, tints,
+ * illuminated borders and reflections. Genuine background blur
+ * or refraction needs a separate GTK rendering implementation.
  * ================================================================ */
 
 
@@ -117,7 +117,7 @@ window {
 .navigation-sidebar {
 
     background:
-        rgba(239, 244, 250, 0.66);
+        rgba(239, 244, 250, 0.48);
 
     color:
         @primary_text;
@@ -140,7 +140,7 @@ window {
 .layout-right-header {
 
     background:
-        rgba(247, 249, 253, 0.58);
+        rgba(247, 249, 253, 0.44);
 
     color:
         @primary_text;
@@ -851,7 +851,7 @@ button.album-card:active {
 .photo-info-bar {
 
     background:
-        rgba(242, 246, 251, 0.70);
+        rgba(242, 246, 251, 0.52);
 
     color:
         @primary_text;
@@ -913,11 +913,10 @@ button.album-card:active {
     min-height:
         32px;
 
-    padding-left:
-        11px;
-
-    padding-right:
-        11px;
+    /* These controls are 34px square in Rust. Large inline padding
+       can increase their natural width and overflow the infobar. */
+    padding: 0 3px;
+    min-width: 0;
 
     border-radius:
         11px;
@@ -1257,7 +1256,7 @@ button.glass:active,
 .photo-context-menu viewport {
 
     background:
-        rgba(242, 247, 253, 0.84);
+        rgba(242, 247, 253, 0.74);
 }
 
 
@@ -1314,7 +1313,7 @@ button.glass:active,
 popover {
 
     background:
-        rgba(242, 247, 253, 0.86);
+        rgba(242, 247, 253, 0.76);
 
     border:
         1px solid rgba(255, 255, 255, 0.76);
@@ -1394,6 +1393,11 @@ scrollbar {
 
 scrollbar slider {
 
+    /* Avoid an inherited outward focus outline on a tiny overlay thumb.
+       Do not override the scrollbar geometry fix in base.css. */
+    outline: none;
+    outline-offset: 0;
+
     min-width:
         6px;
 
@@ -1421,13 +1425,15 @@ scrollbar slider:hover {
  * Apple-like soft blue focus ring.
  * ================================================================ */
 
-*:focus-visible {
-
-    outline:
-        2px solid rgba(0, 122, 255, 0.42);
-
-    outline-offset:
-        1px;
+/* Focus only interactive controls. A universal outward outline also
+   targets GTK's thin overlay-scrollbar nodes during animation. */
+button:focus-visible,
+entry:focus-visible,
+row:focus-visible,
+flowboxchild:focus-visible,
+item:focus-visible {
+    outline: 2px solid rgba(0, 122, 255, 0.42);
+    outline-offset: -2px;
 }
 
 
