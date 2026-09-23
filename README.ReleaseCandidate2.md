@@ -47,7 +47,7 @@ PIC now discovers themes from theme folders, making it easier to explore differe
 - Easier export from the viewer, editor, and photo menus.
 - Continued improvements to Linux and Windows build workflows.
 
-![Text editing in PIC](samples/Crop Mode.jpg)
+![Text editing in PIC](samples/Crop%Mode.jpg)
 
 ## Thanks for trying PIC
 
