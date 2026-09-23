@@ -1171,22 +1171,26 @@ fn build_overlays_panel(
                 return;
             };
             let value = (scale.value() as f32).clamp(0.0, 1.0);
-            let mut session = session.borrow_mut();
-            if dragging.get() {
-                session.mutate_active(move |recipe| {
-                    if let Some(overlay) = recipe.overlays.get_mut(index) {
-                        overlay.opacity = value;
-                    }
-                });
-            } else {
-                session.mutate(move |recipe| {
-                    if let Some(overlay) = recipe.overlays.get_mut(index) {
-                        overlay.opacity = value;
-                    }
-                });
+            let was_dragging = dragging.get();
+            {
+                let mut session = session.borrow_mut();
+                if was_dragging {
+                    session.mutate_active(move |recipe| {
+                        if let Some(overlay) = recipe.overlays.get_mut(index) {
+                            overlay.opacity = value;
+                        }
+                    });
+                } else {
+                    session.mutate(move |recipe| {
+                        if let Some(overlay) = recipe.overlays.get_mut(index) {
+                            overlay.opacity = value;
+                        }
+                    });
+                }
+            }
+            if !was_dragging {
                 update_history_buttons();
             }
-            drop(session);
             redraw_canvas();
         });
     }
