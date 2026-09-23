@@ -4,6 +4,8 @@
 
 The familiar promise is still here: your photos stay yours. PIC works with your folders and keeps your original images safe.
 
+![Browse network shares in PIC](samples/Grid-NoRoundCorners.jpg)
+
 ## What’s new since RC1
 
 ### Browse photos on your network/shared drives (Linux Only)
@@ -34,6 +36,8 @@ Prepare one or many photos for printing. Choose page and photo sizes, paper orie
 
 PIC now discovers themes from theme folders, making it easier to explore different appearances and create community themes. The theme collection has grown, settings have been reorganized, and sidebar controls have been reworked for smoother browsing and easier customization.
 
+![Text editing in PIC](samples/Settings.jpg)
+
 ### A more comfortable everyday experience
 
 - Faster, steadier browsing and search in large libraries.
@@ -42,6 +46,8 @@ PIC now discovers themes from theme folders, making it easier to explore differe
 - Clearer progress feedback for large export and photo operations.
 - Easier export from the viewer, editor, and photo menus.
 - Continued improvements to Linux and Windows build workflows.
+
+![Text editing in PIC](samples/Crop%Mode.jpg)
 
 ## Thanks for trying PIC
 
