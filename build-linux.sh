@@ -870,11 +870,16 @@ EOF_CARGO
     "--socket=wayland",
     "--socket=fallback-x11",
     "--device=dri",
-    "--share=network",
-    "--filesystem=host",
-    "--filesystem=xdg-data/picasa-rs:create",
-    "--filesystem=xdg-cache/picasa-rs:create",
-    "--system-talk-name=org.freedesktop.Avahi"
+"--share=network",
+"--filesystem=host",
+"--filesystem=xdg-data/picasa-rs:create",
+"--filesystem=xdg-cache/picasa-rs:create",
+
+"--talk-name=org.gtk.vfs.*",
+"--filesystem=xdg-run/gvfs",
+"--filesystem=xdg-run/gvfsd",
+
+"--system-talk-name=org.freedesktop.Avahi"
   ],
   "build-options": {
     "append-path": "/usr/lib/sdk/rust-stable/bin",
