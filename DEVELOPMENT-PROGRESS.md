@@ -99,4 +99,4 @@
 - **OpenCode deny: `git push` / `git * push`** — local commits only unless user removes that rule.
 
 ## Recovery pointer for a future session
-Read SESSION_PROGRESS.md for prior text-layer rules (never rustfmt model.rs / photo_actions.rs wholesale; 20 ignored GTK tests pre-existing). Latest commits: `d27c2e1`, `e179cbe`, `65449cc`, `9a8b3cc`, plus this export/progress/crash fix. **LayersOnly crash root-caused to dead `SourceId::remove` in `operation_progress`.**
+Read SESSION_PROGRESS.md for prior text-layer rules (never rustfmt model.rs / photo_actions.rs wholesale; 20 ignored GTK tests pre-existing). Latest commits: `d27c2e1`, `e179cbe`, `65449cc`, `9a8b3cc`, `cc083e7` (LayersOnly crash + export stop/count), plus single-row refresh/export bar merge. **LayersOnly crash root-caused to dead `SourceId::remove` in `operation_progress`.**
