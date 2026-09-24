@@ -212,6 +212,7 @@ impl Gallery {
         };
         if cache.columns != self.current_columns.get()
             && !crate::grid::folder_gridview_experiment_enabled()
+            && !crate::grid::folder_chunked_experiment_enabled()
         {
             if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=current_columns_mismatch cached={} current={}", cache.columns, self.current_columns.get()); }
             return false;
@@ -260,7 +261,8 @@ impl Gallery {
             return false;
         };
         if (cache.columns != self.current_columns.get()
-            && !crate::grid::folder_gridview_experiment_enabled())
+            && !crate::grid::folder_gridview_experiment_enabled()
+            && !crate::grid::folder_chunked_experiment_enabled())
             || cache.order != *self.folder_order.borrow()
         {
             return false;

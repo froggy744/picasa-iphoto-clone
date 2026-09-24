@@ -600,22 +600,27 @@ impl Gallery {
             if !matches {
                 continue;
             }
-            if self.group_mode.get() == GroupMode::Folder
-                && !crate::grid::folder_gridview_experiment_enabled()
-            {
+        if self.group_mode.get() == GroupMode::Folder {
+                if let Some(chunked) = self.chunked_prototype.as_ref() {
+                    self.selection.select_item(position, true);
+                    chunked.scroll_to_photo(position as usize);
+                    return true;
+                }
                 // The backing store is filled progressively, but the Folder
                 // ListView rows are only built once the whole stream is ready.
                 // Selecting the photo is safe early, but report success only
                 // when the row exists so callers keep retrying instead of
                 // leaving the user parked at the folder header/wrong row.
-                self.selection.select_item(position, true);
-                let Some(row) = self.folder_row_index_for_photo(photo_id) else {
-                    return false;
-                };
-                self.folder_root
-                    .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
-                self.focus_folder_tile(photo_id);
-                return true;
+                if !crate::grid::folder_gridview_experiment_enabled() {
+                    self.selection.select_item(position, true);
+                    let Some(row) = self.folder_row_index_for_photo(photo_id) else {
+                        return false;
+                    };
+                    self.folder_root
+                        .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+                    self.focus_folder_tile(photo_id);
+                    return true;
+                }
             }
             self.selection.select_item(position, true);
             self.root.scroll_to(
@@ -649,15 +654,23 @@ impl Gallery {
         };
 
         self.selection.select_item(photo_position as u32, true);
-        if self.group_mode.get() == GroupMode::Folder
-            && !crate::grid::folder_gridview_experiment_enabled()
-        {
-            let Some(row) = self.folder_header_row_for_target(folder_id) else {
-                return false;
-            };
-            self.folder_root
-                .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
-            self.folder_root.grab_focus();
+        if self.group_mode.get() == GroupMode::Folder {
+            if let Some(chunked) = self.chunked_prototype.as_ref() {
+                chunked.scroll_to_photo(photo_position);
+            } else if !crate::grid::folder_gridview_experiment_enabled() {
+                let Some(row) = self.folder_header_row_for_target(folder_id) else {
+                    return false;
+                };
+                self.folder_root
+                    .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+                self.folder_root.grab_focus();
+            } else {
+                self.root.scroll_to(
+                    photo_position as u32,
+                    gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                    None,
+                );
+            }
         } else {
             self.root.scroll_to(
                 photo_position as u32,
@@ -675,18 +688,26 @@ impl Gallery {
         }
         let position = count - 1;
         self.selection.select_item(position, true);
-        if self.group_mode.get() == GroupMode::Folder
-            && !crate::grid::folder_gridview_experiment_enabled()
-        {
-            if let Some(row) = self.folder_row_index_for_photo(
-                self.store
-                    .item(position)
-                    .and_downcast::<PhotoObject>()
-                    .map(|photo| photo.id())
-                    .unwrap_or_default(),
-            ) {
-                self.folder_root
-                    .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+        if self.group_mode.get() == GroupMode::Folder {
+            if let Some(chunked) = self.chunked_prototype.as_ref() {
+                chunked.scroll_to_photo(position as usize);
+            } else if !crate::grid::folder_gridview_experiment_enabled() {
+                if let Some(row) = self.folder_row_index_for_photo(
+                    self.store
+                        .item(position)
+                        .and_downcast::<PhotoObject>()
+                        .map(|photo| photo.id())
+                        .unwrap_or_default(),
+                ) {
+                    self.folder_root
+                        .scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+                }
+            } else {
+                self.root.scroll_to(
+                    position,
+                    gtk::ListScrollFlags::SELECT | gtk::ListScrollFlags::FOCUS,
+                    None,
+                );
             }
         } else {
             self.root.scroll_to(

@@ -714,6 +714,44 @@ impl Gallery {
         refreshed
     }
 
+    /// Chunked Folder variant of [`Gallery::refresh_visible_grid_tiles`]
+    /// (virtualization.rs:688). The chunked prototype's tiles live in bounded
+    /// inner GridViews beneath `chunked.root` — a widget tree that both the
+    /// GridView path and the legacy Folder path ignore — so the initial
+    /// visit-one-wave can fill the 1024-slot decode queue and silently evict
+    /// the final viewport's requests. Reconcile the currently visible chunked
+    /// tiles the same way scrubbing heals the GridView: drop the stale visual
+    /// and either re-apply a RAM-cached paintable or re-queue the request now
+    /// that workers have drained.
+    pub fn refresh_visible_chunked_tiles(&self) -> usize {
+        let Some(chunked) = self.chunked_prototype.as_ref() else {
+            return 0;
+        };
+        if chunked.root.height() <= 0 {
+            return 0;
+        }
+
+        let viewport = chunked.root.height() as f32;
+        let mut tiles = Vec::new();
+        collect_tiles(&chunked.root.upcast_ref(), &mut tiles);
+        let mut refreshed = 0usize;
+        for tile in tiles {
+            if !tile.is_mapped() || tile.height() <= 0 {
+                continue;
+            }
+            let Some(bounds) = tile.compute_bounds(&chunked.root) else {
+                continue;
+            };
+            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
+                continue;
+            }
+            tile.unload_visual();
+            tile.load_visual();
+            refreshed += 1;
+        }
+        refreshed
+    }
+
     /// Warm several screens of GridView thumbnails from the photo model so
     /// Library/Favourites/Albums/Search can scroll into already-decoded RAM
     /// paintables just like Folder mode.
@@ -1101,6 +1139,9 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        if let Some(chunked) = self.chunked_prototype.as_ref() {
+            collect_tiles(&chunked.root.upcast_ref(), &mut tiles);
+        }
         for tile in tiles {
             let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
                 continue;

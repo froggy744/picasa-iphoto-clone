@@ -863,73 +863,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let search = search_for_collection_nav.borrow().clone();
 
         match current_filter {
-            sidebar::SidebarFilter::Folder(current_folder_id) => {
-                // Navigate in the order the user can actually see in the
-                // Folders sidebar. Tree mode therefore follows visible tree
-                // rows, while Imported-only mode contains only imported roots.
-                let folders = db::folders(&connection_for_collection_nav.borrow())
-                    .unwrap_or_default();
-                let folder_ids = sidebar_selection_for_collection_nav
-                    .borrow()
-                    .as_ref()
-                    .map(sidebar::visible_folder_ids)
-                    .unwrap_or_else(|| folders.iter().map(|folder| folder.id).collect());
-                let Some(current_index) = folder_ids
-                    .iter()
-                    .position(|folder_id| *folder_id == current_folder_id)
-                else {
-                    return;
-                };
-
-                let mut candidate = current_index as isize + step;
-                while candidate >= 0 && candidate < folder_ids.len() as isize {
-                    let folder_id = folder_ids[candidate as usize];
-                    let Some(folder) = folders.iter().find(|folder| folder.id == folder_id) else {
-                        candidate += step;
-                        continue;
-                    };
-                    let mut photos = db::photos(
-                        &connection_for_collection_nav.borrow(),
-                        Some(folder.id),
-                        false,
-                        (!search.is_empty()).then_some(search.as_str()),
-                    )
-                    .unwrap_or_default();
-                    retain_enabled_formats(&connection_for_collection_nav.borrow(), &mut photos);
-                    sort_photos(&mut photos, sort_for_collection_nav.get());
-
-                    if !photos.is_empty() {
-                        let new_filter = sidebar::SidebarFilter::Folder(folder.id);
-                        filter_for_collection_nav.set(new_filter);
-                        if let Some(sidebar) = sidebar_selection_for_collection_nav.borrow().as_ref() {
-                            sidebar::set_active_filter(sidebar, new_filter);
-                            let sidebar = sidebar.clone();
-                            let folder_id = folder.id;
-                            glib::timeout_add_local_once(Duration::from_millis(100), move || {
-                                sidebar::scroll_to_folder(&sidebar, folder_id);
-                            });
-                        }
-                        apply_gallery_grouping(
-                            &gallery_for_collection_nav,
-                            new_filter,
-                            sort_for_collection_nav.get(),
-                            group_mode_for_collection_nav.get(),
-                            search.is_empty(),
-                        );
-                        gallery_for_collection_nav.replace(&photos);
-                        let objects = photos
-                            .iter()
-                            .map(crate::photo_object::PhotoObject::from_photo)
-                            .collect::<Vec<_>>();
-                        if lightbox_for_collection_nav.root.is_visible() {
-                            lightbox_for_collection_nav.open(objects, 0);
-                        }
-                        return;
-                    }
-
-                    candidate += step;
-                }
-            }
+            // Folder mode is handled by the early return above: the continuous
+            // stream is already the single collection, so there is no boundary
+            // to walk across at the collection level.
+            sidebar::SidebarFilter::Folder(_) => {}
             sidebar::SidebarFilter::Album(current_album_id) => {
                 let albums = db::albums(&connection_for_collection_nav.borrow())
                     .unwrap_or_default();
@@ -1040,7 +977,19 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             group_mode_for_collection_nav.get(),
                             search.is_empty(),
                         );
-                        gallery_for_collection_nav.replace(&photos);
+                        if gallery_for_collection_nav.can_restore_folder_cache() {
+                            gallery_for_collection_nav.scroll_to_folder(folder.id, &folder.path);
+                        } else {
+                            refresh_grid_to_folder(
+                                &connection_for_collection_nav,
+                                new_filter,
+                                "",
+                                sort_for_collection_nav.get(),
+                                &gallery_for_collection_nav,
+                                folder.id,
+                                folder.path.clone(),
+                            );
+                        }
                         let objects = photos
                             .iter()
                             .map(crate::photo_object::PhotoObject::from_photo)
@@ -1350,7 +1299,19 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             group_mode_for_collection_nav.get(),
                             search.is_empty(),
                         );
-                        gallery_for_collection_nav.replace(&photos);
+                        if gallery_for_collection_nav.can_restore_folder_cache() {
+                            gallery_for_collection_nav.scroll_to_folder(folder.id, &folder.path);
+                        } else {
+                            refresh_grid_to_folder(
+                                &connection_for_collection_nav,
+                                new_filter,
+                                "",
+                                sort_for_collection_nav.get(),
+                                &gallery_for_collection_nav,
+                                folder.id,
+                                folder.path.clone(),
+                            );
+                        }
                         let objects = photos
                             .iter()
                             .map(crate::photo_object::PhotoObject::from_photo)
@@ -1424,6 +1385,48 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             None::<gtk::NoSelection>,
             None::<gtk::SignalListItemFactory>,
         )));
+    }
+    // Chunked rows stay realized after scrolling, so tiles that lost their
+    // decode-queue slot during the initial bind wave never rebind and heal on
+    // their own. Debounce a viewport reconcile shortly after the chunked
+    // scroller settles, mirroring the GridView scrub-settle refresh.
+    {
+        let gallery_for_chunked_settle = gallery.clone();
+        let generation = Rc::new(Cell::new(0_u64));
+        let scroll = folder_chunked_scroll.clone();
+        let generation_for_event = generation.clone();
+        scroll
+            .vadjustment()
+            .connect_value_changed(move |adjustment| {
+                let generation = generation_for_event.get().wrapping_add(1);
+                generation_for_event.set(generation);
+                let gallery = gallery_for_chunked_settle.clone();
+                let generation_guard = generation_for_event.clone();
+                let position = adjustment.value();
+                let viewport = adjustment.page_size();
+                glib::timeout_add_local_once(Duration::from_millis(140), move || {
+                    if generation_guard.get() != generation {
+                        return;
+                    }
+                    let Some(chunked) = gallery.chunked_prototype.as_ref() else {
+                        return;
+                    };
+                    let Some(adjust) = chunked.root.vadjustment() else {
+                        return;
+                    };
+                    let (lower, upper) = (
+                        adjust.lower(),
+                        (adjust.upper() - adjust.page_size()).max(adjust.lower()),
+                    );
+                    let current = adjust.value();
+                    if (current - position).abs() > 1.5
+                        || (adjust.page_size() - viewport).abs() > 1.5
+                    {
+                        return;
+                    }
+                    gallery.refresh_visible_chunked_tiles();
+                });
+            });
     }
 
     // A temporary date bubble makes a long chronological All Photos scrollbar
@@ -1533,6 +1536,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     if let Some(chunked) = gallery_for_folder_view.chunked_prototype.as_ref() {
                         chunked.root.grab_focus();
                     }
+                    // The initial bind wave fills the 1024-slot display queue
+                    // and can silently evict the final viewport's requests.
+                    // Wait for GTK to settle and paint the visible chunked
+                    // tiles, then reconcile them like the GridView path does
+                    // after a scrub.
+                    let gallery = gallery_for_folder_view.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(90), move || {
+                        gallery.refresh_visible_chunked_tiles();
+                    });
                     return;
                 }
                 if folder_grid_experiment {
