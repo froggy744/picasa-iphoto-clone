@@ -681,7 +681,7 @@ write_desktop_file() {
     cat > "$path" <<EOF_DESKTOP
 [Desktop Entry]
 Type=Application
-Name=PIC - Picasa iPhoto Clone
+Name=PIC — Personal Image Catalogue
 Comment=Fast local photo manager inspired by Picasa and iPhoto
 Exec=$BIN_NAME %F
 Icon=$APP_ID
