@@ -4,7 +4,7 @@ include!("navigation.rs");
 pub fn build(app: &adw::Application, connection: Connection) -> adw::ApplicationWindow {
     let build_started = Instant::now();
     let window = adw::ApplicationWindow::new(app);
-    window.set_title(Some("PIC - Picasa iPhoto Clone"));
+    window.set_title(Some("PIC"));
     let connection = Rc::new(RefCell::new(connection));
     let saved_window_width = numeric_setting(&connection.borrow(), WINDOW_WIDTH_SETTING_KEY)
         .unwrap_or(1440)
