@@ -4,7 +4,7 @@
 use gio::prelude::*;
 use gtk::prelude::*;
 use gtk4 as gtk;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const PHOTOS_PER_CHUNK: u32 = 64;
@@ -13,32 +13,75 @@ const PHOTOS_PER_CHUNK: u32 = 64;
 pub(crate) struct ChunkedPrototype {
     pub(crate) root: gtk::ListView,
     grids: Rc<RefCell<Vec<glib::WeakRef<gtk::GridView>>>>,
+    store: gio::ListStore,
+    chunks: gio::ListStore,
+    reconcile_pending: Rc<Cell<bool>>,
+}
+
+/// Clear the models of grids beyond the surviving chunk count, then reconcile
+/// the outer chunk model with the store. Splitting the surplus GridViews'
+/// models away before `sync_chunks` lets those rows finalize cleanly.
+///
+/// This must never run reentrantly from inside the base store's items-changed
+/// dispatch: a `GtkGridView`'s model is a `GtkSliceListModel` over the same
+/// store, so swapping it mid-emission re-enters GTK's list item manager while
+/// it is mid-bind, which segfaulted in `gtk_list_item_manager_remove_items`.
+/// Run it only from an idle source or a call site outside the emission.
+fn reconcile_chunks(
+    store: &gio::ListStore,
+    chunks: &gio::ListStore,
+    grids: &Rc<RefCell<Vec<glib::WeakRef<gtk::GridView>>>>,
+) {
+    let want = store.n_items().div_ceil(PHOTOS_PER_CHUNK);
+    if want == chunks.n_items() {
+        return;
+    }
+    for grid_weak in grids.borrow().iter().skip(want as usize) {
+        if let Some(grid) = grid_weak.upgrade() {
+            grid.set_model(None::<&gtk::NoSelection>);
+        }
+    }
+    sync_chunks(store, chunks);
 }
 
 impl ChunkedPrototype {
     pub(crate) fn new(store: &gio::ListStore, photo_factory: &gtk::SignalListItemFactory) -> Self {
         let chunks = gio::ListStore::new::<gtk::SliceListModel>();
         let chunks_for_updates = chunks.clone();
+        let chunks_for_struct = chunks.clone();
         let store_for_updates = store.clone();
         let grids: Rc<RefCell<Vec<glib::WeakRef<gtk::GridView>>>> = Rc::new(RefCell::new(Vec::new()));
         let grids_for_sync = grids.clone();
+        // Re-modeling the surplus GridViews synchronously inside the base
+        // store's items-changed dispatch re-enters GTK's list item manager
+        // while it is mid-emission, which crashed in
+        // gtk_list_item_manager_remove_items (a `GtkGridView` cannot swap its
+        // model from within the signal that bounds its own items). Defer the
+        // chunk reconciliation to an idle so the emission has unwound; bursts
+        // of items-changed coalesce onto a single pending reconcile.
+        let reconcile_pending = Rc::new(Cell::new(false));
+        let reconcile_pending_for_sync = reconcile_pending.clone();
+        let reconcile_pending_for_struct = reconcile_pending.clone();
         store.connect_items_changed(move |_, _, _, _| {
-            // Dropping the last photos at teardown lets their inner GridViews
-            // die while still realized with a model, which GTK flags as
-            // "Finalizing GtkGridView with a model." Rows are otherwise bound
-            // in setup order, so grids beyond the surviving chunk count are
-            // the ones this sync splices away; give those grids no model first
-            // so they finalize cleanly. Rows the ListView recycles are not
-            // touched here (their unbind clears the model instead).
-            let want = store_for_updates.n_items().div_ceil(PHOTOS_PER_CHUNK);
-            let grids = grids_for_sync.borrow();
-            for grid_weak in grids.iter().skip(want as usize) {
-                if let Some(grid) = grid_weak.upgrade() {
-                    grid.set_model(None::<&gtk::NoSelection>);
-                }
+            if reconcile_pending.replace(true) {
+                return;
             }
-            drop(grids);
-            sync_chunks(&store_for_updates, &chunks_for_updates);
+            let cols = store_for_updates.clone();
+            let chunks = chunks_for_updates.clone();
+            let grids = grids_for_sync.clone();
+            let pending = reconcile_pending_for_sync.clone();
+            glib::idle_add_local_once(move || {
+                // Dropping the last photos at teardown lets their inner
+                // GridViews die while still realized with a model, which GTK
+                // flags as "Finalizing GtkGridView with a model." Rows are
+                // otherwise bound in setup order, so grids beyond the
+                // surviving chunk count are the ones this sync splices away;
+                // give those grids no model first so they finalize cleanly.
+                // Rows the ListView recycles are not touched here (their
+                // unbind clears the model instead).
+                pending.set(false);
+                reconcile_chunks(&cols, &chunks, &grids);
+            });
         });
         sync_chunks(store, &chunks);
 
@@ -85,7 +128,23 @@ impl ChunkedPrototype {
         root.set_hexpand(true);
         root.set_vexpand(true);
         root.add_css_class("folder-stream");
-        Self { root, grids }
+        Self {
+            root,
+            grids,
+            store: store.clone(),
+            chunks: chunks_for_struct,
+            reconcile_pending: reconcile_pending_for_struct,
+        }
+    }
+
+    /// Flush any reconciliation still pending from the last items-changed
+    /// burst. The outer chunk list must contain the target chunk before
+    /// `scroll_to` runs or GTK clamps the scroll to the last existing row.
+    fn flush_reconcile(&self) {
+        if !self.reconcile_pending.replace(false) {
+            return;
+        }
+        reconcile_chunks(&self.store, &self.chunks, &self.grids);
     }
 
     pub(crate) fn set_columns(&self, columns: u32) {
@@ -108,6 +167,7 @@ impl ChunkedPrototype {
     /// chunk; a later step can additionally scroll the inner grid by the
     /// intra-chunk offset.
     pub(crate) fn scroll_to_photo(&self, position: usize) {
+        self.flush_reconcile();
         let chunk_index = position as u32 / PHOTOS_PER_CHUNK;
         self.root
             .scroll_to(chunk_index, gtk::ListScrollFlags::FOCUS, None);
