@@ -1188,6 +1188,7 @@ fn interface_page(
     {
         let connection = connection.clone();
         let thumbnail_changed = thumbnail_changed.clone();
+        let theme_changed = theme_changed.clone();
         fit_whole_photo.connect_active_notify(move |toggle| {
             let state = toggle.is_active();
             crate::window::debug_log(&format!("SETTINGS: fit whole photo switch -> {state}"));
@@ -1200,6 +1201,7 @@ fn interface_page(
                 return;
             }
             thumbnail_changed();
+            theme_changed();
         });
     }
     append_row(

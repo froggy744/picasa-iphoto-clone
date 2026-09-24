@@ -356,6 +356,23 @@ fn cover_height(thumbnail_width: i32) -> i32 {
         .max(1.0)) as i32
 }
 
+fn plain_cover_height(width: i32, photo_dimensions: Option<(i32, i32)>) -> i32 {
+    let Some((photo_width, photo_height)) = photo_dimensions.filter(|(w, h)| *w > 0 && *h > 0)
+    else {
+        return cover_height(width);
+    };
+    // Keep unusually wide or tall photos within a usable card while the
+    // picture's Contain fit still shows every pixel without distortion.
+    let ratio = (photo_height as f64 / photo_width as f64).clamp(0.5, 1.5);
+    (width as f64 * ratio).round().max(1.0) as i32
+}
+
+fn picture_dimensions(picture: &gtk::Picture) -> Option<(i32, i32)> {
+    picture
+        .paintable()
+        .map(|paintable| (paintable.intrinsic_width(), paintable.intrinsic_height()))
+}
+
 /// The photo an album draws on its card. A cover chosen from the thumbnail
 /// menu wins even when that photo is not a member of the album; otherwise the
 /// album keeps its automatic first-thumbnail pick.
@@ -392,6 +409,7 @@ fn album_card(
     on_album: Rc<dyn Fn(i64)>,
     frame: Option<&FrameAsset>,
     responsive_bookshelf: bool,
+    fit_whole_photo: bool,
     menu_connection: Rc<RefCell<Connection>>,
     on_appearance_changed: Rc<dyn Fn()>,
 ) -> gtk::Button {
@@ -441,12 +459,16 @@ fn album_card(
     if frame.is_none() {
         cover.add_css_class("photo-frame");
         cover.add_css_class("photo-tile");
+        cover.add_css_class("plain-album-cover");
     }
 
     let picture = gtk::Picture::new();
 
-    // Fill the standard thumbnail rectangle while preserving aspect ratio.
-    picture.set_content_fit(gtk::ContentFit::Cover);
+    picture.set_content_fit(if fit_whole_photo {
+        gtk::ContentFit::Contain
+    } else {
+        gtk::ContentFit::Cover
+    });
 
     picture.set_can_shrink(true);
     picture.set_size_request(1, 1);
@@ -495,7 +517,21 @@ fn album_card(
         picture.set_paintable(gtk::gdk::Paintable::NONE);
     }
 
-    cover.set_child(Some(&picture));
+    if frame.is_none() && !responsive_bookshelf && fit_whole_photo {
+        let height = plain_cover_height(width, picture_dimensions(&picture));
+        cover.set_height_request(height);
+        cover.set_size_request(width, height);
+    }
+
+    if frame.is_none() {
+        // The picture's natural portrait height must not enlarge the cover's
+        // fixed landscape box when cropping is selected. Overlay children do
+        // not contribute to the cover's preferred size.
+        cover.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
+        cover.add_overlay(&picture);
+    } else {
+        cover.set_child(Some(&picture));
+    }
 
     let placeholder = gtk::Image::from_icon_name("folder-pictures-symbolic");
     placeholder.set_pixel_size(48);

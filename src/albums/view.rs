@@ -232,7 +232,17 @@ fn resize_standard_cards(grid: &gtk::FlowBox, available: i32, preferred: i32) {
             content.set_width_request(width);
         }
         if let Some(cover) = find_descendant_with_css_class(card.upcast_ref(), "album-cover") {
-            cover.set_size_request(width, width * 2 / 3);
+            let picture = find_descendant_with_css_class(&cover, "thumbnail")
+                .and_then(|widget| widget.downcast::<gtk::Picture>().ok());
+            let height = if picture
+                .as_ref()
+                .is_some_and(|picture| picture.content_fit() == gtk::ContentFit::Contain)
+            {
+                plain_cover_height(width, picture.as_ref().and_then(picture_dimensions))
+            } else {
+                width * 2 / 3
+            };
+            cover.set_size_request(width, height);
         }
         // The overlay and FlowBox wrapper must shrink along with the cover.
         if let Some(tile) = card.parent() {
@@ -365,6 +375,11 @@ fn populate(
     
 
     let appearance = settings::album_appearance(&connection.borrow());
+    let fit_whole_photo = settings::saved_bool(
+        &connection.borrow(),
+        crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+    )
+    .unwrap_or(false);
     let bookshelf_theme = bookshelf_theme_for_appearance(appearance);
     let row_theme = bookshelf_theme
         .as_ref()
@@ -503,6 +518,7 @@ fn populate(
             on_album.clone(),
             frame,
             responsive_bookshelf,
+            fit_whole_photo,
             connection.clone(),
             on_appearance_changed.clone(),
         );
@@ -518,8 +534,10 @@ fn populate(
             card.set_halign(gtk::Align::Center);
             bookshelf_cards.push(card);
         } else if standard {
-            if let Some(cover) = find_descendant_with_css_class(card.upcast_ref(), "album-cover") {
-                cover.set_height_request(thumbnail_width * 2 / 3);
+            if !fit_whole_photo {
+                if let Some(cover) = find_descendant_with_css_class(card.upcast_ref(), "album-cover") {
+                    cover.set_height_request(thumbnail_width * 2 / 3);
+                }
             }
             let tile = gtk::Overlay::new();
             tile.set_child(Some(&card));

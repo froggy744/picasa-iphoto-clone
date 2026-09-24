@@ -41,6 +41,153 @@ include!("albums/view.rs");
 mod tests {
     use super::*;
 
+    #[test]
+    fn plain_covers_follow_photo_orientation_without_excessive_card_height() {
+        assert_eq!(plain_cover_height(240, Some((3000, 2000))), 160);
+        assert_eq!(plain_cover_height(240, Some((2000, 3000))), 360);
+        assert_eq!(plain_cover_height(240, Some((4000, 3000))), 180);
+        assert_eq!(plain_cover_height(240, Some((3000, 4000))), 320);
+        assert_eq!(plain_cover_height(240, Some((1000, 4000))), 360);
+        assert_eq!(plain_cover_height(240, Some((0, 3000))), cover_height(240));
+        assert_eq!(plain_cover_height(240, None), cover_height(240));
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn plain_album_card_keeps_a_portrait_cover_and_full_photo() {
+        gtk::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "pic-portrait-cover-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let photo_path = directory.join("portrait.png");
+        image::RgbImage::new(60, 90).save(&photo_path).unwrap();
+        let connection = Rc::new(RefCell::new(
+            db::open(&directory.join("library.db")).unwrap(),
+        ));
+        let album = db::create_album(&connection.borrow(), "Portrait").unwrap();
+        connection
+            .borrow()
+            .execute(
+                "INSERT INTO photos (path) VALUES (?1)",
+                [photo_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        let photo_id = connection.borrow().last_insert_rowid();
+        db::set_album_cover_photo(&connection.borrow(), album.id, photo_id).unwrap();
+        db::set_setting(
+            &connection.borrow(),
+            crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+            "true",
+        )
+        .unwrap();
+
+        let albums = db::albums(&connection.borrow()).unwrap();
+        let opened = Rc::new(Cell::new(None));
+        let opened_for_callback = opened.clone();
+        let view = build(
+            &albums,
+            connection.clone(),
+            136,
+            Rc::new(move |album_id| opened_for_callback.set(Some(album_id))),
+            Rc::new(|| {}),
+            Rc::new(|| {}),
+        );
+        let window = gtk::Window::builder()
+            .default_width(900)
+            .default_height(800)
+            .child(&view)
+            .build();
+        window.present();
+        settle_gtk_layout();
+        let cover = find_descendant_with_css_class(view.upcast_ref(), "album-cover").unwrap();
+        let picture = find_descendant_with_css_class(&cover, "thumbnail")
+            .unwrap()
+            .downcast::<gtk::Picture>()
+            .unwrap();
+        assert!(cover.has_css_class("plain-album-cover"));
+        assert_eq!(picture.content_fit(), gtk::ContentFit::Contain);
+        assert_eq!(picture_dimensions(&picture), Some((60, 90)));
+        assert_eq!(cover.height_request(), cover.width_request() * 3 / 2);
+        assert!(cover.height() > cover.width());
+        find_descendant_with_css_class(view.upcast_ref(), "album-card")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap()
+            .emit_clicked();
+        assert_eq!(opened.get(), Some(album.id));
+
+        db::set_setting(
+            &connection.borrow(),
+            crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+            "false",
+        )
+        .unwrap();
+        refresh(
+            &view,
+            &albums,
+            connection.clone(),
+            136,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+        );
+        settle_gtk_layout();
+        let cropped_cover =
+            find_descendant_with_css_class(view.upcast_ref(), "album-cover").unwrap();
+        let cropped_picture = find_descendant_with_css_class(&cropped_cover, "thumbnail")
+            .unwrap()
+            .downcast::<gtk::Picture>()
+            .unwrap();
+        assert_eq!(cropped_picture.content_fit(), gtk::ContentFit::Cover);
+        assert_eq!(
+            cropped_cover.height_request(),
+            cropped_cover.width_request() * 2 / 3
+        );
+        assert!(
+            cropped_cover.width() > cropped_cover.height(),
+            "cropped album cover allocated {}x{}",
+            cropped_cover.width(),
+            cropped_cover.height()
+        );
+
+        db::set_setting(
+            &connection.borrow(),
+            crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+            "true",
+        )
+        .unwrap();
+        refresh(
+            &view,
+            &albums,
+            connection.clone(),
+            136,
+            Rc::new(|_| {}),
+            Rc::new(|| {}),
+        );
+        settle_gtk_layout();
+        let full_cover = find_descendant_with_css_class(view.upcast_ref(), "album-cover").unwrap();
+        let full_picture = find_descendant_with_css_class(&full_cover, "thumbnail")
+            .unwrap()
+            .downcast::<gtk::Picture>()
+            .unwrap();
+        assert_eq!(full_picture.content_fit(), gtk::ContentFit::Contain);
+        assert_eq!(
+            full_cover.height_request(),
+            full_cover.width_request() * 3 / 2
+        );
+        assert!(full_cover.height() > full_cover.width());
+
+        window.close();
+        drop(view);
+        drop(connection);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     fn settle_gtk_layout() {
         let main_loop = gtk::glib::MainLoop::new(None, false);
         let loop_to_quit = main_loop.clone();

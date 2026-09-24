@@ -2916,13 +2916,6 @@ fn start_photo_export_single(
         let export_clicked = export_clicked.clone();
         move |_| export_clicked()
     });
-    let header_export = gtk::Button::from_icon_name("document-save-symbolic");
-    header_export.set_tooltip_text(Some("Export selected photos"));
-    header_export.add_css_class("flat");
-    header_export.connect_clicked({
-        let export_clicked = export_clicked.clone();
-        move |_| export_clicked()
-    });
     export_slot.replace(Some(export_clicked.clone()));
 
     let selected_for_print = selected_photo.clone();
@@ -2992,7 +2985,6 @@ fn start_photo_export_single(
     }
     let refresh = include!("toolbar.rs");
 
-    right_header.pack_end(&header_export);
     right_column.append(&right_header);
     right_column.append(&content);
 
