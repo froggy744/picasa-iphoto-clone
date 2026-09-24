@@ -222,7 +222,40 @@ impl Gallery {
             return false;
         }
         if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=hit"); }
+        if std::env::var_os("PICASA_TRACE_BACKTRACE").is_some() {
+            eprintln!("PIC_NAV can_restore_backtrace\n{}", std::backtrace::Backtrace::force_capture());
+        }
         true
+    }
+
+    /// Atomic Folder navigation reuse decision: the caller may skip the model
+    /// rebuild and scroll only when the CURRENT model is the continuous Folder
+    /// stream and the target folder actually exists inside it.
+    ///
+    /// `can_restore_folder_cache` only reports that a cached stream exists with
+    /// compatible geometry; it cannot see whether the model still shows that
+    /// stream (library/album/search/history replaces it without clearing the
+    /// cache). Combining the cache check with the actual `scroll_to_folder`
+    /// lookup removes that race: a `true` result always means the scroll
+    /// happened, and `false` always means a reload is required.
+    pub fn try_restore_folder_navigation(&self, folder_id: i64, folder_path: &str) -> bool {
+        if self.group_mode.get() != GroupMode::Folder {
+            // The visible model is not the Folder stream (library, album,
+            // search, history). Scrolling cannot reveal the destination.
+            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=not_folder_mode"); }
+            return false;
+        }
+        if !self.can_restore_folder_cache() {
+            return false;
+        }
+        if self.scroll_to_folder(folder_id, folder_path) {
+            true
+        } else {
+            // The cached stream is valid but predates the current model, or
+            // the destination folder has no photos in the stream yet.
+            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=target_folder_missing_from_stream"); }
+            false
+        }
     }
 
     pub fn set_pending_folder_target(&self, folder_id: i64, folder_path: String) {

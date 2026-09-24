@@ -977,8 +977,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             group_mode_for_collection_nav.get(),
                             search.is_empty(),
                         );
-                        if gallery_for_collection_nav.can_restore_folder_cache() {
-                            gallery_for_collection_nav.scroll_to_folder(folder.id, &folder.path);
+                        if gallery_for_collection_nav.try_restore_folder_navigation(folder.id, &folder.path) {
                         } else {
                             refresh_grid_to_folder(
                                 &connection_for_collection_nav,
@@ -1299,8 +1298,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                             group_mode_for_collection_nav.get(),
                             search.is_empty(),
                         );
-                        if gallery_for_collection_nav.can_restore_folder_cache() {
-                            gallery_for_collection_nav.scroll_to_folder(folder.id, &folder.path);
+                        if gallery_for_collection_nav.try_restore_folder_navigation(folder.id, &folder.path) {
                         } else {
                             refresh_grid_to_folder(
                                 &connection_for_collection_nav,
@@ -3079,6 +3077,10 @@ fn start_photo_export_single(
             if restored.replace(true) {
                 return;
             }
+            // The sidebar suppresses destination navigations from programmatic
+            // row selections until the startup restore has finished, so the
+            // restored selection itself cannot trigger a model rebuild.
+            sidebar::set_navigation_enabled(true);
             if initial_filter == sidebar::SidebarFilter::Albums {
                 let adjustment = albums_home.vadjustment();
                 glib::timeout_add_local_once(Duration::from_millis(50), move || {
@@ -3131,6 +3133,13 @@ fn start_photo_export_single(
     compact.add_setter(&main_split, "collapsed", Some(&true.to_value()));
     compact.add_setter(&main_split, "show-sidebar", Some(&false.to_value()));
     window.add_breakpoint(compact);
+
+    // Safety net: if the startup idle batches never finish (for example a
+    // stalled restore on an unusual library), sidebar navigation must still
+    // come alive instead of staying suppressed forever.
+    glib::timeout_add_local_once(Duration::from_secs(5), || {
+        sidebar::set_navigation_enabled(true);
+    });
 
     crate::css::install_foundation(&display);
     // Apply the persisted theme (and the base layer) before the window's
@@ -3521,9 +3530,26 @@ fn start_photo_export_single(
     let mut failure_message_shown = false;
     let mut thumbnail_total: usize = 0;
     let mut last_progress_update = Instant::now();
+    // Coalesces IndexingFinished rebuilds: multi-folder scan jobs finish one
+    // folder at a time, and each completion used to replace the whole grid
+    // model immediately. One deferred refresh runs after the burst settles.
+    let mut indexing_refresh_pending = false;
+    let mut indexing_refresh_deadline = Instant::now();
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
         let ui_tick_started = Instant::now();
+        // A settled burst of IndexingFinished events triggers exactly one
+        // grid rebuild, on this tick, instead of one per folder.
+        if indexing_refresh_pending && Instant::now() >= indexing_refresh_deadline {
+            indexing_refresh_pending = false;
+            refresh_grid(
+                &connection_for_events,
+                filter_for_events.get(),
+                &search_for_events.borrow(),
+                sort_for_events.get(),
+                &gallery_for_events,
+            );
+        }
         // Drain event-triggered recovery requests once the current scan ends.
         // With no request, this checks only a flag and performs no disk probes.
         start_thumbnail_recovery();
@@ -3776,13 +3802,8 @@ fn start_photo_export_single(
                         scan_job_for_events.borrow().kind,
                         Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
                     ) {
-                        refresh_grid(
-                            &connection_for_events,
-                            filter_for_events.get(),
-                            &search_for_events.borrow(),
-                            sort_for_events.get(),
-                            &gallery_for_events,
-                        );
+                        indexing_refresh_pending = true;
+                        indexing_refresh_deadline = Instant::now() + Duration::from_millis(750);
                     }
                     let text = format!("Indexed {imported} photos");
                     refresh_status_label_for_events.set_text(&text);

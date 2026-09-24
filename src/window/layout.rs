@@ -45,10 +45,27 @@
             // folder should be a scroll operation, not another database query
             // and model rebuild. An active global search is the exception: its
             // grid model is not the Folder stream, so it must be reloaded.
-            let reuse_folder_stream = can_reuse_folder_stream_for_destination(
-                folder_target.is_some(),
-                gallery.can_restore_folder_cache(),
-            );
+            // The restore decision is atomic: it only reports reuse when the
+            // current model is the Folder stream and the scroll to this
+            // destination actually happened. The exact-photo destination
+            // keeps the old non-atomic check because it scrolls itself after
+            // the stream settles and must not fight a folder-header scroll.
+            let reuse_folder_stream = if exact_photo_target {
+                can_reuse_folder_stream_for_destination(
+                    folder_target.is_some(),
+                    gallery.can_restore_folder_cache(),
+                )
+            } else {
+                match folder_target {
+                    Some((folder_id, ref folder_path)) => {
+                        gallery.try_restore_folder_navigation(folder_id, folder_path)
+                    }
+                    None => false,
+                }
+            };
+            // Scrolling already happened above; the Normal plan below must not
+            // attempt it a second time.
+            let restored_scroll = reuse_folder_stream && !exact_photo_target;
 
             if let Some(source) = debounce.borrow_mut().take() {
                 source.remove();
@@ -126,9 +143,7 @@
                 }
                 FolderDestinationPlan::Normal => {
                     if let Some((folder_id, folder_path)) = folder_target {
-                        if reuse_folder_stream
-                            && gallery.scroll_to_folder(folder_id, &folder_path)
-                        {
+                        if restored_scroll {
                             return;
                         }
                         refresh_grid_to_folder(

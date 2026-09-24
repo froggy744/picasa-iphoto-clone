@@ -528,6 +528,86 @@ mod folder_stream_tests {
     }
 
     #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn cache_hit_folder_navigation_never_replaces_the_model() {
+        use super::{gtk, Gallery, GroupMode, PhotoObject};
+        use crate::db::Folder;
+
+        gtk::init().unwrap();
+        let gallery = Gallery::new(
+            &[],
+            148,
+            |_| {},
+            |_, _| {},
+            |_, _, _, _| {},
+            |_, _| {},
+            |_| {},
+        );
+        let photo = |id: i64, folder_id: i64, path: &str| {
+            glib::Object::builder::<PhotoObject>()
+                .property("id", id)
+                .property("folder-id", folder_id)
+                .property("folder-path", path)
+                .property("original-available", true)
+                .build()
+        };
+        let folder = |id, path: &str, parent_id, photo_count| Folder {
+            id,
+            path: path.to_owned(),
+            name: path.rsplit('/').next().unwrap().to_owned(),
+            parent_id,
+            imported_root: false,
+            watched: true,
+            photo_count,
+            subfolder_count: 0,
+            available: true,
+        };
+        let folders = vec![
+            folder(59, "smb://DietPi.local:445/4TBP/Work", None, 0),
+            folder(60, "smb://dietpi.local/4tbp/Work", Some(59), 0),
+            folder(180, "smb://dietpi.local/4tbp/Work/Arise2014", Some(60), 1),
+            folder(27, "smb://dietpi.local/4tbp/Vacation", None, 0),
+            folder(28, "smb://dietpi.local/4tbp/Vacation/Tokyo", Some(27), 1),
+        ];
+        let work_path = "smb://dietpi.local/4tbp/Work/Arise2014";
+        let tokyo_path = "smb://dietpi.local/4tbp/Vacation/Tokyo";
+
+        gallery.group_mode.set(GroupMode::Folder);
+        gallery
+            .current_photos
+            .replace(vec![photo(700, 180, work_path), photo(800, 28, tokyo_path)]);
+        gallery.set_folder_catalog(&folders, &[59, 60, 180, 27, 28]);
+        gallery.rebuild_group_ranges();
+        gallery.rebuild_folder_rows();
+        let generation_before = gallery.replace_generation.get();
+
+        // A valid cache hit inside the Folder stream must scroll and leave
+        // the model untouched: zero replacements, zero store churn.
+        assert!(gallery.try_restore_folder_navigation(180, work_path));
+        assert_eq!(gallery.replace_generation.get(), generation_before);
+
+        // After the model moved to a non-Folder view the stale cache must be
+        // rejected so the caller reloads instead of scrolling a wrong model.
+        gallery.group_mode.set(GroupMode::None);
+        gallery
+            .current_photos
+            .replace(vec![photo(900, 999, "album-content")]);
+        assert!(!gallery.try_restore_folder_navigation(180, work_path));
+        assert_eq!(gallery.replace_generation.get(), generation_before);
+
+        // Inside Folder mode a destination whose photos are absent from the
+        // stream must also fall back to a reload, not a bogus scroll.
+        gallery.group_mode.set(GroupMode::Folder);
+        gallery
+            .current_photos
+            .replace(vec![photo(701, 180, work_path)]);
+        gallery.rebuild_group_ranges();
+        gallery.rebuild_folder_rows();
+        assert!(!gallery.try_restore_folder_navigation(28, tokyo_path));
+        assert_eq!(gallery.replace_generation.get(), generation_before);
+    }
+
+    #[test]
     fn local_folder_navigation_includes_nested_folders_only() {
         let scope =
             folder_navigation_scope([(10, None), (11, Some(10)), (12, Some(11)), (20, None)], 10);

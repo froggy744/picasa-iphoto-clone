@@ -177,6 +177,28 @@ thread_local! {
     static SCROLL_LOCATION_SCHEDULED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Sidebar destination navigation is suppressed until the startup view
+/// restore completes. GTK fires `row_selected` for programmatic selections
+/// made while the lists are built and restored, and every one of those used
+/// to run a full destination navigation (database query + model replace)
+/// before the user ever interacted with the window.
+static NAVIGATION_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Allow sidebar selections to navigate. Called by the window once the
+/// startup restore has finished; a fallback timer enables it regardless so a
+/// stalled restore can never leave the sidebar permanently inert.
+pub fn set_navigation_enabled(enabled: bool) {
+    NAVIGATION_ENABLED.store(
+        enabled,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+fn navigation_enabled() -> bool {
+    NAVIGATION_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn build(
     folders: &[Folder],
     albums: &[Album],
@@ -196,7 +218,14 @@ pub fn build(
     on_folder_display_mode_changed: Rc<dyn Fn(FolderDisplayMode)>,
     visibility: SidebarVisibility,
 ) -> gtk::ScrolledWindow {
-    let on_filter: Rc<dyn Fn(SidebarFilter)> = Rc::new(on_filter);
+    let startup_on_filter = Rc::new(on_filter);
+    // Drop destination navigations triggered by programmatic row selection
+    // while the startup restore is still running.
+    let on_filter: Rc<dyn Fn(SidebarFilter)> = Rc::new(move |filter| {
+        if navigation_enabled() {
+            startup_on_filter(filter);
+        }
+    });
     let mut initial_state = SidebarState::default();
     initial_state.folder_display_mode = folder_display_mode;
     let state = Rc::new(RefCell::new(initial_state));
