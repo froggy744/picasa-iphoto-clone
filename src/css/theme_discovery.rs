@@ -19,7 +19,9 @@
 //!
 //! `name` falls back to the folder name (humanized), `dark` defaults to
 //! false, and `mode` defaults to `overlay` (`base` marks the one theme that
-//! is always loaded beneath every overlay theme).
+//! is always loaded beneath every overlay theme). `color-scheme: theme`
+//! explicitly pins GTK chrome to the theme's scheme; otherwise it follows
+//! the desktop color preference.
 
 use std::path::{Path, PathBuf};
 
@@ -41,9 +43,11 @@ pub(crate) struct DiscoveredTheme {
     /// Display label from the metadata header, falling back to the folder
     /// name in humanized form.
     pub(crate) name: String,
-    /// Dark themes force the app-wide color scheme to prefer dark and use
-    /// the dark lightbox backdrop.
+    /// Whether this theme's own palette is dark.
     pub(crate) dark: bool,
+    /// Whether GTK/libadwaita chrome is pinned to this theme's light/dark
+    /// scheme instead of following the desktop preference.
+    pub(crate) pins_color_scheme: bool,
     /// Base themes are always loaded beneath the active overlay theme.
     pub(crate) is_base: bool,
     /// Window control style the theme opts into (native by default).
@@ -84,6 +88,7 @@ pub(crate) fn discover(directory: &Path) -> Vec<DiscoveredTheme> {
             name: metadata.name.unwrap_or_else(|| humanize_id(&id)),
             id,
             dark: metadata.dark,
+            pins_color_scheme: metadata.pins_color_scheme,
             is_base: metadata.is_base,
             window_controls: metadata.window_controls,
             css,
@@ -141,6 +146,7 @@ fn theme_css_in(directory: &Path) -> Option<PathBuf> {
 struct ThemeMetadata {
     name: Option<String>,
     dark: bool,
+    pins_color_scheme: bool,
     is_base: bool,
     window_controls: WindowControls,
 }
@@ -184,6 +190,15 @@ fn metadata_from_css(css: &str) -> ThemeMetadata {
                         );
                         false
                     }
+                }
+            }
+            "color-scheme" => {
+                metadata.pins_color_scheme = value.eq_ignore_ascii_case("theme");
+                if !metadata.pins_color_scheme
+                    && !value.is_empty()
+                    && !value.eq_ignore_ascii_case("system")
+                {
+                    eprintln!("Theme metadata: ignoring unrecognized color-scheme value '{value}' (expected theme or system)");
                 }
             }
             "mode" => {
@@ -305,6 +320,12 @@ mod tests {
 
         let flagged = metadata_from_css("/* picasa-theme\n   dark: yes\n*/");
         assert!(flagged.dark);
+        assert!(!flagged.pins_color_scheme);
+
+        let pinned = metadata_from_css(
+            "/* picasa-theme\n   dark: false\n   color-scheme: theme\n*/",
+        );
+        assert!(pinned.pins_color_scheme);
         assert_eq!(flagged.name, None);
     }
 
@@ -460,6 +481,7 @@ mod tests {
             id: id.to_string(),
             name: id.to_string(),
             dark: false,
+            pins_color_scheme: false,
             is_base: false,
             window_controls: WindowControls::Native,
             css: String::new(),

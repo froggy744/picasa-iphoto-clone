@@ -25,8 +25,9 @@
        "Surfaces" section; if you are making a dark theme, recolor it.
      - `name:` is the display label. The folder name is the stable id that
        PIC saves in its settings — never rename a folder people already use.
-     - `dark: true` marks dark themes: the app then prefers the dark color
-       scheme and uses the dark lightbox backdrop.
+     - `dark: true` marks a dark palette. Add `color-scheme: theme` when you
+       want GTK chrome outside your stylesheet pinned to match the palette;
+       otherwise the interface follows GNOME's light/dark preference.
      - `version:` is the metadata contract version of this file (current: 1).
        Keep it at 1 unless a PIC release documents a new contract.
      - `window-controls: native` keeps the GTK title buttons; set

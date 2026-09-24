@@ -73,8 +73,9 @@ impl ThemeEngine {
             post_apply: RefCell::new(None),
             window_controls_hook: RefCell::new(None),
         });
-        // While a light theme is active the lightbox backdrop follows the
-        // system preference; dark themes own their backdrop regardless.
+        // Light themes follow GNOME's appearance preference. The active
+        // theme's CSS owns the main window palette, while this signal keeps
+        // GTK widgets outside that CSS (including the lightbox) in sync.
         {
             let engine = engine.clone();
             style_manager.connect_dark_notify(move |manager| {
@@ -215,12 +216,15 @@ impl ThemeEngine {
             hook(theme.window_controls);
         }
 
-        // Force the app-wide color scheme so widgets the theme CSS does not
-        // reach (title bar, popovers, dialogs, the settings window) follow
-        // the dark appearance too.
+        // Dark palettes need dark GTK chrome; explicitly pinned light
+        // palettes need light chrome even when GNOME is dark. Adaptive themes
+        // leave the scheme at the desktop default.
         if theme.dark {
-            self.style_manager.set_color_scheme(adw::ColorScheme::PreferDark);
+            self.style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
             self.lightbox.use_iphone_backdrop();
+        } else if theme.pins_color_scheme {
+            self.style_manager.set_color_scheme(adw::ColorScheme::ForceLight);
+            self.lightbox.use_standard_backdrop(false);
         } else {
             self.style_manager.set_color_scheme(adw::ColorScheme::Default);
             self.lightbox.use_standard_backdrop(self.style_manager.is_dark());

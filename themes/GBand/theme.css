@@ -2,6 +2,7 @@
    version: 1
    name: GBand Lights
    dark: false
+   color-scheme: system
    mode: overlay
    window-controls: traffic-light
 */

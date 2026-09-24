@@ -47,7 +47,8 @@ the stylesheet:
 |-----|--------|---------|---------|
 | `version` | `1` | — | Theme contract version of this file. Unknown keys are ignored; current contract is 1. |
 | `name` | any text | folder name, humanized | Label shown in the picker. |
-| `dark` | `true`/`false` (also `yes`/`on`/`1`) | `false` | Dark themes force the app-wide color scheme to prefer dark and use the dark lightbox backdrop; the header icon switches to a moon. |
+| `dark` | `true`/`false` (also `yes`/`on`/`1`) | `false` | Describes whether the theme palette is dark. It also controls the header icon. |
+| `color-scheme` | `theme` or `system` | `system` | `system` follows GNOME's light/dark preference. `theme` pins GTK/libadwaita widgets outside the stylesheet to light or dark according to the `dark` flag. Use it only when that matches your palette. |
 | `mode` | `overlay` or `base` | `overlay` | `base` marks the one theme that is always loaded beneath every overlay theme (the shipped iPhoto Dark). |
 | `window-controls` | `native` or `traffic-light` | `native` | `traffic-light` replaces the native GTK minimize/maximize/close buttons with the app's gel-style traffic lights while the theme is active; style them via `button.traffic-light-*` (see the template). |
 
