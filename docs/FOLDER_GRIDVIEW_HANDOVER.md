@@ -4,7 +4,8 @@
 
 - Branch: `experiment/folder-gridview`.
 - Starting commit before this WIP checkpoint: `392cb6df` (`Prototype Folder mode on GtkGridView`).
-- The WIP checkpoint commit that includes this document is the branch tip after handover; get its exact immutable hash with `git rev-parse HEAD` (a commit cannot embed its own final hash in its tree).
+- Implementation checkpoint: `5ce0959e` (`WIP: chunked Folder GridView prototype and experiment handover`). This commit contains the implementation and the initial version of this handover document. The exact full hash is also shown by `git rev-parse 5ce0959e`.
+- This file was updated in a documentation-only follow-up so it could record the implementation checkpoint's hash; no code changed after the WIP checkpoint.
 - Do not merge this branch into `main` without a separate review and explicit request.
 - The worktree also contains unrelated/pre-existing untracked items. The checkpoint deliberately excludes them; see the handover summary from the working session and `git status`.
 
