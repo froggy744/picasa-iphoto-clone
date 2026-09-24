@@ -6,6 +6,9 @@ struct DecodedThumbnailSource {
 }
 
 static VIEWER_ORIENTATION_CACHE: OnceLock<Mutex<HashMap<(PathBuf, u128), u16>>> = OnceLock::new();
+#[cfg(target_os = "linux")]
+static REMOTE_JPEG_ORIENTATION_CACHE: OnceLock<Mutex<HashMap<(String, i64, i64), u16>>> =
+    OnceLock::new();
 
 fn is_jpeg(path: &str) -> bool {
     crate::image_format::uses(path, crate::image_format::DecoderKind::TurboJpeg)
@@ -516,8 +519,13 @@ fn resize_viewer_rgba(
 
 pub fn exif_orientation(reference: &str) -> u16 {
     #[cfg(target_os = "linux")]
-    if crate::network_shares::private(reference) && is_nikon_raw(reference) {
-        return remote_nef_orientation(reference).unwrap_or(1);
+    if crate::network_shares::private(reference) {
+        if is_nikon_raw(reference) {
+            return remote_nef_orientation(reference).unwrap_or(1);
+        }
+        if is_jpeg(reference) {
+            return remote_jpeg_orientation(reference).unwrap_or(1);
+        }
     }
     let local = match crate::source::materialize(reference) {
         Ok(path) => path,
@@ -562,6 +570,53 @@ pub fn exif_orientation(reference: &str) -> u16 {
     orientation
 }
 
+/// Inspect only the JPEG header for EXIF orientation on native network
+/// shares. Network originals cannot be materialized, and reading the whole
+/// image here would duplicate the viewer's later source read.
+#[cfg(target_os = "linux")]
+fn remote_jpeg_orientation(reference: &str) -> Option<u16> {
+    let metadata = crate::network_shares::stat(reference).ok()?;
+    let key = (
+        reference.to_owned(),
+        metadata.mtime.unwrap_or(0),
+        i64::try_from(metadata.size).ok()?,
+    );
+    let cache = REMOTE_JPEG_ORIENTATION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(orientation) = cache.lock().ok()?.get(&key).copied() {
+        return Some(orientation);
+    }
+
+    // Camera EXIF blocks are stored near the start of JPEG files. A bounded
+    // prefix supports large metadata blocks without downloading the original.
+    let header = crate::source::read_range(reference, 0, 256 * 1024).ok()?;
+    let orientation = jpeg_orientation_from_header(&header);
+
+    let mut cache = cache.lock().ok()?;
+    if cache.len() >= 512 {
+        if let Some(oldest) = cache.keys().next().cloned() {
+            cache.remove(&oldest);
+        }
+    }
+    cache.insert(key, orientation);
+    Some(orientation)
+}
+
+pub(super) fn jpeg_orientation_from_header(header: &[u8]) -> u16 {
+    exif::Reader::new()
+        .read_from_container(&mut Cursor::new(header))
+        .ok()
+        .and_then(|exif| {
+            exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+                .and_then(|field| match &field.value {
+                    exif::Value::Short(values) => values.first().copied(),
+                    exif::Value::Long(values) => values.first().copied().map(|value| value as u16),
+                    _ => None,
+                })
+        })
+        .filter(|orientation| (1..=8).contains(orientation))
+        .unwrap_or(1)
+}
+
 pub fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage {
     match orientation {
         2 => DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&image.to_rgba8())),
@@ -603,6 +658,21 @@ mod tests {
             .to_string()
             .contains("cancelled at before_source_read"));
         assert_eq!(checks.get(), 3);
+    }
+
+    #[test]
+    fn reads_exif_orientation_from_a_jpeg_header_prefix() {
+        let header = [
+            0xff, 0xd8, // SOI
+            0xff, 0xe1, 0x00, 0x22, // APP1 segment, 32 byte payload
+            b'E', b'x', b'i', b'f', 0, 0, // EXIF identifier
+            b'I', b'I', 0x2a, 0, 8, 0, 0, 0, // TIFF header
+            1, 0, // one IFD entry
+            0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, // orientation = 6
+            0, 0, 0, 0, // next IFD
+            0xff, 0xda, // SOS follows
+        ];
+        assert_eq!(jpeg_orientation_from_header(&header), 6);
     }
 }
 

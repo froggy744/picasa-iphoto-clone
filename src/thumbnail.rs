@@ -18,6 +18,7 @@ const THUMBNAIL_SIZE: u32 = 320;
 const THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v4-heif-orientation";
 const RAW_THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v6-generic-raw";
 const REMOTE_NEF_THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v1-remote-nef-preview";
+const REMOTE_JPEG_THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v1-remote-jpeg-orientation";
 const DNG_THUMBNAIL_CACHE_VERSION: &[u8] = b"picasa-thumb-v7-dng-full-raw";
 
 // A folder import, startup recovery, and a manual refresh can overlap their

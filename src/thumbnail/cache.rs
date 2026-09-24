@@ -66,6 +66,8 @@ pub fn cache_file_name(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) 
     hasher.update(path.as_bytes());
     let cache_version = if remote_nef(path) {
         REMOTE_NEF_THUMBNAIL_CACHE_VERSION
+    } else if remote_jpeg(path) {
+        REMOTE_JPEG_THUMBNAIL_CACHE_VERSION
     } else if is_dng(path) {
         DNG_THUMBNAIL_CACHE_VERSION
     } else if crate::image_format::uses(path, crate::image_format::DecoderKind::Raw) {
@@ -79,6 +81,19 @@ pub fn cache_file_name(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) 
     hasher.update(b"\0");
     hasher.update(size_bytes.unwrap_or_default().to_string().as_bytes());
     format!("{}.jpg", hasher.finalize().to_hex())
+}
+
+fn remote_jpeg(path: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        crate::network_shares::private(path)
+            && crate::image_format::uses(path, crate::image_format::DecoderKind::TurboJpeg)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 fn remote_nef(path: &str) -> bool {
@@ -205,11 +220,19 @@ fn create_uncached(path: &str, destination: &PathBuf) -> Result<PathBuf> {
         fs::create_dir_all(parent)?;
     }
 
+    let mut remote_jpeg_orientation = None;
     let source = if is_raw(path) {
         decode_raw_thumbnail(path)?.image
     } else {
         let bytes = crate::source::read(path)?;
         if is_jpeg(path) {
+            #[cfg(target_os = "linux")]
+            if crate::network_shares::private(path) {
+                // The original JPEG is already in memory for thumbnail
+                // decoding. Read its orientation from those bytes instead of
+                // issuing a second NFS/SMB metadata range request.
+                remote_jpeg_orientation = Some(jpeg_orientation_from_header(&bytes));
+            }
             match decode_jpeg_turbo(&bytes) {
                 Ok(decoded) => decoded.image,
                 Err(_) => decode_with_image(&bytes)?.image,
@@ -228,7 +251,7 @@ fn create_uncached(path: &str, destination: &PathBuf) -> Result<PathBuf> {
     let orientation = if is_heif(path) {
         1
     } else {
-        exif_orientation(path)
+        remote_jpeg_orientation.unwrap_or_else(|| exif_orientation(path))
     };
     let source = apply_orientation(DynamicImage::ImageRgb8(source), orientation).to_rgb8();
     let resized = resize(source)?;
@@ -281,6 +304,15 @@ mod cache_layout_tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_network_jpegs_use_the_orientation_cache_version() {
+        assert!(remote_jpeg("nfs://DietPi.local/photos/test.jpg"));
+        assert!(remote_jpeg("smb://server/share/test.JPG"));
+        assert!(!remote_jpeg("/photos/test.jpg"));
+        assert!(!remote_jpeg("nfs://DietPi.local/photos/test.png"));
+    }
+
     #[test]
     fn distinct_hash_prefixes_distribute_across_buckets() {
         let buckets: HashSet<_> = (0..2000u64)
@@ -320,6 +352,17 @@ mod cache_layout_tests {
         assert!(!destination.parent().unwrap().exists());
         create_uncached(source.to_str().unwrap(), &destination).unwrap();
         assert!(destination.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exif_rotated_test_photo_is_cached_in_display_orientation() {
+        let root = fixture();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/20151128_144228.jpg");
+        let destination = root.join("oriented.jpg");
+        create_uncached(source.to_str().unwrap(), &destination).unwrap();
+        let cached = image::open(&destination).unwrap();
+        assert!(cached.height() > cached.width());
         let _ = fs::remove_dir_all(root);
     }
 }
