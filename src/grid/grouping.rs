@@ -38,12 +38,16 @@ impl Gallery {
         }
 
         if mode == GroupMode::Folder {
-            // Folder headers live inside the scrolling ListView. The old
-            // external heading would be sticky, which is deliberately not
-            // Picasa-style.
-            self.group_header.set_visible(false);
-            self.group_title.set_text("");
-            self.group_count.set_text("");
+            // The experiment uses the existing external heading as a sticky
+            // folder indicator because GtkGridView has no full-width header
+            // factory in the GTK version available to PIC.
+            if crate::grid::folder_gridview_experiment_enabled() {
+                self.update_group_header_for_scroll(self.last_scroll_y.get());
+            } else {
+                self.group_header.set_visible(false);
+                self.group_title.set_text("");
+                self.group_count.set_text("");
+            }
             if old_mode != GroupMode::Folder && !self.restore_folder_cache() {
                 // The current model may still contain All Photos/Favourites in
                 // a global date order. Do not briefly render that as hundreds
@@ -64,6 +68,10 @@ impl Gallery {
             }
         }
 
+        if mode == GroupMode::Folder && crate::grid::folder_gridview_experiment_enabled() {
+            self.update_group_header_for_scroll(self.last_scroll_y.get());
+        }
+
         if let Some(handler) = self.folder_view_changed.borrow().as_ref() {
             handler(mode == GroupMode::Folder);
         }
@@ -78,7 +86,7 @@ impl Gallery {
     pub fn update_group_header_for_scroll(&self, scroll_y: f64) {
         self.last_scroll_y.set(scroll_y.max(0.0));
         let mode = self.group_mode.get();
-        if mode == GroupMode::Folder {
+        if mode == GroupMode::Folder && !crate::grid::folder_gridview_experiment_enabled() {
             return;
         }
         if mode == GroupMode::None {
@@ -92,7 +100,9 @@ impl Gallery {
     /// mode reads the virtualized ListView row at the viewport edge; other
     /// modes keep the existing GridView geometry.
     pub fn photo_for_scroll_position(&self, scroll_y: f64) -> Option<PhotoObject> {
-        if self.group_mode.get() == GroupMode::Folder {
+        if self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled()
+        {
             return self.photo_for_visible_folder_row();
         }
         self.current_photos
@@ -151,9 +161,18 @@ impl Gallery {
             }
         }
         self.group_ranges.replace(ranges);
+        if mode == GroupMode::Folder && crate::grid::folder_gridview_experiment_enabled() {
+            self.update_group_header_for_scroll(self.last_scroll_y.get());
+        }
     }
 
     fn rebuild_folder_rows(&self) {
+        if crate::grid::folder_gridview_experiment_enabled() {
+            // The experimental Folder view binds the already ordered photo
+            // model directly to GtkGridView; virtual row GObjects are unused.
+            self.save_folder_cache();
+            return;
+        }
         rebuild_folder_rows_for(
             &self.current_photos,
             &self.group_ranges,
@@ -191,7 +210,9 @@ impl Gallery {
             if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=no_cached_rows"); }
             return false;
         };
-        if cache.columns != self.current_columns.get() {
+        if cache.columns != self.current_columns.get()
+            && !crate::grid::folder_gridview_experiment_enabled()
+        {
             if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=current_columns_mismatch cached={} current={}", cache.columns, self.current_columns.get()); }
             return false;
         }
@@ -238,7 +259,9 @@ impl Gallery {
         let Some(cache) = self.folder_cache.borrow().clone() else {
             return false;
         };
-        if cache.columns != self.current_columns.get() || cache.order != *self.folder_order.borrow()
+        if (cache.columns != self.current_columns.get()
+            && !crate::grid::folder_gridview_experiment_enabled())
+            || cache.order != *self.folder_order.borrow()
         {
             return false;
         }

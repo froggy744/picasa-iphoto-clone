@@ -787,11 +787,12 @@ impl Gallery {
         }
         self.last_layout_width.set(width);
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        let folder_list_mode = folder_mode && !crate::grid::folder_gridview_experiment_enabled();
         if columns == old_columns {
             // Zooming within the same column count only changes tile geometry.
             // Replacing the Folder ListStore here used to invalidate every
             // realized row and cost ~0.8-1.1s for a 4.5k-photo library.
-            if folder_mode && tile_size_changed {
+            if folder_list_mode && tile_size_changed {
                 // Tile size changed within the same columns: the rows keep
                 // their photos but their heights change, so re-anchor the
                 // viewport to the photo that was at the top.
@@ -808,7 +809,7 @@ impl Gallery {
                 if let Some(started) = trace_started {
                     eprintln!("PIC_ZOOM layout mode=folder action=resize_rows columns={} width={} elapsed_us={}", columns, width, started.elapsed().as_micros());
                 }
-            } else if !folder_mode {
+            } else if !folder_list_mode {
                 self.root.queue_resize();
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
                 if let Some(started) = trace_started {
@@ -826,7 +827,7 @@ impl Gallery {
         self.root.set_min_columns(columns);
         self.root.set_max_columns(columns);
         self.root.queue_resize();
-        if folder_mode {
+        if folder_list_mode {
             // Each model item is one visual photo line. A column change must
             // rebuild those lines to keep the layout gapless.
             let anchor = self.take_reframe_anchor();

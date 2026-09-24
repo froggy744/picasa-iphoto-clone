@@ -33,7 +33,9 @@ impl Gallery {
     }
 
     pub fn scroll_position(&self) -> f64 {
-        let adjustment = if self.group_mode.get() == GroupMode::Folder {
+        let folder_list_mode = self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled();
+        let adjustment = if folder_list_mode {
             self.folder_root.vadjustment()
         } else {
             self.root.vadjustment()
@@ -48,7 +50,9 @@ impl Gallery {
     /// value restores the exact view, while this id restores keyboard focus to
     /// the middle of what the user was looking at.
     pub fn viewport_center_photo(&self) -> Option<PhotoObject> {
-        let root: gtk::Widget = if self.group_mode.get() == GroupMode::Folder {
+        let folder_list_mode = self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled();
+        let root: gtk::Widget = if folder_list_mode {
             self.folder_root.clone().upcast()
         } else {
             self.root.clone().upcast()
@@ -94,16 +98,17 @@ impl Gallery {
         else {
             return false;
         };
-        let folder_mode = self.group_mode.get() == GroupMode::Folder;
-        let folder_row = folder_mode
+        let folder_list_mode = self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled();
+        let folder_row = folder_list_mode
             .then(|| self.folder_row_index_for_photo(photo_id))
             .flatten();
-        let root: gtk::Widget = if folder_mode {
+        let root: gtk::Widget = if folder_list_mode {
             self.folder_root.clone().upcast()
         } else {
             self.root.clone().upcast()
         };
-        let adjustment = if folder_mode {
+        let adjustment = if folder_list_mode {
             self.folder_root.vadjustment()
         } else {
             self.root.vadjustment()
@@ -113,7 +118,7 @@ impl Gallery {
         let selection = self.selection.clone();
         glib::idle_add_local_once(move || {
             selection.select_item(position as u32, true);
-            if folder_mode {
+            if folder_list_mode {
                 if let Some(row) = folder_row {
                     folder_root.scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
                 }
@@ -217,8 +222,9 @@ impl Gallery {
         else {
             return;
         };
-        let folder_mode = self.group_mode.get() == GroupMode::Folder;
-        let folder_row = folder_mode
+        let folder_list_mode = self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled();
+        let folder_row = folder_list_mode
             .then(|| self.folder_row_index_for_photo(photo_id))
             .flatten();
         let root = self.root.clone();
@@ -229,7 +235,7 @@ impl Gallery {
             let scroll = gtk::ScrollInfo::new();
             scroll.set_enable_horizontal(false);
             scroll.set_enable_vertical(false);
-            if folder_mode {
+            if folder_list_mode {
                 if let Some(row) = folder_row {
                     folder_root.scroll_to(row, gtk::ListScrollFlags::FOCUS, Some(scroll));
                 }
@@ -251,7 +257,7 @@ impl Gallery {
                 }
             }
         });
-        if folder_mode {
+        if folder_list_mode {
             self.focus_folder_tile(photo_id);
         }
     }
@@ -265,8 +271,9 @@ impl Gallery {
         else {
             return;
         };
-        let folder_mode = self.group_mode.get() == GroupMode::Folder;
-        let folder_row = folder_mode
+        let folder_list_mode = self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled();
+        let folder_row = folder_list_mode
             .then(|| self.folder_row_index_for_photo(photo_id))
             .flatten();
         let root = self.root.clone();
@@ -275,7 +282,7 @@ impl Gallery {
             let scroll = gtk::ScrollInfo::new();
             scroll.set_enable_horizontal(false);
             scroll.set_enable_vertical(false);
-            if folder_mode {
+            if folder_list_mode {
                 if let Some(row) = folder_row {
                     folder_root.scroll_to(row, gtk::ListScrollFlags::FOCUS, Some(scroll));
                 }
@@ -293,7 +300,7 @@ impl Gallery {
                 }
             }
         });
-        if folder_mode {
+        if folder_list_mode {
             self.focus_folder_tile(photo_id);
         }
     }
@@ -472,7 +479,9 @@ impl Gallery {
     }
 
     pub fn grab_focus(&self) {
-        if self.group_mode.get() == GroupMode::Folder {
+        if self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled()
+        {
             self.folder_root.grab_focus();
         } else {
             self.root.grab_focus();
@@ -483,7 +492,9 @@ impl Gallery {
     /// shows `folder_root` and hides `gallery.root`, so focus helpers must not
     /// hardcode the GridView.
     pub fn visible_root(&self) -> gtk::Widget {
-        if self.group_mode.get() == GroupMode::Folder {
+        if self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled()
+        {
             self.folder_root.clone().upcast()
         } else {
             self.root.clone().upcast()
@@ -589,7 +600,9 @@ impl Gallery {
             if !matches {
                 continue;
             }
-            if self.group_mode.get() == GroupMode::Folder {
+            if self.group_mode.get() == GroupMode::Folder
+                && !crate::grid::folder_gridview_experiment_enabled()
+            {
                 // The backing store is filled progressively, but the Folder
                 // ListView rows are only built once the whole stream is ready.
                 // Selecting the photo is safe early, but report success only
@@ -636,7 +649,9 @@ impl Gallery {
         };
 
         self.selection.select_item(photo_position as u32, true);
-        if self.group_mode.get() == GroupMode::Folder {
+        if self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled()
+        {
             let Some(row) = self.folder_header_row_for_target(folder_id) else {
                 return false;
             };
@@ -660,7 +675,9 @@ impl Gallery {
         }
         let position = count - 1;
         self.selection.select_item(position, true);
-        if self.group_mode.get() == GroupMode::Folder {
+        if self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled()
+        {
             if let Some(row) = self.folder_row_index_for_photo(
                 self.store
                     .item(position)

@@ -228,7 +228,9 @@ impl Gallery {
     /// size. Falls back to the ladder level nearest the legacy fixed default
     /// before the first real layout is known.
     pub fn reset_zoom(self: &Rc<Self>) {
-        let width = if self.group_mode.get() == GroupMode::Folder {
+        let folder_list_mode = self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled();
+        let width = if folder_list_mode {
             self.folder_root.width()
         } else {
             self.root.width()
@@ -352,6 +354,7 @@ impl Gallery {
 
         // Capture the visible photo before the tile resize disturbs the layout.
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        let folder_list_mode = folder_mode && !crate::grid::folder_gridview_experiment_enabled();
         let anchor_started = trace_zoom.then(Instant::now);
         if folder_mode {
             self.zoom_anchor.set(
@@ -375,8 +378,11 @@ impl Gallery {
 
 
         let mut tiles = Vec::new();
-        collect_tiles(self.root.upcast_ref(), &mut tiles);
-        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        if folder_list_mode {
+            collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        } else {
+            collect_tiles(self.root.upcast_ref(), &mut tiles);
+        }
         let realized_tile_count = tiles.len();
 
         let resize_started = trace_zoom.then(Instant::now);
@@ -386,7 +392,7 @@ impl Gallery {
         let resize_us = resize_started.map_or(0, |started| started.elapsed().as_micros());
 
 
-        let root_width = if folder_mode {
+        let root_width = if folder_list_mode {
             self.folder_root.width()
         } else {
             self.root.width()
@@ -402,11 +408,16 @@ impl Gallery {
 
         if let Some(started) = zoom_started {
             eprintln!(
-                "PIC_ZOOM apply old_width={} width={} height={} mode={} realized_tiles={} anchor_us={} tile_resize_us={} layout_us={} total_us={}",
+                "PIC_ZOOM apply old_width={} width={} height={} mode={} view={} realized_tiles={} anchor_us={} tile_resize_us={} layout_us={} total_us={}",
                 old_width,
                 width,
                 height,
                 if folder_mode { "folder" } else { "grid" },
+                if folder_list_mode {
+                    "folder_list"
+                } else {
+                    "photo_grid"
+                },
                 realized_tile_count,
                 anchor_us,
                 resize_us,
@@ -422,7 +433,10 @@ impl Gallery {
     /// widget pool than the visible rows, so loading every bound tile causes
     /// thousands of unnecessary thumbnail operations during scrollbar jumps.
     pub fn refresh_visible_folder_tiles(&self) -> usize {
-        if self.group_mode.get() != GroupMode::Folder || self.folder_root.height() <= 0 {
+        if self.group_mode.get() != GroupMode::Folder
+            || crate::grid::folder_gridview_experiment_enabled()
+            || self.folder_root.height() <= 0
+        {
             return 0;
         }
 
@@ -461,7 +475,11 @@ impl Gallery {
     /// Folder motion pump and prevents fast scrollbar movement from filling the
     /// worker queue with viewports the user has already passed.
     pub fn queue_visible_grid_cached_tiles_async(&self, budget: usize) -> usize {
-        if budget == 0 || self.group_mode.get() == GroupMode::Folder || self.root.height() <= 0 {
+        if budget == 0
+            || (self.group_mode.get() == GroupMode::Folder
+                && !crate::grid::folder_gridview_experiment_enabled())
+            || self.root.height() <= 0
+        {
             return 0;
         }
 
@@ -514,7 +532,10 @@ impl Gallery {
     /// visible tiles against the RAM cache every frame paints exactly those
     /// finished thumbnails while the scrub is still moving.
     pub fn apply_visible_grid_cached_paintables(&self) -> usize {
-        if self.group_mode.get() == GroupMode::Folder || self.root.height() <= 0 {
+        if (self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled())
+            || self.root.height() <= 0
+        {
             return 0;
         }
 
@@ -561,7 +582,10 @@ impl Gallery {
         viewport_height: f64,
         budget: usize,
     ) -> usize {
-        if budget == 0 || self.group_mode.get() == GroupMode::Folder {
+        if budget == 0
+            || (self.group_mode.get() == GroupMode::Folder
+                && !crate::grid::folder_gridview_experiment_enabled())
+        {
             return 0;
         }
 
@@ -616,7 +640,10 @@ impl Gallery {
     }
 
     fn visible_grid_photo_index_span(&self) -> Option<(usize, usize)> {
-        if self.group_mode.get() == GroupMode::Folder || self.root.height() <= 0 {
+        if (self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled())
+            || self.root.height() <= 0
+        {
             return None;
         }
         let viewport = self.root.height() as f32;
@@ -651,7 +678,10 @@ impl Gallery {
     /// the correct RAM-cached thumbnail or restores the normal placeholder and
     /// queues the correct visible thumbnail.
     pub fn refresh_visible_grid_tiles(&self) -> usize {
-        if self.group_mode.get() == GroupMode::Folder || self.root.height() <= 0 {
+        if (self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled())
+            || self.root.height() <= 0
+        {
             return 0;
         }
 
@@ -680,7 +710,10 @@ impl Gallery {
     /// Library/Favourites/Albums/Search can scroll into already-decoded RAM
     /// paintables just like Folder mode.
     pub fn prefetch_grid_cached_tiles(&self, budget: usize, direction: f64) -> usize {
-        if budget == 0 || self.group_mode.get() == GroupMode::Folder {
+        if budget == 0
+            || (self.group_mode.get() == GroupMode::Folder
+                && !crate::grid::folder_gridview_experiment_enabled())
+        {
             return 0;
         }
         let Some((first_visible, last_visible)) = self.visible_grid_photo_index_span() else {
@@ -1509,14 +1542,16 @@ impl Gallery {
             if end >= photos.len() {
                 rebuild_group_ranges_for(&current_photos, &group_mode, &group_date, &group_ranges);
                 if group_mode.get() == GroupMode::Folder {
-                    rebuild_folder_rows_for(
-                        &current_photos,
-                        &group_ranges,
-                        &current_columns,
-                        &folder_order,
-                        &folder_catalog,
-                        &folder_store,
-                    );
+                    if !crate::grid::folder_gridview_experiment_enabled() {
+                        rebuild_folder_rows_for(
+                            &current_photos,
+                            &group_ranges,
+                            &current_columns,
+                            &folder_order,
+                            &folder_catalog,
+                            &folder_store,
+                        );
+                    }
                     if group_mode.get() == GroupMode::Folder {
                         save_folder_cache_for(
                             &folder_cache,
@@ -1527,9 +1562,23 @@ impl Gallery {
                         );
                     }
 
-                    group_header.set_visible(false);
-                    group_title.set_text("");
-                    group_count.set_text("");
+                    if crate::grid::folder_gridview_experiment_enabled() {
+                        update_group_header_for_index_for(
+                            &group_mode,
+                            &group_ranges,
+                            &group_header,
+                            &group_title,
+                            &group_count,
+                            (((last_scroll_y.get() - 20.0).max(0.0)
+                                / (tile_height.get().max(1) as f64 + 12.0))
+                                .floor() as usize)
+                                * current_columns.get().max(1) as usize,
+                        );
+                    } else {
+                        group_header.set_visible(false);
+                        group_title.set_text("");
+                        group_count.set_text("");
+                    }
                 } else {
                     update_group_header_for_index_for(
                         &group_mode,

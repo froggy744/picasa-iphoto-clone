@@ -4,7 +4,7 @@
 
 Investigate whether Folder view can use the same direct, photo-per-item `GtkGridView` path as Library/All Photos. The goal is to remove the zoom pause caused by rebuilding the current Folder row model when the column count changes, while preserving folder section appearance and all existing interaction behavior.
 
-This document is a research and implementation plan. The current branch does **not** contain a Folder `GtkGridView` implementation yet.
+The branch now contains an opt-in first prototype. It is intentionally not the default and does not yet provide in-flow, full-width folder section headers.
 
 ## Current evidence
 
@@ -29,9 +29,17 @@ References:
 
 ## Proposed investigation and implementation sequence
 
+### Prototype currently on this branch
+
+Launch with `PICASA_FOLDER_GRIDVIEW=1` to route Folder mode through `Gallery::root` and its `GtkGridView` photo model. Folder order is retained, and the existing group-header area displays the current folder as a sticky indicator. The experimental path skips building unused `FolderRowObject` rows and routes zoom, visible thumbnail refresh, scroll positioning, folder navigation, selection, and focus through the photo grid. Without the variable, the existing Folder `GtkListView` path is unchanged.
+
+Run the prototype with `PICASA_FOLDER_GRIDVIEW=1 PICASA_TRACE=1 cargo run`. Unset `PICASA_FOLDER_GRIDVIEW` for the current Folder `GtkListView` comparison. Prototype zoom lines identify `view=photo_grid`; normal folder mode reports `view=folder_list`.
+
+This first prototype deliberately exposes the API/design tradeoff: folder headers are sticky and their existing per-section action row is not rendered. It is a responsiveness and interaction probe, not a replacement ready to merge. Keep all observations and follow-up work on this branch.
+
 ### 1. Verify section support for the deployed GTK
 
-Check the minimum GTK version PIC supports and the deployed runtime versions. Confirm whether `GtkGridView` actually consumes `GtkSectionModel` section boundaries and can render a full-width section header in that version. Do not infer this solely from the generic `GtkSectionModel` description.
+Check the minimum GTK version PIC supports and deployed runtime versions. Confirm whether `GtkGridView` actually consumes `GtkSectionModel` section boundaries and can render a full-width section header in that version. Do not infer this solely from the generic `GtkSectionModel` description.
 
 If needed, make a tiny throwaway GTK probe with a section-aware `GListModel`, a `GtkGridView`, and two photo sections. Verify header width, placement, reflow after changing min/max columns, and behavior under scrolling. Keep this probe outside production code unless a focused test helper belongs in the repository.
 
@@ -57,7 +65,7 @@ Map each existing behavior to the prototype and test it before making the new vi
 - thumbnail cache use, tile bind/unbind, and filename captions
 - folder sidebar selection and search-to-folder navigation
 
-Keep the existing `GtkListView` path available behind an opt-in development setting or build-time experiment until the prototype passes these checks. Do not change the production default during the first comparison.
+Keep the existing `GtkListView` path available behind `PICASA_FOLDER_GRIDVIEW=1` until the prototype passes these checks. Do not change the production default during the first comparison.
 
 ### 4. Compare performance under controlled conditions
 
@@ -96,4 +104,4 @@ Accept only if zoom no longer rebuilds/rebinds row objects proportional to the w
 
 ## Branch checkpoint
 
-The working filename-caption feature and `PIC_ZOOM`/`PIC_FILENAME` diagnostics were pushed first to `experiment/folder-gridview` in commit `9a0f0abc`. They are a test baseline, not the GridView experiment itself. Keep all experiment commits on this branch; do not merge or push them to `main` unless requested.
+The working filename-caption feature and `PIC_ZOOM`/`PIC_FILENAME` diagnostics were pushed first to `experiment/folder-gridview` in commit `9a0f0abc`. Keep all experiment commits on this branch; do not merge or push them to `main` unless requested.

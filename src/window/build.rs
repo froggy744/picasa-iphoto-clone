@@ -1499,12 +1499,27 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let gallery_scroll_stack = gallery_scroll_stack.clone();
         let gallery_for_folder_view = gallery.clone();
         gallery.set_folder_view_changed_handler(move |folder_mode| {
-            gallery_scroll_stack.set_visible_child_name(if folder_mode {
+            let folder_grid_experiment =
+                crate::grid::folder_gridview_experiment_enabled() && folder_mode;
+            gallery_scroll_stack.set_visible_child_name(if folder_mode && !folder_grid_experiment {
                 "folders"
             } else {
                 "grid"
             });
             if folder_mode {
+                if folder_grid_experiment {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!("PIC_FOLDER_GRIDVIEW enabled mode=photo_grid folder_indicator=sticky");
+                    }
+                    gallery_for_folder_view.root.grab_focus();
+                    gallery_for_folder_view
+                        .update_group_header_for_scroll(gallery_for_folder_view.scroll_position());
+                    let gallery = gallery_for_folder_view.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(90), move || {
+                        gallery.refresh_visible_grid_tiles();
+                    });
+                    return;
+                }
                 // Keep keyboard focus on the widget that is actually shown.
                 // Tab/search helpers used to target the hidden GridView.
                 let had_grid_focus = gallery_for_folder_view.root.has_focus();
