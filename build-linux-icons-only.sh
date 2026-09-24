@@ -727,6 +727,39 @@ build_native() {
     ok "Native release binary: $NATIVE_BIN"
 }
 
+# GNOME Files does not automatically read an icon embedded in a standalone
+# AppImage. Register a per-file icon without changing the existing build modes
+# or replacing the installed Flatpak's desktop launcher.
+register_appimage_file_icon() {
+    local appimage="$1" icon="$2" app_icon_dir installed_icon icon_uri
+    [[ -s "$appimage" && -s "$icon" ]] || return 0
+    app_icon_dir="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/$([[ "$ICON_EXT" == svg ]] && printf scalable || printf 256x256)/apps"
+    if ! mkdir -p "$app_icon_dir"; then
+        warn "Could not create user icon directory; AppImage was built successfully."
+        return 0
+    fi
+    installed_icon="$app_icon_dir/$APP_ID.$ICON_EXT"
+    if ! cp -f "$icon" "$installed_icon"; then
+        warn "Could not install GNOME icon; AppImage was built successfully."
+        return 0
+    fi
+    if have gio && have python3; then
+        icon_uri="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve().as_uri())' "$installed_icon")" || return 0
+        if gio set -t string "$appimage" metadata::custom-icon "$icon_uri"; then
+            ok "GNOME Files AppImage icon registered: $appimage"
+        else
+            warn "GNOME Files custom icon unavailable (GVfs metadata); AppImage is OK."
+        fi
+    else
+        warn "Install gio and python3 to set the GNOME Files icon; AppImage is OK."
+    fi
+    # GNOME's running-window icon depends on a matching desktop launcher.
+    # A working Flatpak has the same APP_ID; never overwrite its launcher here.
+    if have flatpak && flatpak info "$APP_ID" >/dev/null 2>&1; then
+        ok "Existing Flatpak launcher preserved: $APP_ID"
+    fi
+}
+
 build_appimage() {
     local linuxdeploy app_work appdir desktop staging_icon output_name deployed_bin real_bin resource_root
     if ! linuxdeploy="$(linuxdeploy_path)"; then
@@ -817,6 +850,7 @@ build_appimage() {
     chmod +x "$DIST_DIR/$output_name"
     APPIMAGE_OUTPUT="$DIST_DIR/$output_name"
     ok "AppImage created: $APPIMAGE_OUTPUT"
+    register_appimage_file_icon "$APPIMAGE_OUTPUT" "$staging_icon"
 }
 
 build_flatpak() {

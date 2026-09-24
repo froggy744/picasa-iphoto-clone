@@ -83,6 +83,7 @@ Useful environment overrides:
   PIC_BUILD_CACHE=...          build cache location
   PIC_BUILD_LOG_DIR=...        build log folder
   PIC_BUILD_TARGET=...         both, appimage, or flatpak
+  PIC_GNOME_INTEGRATE=0         skip host GNOME icon setup after AppImage build
 
 Offline rule:
   'local' mode never uses git fetch/pull/clone, curl, wget, or Flatpak downloads.
@@ -727,6 +728,27 @@ build_native() {
     ok "Native release binary: $NATIVE_BIN"
 }
 
+# AppImage icon metadata is independent of the host file-manager icon.
+# Validate the staged AppDir instead of assuming linuxdeploy packaged the icon.
+validate_appimage_icon_layout() {
+    local appdir="$1" desktop_path="$2" icon_path="$3" icon_in_theme="$4"
+    [[ -s "$icon_path" ]] || die "AppImage icon missing or empty: $icon_path"
+    [[ -s "$icon_in_theme" ]] || die "AppImage themed icon missing or empty: $icon_in_theme"
+    [[ -f "$desktop_path" ]] || die "AppImage desktop entry missing: $desktop_path"
+    grep -Fxq "Icon=$APP_ID" "$desktop_path" || \
+        die "AppImage desktop entry icon does not match $APP_ID"
+    [[ -e "$appdir/$APP_ID.desktop" ]] || \
+        die "AppImage root desktop entry missing: $appdir/$APP_ID.desktop"
+    [[ -e "$appdir/$APP_ID.$ICON_EXT" ]] || \
+        die "AppImage root icon missing: $appdir/$APP_ID.$ICON_EXT"
+
+    # appimagetool may regenerate this symlink during squashfs creation.
+    # Its target must be the application's real (not generic) staged icon.
+    ln -sfn "$APP_ID.$ICON_EXT" "$appdir/.DirIcon"
+    [[ -s "$appdir/.DirIcon" ]] || die "AppImage .DirIcon is invalid"
+    ok "AppImage desktop/icon metadata: $APP_ID ($ICON_EXT), .DirIcon valid"
+}
+
 build_appimage() {
     local linuxdeploy app_work appdir desktop staging_icon output_name deployed_bin real_bin resource_root
     if ! linuxdeploy="$(linuxdeploy_path)"; then
@@ -804,6 +826,14 @@ build_appimage() {
         cp -f /usr/share/icons/hicolor/index.theme "$appdir/usr/share/icons/hicolor/"
     fi
 
+    # The embedded icon is used by AppImage-aware launchers/integrators. GNOME
+    # Files does not automatically render arbitrary executable files using it.
+    validate_appimage_icon_layout \
+        "$appdir" \
+        "$appdir/usr/share/applications/$APP_ID.desktop" \
+        "$appdir/$APP_ID.$ICON_EXT" \
+        "$appdir/usr/share/icons/hicolor/$([[ "$ICON_EXT" == svg ]] && printf scalable || printf 256x256)/apps/$APP_ID.$ICON_EXT"
+
     log "Writing AppImage: $DIST_DIR/$output_name"
     (
         cd "$DIST_DIR"
@@ -817,6 +847,77 @@ build_appimage() {
     chmod +x "$DIST_DIR/$output_name"
     APPIMAGE_OUTPUT="$DIST_DIR/$output_name"
     ok "AppImage created: $APPIMAGE_OUTPUT"
+
+    # GNOME integration is local user metadata, not part of AppImage packaging.
+    # Keep it in this one build command; never change an installed Flatpak.
+    if [[ "${PIC_GNOME_INTEGRATE:-1}" == 1 ]]; then
+        integrate_appimage_gnome "$APPIMAGE_OUTPUT" "$staging_icon" || \
+            warn "GNOME icon integration was incomplete; the AppImage itself built successfully."
+    fi
+}
+
+# Automatically give the newly built AppImage its own icon in GNOME Files and
+# make the icon discoverable for the running GTK application. Do not replace an
+# existing Flatpak/user launcher sharing APP_ID.
+integrate_appimage_gnome() {
+    local appimage="$1" source_icon="$2" data_home icon_size icon_dir icon_dest
+    local app_dir launcher icon_uri appimage_path
+
+    [[ -s "$appimage" && -s "$source_icon" ]] || return 1
+    data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+    if [[ "$ICON_EXT" == svg ]]; then icon_size=scalable; else icon_size=256x256; fi
+    icon_dir="$data_home/icons/hicolor/$icon_size/apps"
+    icon_dest="$icon_dir/$APP_ID.$ICON_EXT"
+    mkdir -p "$icon_dir" || return 1
+    cp -f "$source_icon" "$icon_dest" || return 1
+    ok "GNOME PIC icon: $icon_dest"
+
+    # Nautilus/GNOME Files does not automatically read .DirIcon inside AppImages.
+    # GVfs metadata lets this user see the proper icon for this exact file.
+    if have gio && have python3; then
+        appimage_path="$(realpath -- "$appimage")" || return 1
+        icon_uri="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve().as_uri())' "$icon_dest")" || return 1
+        if gio set -t string "$appimage_path" metadata::custom-icon "$icon_uri"; then
+            ok "GNOME Files icon: $appimage_path"
+        else
+            warn "GNOME Files custom icon could not be set; GVfs metadata may be unavailable."
+        fi
+    else
+        warn "gio/python3 unavailable; GNOME Files custom file icon not set."
+    fi
+
+    app_dir="$data_home/applications"
+    launcher="$app_dir/$APP_ID.desktop"
+    if [[ -f "$launcher" ]]; then
+        log "Preserving existing PIC desktop launcher: $launcher"
+        return 0
+    fi
+    if have flatpak && flatpak info "$APP_ID" >/dev/null 2>&1; then
+        log "Preserving installed PIC Flatpak launcher ($APP_ID); AppImage file/icon registered."
+        return 0
+    fi
+
+    # Do not generate an invalid .desktop Exec entry for unusual filenames.
+    appimage_path="$(realpath -- "$appimage")" || return 1
+    if [[ "$appimage_path" == *$'\n'* || "$appimage_path" == *'"'* || \
+          "$appimage_path" == *'`'* || "$appimage_path" == *'\'* || \
+          "$appimage_path" == *'$'* ]]; then
+        warn "AppImage path cannot safely be represented in a desktop launcher."
+        return 0
+    fi
+    mkdir -p "$app_dir" || return 1
+    cat > "$launcher" <<EOF_PIC_GNOME
+[Desktop Entry]
+Type=Application
+Name=PIC — Personal Image Catalogue (AppImage)
+Comment=PIC photo manager
+Exec="$appimage_path" %F
+Icon=$APP_ID
+Terminal=false
+StartupNotify=true
+Categories=Graphics;Photography;
+EOF_PIC_GNOME
+    ok "GNOME PIC AppImage launcher: $launcher"
 }
 
 build_flatpak() {
