@@ -4,6 +4,12 @@ version = "1.0.0"
 edition = "2021"
 description = "A fast native GTK photo gallery"
 license = "MIT"
+authors = ["froggy744"]
+repository = "https://github.com/froggy744/picasa-iphoto-clone"
+homepage = "https://github.com/froggy744/picasa-iphoto-clone"
+readme = "README.md"
+keywords = ["photo", "gallery", "gtk4", "photography", "image-viewer"]
+categories = ["graphics", "multimedia"]
 
 [dependencies]
 anyhow = "1"
@@ -31,6 +37,7 @@ walkdir = "2"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+strip = "symbols"
 
 [profile.dev]
 opt-level = 2

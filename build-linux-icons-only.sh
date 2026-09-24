@@ -14,7 +14,7 @@ FLATPAK_SOURCE_CACHE="$CACHE_ROOT/flatpak-sources"
 DIST_DIR="${PIC_DIST_DIR:-$SCRIPT_DIR/dist}"
 REPO_URL="${PIC_REPO_URL:-https://github.com/froggy744/picasa-iphoto-clone.git}"
 DEFAULT_BRANCH="${PIC_BRANCH:-main}"
-APP_ID="${PIC_APP_ID:-io.github.you.PicasaRs}"
+APP_ID="${PIC_APP_ID:-io.github.froggy744.PIC}"
 BIN_NAME_OVERRIDE="${PIC_BIN_NAME:-}"
 BIN_NAME=""
 GNOME_RUNTIME="${PIC_GNOME_RUNTIME:-50}"
@@ -688,13 +688,16 @@ write_desktop_file() {
 [Desktop Entry]
 Type=Application
 Name=PIC — Personal Image Catalogue
+GenericName=Photo Manager
 Comment=Fast local photo manager inspired by Picasa and iPhoto
 Exec=$BIN_NAME %F
 Icon=$APP_ID
 Terminal=false
 StartupNotify=true
+StartupWMClass=$BIN_NAME
 Categories=Graphics;Photography;
-MimeType=image/jpeg;image/png;image/webp;image/gif;image/tiff;image/bmp;image/avif;image/heif;
+Keywords=photo;photos;picture;gallery;album;albums;viewer;organizer;catalogue;picasa;iphoto;
+MimeType=image/jpeg;image/png;image/webp;image/gif;image/tiff;image/bmp;image/avif;image/heif;image/heic;image/x-canon-cr2;image/x-nikon-nef;image/x-sony-arw;image/x-adobe-dng;image/x-fuji-raf;image/x-olympus-orf;image/x-panasonic-rw2;
 EOF_DESKTOP
 }
 
@@ -976,7 +979,8 @@ EOF_CARGO
         "cp -a images /app/share/$BIN_NAME/",
         "cp -a themes /app/share/$BIN_NAME/",
         "cp -a resources /app/share/$BIN_NAME/",
-        "install -Dm644 $desktop_rel /app/share/applications/$APP_ID.desktop",
+        "if [ -f packaging/flatpak/$APP_ID.desktop ]; then install -Dm644 packaging/flatpak/$APP_ID.desktop /app/share/applications/$APP_ID.desktop; else install -Dm644 $desktop_rel /app/share/applications/$APP_ID.desktop; fi",
+        "if [ -f packaging/flatpak/$APP_ID.metainfo.xml ]; then install -Dm644 packaging/flatpak/$APP_ID.metainfo.xml /app/share/metainfo/$APP_ID.metainfo.xml; fi",
         "install -Dm644 $icon_rel $FLATPAK_ICON_DEST"
       ],
       "sources": [

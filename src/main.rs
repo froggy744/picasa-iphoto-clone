@@ -57,7 +57,7 @@ fn main() {
     adw::init().expect("libadwaita initialization failed");
     register_bundled_icons();
     let application = adw::Application::new(
-        Some("io.github.you.PicasaRs"),
+        Some("io.github.froggy744.PIC"),
         gio::ApplicationFlags::default(),
     );
     application.connect_activate(|application| {

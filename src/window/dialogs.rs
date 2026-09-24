@@ -53,10 +53,16 @@ fn format_folder_bytes(bytes: u64) -> String {
 
 pub(crate) fn debug_log(message: &str) {
     use std::io::Write;
+    // Keep the debug sink inside the user's cache directory instead of a
+    // world-writable fixed path (multi-user systems and sandboxed builds).
+    let Some(cache_dir) = dirs::cache_dir().map(|dir| dir.join("pic-rs")) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&cache_dir);
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/pic-ui-debug.log")
+        .open(cache_dir.join("ui-debug.log"))
     else {
         return;
     };

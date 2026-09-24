@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=PIC — Personal Image Catalogue
+GenericName=Photo Manager
+Comment=Fast local photo manager inspired by Picasa and iPhoto
+Exec=pic-rs %F
+Icon=io.github.froggy744.PIC
+Terminal=false
+StartupNotify=true
+StartupWMClass=pic-rs
+Categories=Graphics;Photography;
+Keywords=photo;photos;picture;gallery;album;albums;viewer;organizer;catalogue;picasa;iphoto;
+MimeType=image/jpeg;image/png;image/webp;image/gif;image/tiff;image/bmp;image/avif;image/heif;image/heic;image/x-canon-cr2;image/x-nikon-nef;image/x-sony-arw;image/x-adobe-dng;image/x-fuji-raf;image/x-olympus-orf;image/x-panasonic-rw2;
