@@ -144,7 +144,11 @@ fn spawn_thumbnail_recovery(
 ) {
     std::thread::spawn(move || {
         let send = |event| {
-            let _ = sender.send(ScanUiEvent { generation, event });
+            let _ = sender.send(ScanUiEvent {
+                generation,
+                event,
+                queued_at: std::time::Instant::now(),
+            });
         };
         let items = photos
             .into_iter()

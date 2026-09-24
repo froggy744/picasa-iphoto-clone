@@ -18,6 +18,7 @@ fn refresh_grid(
     sort: PhotoSort,
     gallery: &Rc<grid::Gallery>,
 ) {
+    let prepare_started = std::time::Instant::now();
     let folder_target = if search.is_empty() {
         if let sidebar::SidebarFilter::Folder(folder_id) = filter {
             db::folders(&connection.borrow())
@@ -30,6 +31,14 @@ fn refresh_grid(
     } else {
         None
     };
+    if std::env::var_os("PICASA_TRACE").is_some()
+        && prepare_started.elapsed() >= std::time::Duration::from_millis(20)
+    {
+        eprintln!(
+            "PIC_SCAN_UI refresh_prepare filter={filter:?} elapsed_ms={}",
+            prepare_started.elapsed().as_millis()
+        );
+    }
     refresh_grid_inner(connection, filter, search, sort, gallery, folder_target);
 }
 
@@ -131,7 +140,17 @@ fn refresh_grid_inner(
         match receiver.try_recv() {
             Ok(Some(photos)) => {
                 if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
+                    let replace_started = std::time::Instant::now();
+                    let count = photos.len();
                     gallery.replace(&photos);
+                    if std::env::var_os("PICASA_TRACE").is_some()
+                        && replace_started.elapsed() >= std::time::Duration::from_millis(20)
+                    {
+                        eprintln!(
+                            "PIC_SCAN_UI gallery_replace photos={count} elapsed_ms={}",
+                            replace_started.elapsed().as_millis()
+                        );
+                    }
                     if let Some((folder_id, folder_path)) = folder_target.clone() {
                         let gallery = gallery.clone();
                         // replace() may schedule a progressive model build.

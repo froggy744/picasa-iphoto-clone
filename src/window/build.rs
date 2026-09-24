@@ -3447,6 +3447,7 @@ fn start_photo_export_single(
     let mut last_progress_update = Instant::now();
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
+        let ui_tick_started = Instant::now();
         // Drain event-triggered recovery requests once the current scan ends.
         // With no request, this checks only a flag and performs no disk probes.
         start_thumbnail_recovery();
@@ -3583,11 +3584,13 @@ fn start_photo_export_single(
         // redraws, and the Stop button run between worker updates.
         const MAX_EVENTS_PER_TICK: usize = 16;
         let mut handled_events = 0;
+        let mut max_event_queue_wait = Duration::ZERO;
         while handled_events < MAX_EVENTS_PER_TICK {
             let Ok(ui_event) = scan_receiver.try_recv() else {
                 break;
             };
             handled_events += 1;
+            max_event_queue_wait = max_event_queue_wait.max(ui_event.queued_at.elapsed());
 
             // Events from a cancelled/superseded scan are still allowed to
             // finish in their worker threads, but they must never overwrite
@@ -3683,6 +3686,14 @@ fn start_photo_export_single(
                 }
 
                 scanner::ScanEvent::IndexingFinished { imported } => {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!(
+                            "PIC_SCAN_UI indexing_finished queued_ms={} imported={} filter={:?}",
+                            ui_event.queued_at.elapsed().as_millis(),
+                            imported,
+                            filter_for_events.get()
+                        );
+                    }
                     // Progressive imports append quickly; refresh jobs do one
                     // final rebuild after the whole serialized multi-folder job.
                     if !matches!(
@@ -3707,6 +3718,12 @@ fn start_photo_export_single(
                     
                 }
                 scanner::ScanEvent::ThumbnailsStarted { total } => {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!(
+                            "PIC_SCAN_UI thumbnails_started queued_ms={} total={total}",
+                            ui_event.queued_at.elapsed().as_millis()
+                        );
+                    }
                     
                     scan_count = 0;
                     thumbnail_total = *total;
@@ -3902,9 +3919,19 @@ fn start_photo_export_single(
                 };
                 batch.push(photo);
             }
+            let append_started = Instant::now();
+            let appended = batch.len();
             run_ui_guarded("photo batch append", || {
                 gallery_for_events.append_photos(&batch)
             });
+            if std::env::var_os("PICASA_TRACE").is_some()
+                && append_started.elapsed() >= Duration::from_millis(20)
+            {
+                eprintln!(
+                    "PIC_SCAN_UI photo_batch_append count={appended} elapsed_ms={}",
+                    append_started.elapsed().as_millis()
+                );
+            }
             
         }
         for path in priority_thumbnail_paths.drain(..) {
@@ -3929,6 +3956,22 @@ fn start_photo_export_single(
             
         }
 
+        if std::env::var_os("PICASA_TRACE").is_some()
+            && (ui_tick_started.elapsed() >= Duration::from_millis(100)
+                || max_event_queue_wait >= Duration::from_millis(500))
+        {
+            eprintln!(
+                "PIC_SCAN_UI tick elapsed_ms={} events={} max_queue_ms={} pending_photos={} thumbnail_progress={}/{} priority_pending={} filter={:?}",
+                ui_tick_started.elapsed().as_millis(),
+                handled_events,
+                max_event_queue_wait.as_millis(),
+                pending_photos.len(),
+                scan_count,
+                thumbnail_total,
+                priority_pending,
+                filter_for_events.get()
+            );
+        }
         glib::ControlFlow::Continue
     });
 

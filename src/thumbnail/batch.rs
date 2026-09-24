@@ -36,8 +36,12 @@ pub fn create_many_cancellable(
 ) -> Vec<Option<Result<PathBuf>>> {
     use rayon::prelude::*;
 
+    let workers = thumbnail_worker_threads(items);
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!("PIC_THUMBNAIL bulk_start cancellable=true items={} workers={workers}", items.len());
+    }
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(thumbnail_worker_threads(items))
+        .num_threads(workers)
         .build()
         .expect("thumbnail worker pool should be constructible");
     pool.install(|| {

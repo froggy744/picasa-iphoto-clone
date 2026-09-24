@@ -371,6 +371,7 @@ fn watch_scan_root(folders: &[db::Folder], watched_id: i64) -> Option<String> {
 struct ScanUiEvent {
     generation: u64,
     event: scanner::ScanEvent,
+    queued_at: Instant,
 }
 
 #[derive(Debug)]
@@ -449,7 +450,14 @@ fn spawn_tagged_scan(
                 }
                 _ => {}
             }
-            if ui_sender.send(ScanUiEvent { generation, event }).is_err() {
+            if ui_sender
+                .send(ScanUiEvent {
+                    generation,
+                    event,
+                    queued_at: Instant::now(),
+                })
+                .is_err()
+            {
                 return;
             }
         }
@@ -464,6 +472,7 @@ fn spawn_tagged_scan(
                     imported: indexed,
                     failed: failures.max(1),
                 },
+                queued_at: Instant::now(),
             });
         }
     });
