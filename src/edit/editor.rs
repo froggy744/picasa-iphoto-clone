@@ -1823,6 +1823,7 @@ pub fn build(
         redraw_overlay_canvas.clone(),
         update_canvas_input.clone(),
         text_toggle.clone(),
+        preview_dimensions.clone(),
     );
     sync_text_slot.replace(Some(sync_text_panel.clone()));
 

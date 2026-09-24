@@ -21,6 +21,17 @@
     .overlay-selected-section { margin-top: 4px; }
     .overlay-anchor-row { margin-top: 2px; }
     .overlay-anchor-row button { min-height: 30px; padding: 3px 4px; font-size: 11px; }
+    .text-position-grid { border-spacing: 0; }
+    .text-position-grid button { min-width: 34px; min-height: 34px; margin: 0; padding: 0; border-radius: 0; }
+    button.text-colour-swatch { min-width: 12px; min-height: 30px; padding: 3px; border: 1px solid alpha(currentColor, 0.35); border-radius: 4px; }
+    button.text-swatch-white { background-color: #ffffff; }
+    button.text-swatch-black { background-color: #111111; }
+    button.text-swatch-red { background-color: #f21f1f; }
+    button.text-swatch-orange { background-color: #ff7a00; }
+    button.text-swatch-yellow { background-color: #ffe60d; }
+    button.text-swatch-green { background-color: #1fb848; }
+    button.text-swatch-blue { background-color: #266bff; }
+    button.text-swatch-purple { background-color: #ad4de0; }
     .quick-fix-row button { min-height: 30px; padding: 4px 8px; }
     .filter-grid > flowboxchild { padding: 0; margin: 0; min-width: 0; background: transparent; }
     button.filter-tile, button.filter-tile:hover, button.filter-tile:active, button.filter-tile:checked { min-width: 0; padding: 0; border: none; background: transparent; box-shadow: none; outline: none; }

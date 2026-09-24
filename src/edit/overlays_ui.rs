@@ -400,6 +400,7 @@ fn configure_overlay_canvas(
     layer.set_hexpand(true);
     layer.set_vexpand(true);
     layer.set_can_target(false);
+    layer.set_focusable(true);
 
     let display_rect_from_params = {
         let preview_dimensions = preview_dimensions.clone();
@@ -435,6 +436,62 @@ fn configure_overlay_canvas(
             )
         }
     };
+
+    // A click may select text without crossing GestureDrag's movement
+    // threshold. Handle selection on press so the Text tab and full controls
+    // appear immediately, while GestureDrag continues to own movement.
+    {
+        let layer_for_click = layer.clone();
+        let selected_text = selected_text.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let picture_scroll = picture_scroll.clone();
+        let session = session.clone();
+        let text_toggle = text_toggle.clone();
+        let sync_text_panel = sync_text_panel.clone();
+        let update_canvas_input = update_canvas_input.clone();
+        let display_rect_from_params = display_rect_from_params.clone();
+        let click = gtk::GestureClick::new();
+        click.set_button(1);
+        click.connect_pressed(move |_, _, x, y| {
+            let _ = layer_for_click.grab_focus();
+            let widget_width = layer_for_click.width().max(1) as f64;
+            let widget_height = layer_for_click.height().max(1) as f64;
+            let display = display_rect_from_params(
+                widget_width,
+                widget_height,
+                picture_scroll.hadjustment().value(),
+                picture_scroll.vadjustment().value(),
+            );
+            let (photo_w, photo_h) = preview_dimensions.get();
+            let (photo_w, photo_h) = (photo_w.max(1) as f32, photo_h.max(1) as f32);
+            let recipe = session.borrow();
+            let text_hit =
+                recipe
+                    .recipe
+                    .text_layers
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(index, text)| {
+                        if !text.visible {
+                            return None;
+                        }
+                        let (left, top, width, height) =
+                            text_screen_rect(display, photo_w, photo_h, text)?;
+                        (x >= left && x <= left + width && y >= top && y <= top + height)
+                            .then_some(index)
+                    });
+            drop(recipe);
+            if let Some(index) = text_hit {
+                selected_text.set(Some(index));
+                text_toggle.set_active(true);
+                sync_text_panel();
+                update_canvas_input();
+                layer_for_click.queue_draw();
+            }
+        });
+        layer.add_controller(click);
+    }
 
     {
         let session = session.clone();
