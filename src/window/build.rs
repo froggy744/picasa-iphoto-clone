@@ -2003,8 +2003,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let album_theme_changed: Rc<dyn Fn()> = {
         let connection = connection.clone();
         let refresh_slot = albums_home_refresh_slot.clone();
+        let sidebar_slot = sidebar_for_unavailable.clone();
+        let on_delete_album = delete_album.clone();
         Rc::new(move || {
             let albums = db::albums(&connection.borrow()).unwrap_or_default();
+            if let Some(sidebar) = sidebar_slot.borrow().as_ref() {
+                sidebar::refresh_album_rows(sidebar, &albums, &on_delete_album);
+            }
             if let Some(refresh) = refresh_slot.borrow().as_ref() {
                 refresh(&albums);
             }

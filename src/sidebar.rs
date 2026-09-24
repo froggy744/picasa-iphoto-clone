@@ -1349,6 +1349,29 @@ pub fn refresh_library_counts(
     }
 }
 
+/// Refresh only album names after an album edit. Avoid rebuilding the folder
+/// tree, which may be receiving progressive scan updates at the same time.
+pub fn refresh_album_rows(
+    scrolled: &gtk::ScrolledWindow,
+    albums: &[Album],
+    on_delete_album: &Rc<dyn Fn(i64)>,
+) {
+    let Some(album_list) = stored_widget::<gtk::ListBox>(scrolled, ALBUM_LIST_KEY) else {
+        return;
+    };
+    let scroll = scrolled.vadjustment();
+    let scroll_value = scroll.value();
+    clear_list(&album_list);
+    populate_albums(&album_list, albums, on_delete_album);
+    if let Some(filter) = current_filter(scrolled) {
+        set_active_filter(scrolled, filter);
+    }
+    glib::idle_add_local_once(move || {
+        let upper = (scroll.upper() - scroll.page_size()).max(scroll.lower());
+        scroll.set_value(scroll_value.clamp(scroll.lower(), upper));
+    });
+}
+
 /// Rebuild only the folder rows from fresh folder data while preserving the
 /// scroll position.
 pub fn refresh_folder_rows(
