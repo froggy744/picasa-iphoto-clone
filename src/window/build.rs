@@ -541,7 +541,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // Resolved size for views that only need a number (album covers).
     let grid_thumbnail_size = saved_grid_thumbnail_size.unwrap_or(DEFAULT_GRID_THUMBNAIL_SIZE);
 
-    // Thumbnail appearance (Settings > Library). Square corners toggle a CSS
+    // Thumbnail appearance (Settings > Interface). Square corners toggle a CSS
     // class on the main window; whole-photo fit is applied to the gallery and
     // re-applied live when the toggles change.
     if crate::settings::saved_bool(
@@ -556,6 +556,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         crate::settings::saved_bool(
             &connection.borrow(),
             crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+        )
+        .unwrap_or(false),
+    );
+    gallery.set_show_file_names(
+        crate::settings::saved_bool(
+            &connection.borrow(),
+            crate::db::THUMBNAIL_FILE_NAMES_SETTING_KEY,
         )
         .unwrap_or(false),
     );
@@ -763,6 +770,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
                 )
                 .unwrap_or(false);
+                let show_file_names = crate::settings::saved_bool(
+                    &thumbs_connection.borrow(),
+                    crate::db::THUMBNAIL_FILE_NAMES_SETTING_KEY,
+                )
+                .unwrap_or(false);
                 if square {
                     thumbs_window.add_css_class("square-corners");
                 } else {
@@ -778,6 +790,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     crate::window::debug_log("THUMB SETTINGS: set_fit_whole_photo begin");
                     gallery_for_fit.set_fit_whole_photo(fit);
                     crate::window::debug_log("THUMB SETTINGS: set_fit_whole_photo end");
+                });
+                let gallery_for_names = thumbs_gallery.clone();
+                glib::idle_add_local_once(move || {
+                    gallery_for_names.set_show_file_names(show_file_names);
                 });
                 crate::window::debug_log("THUMB SETTINGS: apply callback exit");
             }),

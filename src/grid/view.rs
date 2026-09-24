@@ -66,6 +66,7 @@ pub struct Gallery {
     // Letterbox whole photos (Contain) instead of cropping to the tile
     // (Cover), so portrait thumbnails show portrait, not a centre strip.
     fit_whole_photo: Rc<Cell<bool>>,
+    show_file_names: Rc<Cell<bool>>,
     on_zoom_changed: Rc<dyn Fn(i32)>,
 }
 
@@ -131,6 +132,8 @@ impl Gallery {
         let unavailable_for_setup = unavailable.clone();
         let fit_whole_photo = Rc::new(Cell::new(false));
         let fit_whole_photo_for_setup = fit_whole_photo.clone();
+        let show_file_names = Rc::new(Cell::new(false));
+        let show_file_names_for_setup = show_file_names.clone();
         factory.connect_setup(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
@@ -219,6 +222,7 @@ impl Gallery {
                 tile_height_for_setup.get(),
                 &frame,
             );
+            tile.set_filename_visible(show_file_names_for_setup.get());
             tile.set_hexpand(true);
             tile.set_vexpand(false);
             tile.set_valign(gtk::Align::Start);
@@ -468,6 +472,7 @@ impl Gallery {
         let current_photos_for_folder_bind = current_photos.clone();
         let unavailable_for_folder_bind = unavailable.clone();
         let selected_ids_for_folder_bind = folder_selected_ids.clone();
+        let show_file_names_for_folder_bind = show_file_names.clone();
 
         folder_factory.connect_bind(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -618,6 +623,9 @@ impl Gallery {
                                 tile.set_can_target(true);
                             }
                             tile.bind_photo_folder_fast(photo, data.start + slot);
+                            if show_file_names_for_folder_bind.get() {
+                                tile.set_filename_visible(true);
+                            }
                             tile.set_manual_selected(
                                 selected_ids_for_folder_bind.borrow().contains(&photo.id()),
                             );
@@ -736,6 +744,7 @@ impl Gallery {
             zoom_reflow_source: Rc::new(RefCell::new(None)),
             auto_default_zoom: Cell::new(false),
             fit_whole_photo,
+            show_file_names,
             on_zoom_changed,
         };
         gallery.replace(photos);
@@ -758,6 +767,7 @@ impl Gallery {
     }
 
     fn update_layout(&self, width: i32, tile_size_changed: bool) {
+        let trace_started = std::env::var_os("PICASA_TRACE").is_some().then(std::time::Instant::now);
         // First real allocation with no stored thumbnail preference: adopt
         // the ~4-thumbnails-per-row default for this surface width. Session
         // only - it becomes a preference if the user zooms manually.
@@ -795,9 +805,15 @@ impl Gallery {
                 if let Some(anchor) = anchor {
                     self.scroll_folder_to_photo(anchor);
                 }
+                if let Some(started) = trace_started {
+                    eprintln!("PIC_ZOOM layout mode=folder action=resize_rows columns={} width={} elapsed_us={}", columns, width, started.elapsed().as_micros());
+                }
             } else if !folder_mode {
                 self.root.queue_resize();
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
+                if let Some(started) = trace_started {
+                    eprintln!("PIC_ZOOM layout mode=grid action=resize_tiles columns={} width={} elapsed_us={}", columns, width, started.elapsed().as_micros());
+                }
             }
             // Width-only changes with the same columns need no vertical layout
             // work. GTK stretches the row boxes itself. Re-anchoring here made
@@ -818,8 +834,14 @@ impl Gallery {
             if let Some(anchor) = anchor {
                 self.scroll_folder_to_photo(anchor);
             }
+            if let Some(started) = trace_started {
+                eprintln!("PIC_ZOOM layout mode=folder action=rebuild_rows old_columns={} columns={} width={} elapsed_us={}", old_columns, columns, width, started.elapsed().as_micros());
+            }
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
+            if let Some(started) = trace_started {
+                eprintln!("PIC_ZOOM layout mode=grid action=columns_changed old_columns={} columns={} width={} elapsed_us={}", old_columns, columns, width, started.elapsed().as_micros());
+            }
         }
     }
 

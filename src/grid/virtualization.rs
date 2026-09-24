@@ -275,6 +275,22 @@ impl Gallery {
         }
     }
 
+    /// Toggle filenames in the fixed-height tile caption area. This only walks
+    /// GTK's realized tile pool; future GridView and Folder tiles read the
+    /// shared setting during setup/bind.
+    pub fn set_show_file_names(self: &Rc<Self>, show: bool) {
+        if self.show_file_names.get() == show {
+            return;
+        }
+        self.show_file_names.set(show);
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        for tile in tiles {
+            tile.set_filename_visible(show);
+        }
+    }
+
     /// Record a zoom request. Isolated clicks apply immediately; a rapid
     /// Ctrl+wheel spin coalesces its extra notches into one trailing reflow so
     /// crossing several column boundaries does not rebuild the Folder rows per
@@ -325,6 +341,8 @@ impl Gallery {
     }
 
     fn apply_tile_size(&self, width: i32, persist: bool) {
+        let trace_zoom = std::env::var_os("PICASA_TRACE").is_some();
+        let zoom_started = trace_zoom.then(Instant::now);
         let old_width = self.tile_width.get().max(1);
         let old_height = self.tile_height.get().max(1);
         let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
@@ -333,7 +351,9 @@ impl Gallery {
         }
 
         // Capture the visible photo before the tile resize disturbs the layout.
-        if self.group_mode.get() == GroupMode::Folder {
+        let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        let anchor_started = trace_zoom.then(Instant::now);
+        if folder_mode {
             self.zoom_anchor.set(
                 self.photo_for_scroll_position(self.last_scroll_y.get())
                     .map(|photo| photo.id()),
@@ -341,6 +361,7 @@ impl Gallery {
         } else {
             self.zoom_anchor.set(None);
         }
+        let anchor_us = anchor_started.map_or(0, |started| started.elapsed().as_micros());
 
         let scale = width as f64 / old_width as f64;
         let height = ((old_height as f64) * scale).round().max(1.0) as i32;
@@ -356,23 +377,43 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        let realized_tile_count = tiles.len();
 
+        let resize_started = trace_zoom.then(Instant::now);
         for tile in tiles {
             tile.set_tile_size(width, height);
         }
+        let resize_us = resize_started.map_or(0, |started| started.elapsed().as_micros());
 
 
-        let root_width = if self.group_mode.get() == GroupMode::Folder {
+        let root_width = if folder_mode {
             self.folder_root.width()
         } else {
             self.root.width()
         };
+        let layout_started = trace_zoom.then(Instant::now);
         if root_width > 100 {
             self.update_layout(root_width, true);
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
+        let layout_us = layout_started.map_or(0, |started| started.elapsed().as_micros());
         self.zoom_anchor.set(None);
+
+        if let Some(started) = zoom_started {
+            eprintln!(
+                "PIC_ZOOM apply old_width={} width={} height={} mode={} realized_tiles={} anchor_us={} tile_resize_us={} layout_us={} total_us={}",
+                old_width,
+                width,
+                height,
+                if folder_mode { "folder" } else { "grid" },
+                realized_tile_count,
+                anchor_us,
+                resize_us,
+                layout_us,
+                started.elapsed().as_micros()
+            );
+        }
 
     }
 

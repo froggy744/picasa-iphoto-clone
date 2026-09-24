@@ -78,6 +78,64 @@ fn queue_photo_presentation_async(photo: &PhotoObject, visible_priority: bool) -
     crate::thumbnail_display::submit(request)
 }
 
+const FILENAME_CAPTION_HEIGHT: i32 = 24;
+
+thread_local! {
+    static FILENAME_LABEL_TRACE_STATS: RefCell<(u64, u128, u128)> =
+        const { RefCell::new((0, 0, 0)) };
+}
+
+fn filename_caption_height(tile_height: i32, visible: bool) -> i32 {
+    if visible {
+        tile_height
+            .max(1)
+            .saturating_sub(1)
+            .min(FILENAME_CAPTION_HEIGHT)
+    } else {
+        0
+    }
+}
+
+fn update_filename_label(label: &gtk::Label, filename: &str) {
+    let text_changed = label.text().as_str() != filename;
+    let tooltip_changed = label.tooltip_text().as_deref() != Some(filename);
+    if !text_changed && !tooltip_changed {
+        return;
+    }
+
+    let tracing = std::env::var_os("PICASA_TRACE").is_some();
+    let started = tracing.then(Instant::now);
+    if text_changed {
+        label.set_text(filename);
+    }
+    if tooltip_changed {
+        label.set_tooltip_text(Some(filename));
+    }
+    let Some(started) = started else {
+        return;
+    };
+
+    let elapsed_us = started.elapsed().as_micros();
+    let batch = FILENAME_LABEL_TRACE_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        stats.0 += 1;
+        stats.1 += elapsed_us;
+        stats.2 = stats.2.max(elapsed_us);
+        if stats.0 >= 64 {
+            let batch = *stats;
+            *stats = (0, 0, 0);
+            Some(batch)
+        } else {
+            None
+        }
+    });
+    if let Some((count, total_us, max_us)) = batch {
+        eprintln!(
+            "PIC_FILENAME label_update_batch count={count} total_us={total_us} max_us={max_us}"
+        );
+    }
+}
+
 mod square_tile {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -93,6 +151,8 @@ mod square_tile {
     pub struct SquareTile {
         pub width: Cell<i32>,
         pub height: Cell<i32>,
+        pub filename_visible: Cell<bool>,
+        pub filename_label: RefCell<Option<gtk::Label>>,
         pub favorite_indicators_visible: Cell<bool>,
         pub photo: RefCell<Option<PhotoObject>>,
         pub visual_loaded: Cell<bool>,
@@ -136,6 +196,14 @@ mod square_tile {
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
             let child_width = self.width.get().min(width).max(1);
             let child_height = self.height.get().min(height).max(1);
+            let has_caption = self.filename_visible.get()
+                && self
+                    .filename_label
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|label| label.is_visible());
+            let caption_height = super::filename_caption_height(child_height, has_caption);
+            let frame_height = child_height - caption_height;
 
             if let Some(child) = self.obj().first_child() {
                 let x = ((width - child_width) / 2).max(0) as f32;
@@ -144,14 +212,48 @@ mod square_tile {
                 let transform =
                     gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x, y));
 
-                child.allocate(child_width, child_height, baseline, Some(transform));
+                child.allocate(child_width, frame_height, baseline, Some(transform));
+                if has_caption {
+                    if let Some(label) = self.filename_label.borrow().as_ref() {
+                        let label_transform = gtk::gsk::Transform::new()
+                            .translate(&gtk::graphene::Point::new(x, y + frame_height as f32));
+                        label.allocate(
+                            child_width,
+                            caption_height,
+                            baseline,
+                            Some(label_transform),
+                        );
+                    }
+                }
             }
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            if let Some(child) = self.obj().first_child() {
-                self.obj().snapshot_child(&child, snapshot);
+            let mut child = self.obj().first_child();
+            while let Some(widget) = child {
+                let next = widget.next_sibling();
+                if widget.is_visible() {
+                    self.obj().snapshot_child(&widget, snapshot);
+                }
+                child = next;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod filename_caption_tests {
+    use super::*;
+
+    #[test]
+    fn filename_caption_uses_space_inside_the_fixed_tile_height() {
+        for tile_height in [1, 24, 80, 180, 300] {
+            let caption = filename_caption_height(tile_height, true);
+            let photo = tile_height - caption;
+            assert_eq!(photo + caption, tile_height);
+            assert!(photo >= 1);
+            assert!(caption <= FILENAME_CAPTION_HEIGHT);
+            assert_eq!(filename_caption_height(tile_height, false), 0);
         }
     }
 }
@@ -167,6 +269,7 @@ impl SquareTile {
         let tile: Self = glib::Object::new();
         tile.imp().width.set(width.max(1));
         tile.imp().height.set(height.max(1));
+        tile.imp().filename_visible.set(false);
         tile.imp().favorite_indicators_visible.set(true);
         child.as_ref().set_parent(&tile);
         tile
@@ -185,6 +288,38 @@ impl SquareTile {
         self.imp().width.set(width);
         self.imp().height.set(height);
         self.queue_resize();
+    }
+
+    /// Show a single-line filename inside the tile's fixed outer dimensions.
+    /// The image frame gives up caption height, so grid and Folder row geometry
+    /// stay unchanged when this preference is toggled.
+    pub(crate) fn set_filename_visible(&self, visible: bool) -> bool {
+        let changed = self.imp().filename_visible.replace(visible) != visible;
+        let mut created = false;
+        if visible && self.imp().filename_label.borrow().is_none() {
+            let label = gtk::Label::new(None);
+            label.set_xalign(0.0);
+            label.set_yalign(0.5);
+            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            label.set_single_line_mode(true);
+            label.set_margin_start(4);
+            label.set_margin_end(4);
+            label.set_can_target(false);
+            label.add_css_class("thumbnail-filename");
+            label.set_parent(self);
+            self.imp().filename_label.replace(Some(label));
+            created = true;
+        }
+        if let Some(label) = self.imp().filename_label.borrow().as_ref() {
+            if let Some(photo) = self.photo() {
+                update_filename_label(label, &photo.filename());
+            }
+            label.set_visible(visible);
+        }
+        if changed || created {
+            self.queue_allocate();
+        }
+        created
     }
 
     /// Switch between cropping photos to the tile (Cover, the default) and
@@ -348,6 +483,13 @@ impl SquareTile {
             return;
         };
 
+        if let Some(label) = self.imp().filename_label.borrow().as_ref() {
+            update_filename_label(label, &photo.filename());
+            if label.is_visible() != self.imp().filename_visible.get() {
+                label.set_visible(self.imp().filename_visible.get());
+            }
+        }
+
         if let Some(caption) = photo.history_caption() {
             let label = find_overlay_child(&frame, "history-caption")
                 .and_then(|child| child.downcast::<gtk::Label>().ok())
@@ -504,6 +646,12 @@ impl SquareTile {
         let Some(bound) = self.imp().photo.borrow().as_ref().cloned() else {
             return;
         };
+        if let Some(label) = self.imp().filename_label.borrow().as_ref() {
+            update_filename_label(label, &bound.filename());
+            if label.is_visible() != self.imp().filename_visible.get() {
+                label.set_visible(self.imp().filename_visible.get());
+            }
+        }
         let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() else {
             return;
         };
