@@ -251,7 +251,7 @@ where
             break;
         }
         let done = index + 1;
-        if !Path::new(&job.source_path).is_file() {
+        if !crate::source::file_available(&job.source_path) {
             outcome.skipped += 1;
             outcome
                 .errors
@@ -483,6 +483,58 @@ mod tests {
         assert!(dir.join("photo-1.jpg").is_file());
         assert!(dir.join("photo-4_edit.jpg").is_file());
         assert!(!dir.join("photo-2_edit.jpg").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn batch_exports_uri_and_local_sources_together() {
+        let dir = std::env::temp_dir().join(format!(
+            "pic-export-uri-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.png");
+        image::DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            16,
+            16,
+            image::Rgba([80, 100, 120, 255]),
+        ))
+        .save(&source)
+        .unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let uri = format!("file://{}", source.display());
+        let mut recipe = EditRecipe::default();
+        recipe.exposure = 0.5;
+        let jobs = [
+            ExportJob::from_record(uri.clone(), 0, recipe.encode(), 16, 16, "uri.png"),
+            ExportJob::from_record(
+                source.display().to_string(),
+                0,
+                String::new(),
+                16,
+                16,
+                "local.png",
+            ),
+        ];
+        let outcome = run_batch_export(
+            &jobs,
+            &dir,
+            0,
+            92,
+            ExportFormat::Png,
+            render_job,
+            |_, _, _, _| {},
+            None,
+        );
+        assert_eq!(outcome.exported, 2, "{outcome:?}");
+        let edited = image::open(dir.join("uri_edit.png")).unwrap().to_rgba8();
+        let unedited = image::open(dir.join("local.png")).unwrap().to_rgba8();
+        assert!(edited.get_pixel(0, 0)[0] > unedited.get_pixel(0, 0)[0]);
+        assert_eq!(std::fs::read(source).unwrap(), original);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -2831,7 +2831,7 @@ fn start_photo_export_single(
                 errors: vec!["cancelled".into()],
                 ..Default::default()
             }
-        } else if !std::path::Path::new(&job.source_path).is_file() {
+        } else if !crate::source::file_available(&job.source_path) {
             crate::edit::export_batch::BatchExportOutcome {
                 skipped: 1,
                 errors: vec![format!("skipped (missing): {}", job.source_path)],
