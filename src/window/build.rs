@@ -1412,6 +1412,20 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     folder_scroll_overlay.set_child(Some(&folder_scroll));
     folder_scroll_overlay.add_overlay(&gallery.folder_rubberband);
 
+    // Step 1 nested GridView prototype. The outer ListView is the sole
+    // vertical scrollable; inner GridViews only size their bounded chunk.
+    let folder_chunked_scroll = gtk::ScrolledWindow::new();
+    folder_chunked_scroll.set_vexpand(true);
+    folder_chunked_scroll.set_hexpand(true);
+    if let Some(chunked) = gallery.chunked_prototype.as_ref() {
+        folder_chunked_scroll.set_child(Some(&chunked.root));
+    } else {
+        folder_chunked_scroll.set_child(Some(&gtk::ListView::new(
+            None::<gtk::NoSelection>,
+            None::<gtk::SignalListItemFactory>,
+        )));
+    }
+
     // A temporary date bubble makes a long chronological All Photos scrollbar
     // usable like a timeline. It is deliberately attached only to the GridView
     // scrollbar: Folder mode is not globally date-sorted.
@@ -1495,18 +1509,32 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     gallery_scroll_stack.set_vexpand(true);
     gallery_scroll_stack.add_named(&grid_scroll, Some("grid"));
     gallery_scroll_stack.add_named(&folder_scroll_overlay, Some("folders"));
+    gallery_scroll_stack.add_named(&folder_chunked_scroll, Some("folder-chunked"));
     {
         let gallery_scroll_stack = gallery_scroll_stack.clone();
         let gallery_for_folder_view = gallery.clone();
         gallery.set_folder_view_changed_handler(move |folder_mode| {
+            let chunked_experiment =
+                crate::grid::folder_chunked_experiment_enabled() && folder_mode;
             let folder_grid_experiment =
                 crate::grid::folder_gridview_experiment_enabled() && folder_mode;
-            gallery_scroll_stack.set_visible_child_name(if folder_mode && !folder_grid_experiment {
+            gallery_scroll_stack.set_visible_child_name(if chunked_experiment {
+                "folder-chunked"
+            } else if folder_mode && !folder_grid_experiment {
                 "folders"
             } else {
                 "grid"
             });
             if folder_mode {
+                if chunked_experiment {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!("PIC_FOLDER_CHUNKED enabled chunk_size=64");
+                    }
+                    if let Some(chunked) = gallery_for_folder_view.chunked_prototype.as_ref() {
+                        chunked.root.grab_focus();
+                    }
+                    return;
+                }
                 if folder_grid_experiment {
                     if std::env::var_os("PICASA_TRACE").is_some() {
                         eprintln!("PIC_FOLDER_GRIDVIEW enabled mode=photo_grid folder_indicator=sticky");

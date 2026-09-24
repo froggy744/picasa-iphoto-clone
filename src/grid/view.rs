@@ -5,6 +5,7 @@ pub struct Gallery {
     // in a Box/Viewport to implement grouping.
     pub root: gtk::GridView,
     pub folder_root: gtk::ListView,
+    pub chunked_prototype: Option<chunked::ChunkedPrototype>,
     pub folder_rubberband: gtk::DrawingArea,
     pub group_header: gtk::Box,
     group_title: gtk::Label,
@@ -245,6 +246,8 @@ impl Gallery {
             tile.bind_photo(&photo);
         });
 
+        let chunked_prototype = crate::grid::folder_chunked_experiment_enabled()
+            .then(|| chunked::ChunkedPrototype::new(&store, &factory));
         let root = gtk::GridView::new(Some(selection.clone()), Some(factory));
         root.set_min_columns(5);
         root.set_max_columns(5);
@@ -709,6 +712,7 @@ impl Gallery {
         let gallery = Self {
             root,
             folder_root,
+            chunked_prototype,
             folder_rubberband,
             group_header,
             group_title,

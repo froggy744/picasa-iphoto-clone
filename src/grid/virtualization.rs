@@ -392,7 +392,15 @@ impl Gallery {
         let resize_us = resize_started.map_or(0, |started| started.elapsed().as_micros());
 
 
-        let root_width = if folder_list_mode {
+        // The resize tick measures the scroll stack, while the view widgets
+        // exclude their CSS padding. Mixing those widths can cross a column
+        // threshold twice for a single zoom (1386/1346 in the trace), rebuilding
+        // Folder rows more than once. Use the same width source as the resize
+        // tick for both Folder views and the normal photo grid.
+        let layout_width = self.last_layout_width.get();
+        let root_width = if layout_width > 100 {
+            layout_width
+        } else if folder_list_mode {
             self.folder_root.width()
         } else {
             self.root.width()

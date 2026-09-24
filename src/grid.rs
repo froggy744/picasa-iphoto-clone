@@ -42,6 +42,10 @@ pub(crate) fn folder_gridview_experiment_enabled() -> bool {
     std::env::var("PICASA_FOLDER_GRIDVIEW").is_ok_and(|value| value == "1")
 }
 
+pub(crate) fn folder_chunked_experiment_enabled() -> bool {
+    std::env::var("PICASA_FOLDER_CHUNKED").is_ok_and(|value| value == "1")
+}
+
 pub(crate) fn nearest_zoom_level(width: i32) -> i32 {
     let mut best = ZOOM_LEVELS[0];
     for level in ZOOM_LEVELS {
@@ -111,6 +115,7 @@ include!("grid/virtualization.rs");
 include!("grid/view.rs");
 include!("grid/navigation.rs");
 include!("grid/selection.rs");
+mod chunked;
 
 #[cfg(test)]
 mod zoom_ladder_tests {
