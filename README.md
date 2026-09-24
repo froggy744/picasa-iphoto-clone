@@ -1,4 +1,6 @@
-# PIC — Picasa iPhoto Clone
+# PIC — Personal Image Catalogue
+
+*Inspired by Picasa and iPhoto*
 
 ### The simple, fast photo manager for Linux. Your folders. Your photos. No fuss.
 
@@ -6,7 +8,7 @@
 
 ## New in Release Candidate 2
 
-**PIC: Picasa iPhoto Clone has grown into a much more capable photo workspace.** RC2 adds network share browsing, richer editing, resumable collages and flexible photo printing, alongside a refreshed interface and smoother everyday use.
+**PIC — Personal Image Catalogue has grown into a much more capable photo workspace.** RC2 adds network share browsing, richer editing, resumable collages and flexible photo printing, alongside a refreshed interface and smoother everyday use.
 
 ### Browse network shares
 
@@ -254,4 +256,4 @@ PIC is an independent open-source project. It is **not affiliated with, sponsore
 
 ---
 
-**PIC — Picasa iPhoto Clone.** *Browse. Organise. View. Edit. Crop. Collage. Your folders. Your photos. Linux.*
+**PIC — Personal Image Catalogue.** *Browse. Organise. View. Edit. Crop. Collage. Your folders. Your photos. Linux.*

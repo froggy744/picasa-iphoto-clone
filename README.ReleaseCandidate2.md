@@ -1,6 +1,6 @@
-# PIC: Picasa iPhoto Clone — Release Candidate 2
+# PIC — Personal Image Catalogue — Release Candidate 2
 
-**This is a massive upgrade for PIC: Picasa iPhoto Clone.** Since Release Candidate 1, PIC has grown into a much more complete photo workspace: browse photos across your network, create and resume collages, print with control over the page, and make richer edits—all wrapped in a refreshed, themeable interface.
+**This is a massive upgrade for PIC — Personal Image Catalogue.** Since Release Candidate 1, PIC has grown into a much more complete photo workspace: browse photos across your network, create and resume collages, print with control over the page, and make richer edits—all wrapped in a refreshed, themeable interface.
 
 The familiar promise is still here: your photos stay yours. PIC works with your folders and keeps your original images safe.
 
@@ -53,4 +53,4 @@ PIC now discovers themes from theme folders, making it easier to explore differe
 
 RC2 brings together a huge amount of work across browsing, editing, creating, printing, and everyday polish. We hope it makes spending time with your photo collection feel even better.
 
-PIC: Picasa iPhoto Clone is an independent project inspired by classic Picasa and iPhoto. It is not affiliated with Google or Apple.
+PIC — Personal Image Catalogue is an independent project inspired by classic Picasa and iPhoto. It is not affiliated with Google or Apple.
