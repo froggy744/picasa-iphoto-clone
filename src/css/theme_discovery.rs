@@ -89,11 +89,14 @@ pub(crate) fn discover(directory: &Path) -> Vec<DiscoveredTheme> {
             css,
         });
     }
-    themes.sort_by(|a, b| {
-        a.name
+    themes.sort_by(|a, b| match (a.id == "standard", b.id == "standard") {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a
+            .name
             .to_lowercase()
             .cmp(&b.name.to_lowercase())
-            .then_with(|| a.id.cmp(&b.id))
+            .then_with(|| a.id.cmp(&b.id)),
     });
     themes
 }

@@ -497,12 +497,14 @@ impl Gallery {
         folder_root: &gtk::ListView,
         selection: &gtk::MultiSelection,
         current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
+        activate: &Rc<dyn Fn(Vec<PhotoObject>, usize)>,
     ) {
         let keyboard = gtk::EventControllerKey::new();
         keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
         let selection = selection.clone();
         let current_photos = current_photos.clone();
         let folder_root_for_key = folder_root.clone();
+        let activate_for_key = activate.clone();
         keyboard.connect_key_pressed(move |_, key, _, modifiers| {
             let control = modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             if control && matches!(key, gtk::gdk::Key::a | gtk::gdk::Key::A) {
@@ -511,6 +513,41 @@ impl Gallery {
             }
             if control || modifiers.contains(gtk::gdk::ModifierType::ALT_MASK) {
                 return glib::Propagation::Proceed;
+            }
+            if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter) {
+                let typing = folder_root_for_key
+                    .root()
+                    .and_then(|root| root.downcast::<gtk::Window>().ok())
+                    .and_then(|window| gtk::prelude::RootExt::focus(&window))
+                    .is_some_and(|focus| {
+                        std::iter::successors(Some(focus), |widget| widget.parent())
+                            .any(|widget| {
+                                widget.is::<gtk::Editable>() || widget.is::<gtk::TextView>()
+                            })
+                    });
+                if typing {
+                    return glib::Propagation::Proceed;
+                }
+                let selected = selection.selection();
+                let Some((_, position)) = gtk::BitsetIter::init_first(&selected) else {
+                    return glib::Propagation::Proceed;
+                };
+                let Some(photo) = selection
+                    .item(position)
+                    .and_downcast::<PhotoObject>()
+                else {
+                    return glib::Propagation::Proceed;
+                };
+                let photo_id = photo.id();
+                let photos = current_photos.borrow().clone();
+                let Some(index) = photos
+                    .iter()
+                    .position(|photo| photo.id() == photo_id)
+                else {
+                    return glib::Propagation::Proceed;
+                };
+                (activate_for_key)(photos, index);
+                return glib::Propagation::Stop;
             }
             let (dx, dy) = match key {
                 gtk::gdk::Key::Left => (-1.0, 0.0),

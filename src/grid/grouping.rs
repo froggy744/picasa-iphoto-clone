@@ -432,12 +432,7 @@ fn group_label(photo: &PhotoObject, mode: GroupMode, date: GroupDate) -> String 
         if folder_path.is_empty() {
             return "Unknown Folder".to_string();
         }
-        return std::path::Path::new(&folder_path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or(folder_path.as_str())
-            .to_string();
+        return crate::db::folder_name(&folder_path);
     }
 
     let value = match date {

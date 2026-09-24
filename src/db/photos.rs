@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-fn folder_name(path: &str) -> String {
+pub(crate) fn folder_name(path: &str) -> String {
     if is_remote_path(path) {
         let segment = path
             .trim_end_matches('/')
