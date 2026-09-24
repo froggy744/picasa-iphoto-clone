@@ -104,6 +104,7 @@ struct SidebarState {
     folders_expanded: bool,
     expanded_folders: HashSet<i64>,
     folder_display_mode: FolderDisplayMode,
+    network_tree_mode: bool,
     pinned: Cell<bool>,
     hover_open: Cell<bool>,
 }
@@ -116,6 +117,7 @@ impl Default for SidebarState {
             folders_expanded: true,
             expanded_folders: HashSet::new(),
             folder_display_mode: FolderDisplayMode::Tree,
+            network_tree_mode: true,
             pinned: Cell::new(true),
             hover_open: Cell::new(false),
         }
@@ -162,6 +164,7 @@ const FOLDER_REMOVE_KEY: &str = "picasa-sidebar-folder-remove";
 const FOLDER_FAVORITE_KEY: &str = "picasa-sidebar-folder-favorite";
 const FOLDER_WATCH_KEY: &str = "picasa-sidebar-folder-watch";
 const FOLDER_MODE_TOGGLE_KEY: &str = "picasa-sidebar-folder-mode-toggle";
+const SHARE_MODE_TOGGLE_KEY: &str = "picasa-sidebar-share-mode-toggle";
 const FOLDER_MODE_CHANGED_KEY: &str = "picasa-sidebar-folder-mode-changed";
 const FOLDER_SHARE_PANED_KEY: &str = "picasa-sidebar-folder-share-paned";
 const FOLDER_PANE_SAVED_KEY: &str = "picasa-sidebar-folder-pane-saved";
@@ -364,6 +367,14 @@ pub fn build(
         None,
     );
     share_heading.add_css_class("sidebar-sticky-heading");
+    let share_mode_toggle = gtk::Button::from_icon_name("folder-symbolic");
+    share_mode_toggle.add_css_class("flat");
+    share_mode_toggle.set_focusable(false);
+    share_mode_toggle.set_size_request(24, 24);
+    set_share_mode_toggle_presentation(&share_mode_toggle, true);
+    if let Some(label) = share_heading.first_child() {
+        share_heading.insert_child_after(&share_mode_toggle, Some(&label));
+    }
     let share_list = section_list();
     connect_filter_list(&share_list, on_filter.clone(), filter_syncing.clone());
     let share_scroll = gtk::ScrolledWindow::new();
@@ -419,6 +430,30 @@ pub fn build(
             }),
             Rc::new(move || set_expanded(false)),
         );
+    }
+    {
+        let toggle = share_mode_toggle.clone();
+        let state = state.clone();
+        let sidebar = outer.downgrade();
+        let list = share_list.clone();
+        let on_unavailable = on_unavailable.clone();
+        share_mode_toggle.connect_clicked(move |_| {
+            let tree_mode = {
+                let mut state = state.borrow_mut();
+                state.network_tree_mode = !state.network_tree_mode;
+                state.network_tree_mode
+            };
+            set_share_mode_toggle_presentation(&toggle, tree_mode);
+            let Some(sidebar) = sidebar.upgrade() else {
+                return;
+            };
+            let folders = unsafe {
+                list.data::<Vec<Folder>>("picasa-folder-cache")
+                    .map(|folders| folders.as_ref().clone())
+                    .unwrap_or_default()
+            };
+            refresh_network_shares(&sidebar, &folders, &state, &on_unavailable);
+        });
     }
     // Native drag handle between Folders and Network Shares, matching the
     // Albums split: the user can resize both sections with GtkPaned's native
@@ -892,7 +927,7 @@ pub fn build(
     unsafe {
         outer.set_data(SHARE_LIST_KEY, share_list.clone());
     }
-    refresh_network_shares(&outer, folders, &on_unavailable);
+    refresh_network_shares(&outer, folders, &state, &on_unavailable);
 
     outer.set_child(Some(&root));
 
@@ -1001,6 +1036,7 @@ pub fn build(
         outer.set_data(SECTION_PANED_KEY, section_paned);
         outer.set_data(FOLDER_SECTION_KEY, folder_section);
         outer.set_data(SHARE_SECTION_KEY, share_section);
+        outer.set_data(SHARE_MODE_TOGGLE_KEY, share_mode_toggle);
         outer.set_data(FILTER_SYNCING_KEY, filter_syncing);
     }
 
@@ -1284,7 +1320,7 @@ pub fn refresh(
 
     clear_list(&folder_list);
     populate_folders(&folder_list, folders, &state, &on_unavailable);
-    refresh_network_shares(scrolled, folders, &on_unavailable);
+    refresh_network_shares(scrolled, folders, &state, &on_unavailable);
     apply_visibility(scrolled, sidebar_visibility(scrolled));
 
     if let Some(revealer) = stored_widget::<gtk::Revealer>(scrolled, LIBRARY_REVEALER_KEY) {
@@ -1388,7 +1424,7 @@ pub fn refresh_folder_rows(
     let folder_scroll_value = folder_scroll_value(scrolled);
     clear_list(&folder_list);
     populate_folders(&folder_list, folders, &state, on_unavailable);
-    refresh_network_shares(scrolled, folders, on_unavailable);
+    refresh_network_shares(scrolled, folders, &state, on_unavailable);
     restore_folder_scroll(scrolled, folder_scroll_value);
 }
 
@@ -2283,112 +2319,119 @@ fn append_folder_branch(
     }
 }
 
-/// Registered network shares (imported smb:// and nfs:// roots). Presented in
-/// their own sidebar section below Folders, never mixed into the local folder
-/// tree. Rebuilt by every folder refresh path, so a newly added share appears
-/// immediately and stays listed after refreshes and restarts.
+/// Registered network shares (imported smb:// and nfs:// roots) and their
+/// indexed descendants. Presented as a tree in their own sidebar section,
+/// separate from local folders, and rebuilt by every folder refresh path.
 fn refresh_network_shares(
     scrolled: &gtk::ScrolledWindow,
     folders: &[Folder],
-    _on_unavailable: &Rc<dyn Fn()>,
+    state: &Rc<RefCell<SidebarState>>,
+    on_unavailable: &Rc<dyn Fn()>,
 ) {
     let Some(list) = stored_widget::<gtk::ListBox>(scrolled, SHARE_LIST_KEY) else {
         return;
     };
     clear_list(&list);
-    let shares: Vec<Folder> = folders
+    let roots = folders
         .iter()
         .filter(|folder| folder.imported_root && crate::db::is_remote_path(&folder.path))
         .cloned()
+        .collect::<Vec<_>>();
+    let shares_exist = !roots.is_empty();
+    list.set_visible(shares_exist);
+    let all_remote_folders = folders
+        .iter()
+        .filter(|folder| crate::db::is_remote_path(&folder.path))
+        .cloned()
+        .collect::<Vec<_>>();
+    let remote_by_id: HashMap<i64, &Folder> = all_remote_folders
+        .iter()
+        .map(|folder| (folder.id, folder))
         .collect();
-    list.set_visible(!shares.is_empty());
-    if shares.is_empty() {
+    let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
+    for folder in &all_remote_folders {
+        if let Some(parent) = folder
+            .parent_id
+            .filter(|parent| remote_by_id.contains_key(parent))
+        {
+            children.entry(parent).or_default().push(folder.id);
+        }
+    }
+    let mut included = HashSet::new();
+    let mut pending = roots.iter().map(|folder| folder.id).collect::<Vec<_>>();
+    while let Some(id) = pending.pop() {
+        if !included.insert(id) {
+            continue;
+        }
+        if let Some(descendants) = children.get(&id) {
+            pending.extend_from_slice(descendants);
+        }
+    }
+    let remote_folders = all_remote_folders
+        .into_iter()
+        .filter(|folder| included.contains(&folder.id))
+        .collect::<Vec<_>>();
+    unsafe {
+        list.set_data("picasa-network-share-tree", true);
+        list.set_data("picasa-folder-unavailable-callback", on_unavailable.clone());
+        list.set_data("picasa-folder-cache", remote_folders.clone());
+    }
+    if !shares_exist {
         return;
     }
-    for share in &shares {
-        append_share_row(&list, share, folders);
+    if state.borrow().network_tree_mode {
+        populate_network_folder_tree(&list, &remote_folders, state, on_unavailable);
+    } else {
+        populate_network_share_roots(&list, &roots, state, on_unavailable);
     }
 }
 
-fn append_share_row(list: &gtk::ListBox, folder: &Folder, folders: &[Folder]) -> gtk::ListBoxRow {
-    let row = gtk::ListBoxRow::new();
-    row.set_margin_top(2);
-    row.set_margin_bottom(2);
-    row.set_tooltip_text(Some(folder.path.as_str()));
-
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    content.set_margin_top(4);
-    content.set_margin_bottom(4);
-    content.set_margin_start(4);
-    content.set_margin_end(8);
-
-    let icon_overlay = gtk::Overlay::new();
-    icon_overlay.set_size_request(18, 18);
-    icon_overlay.set_halign(gtk::Align::Center);
-    icon_overlay.set_valign(gtk::Align::Center);
-    icon_overlay.set_hexpand(false);
-    let icon = gtk::Image::from_icon_name("folder-remote-symbolic");
-    icon.set_pixel_size(18);
-    icon_overlay.set_child(Some(&icon));
-    if !folder.available {
-        // Same offline indicator as local folders: the row survives, only the
-        // original files are unreachable right now.
-        let badge = gtk::Image::from_icon_name("dialog-warning-symbolic");
-        badge.set_pixel_size(11);
-        badge.set_halign(gtk::Align::End);
-        badge.set_valign(gtk::Align::End);
-        badge.add_css_class("unavailable-badge");
-        badge.set_tooltip_text(Some(
-            "Share unreachable - cached thumbnails remain available",
-        ));
-        icon_overlay.add_overlay(&badge);
+fn populate_network_share_roots(
+    list: &gtk::ListBox,
+    roots: &[Folder],
+    state: &Rc<RefCell<SidebarState>>,
+    on_unavailable: &Rc<dyn Fn()>,
+) {
+    let previous_mode = state.borrow().folder_display_mode;
+    state.borrow_mut().folder_display_mode = FolderDisplayMode::ImportedOnly;
+    let mut roots = roots.iter().collect::<Vec<_>>();
+    roots.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
+    });
+    for folder in roots {
+        append_folder_row(list, folder, 0, false, state, on_unavailable);
     }
-    content.append(&icon_overlay);
+    state.borrow_mut().folder_display_mode = previous_mode;
+}
 
-    let name = gtk::Label::new(Some(&folder.name));
-    name.set_xalign(0.0);
-    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    name.set_hexpand(true);
-    content.append(&name);
-
-    // Photos indexed under a share live in descendant folder rows, so the
-    // share's own photo_count alone is not the section count. Sum the stored
-    // counts across the in-memory descendant tree; no extra query.
-    let totals: HashMap<i64, i64> = folders
-        .iter()
-        .map(|candidate| (candidate.id, candidate.photo_count.max(0)))
-        .collect();
-    let mut children_of: HashMap<Option<i64>, Vec<i64>> = HashMap::new();
-    for candidate in folders {
-        children_of
-            .entry(candidate.parent_id)
-            .or_default()
-            .push(candidate.id);
+fn populate_network_folder_tree(
+    list: &gtk::ListBox,
+    folders: &[Folder],
+    state: &Rc<RefCell<SidebarState>>,
+    on_unavailable: &Rc<dyn Fn()>,
+) {
+    let by_id: HashMap<i64, &Folder> = folders.iter().map(|folder| (folder.id, folder)).collect();
+    let mut children: HashMap<Option<i64>, Vec<i64>> = HashMap::new();
+    for folder in folders {
+        let parent = folder.parent_id.filter(|parent| by_id.contains_key(parent));
+        children.entry(parent).or_default().push(folder.id);
     }
-    let mut count = 0_i64;
-    let mut pending = vec![folder.id];
-    while let Some(id) = pending.pop() {
-        count += totals.get(&id).copied().unwrap_or(0);
-        if let Some(children) = children_of.get(&Some(id)) {
-            pending.extend_from_slice(children);
-        }
+    for ids in children.values_mut() {
+        ids.sort_by(|left, right| {
+            let left = by_id.get(left).expect("folder id exists");
+            let right = by_id.get(right).expect("folder id exists");
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
+        });
     }
-
-    let count_label = gtk::Label::new(Some(&format_count(count)));
-    count_label.set_width_request(36);
-    count_label.set_xalign(1.0);
-    count_label.set_valign(gtk::Align::Center);
-    count_label.add_css_class("dim-label");
-    count_label.add_css_class("sidebar-count");
-    content.append(&count_label);
-
-    row.set_child(Some(&content));
-    unsafe {
-        row.set_data("picasa-filter", SidebarFilter::Folder(folder.id));
+    for id in children.get(&None).cloned().unwrap_or_default() {
+        append_folder_branch(list, id, 0, &by_id, &children, state, on_unavailable);
     }
-    list.append(&row);
-    add_folder_context_menu(list, &row, folder);
-    row
 }
 
 fn append_folder_row(
@@ -2702,6 +2745,10 @@ fn add_folder_context_menu(list: &gtk::ListBox, row: &gtk::ListBoxRow, folder: &
 // record. We collect the full currently-known set from visible rows plus hidden
 // descendants cached on the ListBox itself when populate_folders() runs.
 fn rebuild_folder_list_from_rows(list: &gtk::ListBox, state: &Rc<RefCell<SidebarState>>) {
+    let is_network_tree = unsafe {
+        list.data::<bool>("picasa-network-share-tree")
+            .is_some_and(|data| *data.as_ref())
+    };
     let folder_scroll = list
         .ancestor(gtk::ScrolledWindow::static_type())
         .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok());
@@ -2710,7 +2757,12 @@ fn rebuild_folder_list_from_rows(list: &gtk::ListBox, state: &Rc<RefCell<Sidebar
             .ancestor(gtk::ScrolledWindow::static_type())
             .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
     });
-    let folder_scroll_value = outer.as_ref().and_then(|outer| folder_scroll_value(outer));
+    let list_scroll_value = folder_scroll
+        .as_ref()
+        .map(|scroll| scroll.vadjustment().value());
+    let folder_scroll_value = (!is_network_tree)
+        .then(|| outer.as_ref().and_then(|outer| folder_scroll_value(outer)))
+        .flatten();
     let folders = unsafe {
         list.data::<Vec<Folder>>("picasa-folder-cache")
             .map(|data| data.as_ref().clone())
@@ -2725,12 +2777,27 @@ fn rebuild_folder_list_from_rows(list: &gtk::ListBox, state: &Rc<RefCell<Sidebar
         return;
     }
     clear_list(list);
-    populate_folders(list, &folders, state, &callback);
+    if is_network_tree {
+        populate_network_folder_tree(list, &folders, state, &callback);
+    } else {
+        populate_folders(list, &folders, state, &callback);
+    }
     if let Some(outer) = outer {
         if let Some(filter) = current_filter(&outer) {
             set_active_filter(&outer, filter);
         }
-        restore_folder_scroll(&outer, folder_scroll_value);
+        if is_network_tree {
+            if let (Some(scroll), Some(value)) = (folder_scroll, list_scroll_value) {
+                let adjustment = scroll.vadjustment();
+                glib::idle_add_local_once(move || {
+                    let upper =
+                        (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+                    adjustment.set_value(value.clamp(adjustment.lower(), upper));
+                });
+            }
+        } else {
+            restore_folder_scroll(&outer, folder_scroll_value);
+        }
         let outer_for_location = outer.clone();
         glib::idle_add_local_once(move || apply_scroll_location(&outer_for_location));
     }
@@ -2848,6 +2915,16 @@ fn set_folder_mode_toggle_presentation(button: &gtk::Button, mode: FolderDisplay
             button.set_icon_name("view-list-symbolic");
             button.set_tooltip_text(Some("Show folder tree"));
         }
+    }
+}
+
+fn set_share_mode_toggle_presentation(button: &gtk::Button, tree_mode: bool) {
+    if tree_mode {
+        button.set_icon_name("folder-symbolic");
+        button.set_tooltip_text(Some("Show imported shares only"));
+    } else {
+        button.set_icon_name("view-list-symbolic");
+        button.set_tooltip_text(Some("Show network folder tree"));
     }
 }
 
@@ -3091,17 +3168,30 @@ mod tests {
     fn saved_network_shares_populate_at_startup_and_use_the_remaining_height() {
         gtk::init().unwrap();
 
-        let folders = vec![Folder {
-            id: 1,
-            path: "smb://server/photos".to_string(),
-            name: "photos".to_string(),
-            parent_id: None,
-            imported_root: true,
-            watched: false,
-            photo_count: 4,
-            subfolder_count: 0,
-            available: true,
-        }];
+        let folders = vec![
+            Folder {
+                id: 1,
+                path: "smb://server/photos".to_string(),
+                name: "photos".to_string(),
+                parent_id: None,
+                imported_root: true,
+                watched: false,
+                photo_count: 4,
+                subfolder_count: 1,
+                available: true,
+            },
+            Folder {
+                id: 2,
+                path: "smb://server/photos/album".to_string(),
+                name: "album".to_string(),
+                parent_id: Some(1),
+                imported_root: false,
+                watched: false,
+                photo_count: 3,
+                subfolder_count: 0,
+                available: true,
+            },
+        ];
         let no_args: Rc<dyn Fn()> = Rc::new(|| {});
         let sidebar = build(
             &folders,
@@ -3131,7 +3221,7 @@ mod tests {
         assert_eq!(
             share_list.observe_children().iter::<glib::Object>().count(),
             1,
-            "saved shares should be present in the first rendered sidebar"
+            "a saved share should be the collapsed tree root"
         );
         assert!(unsafe {
             share_list
@@ -3151,6 +3241,38 @@ mod tests {
         assert!(
             has_right_click,
             "saved shares should install the folder context menu"
+        );
+
+        let state = sidebar_state(&sidebar).unwrap();
+        state.borrow_mut().expanded_folders.insert(1);
+        let no_unavailable: Rc<dyn Fn()> = Rc::new(|| {});
+        refresh_network_shares(&sidebar, &folders, &state, &no_unavailable);
+        assert_eq!(
+            share_list.observe_children().iter::<glib::Object>().count(),
+            2,
+            "expanding a share should reveal its indexed child folders"
+        );
+        let child_row = share_list
+            .last_child()
+            .and_then(|widget| widget.downcast::<gtk::ListBoxRow>().ok())
+            .unwrap();
+        assert!(unsafe {
+            child_row
+                .data::<SidebarFilter>("picasa-filter")
+                .is_some_and(|filter| *filter.as_ref() == SidebarFilter::Folder(2))
+        });
+        let mode_toggle = stored_widget::<gtk::Button>(&sidebar, SHARE_MODE_TOGGLE_KEY).unwrap();
+        mode_toggle.emit_clicked();
+        assert_eq!(
+            share_list.observe_children().iter::<glib::Object>().count(),
+            1,
+            "the share list mode should show imported roots only"
+        );
+        mode_toggle.emit_clicked();
+        assert_eq!(
+            share_list.observe_children().iter::<glib::Object>().count(),
+            2,
+            "the share tree mode should restore expanded child folders"
         );
 
         let share_scroll = share_list
