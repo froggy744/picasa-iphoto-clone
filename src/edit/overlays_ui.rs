@@ -290,6 +290,97 @@ fn overlay_norm_rect(
     Some(overlay.rect(photo_w, photo_h, aspect))
 }
 
+fn overlay_grid_position(
+    overlay: &OverlaySpec,
+    dims: (i32, i32),
+    aspect: f32,
+) -> (u8, u8, f64, f64) {
+    let photo_w = dims.0.max(1) as f32;
+    let photo_h = dims.1.max(1) as f32;
+    let rect = overlay.rect(photo_w, photo_h, aspect);
+    let xs = [rect.left, rect.left + rect.width * 0.5, rect.right()];
+    let ys = [rect.top, rect.top + rect.height * 0.5, rect.bottom()];
+    let targets = [
+        OverlaySpec::POSITION_MARGIN,
+        0.5,
+        1.0 - OverlaySpec::POSITION_MARGIN,
+    ];
+    let nearest = |values: [f32; 3]| {
+        (0..3)
+            .min_by(|a, b| {
+                (values[*a] - targets[*a])
+                    .abs()
+                    .total_cmp(&(values[*b] - targets[*b]).abs())
+            })
+            .unwrap_or(1)
+    };
+    let col = nearest(xs);
+    let row = nearest(ys);
+    (
+        col as u8,
+        row as u8,
+        f64::from(xs[col] - targets[col]) * f64::from(photo_w),
+        f64::from(ys[row] - targets[row]) * f64::from(photo_h),
+    )
+}
+
+fn reset_overlay_position(overlay: &mut OverlaySpec) {
+    let (width, opacity, rotation, visible) = (
+        overlay.width,
+        overlay.opacity,
+        overlay.rotation,
+        overlay.visible,
+    );
+    overlay.reset_placement();
+    overlay.width = width;
+    overlay.opacity = opacity;
+    overlay.rotation = rotation;
+    overlay.visible = visible;
+}
+
+fn place_overlay_grid(
+    overlay: &mut OverlaySpec,
+    dims: (i32, i32),
+    aspect: f32,
+    col: u8,
+    row: u8,
+    x_offset: f64,
+    y_offset: f64,
+) {
+    let photo_w = dims.0.max(1) as f32;
+    let photo_h = dims.1.max(1) as f32;
+    let current = overlay.rect(photo_w, photo_h, aspect);
+    let targets = [
+        OverlaySpec::POSITION_MARGIN,
+        0.5,
+        1.0 - OverlaySpec::POSITION_MARGIN,
+    ];
+    let col = usize::from(col.min(2));
+    let row = usize::from(row.min(2));
+    let left = match col {
+        0 => targets[col],
+        1 => targets[col] - current.width * 0.5,
+        _ => targets[col] - current.width,
+    } + (x_offset / f64::from(photo_w)) as f32;
+    let top = match row {
+        0 => targets[row],
+        1 => targets[row] - current.height * 0.5,
+        _ => targets[row] - current.height,
+    } + (y_offset / f64::from(photo_h)) as f32;
+    overlay.position_at(OverlayAnchor::Center);
+    overlay.set_rect(
+        super::model::NormRect {
+            left,
+            top,
+            width: current.width,
+            height: current.height,
+        },
+        photo_w,
+        photo_h,
+        aspect,
+    );
+}
+
 fn text_norm_rect(
     layer: &super::model::TextLayerSpec,
     photo_w: f32,
@@ -346,32 +437,64 @@ fn draw_selection_chrome(
     let _ = context.restore();
 }
 
-fn build_position_row(
-    parent: &gtk::Box,
-) -> (Vec<(OverlayAnchor, gtk::ToggleButton)>, gtk::ToggleButton) {
-    let anchor_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    anchor_row.add_css_class("linked");
-    anchor_row.add_css_class("overlay-anchor-row");
-    let mut anchor_buttons = Vec::new();
-    let first_anchor = gtk::ToggleButton::with_label(OverlayAnchor::TopLeft.label());
-    first_anchor.set_active(true);
-    first_anchor.set_hexpand(true);
-    anchor_row.append(&first_anchor);
-    anchor_buttons.push((OverlayAnchor::TopLeft, first_anchor.clone()));
-    for anchor in [
-        OverlayAnchor::TopRight,
-        OverlayAnchor::Center,
-        OverlayAnchor::BottomLeft,
-        OverlayAnchor::BottomRight,
-    ] {
-        let button = gtk::ToggleButton::with_label(anchor.label());
-        button.set_group(Some(&first_anchor));
-        button.set_hexpand(true);
-        anchor_row.append(&button);
-        anchor_buttons.push((anchor, button));
+fn build_overlay_position_grid(parent: &gtk::Box) -> Vec<((u8, u8), gtk::ToggleButton)> {
+    let grid = gtk::Grid::new();
+    grid.add_css_class("text-position-grid");
+    let glyphs = [["↖", "↑", "↗"], ["←", "•", "→"], ["↙", "↓", "↘"]];
+    let mut buttons: Vec<((u8, u8), gtk::ToggleButton)> = Vec::with_capacity(9);
+    for row in 0..3u8 {
+        for col in 0..3u8 {
+            let button = gtk::ToggleButton::with_label(glyphs[row as usize][col as usize]);
+            button.set_size_request(34, 34);
+            button.set_tooltip_text(Some(match (col, row) {
+                (0, 0) => "Top left",
+                (1, 0) => "Top centre",
+                (2, 0) => "Top right",
+                (0, 1) => "Centre left",
+                (1, 1) => "Centre",
+                (2, 1) => "Centre right",
+                (0, 2) => "Bottom left",
+                (1, 2) => "Bottom centre",
+                _ => "Bottom right",
+            }));
+            if let Some((_, first)) = buttons.first() {
+                button.set_group(Some(first));
+            }
+            grid.attach(&button, i32::from(col), i32::from(row), 1, 1);
+            buttons.push(((col, row), button));
+        }
     }
-    parent.append(&anchor_row);
-    (anchor_buttons, first_anchor)
+    buttons[4].1.set_active(true);
+    parent.append(&grid);
+    buttons
+}
+
+fn add_overlay_opacity_slider(parent: &gtk::Box) -> gtk::Scale {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.add_css_class("edit-adjustment-row");
+    row.set_margin_top(6);
+    let label = gtk::Label::new(Some("Opacity"));
+    label.set_xalign(0.0);
+    label.set_width_chars(8);
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
+    scale.set_digits(2);
+    scale.set_draw_value(false);
+    scale.set_hexpand(true);
+    scale.add_css_class("edit-adjustment-scale");
+    let value = gtk::Label::new(Some("1.00"));
+    value.set_xalign(1.0);
+    value.set_width_chars(4);
+    value.add_css_class("dim-label");
+    value.add_css_class("edit-adjustment-value");
+    let value_for_update = value.clone();
+    scale.connect_value_changed(move |scale| {
+        value_for_update.set_text(&format!("{:.2}", scale.value()));
+    });
+    row.append(&label);
+    row.append(&scale);
+    row.append(&value);
+    parent.append(&row);
+    scale
 }
 
 /// Wire up drawing, hit-testing and gestures on the overlay layer. The layer
@@ -1032,22 +1155,21 @@ fn build_overlays_panel(
     update_canvas_input: Rc<dyn Fn()>,
     overlays_toggle: gtk::ToggleButton,
 ) -> Rc<dyn Fn()> {
-    let import = gtk::Button::with_label("Import Overlay Image…");
+    let action_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let import = gtk::Button::with_label("Add Overlay");
     import.set_hexpand(true);
     import.set_tooltip_text(Some(
         "Add a PNG or JPG logo, badge or banner on top of this photo",
     ));
     import.add_css_class("crop-apply-button");
-    parent.append(&import);
-
-    let empty_hint = gtk::Label::new(Some(
-        "No overlays yet.\nImport a PNG or JPG, then drag it into place on the photo.",
-    ));
-    empty_hint.set_xalign(0.0);
-    empty_hint.set_justify(gtk::Justification::Left);
-    empty_hint.add_css_class("dim-label");
-    empty_hint.set_margin_top(8);
-    parent.append(&empty_hint);
+    let remove = gtk::Button::with_label("Remove Overlay");
+    remove.set_hexpand(true);
+    remove.set_sensitive(false);
+    remove.set_tooltip_text(Some("Delete this overlay from the photo"));
+    remove.add_css_class("crop-reset-button");
+    action_row.append(&import);
+    action_row.append(&remove);
+    parent.append(&action_row);
 
     add_section_label(parent, "OVERLAYS");
     let list = gtk::ListBox::new();
@@ -1061,13 +1183,15 @@ fn build_overlays_panel(
     parent.append(&selected_section);
 
     add_section_label(&selected_section, "SELECTED OVERLAY");
-    let opacity_row = add_slider(&selected_section, "Opacity", 0.0, 1.0, 0.01, 2);
+    let opacity_row = add_overlay_opacity_slider(&selected_section);
 
-    add_section_label(&selected_section, "POSITION");
-    let (anchor_buttons, first_anchor) = build_position_row(&selected_section);
-
+    let position_column = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    add_section_label(&position_column, "POSITION");
+    let anchor_buttons = build_overlay_position_grid(&position_column);
+    let fit_column = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    fit_column.set_hexpand(true);
+    add_section_label(&fit_column, "FIT");
     let fit_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    fit_row.set_margin_top(6);
     let fit_width = gtk::Button::with_label("Fit to Width");
     fit_width.set_hexpand(true);
     fit_width.set_tooltip_text(Some("Stretch this overlay across the full photo width"));
@@ -1080,21 +1204,47 @@ fn build_overlays_panel(
     fit_screen.add_css_class("crop-reset-button");
     fit_row.append(&fit_width);
     fit_row.append(&fit_screen);
-    selected_section.append(&fit_row);
-
-    let action_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    action_row.set_margin_top(6);
+    fit_column.append(&fit_row);
     let reset_placement = gtk::Button::with_label("Reset Placement");
     reset_placement.set_hexpand(true);
-    reset_placement.set_tooltip_text(Some("Centre this overlay and restore full opacity"));
+    reset_placement.set_tooltip_text(Some("Centre this overlay and reset its position offsets"));
     reset_placement.add_css_class("crop-reset-button");
-    let remove = gtk::Button::with_label("Remove Overlay");
-    remove.set_hexpand(true);
-    remove.set_tooltip_text(Some("Delete this overlay from the photo"));
-    remove.add_css_class("crop-reset-button");
-    action_row.append(&reset_placement);
-    action_row.append(&remove);
-    selected_section.append(&action_row);
+    fit_column.append(&reset_placement);
+    let position_fit_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    position_fit_row.set_margin_top(10);
+    position_fit_row.append(&position_column);
+    position_fit_row.append(&fit_column);
+    selected_section.append(&position_fit_row);
+
+    add_section_label(&selected_section, "OFFSET");
+    let offset_x = gtk::SpinButton::with_range(-100000.0, 100000.0, 1.0);
+    let offset_y = gtk::SpinButton::with_range(-100000.0, 100000.0, 1.0);
+    offset_x.set_tooltip_text(Some(
+        "Horizontal offset from the selected position, in photo pixels",
+    ));
+    offset_y.set_tooltip_text(Some(
+        "Vertical offset from the selected position, in photo pixels",
+    ));
+    let offset_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    offset_row.set_margin_top(4);
+    offset_row.set_margin_bottom(10);
+    let offset_cell_x = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let offset_label_x = gtk::Label::new(Some("X offset"));
+    offset_label_x.set_xalign(0.0);
+    offset_label_x.set_hexpand(true);
+    offset_cell_x.set_hexpand(true);
+    offset_cell_x.append(&offset_label_x);
+    offset_cell_x.append(&offset_x);
+    offset_row.append(&offset_cell_x);
+    let offset_cell_y = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let offset_label_y = gtk::Label::new(Some("Y offset"));
+    offset_label_y.set_xalign(0.0);
+    offset_label_y.set_hexpand(true);
+    offset_cell_y.set_hexpand(true);
+    offset_cell_y.append(&offset_label_y);
+    offset_cell_y.append(&offset_y);
+    offset_row.append(&offset_cell_y);
+    selected_section.append(&offset_row);
 
     // Populate the list and control states from the recipe.
     let sync: Rc<dyn Fn()> = {
@@ -1103,11 +1253,13 @@ fn build_overlays_panel(
         let selected = selected.clone();
         let syncing = syncing.clone();
         let list = list.clone();
-        let empty_hint = empty_hint.clone();
         let selected_section = selected_section.clone();
         let opacity_row = opacity_row.clone();
+        let remove = remove.clone();
         let anchor_buttons = anchor_buttons.clone();
-        let first_anchor = first_anchor.clone();
+        let offset_x = offset_x.clone();
+        let offset_y = offset_y.clone();
+        let preview_dimensions = preview_dimensions.clone();
         let redraw_canvas = redraw_canvas.clone();
         let update_canvas_input = update_canvas_input.clone();
         Rc::new(move || {
@@ -1120,9 +1272,8 @@ fn build_overlays_panel(
                 selected.set(Some(0));
             }
             let active = selected.get();
-            empty_hint.set_visible(overlays.is_empty());
-            selected_section.set_visible(!overlays.is_empty());
-            list.set_visible(!overlays.is_empty());
+            remove.set_sensitive(active.is_some());
+            selected_section.set_sensitive(active.is_some());
 
             while let Some(child) = list.first_child() {
                 list.remove(&child);
@@ -1152,12 +1303,21 @@ fn build_overlays_panel(
 
             if let Some(overlay) = active.and_then(|index| overlays.get(index)) {
                 opacity_row.set_value(overlay.opacity as f64);
-                for (anchor, button) in &anchor_buttons {
-                    button.set_active(*anchor == overlay.anchor);
+                let (photo_w, photo_h) = preview_dimensions.get();
+                let aspect = asset_aspect(&overlay.asset).unwrap_or(1.0);
+                let (col, row, x, y) = overlay_grid_position(overlay, (photo_w, photo_h), aspect);
+                for ((button_col, button_row), button) in &anchor_buttons {
+                    button.set_active((*button_col, *button_row) == (col, row));
                 }
+                offset_x.set_value(x);
+                offset_y.set_value(y);
             } else {
                 opacity_row.set_value(1.0);
-                first_anchor.set_active(true);
+                for ((col, row), button) in &anchor_buttons {
+                    button.set_active((*col, *row) == (1, 1));
+                }
+                offset_x.set_value(0.0);
+                offset_y.set_value(0.0);
             }
             syncing.set(false);
             redraw_canvas();
@@ -1252,15 +1412,16 @@ fn build_overlays_panel(
         });
     }
 
-    // Position toggles move the overlay to the named spot on the photo,
-    // keeping its size and opacity.
-    for (anchor, button) in &anchor_buttons {
-        let anchor = *anchor;
+    // Position toggles align the existing overlay rectangle to the chosen
+    // photo location, keeping its size and opacity.
+    for ((col, row), button) in &anchor_buttons {
+        let (col, row) = (*col, *row);
         let session = session.clone();
         let selected = selected.clone();
         let syncing = syncing.clone();
         let update_history_buttons = update_history_buttons.clone();
-        let redraw_canvas = redraw_canvas.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let sync = sync.clone();
         button.connect_toggled(move |button| {
             if syncing.get() || !button.is_active() {
                 return;
@@ -1268,11 +1429,57 @@ fn build_overlays_panel(
             let Some(index) = selected.get() else {
                 return;
             };
+            let dims = preview_dimensions.get();
             session.borrow_mut().mutate(move |recipe| {
                 let Some(overlay) = recipe.overlays.get_mut(index) else {
                     return;
                 };
-                overlay.position_at(anchor);
+                let aspect = asset_aspect(&overlay.asset).unwrap_or(1.0);
+                place_overlay_grid(overlay, dims, aspect, col, row, 0.0, 0.0);
+            });
+            update_history_buttons();
+            sync();
+        });
+    }
+
+    for (spin, horizontal) in [(offset_x.clone(), true), (offset_y.clone(), false)] {
+        let session = session.clone();
+        let selected = selected.clone();
+        let syncing = syncing.clone();
+        let update_history_buttons = update_history_buttons.clone();
+        let redraw_canvas = redraw_canvas.clone();
+        let preview_dimensions = preview_dimensions.clone();
+        let anchor_buttons = anchor_buttons.clone();
+        let offset_x = offset_x.clone();
+        let offset_y = offset_y.clone();
+        spin.connect_value_changed(move |spin| {
+            if syncing.get() {
+                return;
+            }
+            let Some(index) = selected.get() else {
+                return;
+            };
+            let dims = preview_dimensions.get();
+            let (col, row) = anchor_buttons
+                .iter()
+                .find(|(_, button)| button.is_active())
+                .map(|((col, row), _)| (*col, *row))
+                .unwrap_or((1, 1));
+            let x = if horizontal {
+                spin.value()
+            } else {
+                offset_x.value()
+            };
+            let y = if horizontal {
+                offset_y.value()
+            } else {
+                spin.value()
+            };
+            session.borrow_mut().mutate(move |recipe| {
+                if let Some(overlay) = recipe.overlays.get_mut(index) {
+                    let aspect = asset_aspect(&overlay.asset).unwrap_or(1.0);
+                    place_overlay_grid(overlay, dims, aspect, col, row, x, y);
+                }
             });
             update_history_buttons();
             redraw_canvas();
@@ -1284,21 +1491,13 @@ fn build_overlays_panel(
         let selected = selected.clone();
         let update_history_buttons = update_history_buttons.clone();
         let sync = sync.clone();
-        let preview_dimensions = preview_dimensions.clone();
         reset_placement.connect_clicked(move |_| {
             let Some(index) = selected.get() else {
                 return;
             };
-            let (photo_w, photo_h) = preview_dimensions.get();
             session.borrow_mut().mutate(move |recipe| {
                 if let Some(overlay) = recipe.overlays.get_mut(index) {
-                    overlay.reset_placement();
-                    let aspect = asset_aspect(&overlay.asset).unwrap_or(1.0);
-                    overlay.width = overlay.width.min(OverlaySpec::max_fitting_width(
-                        photo_w.max(1) as f32,
-                        photo_h.max(1) as f32,
-                        aspect,
-                    ));
+                    reset_overlay_position(overlay);
                 }
             });
             update_history_buttons();
@@ -1527,6 +1726,66 @@ mod overlay_geometry_tests {
             width,
             height,
         }
+    }
+
+    #[test]
+    fn position_grid_places_and_recovers_all_nine_alignments() {
+        let dims = (2400, 1600);
+        let aspect = 1.5;
+        let targets = [
+            OverlaySpec::POSITION_MARGIN,
+            0.5,
+            1.0 - OverlaySpec::POSITION_MARGIN,
+        ];
+        for row in 0..3 {
+            for col in 0..3 {
+                let mut overlay = OverlaySpec::new_centered("overlay.png");
+                place_overlay_grid(&mut overlay, dims, aspect, col, row, 0.0, 0.0);
+                let placed = overlay.rect(dims.0 as f32, dims.1 as f32, aspect);
+                let x = [
+                    placed.left,
+                    placed.left + placed.width * 0.5,
+                    placed.right(),
+                ];
+                let y = [
+                    placed.top,
+                    placed.top + placed.height * 0.5,
+                    placed.bottom(),
+                ];
+                assert!((x[usize::from(col)] - targets[usize::from(col)]).abs() < 1e-6);
+                assert!((y[usize::from(row)] - targets[usize::from(row)]).abs() < 1e-6);
+                let (actual_col, actual_row, x_offset, y_offset) =
+                    overlay_grid_position(&overlay, dims, aspect);
+                assert_eq!((actual_col, actual_row), (col, row));
+                assert!(x_offset.abs() < 1e-3);
+                assert!(y_offset.abs() < 1e-3);
+            }
+        }
+    }
+
+    #[test]
+    fn position_grid_offsets_use_photo_pixel_coordinates() {
+        let dims = (2400, 1600);
+        let aspect = 1.5;
+        let mut overlay = OverlaySpec::new_centered("overlay.png");
+        place_overlay_grid(&mut overlay, dims, aspect, 2, 0, 120.0, -50.0);
+        let (col, row, x_offset, y_offset) = overlay_grid_position(&overlay, dims, aspect);
+        assert_eq!((col, row), (2, 0));
+        assert!((x_offset - 120.0).abs() < 1e-3);
+        assert!((y_offset + 50.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn resetting_position_preserves_overlay_size_and_opacity() {
+        let mut overlay = OverlaySpec::new_centered("overlay.png");
+        overlay.width = 0.42;
+        overlay.opacity = 0.37;
+        overlay.position_at(OverlayAnchor::TopRight);
+        reset_overlay_position(&mut overlay);
+        assert_eq!(overlay.anchor, OverlayAnchor::Center);
+        assert_eq!((overlay.x, overlay.y), (0.5, 0.5));
+        assert_eq!(overlay.width, 0.42);
+        assert_eq!(overlay.opacity, 0.37);
     }
 
     #[test]

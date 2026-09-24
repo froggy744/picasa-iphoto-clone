@@ -117,6 +117,7 @@ impl OverlayAnchor {
         }
     }
 
+    #[allow(dead_code)] // The overlay UI now uses the nine-cell position grid.
     pub fn label(self) -> &'static str {
         match self {
             Self::TopLeft => "Top Left",
