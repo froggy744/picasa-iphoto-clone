@@ -1721,16 +1721,34 @@ fn rebuild_folder_rows_for(
     let old_len = old_rows as usize;
     let new_len = new_rows.len();
     let mut prefix = 0usize;
-    while prefix < old_len
-        && prefix < new_len
-        && folder_store
+    while prefix < old_len && prefix < new_len {
+        let Some(old_row) = folder_store
             .item(prefix as u32)
             .and_downcast::<FolderRowObject>()
-            .is_some_and(|old_row| {
-                folder_virtual_row_matches(&old_row.data(), &new_rows[prefix].data())
-            })
-    {
-        prefix += 1;
+        else {
+            break;
+        };
+        let old = old_row.data();
+        let new = new_rows[prefix].data();
+        if folder_virtual_row_matches(&old, &new) {
+            prefix += 1;
+            continue;
+        }
+        // Progressive appends change the last folder header's count. Replace
+        // that one row and keep scanning so the unchanged photo rows retain
+        // their GTK objects and the final splice only appends the new tail.
+        if old.kind == FolderRowKind::Header
+            && new.kind == FolderRowKind::Header
+            && old.folder_id == new.folder_id
+            && old.folder_path == new.folder_path
+            && old.start == new.start
+            && old.end == new.end
+        {
+            folder_store.splice(prefix as u32, 1, &new_rows[prefix..prefix + 1]);
+            prefix += 1;
+            continue;
+        }
+        break;
     }
     let mut suffix = 0usize;
     while suffix < old_len - prefix

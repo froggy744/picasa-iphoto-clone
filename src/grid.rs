@@ -163,6 +163,67 @@ mod folder_stream_tests {
 
     #[test]
     #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn progressive_folder_append_keeps_existing_photo_rows() {
+        use super::{gtk, FolderRowObject, Gallery, GroupMode};
+        use gtk::prelude::*;
+
+        gtk::init().unwrap();
+        let gallery = Gallery::new(
+            &[],
+            180,
+            |_| {},
+            |_, _| {},
+            |_, _, _, _| {},
+            |_, _| {},
+            |_| {},
+        );
+        gallery.group_mode.set(GroupMode::Folder);
+        gallery.current_columns.set(4);
+        let photos = (1..=32_i64)
+            .map(|id| crate::db::Photo {
+                id,
+                path: format!("/probe/folder/photo-{id}.jpg"),
+                folder_id: Some(1),
+                folder_path: Some("/probe/folder".into()),
+                taken_at: None,
+                camera: None,
+                width: Some(16),
+                height: Some(16),
+                size_bytes: Some(1),
+                mtime: Some(1),
+                added_at: id,
+                rotation: 0,
+                edit_recipe: String::new(),
+                favorite: false,
+                trashed: false,
+                history_caption: None,
+                edited_at: 0,
+            })
+            .collect::<Vec<_>>();
+        gallery.append_photos(&photos[..18]);
+        let first_photo_row = gallery.folder_store.item(1).unwrap();
+
+        gallery.append_photos(&photos[18..]);
+
+        assert!(first_photo_row == gallery.folder_store.item(1).unwrap());
+        assert_eq!(gallery.folder_store.n_items(), 9);
+        let header = gallery
+            .folder_store
+            .item(0)
+            .and_downcast::<FolderRowObject>()
+            .unwrap();
+        assert_eq!(header.data().count, 32);
+        let last_row = gallery
+            .folder_store
+            .item(8)
+            .and_downcast::<FolderRowObject>()
+            .unwrap();
+        assert_eq!(last_row.data().photo_ids, vec![29, 30, 31, 32]);
+        assert_eq!(gallery.current_photos.borrow().len(), 32);
+    }
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
     fn sidebar_width_changes_do_not_scroll_or_lose_the_visible_photo() {
         use super::{gtk, Gallery, GroupMode, PhotoObject};
         use gtk::prelude::*;
