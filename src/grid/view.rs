@@ -797,7 +797,11 @@ impl Gallery {
         }
         self.last_layout_width.set(width);
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
-        let folder_list_mode = folder_mode && !crate::grid::folder_gridview_experiment_enabled();
+        let folder_grid_mode =
+            folder_mode && crate::grid::folder_gridview_experiment_enabled();
+        let folder_chunked_mode =
+            folder_mode && crate::grid::folder_chunked_experiment_enabled();
+        let folder_list_mode = folder_mode && !folder_grid_mode && !folder_chunked_mode;
         if columns == old_columns {
             // Zooming within the same column count only changes tile geometry.
             // Replacing the Folder ListStore here used to invalidate every
@@ -819,6 +823,19 @@ impl Gallery {
                 if let Some(started) = trace_started {
                     eprintln!("PIC_ZOOM layout mode=folder action=resize_rows columns={} width={} elapsed_us={}", columns, width, started.elapsed().as_micros());
                 }
+            } else if folder_chunked_mode {
+                if let Some(chunked) = self.chunked_prototype.as_ref() {
+                    chunked.set_tile_height(self.tile_height.get());
+                    chunked.root.queue_resize();
+                }
+                if let Some(started) = trace_started {
+                    eprintln!(
+                        "PIC_ZOOM layout mode=folder-chunked action=resize_chunks columns={} width={} outer_splice=0 elapsed_us={}",
+                        columns,
+                        width,
+                        started.elapsed().as_micros()
+                    );
+                }
             } else if !folder_list_mode {
                 self.root.queue_resize();
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
@@ -837,7 +854,32 @@ impl Gallery {
         self.root.set_min_columns(columns);
         self.root.set_max_columns(columns);
         self.root.queue_resize();
-        if folder_list_mode {
+        if folder_chunked_mode {
+            if let Some(chunked) = self.chunked_prototype.as_ref() {
+                let started = crate::diagnostics::trace_enabled()
+                    .then(std::time::Instant::now);
+                chunked.set_columns(columns);
+                chunked.set_tile_height(self.tile_height.get());
+                chunked.request_realization_update();
+                chunked.root.queue_resize();
+                if let Some(started) = started {
+                    eprintln!(
+                        "PIC_CHUNK zoom_update columns={} outer_splice=0 elapsed_us={}",
+                        columns,
+                        started.elapsed().as_micros()
+                    );
+                }
+            }
+            if let Some(started) = trace_started {
+                eprintln!(
+                    "PIC_ZOOM layout mode=folder-chunked action=columns_changed old_columns={} columns={} width={} outer_splice=0 elapsed_us={}",
+                    old_columns,
+                    columns,
+                    width,
+                    started.elapsed().as_micros()
+                );
+            }
+        } else if folder_list_mode {
             // Each model item is one visual photo line. A column change must
             // rebuild those lines to keep the layout gapless.
             let trace = trace_started.is_some();
