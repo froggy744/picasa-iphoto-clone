@@ -65,6 +65,7 @@ pub struct PhotoRecord {
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub size_bytes: Option<i64>,
+    pub mtime: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -128,7 +129,7 @@ pub fn photos() -> Result<Vec<PhotoRecord>> {
     let connection = open_default()?;
     let mut statement = connection.prepare(
         "SELECT p.id, p.path, COALESCE(f.path, ''), p.favorite, p.rotation,
-                p.taken_at, p.camera, p.width, p.height, p.size_bytes
+                p.taken_at, p.camera, p.width, p.height, p.size_bytes, p.mtime
          FROM photos p
          LEFT JOIN folders f ON f.id = p.folder_id
          WHERE p.trashed = 0
@@ -146,6 +147,7 @@ pub fn photos() -> Result<Vec<PhotoRecord>> {
             width: row.get(7)?,
             height: row.get(8)?,
             size_bytes: row.get(9)?,
+            mtime: row.get(10)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -156,7 +158,7 @@ pub fn photo_by_id(id: i64) -> Result<Option<PhotoRecord>> {
     Ok(connection
         .query_row(
             "SELECT p.id, p.path, COALESCE(f.path, ''), p.favorite, p.rotation,
-                    p.taken_at, p.camera, p.width, p.height, p.size_bytes
+                    p.taken_at, p.camera, p.width, p.height, p.size_bytes, p.mtime
              FROM photos p
              LEFT JOIN folders f ON f.id = p.folder_id
              WHERE p.id = ?1 AND p.trashed = 0",
@@ -173,6 +175,7 @@ pub fn photo_by_id(id: i64) -> Result<Option<PhotoRecord>> {
                     width: row.get(7)?,
                     height: row.get(8)?,
                     size_bytes: row.get(9)?,
+                    mtime: row.get(10)?,
                 })
             },
         )
