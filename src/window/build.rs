@@ -1380,9 +1380,19 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let grid_scroll = gtk::ScrolledWindow::new();
     grid_scroll.set_vexpand(true);
     grid_scroll.set_hexpand(true);
-    // GtkGridView remains the direct scrollable child for every non-Folder
-    // view, preserving its existing virtualization and selection behavior.
-    grid_scroll.set_child(Some(&gallery.root));
+    // Gallery V2 is opt-in during the migration. It uses the same real RC
+    // PhotoObject/database/actions, but the persistent model never changes
+    // membership during zoom. Keeping the legacy root available gives us an
+    // immediate rollback while feature parity is verified.
+    let gallery_v2_enabled = std::env::var_os("PIC_GALLERY_V2").is_some();
+    grid_scroll.set_child(Some(if gallery_v2_enabled {
+        gallery.v2.root.upcast_ref::<gtk::Widget>()
+    } else {
+        gallery.root.upcast_ref::<gtk::Widget>()
+    }));
+    if std::env::var_os("PICASA_TRACE").is_some() {
+        eprintln!("PIC_V2 enabled={gallery_v2_enabled}");
+    }
 
     let folder_scroll = gtk::ScrolledWindow::new();
     folder_scroll.set_vexpand(true);
