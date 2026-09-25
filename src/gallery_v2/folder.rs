@@ -663,15 +663,15 @@ impl GalleryV2Folder {
     }
 
     pub(crate) fn replace(&self, photos: &[Photo]) {
+        let objects = photos.iter().map(PhotoObject::from_photo).collect::<Vec<_>>();
+        self.replace_objects(&objects);
+    }
+
+    pub(crate) fn replace_objects(&self, objects: &[PhotoObject]) {
         let started = std::time::Instant::now();
         self.groups.remove_all();
         self.folder_positions.borrow_mut().clear();
-
-        let objects = photos
-            .iter()
-            .map(PhotoObject::from_photo)
-            .collect::<Vec<_>>();
-        self.current_photos.replace(objects.clone());
+        self.current_photos.replace(objects.to_vec());
 
         let mut start = 0usize;
         let mut section_index = 0u32;
@@ -716,7 +716,7 @@ impl GalleryV2Folder {
         if trace_enabled() {
             eprintln!(
                 "PIC_V2_FOLDER replace photos={} sections={} elapsed_ms={}",
-                photos.len(),
+                objects.len(),
                 self.groups.n_items(),
                 started.elapsed().as_millis()
             );
