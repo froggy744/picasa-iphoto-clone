@@ -372,6 +372,9 @@ impl Gallery {
 
         self.tile_width.set(width);
         self.tile_height.set(height);
+        if let Some(chunked) = self.chunked_prototype.as_ref() {
+            chunked.set_tile_height(height);
+        }
         if persist {
             (self.on_zoom_changed)(width);
         }
@@ -1399,6 +1402,15 @@ impl Gallery {
         });
     }
 
+    /// Single writer for the stream-building flag so the chunked prototype's
+    /// fill/realization hook stays in sync with every completion path.
+    fn set_stream_building(&self, building: bool) {
+        self.stream_building.set(building);
+        if let Some(chunked) = self.chunked_prototype.as_ref() {
+            chunked.notify_stream_building(building);
+        }
+    }
+
     pub fn replace(&self, photos: &[Photo]) {
         if crate::diagnostics::trace_enabled() { eprintln!("PIC_NAV gallery_replace photos={}", photos.len()); }
         if std::env::var_os("PICASA_TRACE_BACKTRACE").is_some() {
@@ -1409,7 +1421,7 @@ impl Gallery {
         // Assume a build is in progress until each completion path clears it.
         // Callers such as folder navigation wait on this so they do not give
         // up while the virtualized Folder rows are still being constructed.
-        self.stream_building.set(true);
+        self.set_stream_building(true);
         let unchanged = {
             let current = self.current_photos.borrow();
             current.len() == photos.len()
@@ -1437,7 +1449,7 @@ impl Gallery {
                 self.rebuild_folder_rows();
             }
 
-            self.stream_building.set(false);
+            self.set_stream_building(false);
             return;
         }
 
@@ -1489,7 +1501,7 @@ impl Gallery {
                 }
             }
 
-            self.stream_building.set(false);
+            self.set_stream_building(false);
             return;
         }
 
@@ -1509,29 +1521,6 @@ impl Gallery {
         }
         let replace_trace = crate::diagnostics::trace_enabled();
         let replace_started = replace_trace.then(std::time::Instant::now);
-        // A wholesale shrink under the chunked Folder prototype (folder
-        // stream -> album/history/favorites) unmounts the outer chunk rows
-        // first: splicing thousands of items while hundreds of chunk
-        // GridViews are mounted costs seconds of item-manager teardown for
-        // content the user cannot see mid-transition anyway.
-        let old_items = self.store.n_items();
-        let chunked_detach = self
-            .chunked_prototype
-            .as_ref()
-            .filter(|_| {
-                old_items > 1_000 && (photos.len() as u32) * 4 < old_items
-            })
-            .cloned();
-        if let Some(chunked) = &chunked_detach {
-            // GTK frees the hidden folder view's mounted rows on the frame
-            // clock, not during the visibility swap. Unmounting the model
-            // synchronously here tore down every live chunk GridView and its
-            // tiles inside the navigation frame (~600 ms for the full
-            // library stream, measured); by the next idle the unmap has
-            // already released them and the same call is cheap.
-            let chunked = chunked.clone();
-            glib::idle_add_local_once(move || chunked.detach_for_replace());
-        }
         let detach_done = replace_started.map(|s| s.elapsed());
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
         let objects_done = replace_started.map(|s| s.elapsed());
@@ -1585,11 +1574,6 @@ impl Gallery {
                 }
             });
         }
-        if let Some(chunked) = chunked_detach {
-            // After the reconcile idle the chunk list matches the new store,
-            // so re-mounting binds only the new content.
-            glib::idle_add_local_once(move || chunked.reattach_after_replace());
-        }
         if self.collage_selection_mode.get() {
             self.restore_collage_selection();
         } else if objects.is_empty() {
@@ -1608,14 +1592,13 @@ impl Gallery {
         }
         let groups_done = replace_started.map(|s| s.elapsed());
 
-        self.stream_building.set(false);
+        self.set_stream_building(false);
         if let Some(started) = replace_started {
             let phase = |done: Option<std::time::Duration>| {
                 done.map(|d| d.as_micros()).unwrap_or_default()
             };
-            let old_items_us = old_items as u64;
             eprintln!(
-                "PIC_NAV nav_stage=replace_phases t={} old_items={old_items_us} new_items={} detach_us={} objects_us={} swap_us={} splice_us={} select_us={} groups_us={} total_us={}",
+                "PIC_NAV nav_stage=replace_phases t={} new_items={} detach_us={} objects_us={} swap_us={} splice_us={} select_us={} groups_us={} total_us={}",
                 crate::diagnostics::t_ms(),
                 photos.len(),
                 phase(detach_done),
@@ -1701,6 +1684,7 @@ impl Gallery {
         let _folder_root = self.folder_root.clone();
         let replace_generation = self.replace_generation.clone();
         let stream_building = self.stream_building.clone();
+        let chunked_for_fill = self.chunked_prototype.clone();
 
         glib::idle_add_local(move || {
             if replace_generation.get() != generation {
@@ -1802,7 +1786,7 @@ impl Gallery {
 
                 // Folder rows (and therefore folder navigation targets) only
                 // exist once every batch has been applied.
-                stream_building.set(false);
+                set_stream_building_values(&stream_building, &chunked_for_fill, false);
                 glib::ControlFlow::Break
             }
         });
@@ -1812,6 +1796,10 @@ impl Gallery {
         if photos.is_empty() {
             return;
         }
+        // Each startup batch is part of the Folder-stream fill: keep the
+        // chunked prototype's post-fill remount postponed until the batches
+        // stop arriving (append end clears it again).
+        self.set_stream_building(true);
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
         self.current_photos
             .borrow_mut()
@@ -1825,6 +1813,9 @@ impl Gallery {
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
             }
         }
+        // Batch applied: allow the chunked post-fill remount 300 ms after
+        // the LAST batch (each batch's true-entry cancels the pending one).
+        self.set_stream_building(false);
 
     }
 
@@ -1836,7 +1827,7 @@ impl Gallery {
     pub fn cancel_progressive_build(&self) {
         self.replace_generation
             .set(self.replace_generation.get().wrapping_add(1));
-        self.stream_building.set(false);
+        self.set_stream_building(false);
     }
 
 }
@@ -1962,6 +1953,20 @@ fn folder_virtual_row_matches(old: &FolderRowData, new: &FolderRowData) -> bool 
         && old.start == new.start
         && old.end == new.end
         && old.photo_ids == new.photo_ids
+}
+
+/// Free-standing variant used inside `move` closures (progressive batches)
+/// where `self` is unavailable: keeps the flag and the chunked prototype's
+/// fill hook in lockstep.
+fn set_stream_building_values(
+    stream_building: &Rc<Cell<bool>>,
+    chunked: &Option<chunked::ChunkedPrototype>,
+    building: bool,
+) {
+    stream_building.set(building);
+    if let Some(chunked) = chunked {
+        chunked.notify_stream_building(building);
+    }
 }
 
 fn save_folder_cache_for(

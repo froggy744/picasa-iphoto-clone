@@ -8,6 +8,31 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const PHOTOS_PER_CHUNK: u32 = 64;
+/// Columns each chunk's inner GridView is pinned to, so every chunk row's
+/// final height is known before a single tile is loaded.
+const CHUNK_COLUMNS: u32 = 5;
+/// Vertical pitch of one tile line inside an inner GridView: the tile plus
+/// the per-item padding the shared photo-grid CSS applies (6px top/bottom).
+const CHUNK_LINE_SPACING: i32 = 12;
+/// How many chunk rows beyond the viewport keep their photo models mounted
+/// in each scroll direction. Keeps mounted tiles bounded while making
+/// ordinary scrolling and small jumps seamless.
+const REALIZATION_OVERSCAN_CHUNKS: i64 = 4;
+
+fn slice_size_for(filled_items: u32) -> u32 {
+    filled_items
+}
+
+/// Final height of one chunk row holding `items` photos on `CHUNK_COLUMNS`
+/// lines. Wrapped around the inner GridView so GtkListView measures the row's
+/// FINAL size immediately: without it, rows measure a few px while their
+/// photos stream in, the list reports the whole stream as one viewport tall
+/// (upper == page), treats every row as visible, and mounts hundreds of
+/// chunk GridViews that then cost ~600 ms to tear down.
+fn chunk_row_height_px(items: u32, tile_height: i32, columns: u32) -> i32 {
+    let lines = (items as f64 / columns.max(1) as f64).ceil() as i32;
+    lines * (tile_height.max(1) + CHUNK_LINE_SPACING)
+}
 
 #[derive(Clone)]
 pub(crate) struct ChunkedPrototype {
@@ -16,6 +41,21 @@ pub(crate) struct ChunkedPrototype {
     store: gio::ListStore,
     chunks: gio::ListStore,
     reconcile_pending: Rc<Cell<bool>>,
+    /// (tile_height, columns) the wrapper height requests are computed from.
+    metrics: Rc<Cell<(i32, u32)>>,
+    /// Chunk-row wrapper boxes, for metric updates on already-realized rows.
+    wrappers: Rc<RefCell<Vec<glib::WeakRef<gtk::Box>>>>,
+    /// False while a Folder-stream fill is in progress. Rows must not mount
+    /// photo models while their slice is only partly filled: GtkListBase
+    /// caches the (tiny) measured row height at first materialization and
+    /// averages it into the adjustment's upper estimate. A collapsed upper
+    /// (measured upper == page_size == 872) makes GTK treat every row as
+    /// visible, mounts all 205-354 chunk GridViews, and costs ~600 ms at the
+    /// next cross-view teardown.
+    fill_complete: Rc<Cell<bool>>,
+    /// Pending post-fill remount, postponed while fill signals keep arriving
+    /// (startup batches set building=false after every append).
+    remount_pending: Rc<RefCell<Option<glib::SourceId>>>,
 }
 
 /// Clear the models of grids beyond the surviving chunk count, then reconcile
@@ -62,6 +102,12 @@ impl ChunkedPrototype {
         let reconcile_pending = Rc::new(Cell::new(false));
         let reconcile_pending_for_sync = reconcile_pending.clone();
         let reconcile_pending_for_struct = reconcile_pending.clone();
+        let metrics = Rc::new(Cell::new((0_i32, CHUNK_COLUMNS)));
+        let wrappers: Rc<RefCell<Vec<glib::WeakRef<gtk::Box>>>> =
+            Rc::new(RefCell::new(Vec::new()));
+        let fill_complete = Rc::new(Cell::new(false));
+        let remount_pending: Rc<RefCell<Option<glib::SourceId>>> =
+            Rc::new(RefCell::new(None));
         store.connect_items_changed(move |_, _, _, _| {
             if reconcile_pending.replace(true) {
                 return;
@@ -91,18 +137,40 @@ impl ChunkedPrototype {
         let item_factory = photo_factory.clone();
         let bind_trace_root: Rc<RefCell<Option<gtk::ListView>>> = Rc::new(RefCell::new(None));
         let bind_trace_root_for_bind = bind_trace_root.clone();
+        let metrics_for_setup = metrics.clone();
+        let metrics_for_bind = metrics.clone();
+        let fill_complete_for_bind = fill_complete.clone();
+        let wrappers_for_setup = wrappers.clone();
         factory.connect_setup(move |_, object| {
             let Some(item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
             let grid = gtk::GridView::new(None::<gtk::NoSelection>, Some(item_factory.clone()));
-            grid.set_min_columns(5);
-            grid.set_max_columns(5);
+            let (tile_height, columns) = metrics_for_setup.get();
+            grid.set_min_columns(columns);
+            grid.set_max_columns(columns);
             grid.set_single_click_activate(false);
             grid.set_hexpand(true);
             grid.set_halign(gtk::Align::Fill);
-            grid.add_css_class("section-grid");
-            item.set_child(Some(&grid));
+            // Fill the wrapper vertically: the wrapper owns the row height;
+            // without vexpand the grid would render at its (possibly empty)
+            // natural height and the row would look blank.
+            grid.set_vexpand(true);
+            grid.set_valign(gtk::Align::Fill);
+            if std::env::var_os("PIC_BISECT_NO_CSS").is_none() {
+                grid.add_css_class("section-grid");
+            }
+            // The wrapper owns the row height so the outer ListView can size
+            // and virtualize rows whose photos have not streamed in yet.
+            let wrapper = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            wrapper.set_height_request(chunk_row_height_px(
+                PHOTOS_PER_CHUNK,
+                tile_height,
+                columns,
+            ));
+            wrapper.append(&grid);
+            item.set_child(Some(&wrapper));
+            wrappers_for_setup.borrow_mut().push(wrapper.downgrade());
             grids_for_setup.borrow_mut().push(grid.downgrade());
             if crate::diagnostics::trace_enabled() {
                 static SETUP_COUNT: std::sync::atomic::AtomicU32 =
@@ -115,6 +183,7 @@ impl ChunkedPrototype {
                 );
             }
         });
+        let store_for_bind = store.clone();
         factory.connect_bind(move |_, object| {
             let self_root = bind_trace_root_for_bind.clone();
             let Some(item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -123,10 +192,63 @@ impl ChunkedPrototype {
             let Some(slice) = item.item().and_downcast::<gtk::SliceListModel>() else {
                 return;
             };
-            let Some(grid) = item.child().and_downcast::<gtk::GridView>() else {
+            let Some(wrapper) = item.child().and_downcast::<gtk::Box>() else {
                 return;
             };
-            grid.set_model(Some(&gtk::NoSelection::new(Some(slice))));
+            let Some(grid) = wrapper.first_child().and_downcast::<gtk::GridView>() else {
+                return;
+            };
+            // Correct the final partial chunk's wrapper height once the
+            // position is known (setup optimistically assumes a full chunk).
+            let position = item.position();
+            let total = store_for_bind.n_items();
+            let filled = total.saturating_sub(position * PHOTOS_PER_CHUNK).min(PHOTOS_PER_CHUNK);
+            let (tile_height, columns) = metrics_for_bind.get();
+            wrapper.set_height_request(chunk_row_height_px(
+                filled.max(1),
+                tile_height,
+                columns,
+            ));
+            // Mount photos only when the fill is complete AND this chunk is
+            // near the viewport (viewport-windowed realization). Everything
+            // else stays a cheap empty wrapper: bounded mounted tiles, and
+            // the row still measures its full wrapper height so the
+            // adjustment upper spans the whole library.
+            if crate::diagnostics::trace_enabled() {
+                let wrapper_probe = wrapper.downgrade();
+                let slice_probe = slice.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || {
+                    let Some(wrapper) = wrapper_probe.upgrade() else { return };
+                    let allocated = wrapper.allocated_height();
+                    if allocated == 0 {
+                        return; // off-screen pre-roll row, never allocated
+                    }
+                    eprintln!(
+                        "PIC_NAV chunk_wrapper_alloc allocated_h={allocated} request={} slice_items={} t={}",
+                        wrapper.height_request(),
+                        slice_probe.n_items(),
+                        crate::diagnostics::t_ms()
+                    );
+                });
+            }
+            let filling = !fill_complete_for_bind.get()
+                || slice.n_items() < slice_size_for(filled);
+            let row_height = chunk_row_height_px(PHOTOS_PER_CHUNK, tile_height, columns) as f64;
+            let viewport_center = if row_height > 0.0 {
+                let adjustment = self_root.borrow().as_ref().and_then(|root| root.vadjustment());
+                adjustment
+                    .map(|adj| (adj.value() + adj.page_size() / 2.0) / row_height)
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            let distance =
+                (position as f64 - viewport_center).abs() - (filled as f64 / columns.max(1) as f64);
+            if filling || distance > REALIZATION_OVERSCAN_CHUNKS as f64 {
+                grid.set_model(None::<&gtk::NoSelection>);
+            } else {
+                grid.set_model(Some(&gtk::NoSelection::new(Some(slice))));
+            }
             if crate::diagnostics::trace_enabled() {
                 static BIND_COUNT: std::sync::atomic::AtomicU32 =
                     std::sync::atomic::AtomicU32::new(0);
@@ -168,14 +290,96 @@ impl ChunkedPrototype {
         root.set_show_separators(false);
         root.set_hexpand(true);
         root.set_vexpand(true);
-        root.add_css_class("folder-stream");
+        if std::env::var_os("PIC_BISECT_NO_CSS").is_none() {
+            root.add_css_class("folder-stream");
+        }
         *bind_trace_root.borrow_mut() = Some(root.clone());
+        let pending_self_clone = Self {
+            root: root.clone(),
+            grids: grids.clone(),
+            store: store.clone(),
+            chunks: chunks_for_struct.clone(),
+            reconcile_pending: reconcile_pending_for_struct.clone(),
+            metrics: metrics.clone(),
+            wrappers: wrappers.clone(),
+            fill_complete: fill_complete.clone(),
+            remount_pending: remount_pending.clone(),
+        };
+        if crate::diagnostics::trace_enabled() {
+            // Realization status: bounded-mounted-row evidence plus the
+            // adjustment health of the outer list. Doubles as a self-heal:
+            // if the post-fill remount raced the window's first allocations
+            // and the upper collapsed to a degenerate value, re-run the
+            // remount (bounded attempts) so measurement recovers.
+            let status_root = root.downgrade();
+            let fill_status = fill_complete.clone();
+            let pending_status = remount_pending.clone();
+            let metrics_status = metrics.clone();
+            let recovery_attempts = Rc::new(Cell::new(0u8));
+            let recovery_for_timer = recovery_attempts.clone();
+            let prototype_for_status = pending_self_clone.clone();
+            let wrappers_status = wrappers.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(2000), move || {
+                let Some(root) = status_root.upgrade() else {
+                    return glib::ControlFlow::Break;
+                };
+                let (value, upper, page) = root
+                    .vadjustment()
+                    .map(|adj| (adj.value(), adj.upper(), adj.page_size()))
+                    .unwrap_or_default();
+                let logical = root.model().map(|m| m.n_items()).unwrap_or_default();
+                let (tile_height, columns) = metrics_status.get();
+                let expected_upper =
+                    chunk_row_height_px(PHOTOS_PER_CHUNK, tile_height, columns) as f64
+                        * logical.max(1) as f64;
+                let degenerate = fill_status.get()
+                    && logical > 0
+                    && upper + 1.0 < expected_upper * 0.5;
+                if degenerate && recovery_for_timer.get() < 5 {
+                    recovery_for_timer.set(recovery_for_timer.get() + 1);
+                    eprintln!(
+                        "PIC_NAV chunk_realization recovery remount attempt={} t={}",
+                        recovery_for_timer.get(),
+                        crate::diagnostics::t_ms()
+                    );
+                    prototype_for_status.remount_for_measurement();
+                }
+                let mounted = wrappers_status
+                    .borrow()
+                    .iter()
+                    .filter(|weak| weak.upgrade().is_some())
+                    .count();
+                let parent_desc = root
+                    .parent()
+                    .map(|parent| {
+                        format!(
+                            " parent={} visible={} mapped={}",
+                            parent.widget_name(),
+                            parent.is_visible(),
+                            parent.is_mapped()
+                        )
+                    })
+                    .unwrap_or_default();
+                eprintln!(
+                    "PIC_NAV chunk_realization logical_chunks={logical} realized_wrappers={mounted} value={value:.0} upper={upper:.0} page={page:.0} expected={expected_upper:.0} self_visible={} self_mapped={}{} t={}",
+                    root.is_visible(),
+                    root.is_mapped(),
+                    parent_desc,
+                    crate::diagnostics::t_ms()
+                );
+                glib::ControlFlow::Continue
+            });
+        }
         Self {
             root: root.clone(),
             grids,
             store: store.clone(),
             chunks: chunks_for_struct,
             reconcile_pending: reconcile_pending_for_struct,
+            metrics,
+            wrappers,
+            fill_complete: fill_complete.clone(),
+            remount_pending: remount_pending.clone(),
         }
     }
 
@@ -189,38 +393,105 @@ impl ChunkedPrototype {
         reconcile_chunks(&self.store, &self.chunks, &self.grids);
     }
 
-    /// Unmount the outer chunk rows before a wholesale base-store
-    /// replacement. With no mounted chunk GridViews, the splice's
-    /// items-changed dispatch becomes plain GObject disposal instead of
-    /// per-chunk list item manager work across hundreds of slices
-    /// (measured ~700 ms for a 22k-photo folder to a small album view).
-    /// Call from outside any items-changed emission, pair with
-    /// `reattach_after_replace` on a later idle.
-    pub(crate) fn detach_for_replace(&self) {
+    /// Called by the Gallery when a Folder-stream fill starts (`true`) and
+    /// when it completes (`false`). On completion, the outer list's model is
+    /// remounted once: every chunk row re-measures against its now-complete
+    /// slice, so the adjustment upper spans the real library height and the
+    /// realization window binds only chunks near the viewport.
+    pub(crate) fn notify_stream_building(&self, building: bool) {
         if crate::diagnostics::trace_enabled() {
-            let tracked = self.grids.borrow().len();
-            let alive = self
-                .grids
-                .borrow()
-                .iter()
-                .filter(|weak| weak.upgrade().is_some())
-                .count();
             eprintln!(
-                "PIC_NAV chunk_detach tracked_grids={tracked} alive_grids={alive} chunks={} t={}",
-                self.chunks.n_items(),
+                "PIC_NAV chunk_realization notify building={building} fill_complete={} t={}",
+                self.fill_complete.get(),
                 crate::diagnostics::t_ms()
             );
         }
-        self.root.set_model(None::<&gtk::NoSelection>);
+        if let Some(pending) = self.remount_pending.borrow_mut().take() {
+            pending.remove();
+        }
+        if building {
+            self.fill_complete.set(false);
+            return;
+        }
+        if self.fill_complete.get() {
+            return;
+        }
+        // Postpone the remount while fill signals keep arriving: startup
+        // appends set building=false after every batch, so only a quiet
+        // period (no new batches for 300 ms) means the stream is complete.
+        let pending_self = self.clone();
+        let source = glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
+            if pending_self.fill_complete.get() {
+                return glib::ControlFlow::Break;
+            }
+            pending_self.fill_complete.set(true);
+            pending_self.remount_pending.borrow_mut().take();
+            if crate::diagnostics::trace_enabled() {
+                eprintln!(
+                    "PIC_NAV chunk_realization remount t={} chunks={} store={}",
+                    crate::diagnostics::t_ms(),
+                    pending_self.chunks.n_items(),
+                    pending_self.store.n_items()
+                );
+            }
+            // Fresh model pass: unmount everything and let the list rebind
+            // with complete slices. Bind runs the realization window per
+            // row, so only chunks near the viewport mount photo models.
+            pending_self.root.set_model(None::<&gtk::NoSelection>);
+            let model = gtk::NoSelection::new(Some(pending_self.chunks.clone()));
+            pending_self.root.set_model(Some(&model));
+            glib::ControlFlow::Break
+        });
+        *self.remount_pending.borrow_mut() = Some(source);
     }
 
-    /// Re-mount the outer chunk model after a replacement splice. The
-    /// pending reconcile (if any) must run first so the chunk list matches
-    /// the new store size; `flush_reconcile` is a no-op otherwise.
-    pub(crate) fn reattach_after_replace(&self) {
-        self.flush_reconcile();
+    /// Re-mount the outer chunk model so every row re-measures against its
+    /// now-complete slice. Used after a Folder-stream fill and as a bounded
+    /// self-heal when the adjustment upper collapsed to a degenerate value
+    /// (progressive-fill measurement race), which otherwise leaves every
+    /// chunk row mounted and costs ~600 ms at the next teardown.
+    fn remount_for_measurement(&self) {
+        self.root.set_model(None::<&gtk::NoSelection>);
         let model = gtk::NoSelection::new(Some(self.chunks.clone()));
         self.root.set_model(Some(&model));
+    }
+
+    /// Track thumbnail zoom so every chunk wrapper's height request keeps
+    /// matching the final laid-out size of its 64 photos.
+    pub(crate) fn set_tile_height(&self, tile_height: i32) {
+        let (_, columns) = self.metrics.get();
+        if self.metrics.replace((tile_height, columns)) == (tile_height, columns) {
+            return;
+        }
+        self.apply_row_metrics();
+    }
+
+    fn apply_row_metrics(&self) {
+        let (tile_height, columns) = self.metrics.get();
+        let mut wrappers = self.wrappers.borrow_mut();
+        wrappers.retain(|weak| {
+            let Some(wrapper) = weak.upgrade() else {
+                return false;
+            };
+            // Rows keep the full-chunk height here; bind corrects the final
+            // partial chunk once its position is known.
+            wrapper.set_height_request(chunk_row_height_px(
+                PHOTOS_PER_CHUNK,
+                tile_height,
+                columns,
+            ));
+            true
+        });
+        let mut grids = self.grids.borrow_mut();
+        grids.retain(|weak| {
+            let Some(grid) = weak.upgrade() else {
+                return false;
+            };
+            grid.set_min_columns(columns);
+            grid.set_max_columns(columns);
+            grid.queue_resize();
+            true
+        });
     }
 
     pub(crate) fn set_columns(&self, columns: u32) {

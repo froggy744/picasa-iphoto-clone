@@ -247,7 +247,13 @@ impl Gallery {
         });
 
         let chunked_prototype = crate::grid::folder_chunked_experiment_enabled()
-            .then(|| chunked::ChunkedPrototype::new(&store, &factory));
+            .then(|| {
+                let prototype = chunked::ChunkedPrototype::new(&store, &factory);
+                // Rows must measure their final height from the first
+                // allocation or the list virtualizes as one viewport.
+                prototype.set_tile_height(tile_height.get());
+                prototype
+            });
         let root = gtk::GridView::new(Some(selection.clone()), Some(factory));
         root.set_min_columns(5);
         root.set_max_columns(5);
