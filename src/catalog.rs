@@ -179,6 +179,27 @@ pub fn photo_by_id(id: i64) -> Result<Option<PhotoRecord>> {
         .optional()?)
 }
 
+pub fn setting(key: &str) -> Result<Option<String>> {
+    let connection = open_default()?;
+    Ok(connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+pub fn set_setting(key: &str, value: &str) -> Result<()> {
+    let connection = open_default()?;
+    connection.execute(
+        "INSERT INTO settings(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
 pub fn favorite_paths() -> Result<HashSet<String>> {
     let connection = open_default()?;
     let mut statement =
