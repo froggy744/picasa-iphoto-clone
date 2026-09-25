@@ -239,8 +239,15 @@ impl Gallery {
             }
         }
         self.group_ranges.replace(ranges);
-        if mode == GroupMode::Folder && crate::grid::folder_gridview_experiment_enabled() {
-            self.update_group_header_for_scroll(self.last_scroll_y.get());
+        if mode == GroupMode::Folder {
+            if let Some(chunked) = self.chunked_prototype.as_ref() {
+                if crate::grid::folder_chunked_experiment_enabled() {
+                    chunked.set_folder_ranges(&self.group_ranges.borrow());
+                }
+            }
+            if crate::grid::folder_gridview_experiment_enabled() {
+                self.update_group_header_for_scroll(self.last_scroll_y.get());
+            }
         }
     }
 
