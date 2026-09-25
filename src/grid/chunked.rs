@@ -96,6 +96,35 @@ fn chunk_row_height_px(items: u32, tile_height: i32, columns: u32) -> i32 {
     lines * (tile_height.max(1) + CHUNK_LINE_SPACING)
 }
 
+fn chunk_index_for_scroll_y(
+    meta: &[ChunkMeta],
+    columns: u32,
+    tile_height: i32,
+    scroll_y: f64,
+) -> u32 {
+    if meta.is_empty() {
+        return 0;
+    }
+    let mut y = 0.0_f64;
+    let target = scroll_y.max(0.0);
+    for (index, entry) in meta.iter().enumerate() {
+        let (start, end) = aligned_chunk_bounds(entry, columns);
+        let header = if entry.logical_index == 0 {
+            CHUNK_HEADER_HEIGHT
+        } else {
+            0
+        };
+        let height = f64::from(
+            header + chunk_row_height_px(end.saturating_sub(start).max(1), tile_height, columns),
+        );
+        if target < y + height {
+            return index as u32;
+        }
+        y += height;
+    }
+    meta.len().saturating_sub(1) as u32
+}
+
 /// Photo count the `position`-th chunk would hold in a store of `total_items`
 /// photos: a full chunk, or only the remainder for the final one.
 fn filled_items_for_chunk(total_items: u32, position: u32) -> u32 {
@@ -412,7 +441,6 @@ impl ChunkedPrototype {
                 return;
             };
             let position = item.position();
-            let total = store_for_bind.n_items();
             let (tile_height, columns) = metrics_for_bind.get();
             let meta = chunk_meta_for_bind
                 .borrow()
@@ -466,23 +494,26 @@ impl ChunkedPrototype {
                     );
                 });
             }
-            let row_height = chunk_row_height_px(PHOTOS_PER_CHUNK, tile_height, columns) as f64;
-            let viewport_center = if row_height > 0.0 {
-                let adjustment = self_root.borrow().as_ref().and_then(|root| root.vadjustment());
-                adjustment
-                    .map(|adj| (adj.value() + adj.page_size() / 2.0) / row_height)
-                    .unwrap_or(0.0)
+            let mount = if fill_complete_for_bind.get() {
+                let meta = chunk_meta_for_bind.borrow();
+                let center = self_root
+                    .borrow()
+                    .as_ref()
+                    .and_then(|root| root.vadjustment())
+                    .map(|adj| {
+                        chunk_index_for_scroll_y(
+                            &meta,
+                            columns,
+                            tile_height,
+                            adj.value() + adj.page_size() / 2.0,
+                        )
+                    })
+                    .unwrap_or(0);
+                let (start, end) = realization_window(center as i64, meta.len() as u32);
+                position >= start && position <= end
             } else {
-                0.0
+                false
             };
-            let mount = chunk_in_realization_window(
-                position,
-                viewport_center,
-                slice.n_items(),
-                total,
-                columns,
-                fill_complete_for_bind.get(),
-            );
             if mount {
                 grid.set_model(Some(&gtk::NoSelection::new(Some(slice))));
             } else {
@@ -698,12 +729,17 @@ impl ChunkedPrototype {
             return;
         };
         let (tile_height, columns) = self.metrics.get();
-        let row_height = chunk_row_height_px(PHOTOS_PER_CHUNK, tile_height, columns) as f64;
-        if row_height <= 0.0 {
+        let meta = self.chunk_meta.borrow();
+        if meta.is_empty() {
             return;
         }
-        let center = (adjustment.value() + adjustment.page_size() / 2.0) / row_height;
-        let total = self.store.n_items();
+        let center = chunk_index_for_scroll_y(
+            &meta,
+            columns,
+            tile_height,
+            adjustment.value() + adjustment.page_size() / 2.0,
+        );
+        let (mount_start, mount_end) = realization_window(center as i64, meta.len() as u32);
         let items = {
             let mut items = self.bound_items.borrow_mut();
             items.retain(|weak| weak.upgrade().is_some());
@@ -721,35 +757,10 @@ impl ChunkedPrototype {
             let Some(grid) = wrapper.last_child().and_downcast::<gtk::GridView>() else {
                 continue;
             };
-            let overscan_px = adjustment.page_size().max(row_height);
-            let mount = wrapper
-                .compute_bounds(&self.root)
-                .map(|bounds| {
-                    let retain = if grid.model().is_some() {
-                        overscan_px * 0.5
-                    } else {
-                        0.0
-                    };
-                    let top = bounds.y() as f64;
-                    let bottom = top + bounds.height() as f64;
-                    bottom >= -overscan_px - retain
-                        && top <= adjustment.page_size() + overscan_px + retain
-                })
-                .unwrap_or_else(|| {
-                    chunk_in_realization_window_with_margin(
-                        item.position(),
-                        center,
-                        slice.n_items(),
-                        total,
-                        columns,
-                        true,
-                        if grid.model().is_some() {
-                            REALIZATION_RETAIN_MARGIN_CHUNKS
-                        } else {
-                            0.0
-                        },
-                    )
-                });
+            let position = item.position();
+            let retain = if grid.model().is_some() { 1 } else { 0 };
+            let mount = position.saturating_add(retain) >= mount_start
+                && position <= mount_end.saturating_add(retain);
             if mount {
                 realized += 1;
                 if grid.model().is_none() {
@@ -763,7 +774,7 @@ impl ChunkedPrototype {
         }
         if crate::diagnostics::trace_enabled() && changed > 0 {
             eprintln!(
-                "PIC_NAV chunk_realization update center={center:.1} realized_grids={realized} changed={changed} value={:.0} upper={:.0} page={:.0} t={}",
+                "PIC_NAV chunk_realization update center={center} realized_grids={realized} changed={changed} value={:.0} upper={:.0} page={:.0} t={}",
                 adjustment.value(), adjustment.upper(), adjustment.page_size(),
                 crate::diagnostics::t_ms()
             );
@@ -1032,13 +1043,24 @@ impl ChunkedPrototype {
                 (position >= start && position < end).then_some(index as u32)
             })
             .unwrap_or_else(|| position / PHOTOS_PER_CHUNK);
-        // Let GtkListView perform the jump itself. A raw vadjustment
-        // teleport invalidates the old viewport before GTK has realized the
-        // destination rows, which produces the visible blank/flicker frame on
-        // Folder-to-Folder navigation. scroll_to() can realize the target as
-        // part of the list operation instead.
-        self.root
-            .scroll_to(chunk_index, gtk::ListScrollFlags::empty(), None);
+        let exact_offset = self.scroll_offset_for_photo(position);
+        if let (Some(offset), Some(adjustment)) = (exact_offset, self.root.vadjustment()) {
+            let healthy = self.root.is_mapped()
+                && adjustment.page_size() > 0.0
+                && adjustment.upper() > adjustment.page_size();
+            if healthy {
+                let upper = (adjustment.upper() - adjustment.page_size())
+                    .max(adjustment.lower());
+                adjustment.set_value(offset.clamp(adjustment.lower(), upper));
+                self.request_realization_update();
+            } else {
+                self.root
+                    .scroll_to(chunk_index, gtk::ListScrollFlags::empty(), None);
+            }
+        } else {
+            self.root
+                .scroll_to(chunk_index, gtk::ListScrollFlags::empty(), None);
+        }
     }
 }
 
