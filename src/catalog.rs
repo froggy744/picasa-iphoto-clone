@@ -211,6 +211,19 @@ pub fn favorite_paths() -> Result<HashSet<String>> {
     Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
 }
 
+pub fn set_rotation(photo_id: i64, rotation: i32) -> Result<()> {
+    let normalized = rotation.rem_euclid(360);
+    if ![0, 90, 180, 270].contains(&normalized) {
+        anyhow::bail!("invalid rotation: {rotation}");
+    }
+    let connection = open_default()?;
+    connection.execute(
+        "UPDATE photos SET rotation = ?1 WHERE id = ?2",
+        params![normalized, photo_id],
+    )?;
+    Ok(())
+}
+
 pub fn set_favorite_by_path(path: &str, favorite: bool) -> Result<()> {
     let connection = open_default()?;
     connection.execute(
