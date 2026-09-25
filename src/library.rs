@@ -535,6 +535,12 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
 
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Search photos or folders"));
+    search.set_size_request(280, -1);
+    search.set_tooltip_text(Some("Search file names and folder paths"));
+    header.pack_end(&search);
+
+    let search = gtk::SearchEntry::new();
+    search.set_placeholder_text(Some("Search photos or folders"));
     search.set_size_request(260, -1);
     search.set_tooltip_text(Some("Search filename, folder name, or path"));
     header.pack_end(&search);
@@ -581,6 +587,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let groups = groups.clone();
         let master = master_groups.clone();
         let mode = mode.clone();
+        let search_query = search_query.clone();
         let count_label = count_label.clone();
         let content_title = content_title.clone();
         let photos_button = photos_button.clone();
@@ -597,6 +604,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                     &groups,
                     &master.borrow(),
                     ViewMode::Favorites,
+                    &search_query.borrow(),
                     &count_label,
                     &content_title,
                     &photos_button,
@@ -612,6 +620,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let groups = groups.clone();
         let master = master_groups.clone();
         let mode = mode.clone();
+        let search_query = search_query.clone();
         let count_label = count_label.clone();
         let title = content_title.clone();
         let photos_button_for_style = photos_button.clone();
@@ -624,6 +633,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &groups,
                 &master.borrow(),
                 ViewMode::Photos,
+                &search_query.borrow(),
                 &count_label,
                 &title,
                 &photos_button_for_style,
@@ -637,6 +647,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let groups = groups.clone();
         let master = master_groups.clone();
         let mode = mode.clone();
+        let search_query = search_query.clone();
         let count_label = count_label.clone();
         let title = content_title.clone();
         let photos_button_for_style = photos_button.clone();
@@ -650,6 +661,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &groups,
                 &master.borrow(),
                 ViewMode::Favorites,
+                &search_query.borrow(),
                 &count_label,
                 &title,
                 &photos_button_for_style,
@@ -684,13 +696,41 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         });
     }
 
+    {
+        let groups = groups.clone();
+        let master = master_groups.clone();
+        let mode = mode.clone();
+        let search_query = search_query.clone();
+        let count_label = count_label.clone();
+        let title = content_title.clone();
+        let photos_button = photos_button.clone();
+        let favorites_button = favorites_button.clone();
+
+        search.connect_search_changed(move |entry| {
+            let query = entry.text().to_string();
+            search_query.replace(query.clone());
+            apply_view(
+                &groups,
+                &master.borrow(),
+                mode.get(),
+                &query,
+                &count_label,
+                &title,
+                &photos_button,
+                &favorites_button,
+            );
+        });
+    }
+
     let folder_activate: Rc<dyn Fn(usize)> = {
         let groups = groups.clone();
         let master = master_groups.clone();
         let mode = mode.clone();
+        let search_query = search_query.clone();
         let count_label = count_label.clone();
         let title = content_title.clone();
         let list = list.clone();
+        let search = search.clone();
         let photos_button = photos_button.clone();
         let favorites_button = favorites_button.clone();
         let search_text = search_text.clone();
@@ -707,6 +747,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                     &groups,
                     &master.borrow(),
                     ViewMode::Photos,
+                    &search_query.borrow(),
                     &count_label,
                     &title,
                     &photos_button,
@@ -1270,24 +1311,27 @@ fn apply_view(
     groups: &gio::ListStore,
     master: &[FolderGroupData],
     mode: ViewMode,
+    query: &str,
     count_label: &gtk::Label,
     content_title: &gtk::Label,
     photos_button: &gtk::Button,
     favorites_button: &gtk::Button,
-    query: &str,
 ) {
     groups.remove_all();
     let mut photo_count = 0u32;
     let mut folder_count = 0u32;
-    let needle = query.trim().to_lowercase();
+    let needle = query.trim().to_ascii_lowercase();
 
     for group in master {
-        let folder_match = needle.is_empty()
-            || group.label.to_lowercase().contains(&needle)
-            || group.folder.to_string_lossy().to_lowercase().contains(&needle);
+        let folder_match = !needle.is_empty()
+            && (group.label.to_ascii_lowercase().contains(&needle)
+                || group
+                    .folder
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .contains(&needle));
 
         let filtered = gio::ListStore::new::<PhotoObject>();
-
         for position in 0..group.model.n_items() {
             let Some(photo) = group.model.item(position).and_downcast::<PhotoObject>() else {
                 continue;
@@ -1297,13 +1341,15 @@ fn apply_view(
                 continue;
             }
 
+            let path = photo.path();
             let photo_match = needle.is_empty()
                 || folder_match
-                || Path::new(&photo.path())
+                || Path::new(&path)
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.to_lowercase().contains(&needle))
-                || photo.path().to_lowercase().contains(&needle);
+                    .map(|name| name.to_ascii_lowercase().contains(&needle))
+                    .unwrap_or(false)
+                || path.to_ascii_lowercase().contains(&needle);
 
             if photo_match {
                 filtered.append(&photo);
@@ -1330,17 +1376,17 @@ fn apply_view(
             favorites_button.remove_css_class("sidebar-active");
         }
         ViewMode::Favorites => {
-            content_title.set_label(if needle.is_empty() { "Favourites" } else { "Search · Favourites" });
+            content_title.set_label(if needle.is_empty() {
+                "Favourites"
+            } else {
+                "Search · Favourites"
+            });
             favorites_button.add_css_class("sidebar-active");
             photos_button.remove_css_class("sidebar-active");
         }
     }
 
-    if needle.is_empty() {
-        count_label.set_label(&format!("{} photos · {} folders", photo_count, folder_count));
-    } else {
-        count_label.set_label(&format!("{} matches · {} folders", photo_count, folder_count));
-    }
+    count_label.set_label(&format!("{} photos · {} folders", photo_count, folder_count));
 }
 
 fn count_photos(groups: &[FolderGroupData]) -> u32 {
@@ -1467,6 +1513,7 @@ fn refresh_library_chrome(
         groups,
         &master_ref,
         ViewMode::Photos,
+        "",
         count_label,
         content_title,
         photos_button,
@@ -1489,6 +1536,10 @@ fn install_css() {
     let css = gtk::CssProvider::new();
     css.load_from_data(
         r#"
+        searchentry {
+            min-height: 34px;
+        }
+
         .library-sidebar {
             background: alpha(@window_fg_color, 0.025);
             border-right: 1px solid alpha(@window_fg_color, 0.10);
