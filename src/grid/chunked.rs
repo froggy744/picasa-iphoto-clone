@@ -935,11 +935,69 @@ impl ChunkedPrototype {
         }
     }
 
+    pub(crate) fn photo_index_for_scroll_position(&self, fallback_scroll_y: f64) -> Option<usize> {
+        let scroll_y = self
+            .root
+            .vadjustment()
+            .map(|adjustment| adjustment.value())
+            .unwrap_or(fallback_scroll_y)
+            .max(0.0);
+        let (tile_height, columns) = self.metrics.get();
+        let row_pitch = f64::from(tile_height.max(1) + CHUNK_LINE_SPACING);
+        let meta = self.chunk_meta.borrow();
+        if meta.is_empty() {
+            return None;
+        }
+
+        let mut y = 0.0_f64;
+        for entry in meta.iter() {
+            let (start, end) = aligned_chunk_bounds(entry, columns);
+            let items = end.saturating_sub(start).max(1);
+            let header = if entry.logical_index == 0 {
+                f64::from(CHUNK_HEADER_HEIGHT)
+            } else {
+                0.0
+            };
+            let rows = items.div_ceil(columns.max(1));
+            let height = header + f64::from(rows) * row_pitch;
+            if scroll_y < y + height {
+                let inside = (scroll_y - y - header).max(0.0);
+                let row = (inside / row_pitch).floor() as u32;
+                let index = start
+                    .saturating_add(row.saturating_mul(columns.max(1)))
+                    .min(end.saturating_sub(1));
+                return Some(index as usize);
+            }
+            y += height;
+        }
+        meta.last().map(|entry| entry.folder_end.saturating_sub(1) as usize)
+    }
+
+    fn scroll_offset_for_photo(&self, position: u32) -> Option<f64> {
+        let (tile_height, columns) = self.metrics.get();
+        let row_pitch = f64::from(tile_height.max(1) + CHUNK_LINE_SPACING);
+        let meta = self.chunk_meta.borrow();
+        let mut y = 0.0_f64;
+        for entry in meta.iter() {
+            let (start, end) = aligned_chunk_bounds(entry, columns);
+            let header = if entry.logical_index == 0 {
+                f64::from(CHUNK_HEADER_HEIGHT)
+            } else {
+                0.0
+            };
+            if position >= start && position < end {
+                let row = position.saturating_sub(start) / columns.max(1);
+                return Some(y + header + f64::from(row) * row_pitch);
+            }
+            let items = end.saturating_sub(start).max(1);
+            let rows = items.div_ceil(columns.max(1));
+            y += header + f64::from(rows) * row_pitch;
+        }
+        None
+    }
+
     /// Scroll the visible outer chunk list so the photo at `position` in the
-    /// shared stream is revealed by its owning chunk's GridView. Because only
-    /// the outer ListView scrolls, this lands at the top of the enclosing
-    /// chunk; a later step can additionally scroll the inner grid by the
-    /// intra-chunk offset.
+    /// shared stream is revealed by its owning chunk's GridView.
     pub(crate) fn scroll_to_photo(&self, position: usize) {
         self.flush_reconcile();
         let columns = self.metrics.get().1;
@@ -956,6 +1014,13 @@ impl ChunkedPrototype {
             .unwrap_or_else(|| position / PHOTOS_PER_CHUNK);
         self.root
             .scroll_to(chunk_index, gtk::ListScrollFlags::FOCUS, None);
+        if let (Some(offset), Some(adjustment)) = (
+            self.scroll_offset_for_photo(position),
+            self.root.vadjustment(),
+        ) {
+            let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+            adjustment.set_value(offset.clamp(adjustment.lower(), upper));
+        }
         self.root.grab_focus();
     }
 }
