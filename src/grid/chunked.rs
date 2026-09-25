@@ -206,6 +206,7 @@ pub(crate) struct ChunkedPrototype {
     /// weak references so an idle can move photo models with the viewport.
     bound_items: Rc<RefCell<Vec<glib::WeakRef<gtk::ListItem>>>>,
     realization_pending: Rc<Cell<bool>>,
+    realization_retry_pending: Rc<Cell<bool>>,
     /// False while a Folder-stream fill is in progress. Rows must not mount
     /// photo models while their slice is only partly filled: GtkListBase
     /// caches the (tiny) measured row height at first materialization and
@@ -298,6 +299,7 @@ impl ChunkedPrototype {
         let bound_items: Rc<RefCell<Vec<glib::WeakRef<gtk::ListItem>>>> =
             Rc::new(RefCell::new(Vec::new()));
         let realization_pending = Rc::new(Cell::new(false));
+        let realization_retry_pending = Rc::new(Cell::new(false));
         let fill_complete = Rc::new(Cell::new(false));
         let remount_pending: Rc<RefCell<Option<glib::SourceId>>> =
             Rc::new(RefCell::new(None));
@@ -576,6 +578,7 @@ impl ChunkedPrototype {
             wrappers: wrappers.clone(),
             bound_items: bound_items.clone(),
             realization_pending: realization_pending.clone(),
+            realization_retry_pending: realization_retry_pending.clone(),
             fill_complete: fill_complete.clone(),
             remount_pending: remount_pending.clone(),
         };
@@ -740,14 +743,55 @@ impl ChunkedPrototype {
             adjustment.value() + adjustment.page_size() / 2.0,
         );
         let (mount_start, mount_end) = realization_window(center as i64, meta.len() as u32);
+        drop(meta);
+
         let items = {
             let mut items = self.bound_items.borrow_mut();
             items.retain(|weak| weak.upgrade().is_some());
             items.iter().filter_map(|weak| weak.upgrade()).collect::<Vec<_>>()
         };
+
+        // First determine whether GTK has actually bound any rows at the new
+        // viewport. During a large Folder jump, the adjustment can move before
+        // GtkListView has recycled its outer rows. If we unmount the old inner
+        // grids in that gap, the viewport briefly has zero photo models and
+        // some thumbnails never get remounted until another scroll.
+        let target_bound = items.iter().filter(|item| {
+            let position = item.position();
+            position >= mount_start && position <= mount_end
+        }).count();
+
+        if target_bound == 0 {
+            if !self.realization_retry_pending.replace(true) {
+                let this = self.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(16), move || {
+                    this.realization_retry_pending.set(false);
+                    this.request_realization_update();
+                });
+            }
+            if crate::diagnostics::trace_enabled() {
+                eprintln!(
+                    "PIC_NAV chunk_realization wait center={center} target_bound=0 value={:.0} upper={:.0} page={:.0} t={}",
+                    adjustment.value(),
+                    adjustment.upper(),
+                    adjustment.page_size(),
+                    crate::diagnostics::t_ms()
+                );
+            }
+            return;
+        }
+        self.realization_retry_pending.set(false);
+
+        // Mount the destination window first. Only after at least one target
+        // row exists do we retire old off-screen models. This keeps the
+        // adjustment geometry stable and avoids a zero-thumbnail transition.
         let mut realized = 0;
         let mut changed = 0;
-        for item in items {
+        for item in &items {
+            let position = item.position();
+            if position < mount_start || position > mount_end {
+                continue;
+            }
             let Some(slice) = item.item().and_downcast::<gtk::SliceListModel>() else {
                 continue;
             };
@@ -757,24 +801,35 @@ impl ChunkedPrototype {
             let Some(grid) = wrapper.last_child().and_downcast::<gtk::GridView>() else {
                 continue;
             };
+            realized += 1;
+            if grid.model().is_none() {
+                grid.set_model(Some(&gtk::NoSelection::new(Some(slice))));
+                changed += 1;
+            }
+        }
+
+        for item in &items {
             let position = item.position();
-            let retain = if grid.model().is_some() { 1 } else { 0 };
-            let mount = position.saturating_add(retain) >= mount_start
-                && position <= mount_end.saturating_add(retain);
-            if mount {
-                realized += 1;
-                if grid.model().is_none() {
-                    grid.set_model(Some(&gtk::NoSelection::new(Some(slice))));
-                    changed += 1;
-                }
-            } else if grid.model().is_some() {
+            let retain_start = mount_start.saturating_sub(1);
+            let retain_end = mount_end.saturating_add(1);
+            if position >= retain_start && position <= retain_end {
+                continue;
+            }
+            let Some(wrapper) = item.child().and_downcast::<gtk::Box>() else {
+                continue;
+            };
+            let Some(grid) = wrapper.last_child().and_downcast::<gtk::GridView>() else {
+                continue;
+            };
+            if grid.model().is_some() {
                 grid.set_model(None::<&gtk::NoSelection>);
                 changed += 1;
             }
         }
+
         if crate::diagnostics::trace_enabled() && changed > 0 {
             eprintln!(
-                "PIC_NAV chunk_realization update center={center} realized_grids={realized} changed={changed} value={:.0} upper={:.0} page={:.0} t={}",
+                "PIC_NAV chunk_realization update center={center} target_bound={target_bound} realized_grids={realized} changed={changed} value={:.0} upper={:.0} page={:.0} t={}",
                 adjustment.value(), adjustment.upper(), adjustment.page_size(),
                 crate::diagnostics::t_ms()
             );
