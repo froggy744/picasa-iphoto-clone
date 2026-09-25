@@ -4,6 +4,8 @@ version = "1.0.0"
 edition = "2021"
 
 [dependencies]
+chrono = { version = "0.4", features = ["clock"] }
+kamadak-exif = "0.6"
 anyhow = "1"
 dirs = "6"
 rusqlite = { version = "0.32", features = ["bundled"] }
