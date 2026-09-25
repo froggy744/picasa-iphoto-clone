@@ -788,6 +788,7 @@ impl Gallery {
     }
 
     pub fn update_width(&self, width: i32) {
+        self.v2.update_width(width);
         self.update_layout(width, false);
     }
 
