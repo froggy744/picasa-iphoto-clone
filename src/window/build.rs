@@ -3578,21 +3578,62 @@ fn start_photo_export_single(
     // model immediately. One deferred refresh runs after the burst settles.
     let mut indexing_refresh_pending = false;
     let mut indexing_refresh_deadline = Instant::now();
+    let mut indexing_refresh_imported = 0usize;
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
         let ui_tick_started = Instant::now();
-        // A settled burst of IndexingFinished events triggers exactly one
-        // grid rebuild, on this tick, instead of one per folder.
+        // A settled burst of IndexingFinished events triggers one targeted
+        // Folder model reconciliation or one full refresh.
         if indexing_refresh_pending && Instant::now() >= indexing_refresh_deadline {
             indexing_refresh_pending = false;
-            refresh_grid(
-                &connection_for_events,
-                filter_for_events.get(),
-                &search_for_events.borrow(),
-                sort_for_events.get(),
-                &gallery_for_events,
-                "build.indexing_finished_debounce",
-            );
+            let imported = std::mem::take(&mut indexing_refresh_imported);
+            let filter = filter_for_events.get();
+            let search = search_for_events.borrow().clone();
+            let mut action = "full";
+            let reason = if !matches!(filter, sidebar::SidebarFilter::Folder(_)) {
+                "not_folder_stream"
+            } else if !search.is_empty() {
+                "search_active"
+            } else {
+                let mut photos = db::photos(&connection_for_events.borrow(), None, false, None)
+                    .unwrap_or_default();
+                retain_enabled_formats(&connection_for_events.borrow(), &mut photos);
+                limit_recently_added(&connection_for_events.borrow(), filter, &mut photos);
+                let folders = db::folders(&connection_for_events.borrow()).unwrap_or_default();
+                let display_mode = sidebar::FolderDisplayMode::from_setting(
+                    db::setting(
+                        &connection_for_events.borrow(),
+                        sidebar::FOLDER_DISPLAY_MODE_SETTING_KEY,
+                    )
+                    .ok()
+                    .flatten()
+                    .as_deref(),
+                );
+                let folder_order = folder_stream_order(&folders, display_mode);
+                sort_folder_stream(&mut photos, &folders, sort_for_events.get(), display_mode);
+                gallery_for_events.set_folder_catalog(&folders, &folder_order);
+                if gallery_for_events.apply_folder_stream_additions(&photos) {
+                    action = "incremental";
+                    "folder_model_delta"
+                } else {
+                    "existing_photos_changed_or_removed"
+                }
+            };
+            if crate::diagnostics::trace_enabled() {
+                eprintln!(
+                    "PIC_NAV indexing_finish_refresh action={action} imported={imported} reason={reason}"
+                );
+            }
+            if action == "full" {
+                refresh_grid(
+                    &connection_for_events,
+                    filter,
+                    &search,
+                    sort_for_events.get(),
+                    &gallery_for_events,
+                    "build.indexing_finished_debounce",
+                );
+            }
         }
         // Drain event-triggered recovery requests once the current scan ends.
         // With no request, this checks only a flag and performs no disk probes.
@@ -3802,15 +3843,28 @@ fn start_photo_export_single(
                     
                     let search_active = !search_for_events.borrow().is_empty();
                     if !search_active {
-                        if *newly_discovered
-                            && crate::image_format::path_is_enabled(
+                        let continuous_folder = matches!(
+                            filter_for_events.get(),
+                            sidebar::SidebarFilter::Folder(_)
+                        );
+                        let refresh_job = matches!(
+                            scan_job_for_events.borrow().kind,
+                            Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)
+                        );
+                        let enabled = crate::image_format::path_is_enabled(
                                 &connection_for_events.borrow(),
                                 &photo.path,
-                            )
-                            && (matches!(filter_for_events.get(), sidebar::SidebarFilter::All)
-                                || matches!(filter_for_events.get(), sidebar::SidebarFilter::Folder(id) if Some(id) == photo.folder_id))
-                        {
-                            pending_photos.push_back(photo.clone());
+                            );
+                        if *newly_discovered && enabled {
+                            if continuous_folder && !refresh_job {
+                                // The sorted DB result is reconciled at the
+                                // debounce boundary so new photos can be
+                                // inserted into their canonical Folder section.
+                            } else if matches!(filter_for_events.get(), sidebar::SidebarFilter::All)
+                                || matches!(filter_for_events.get(), sidebar::SidebarFilter::Folder(id) if Some(id) == photo.folder_id)
+                            {
+                                pending_photos.push_back(photo.clone());
+                            }
                         } else if !newly_discovered {
                             gallery_for_events.update_dimensions(photo.id, photo.width, photo.height);
                             if selected_photo_for_events
@@ -3849,6 +3903,11 @@ fn start_photo_export_single(
                     ) {
                         indexing_refresh_pending = true;
                         indexing_refresh_deadline = Instant::now() + Duration::from_millis(750);
+                        indexing_refresh_imported += imported;
+                    } else if crate::diagnostics::trace_enabled() {
+                        eprintln!(
+                            "PIC_NAV indexing_finish_refresh action=full imported={imported} reason=refresh_job"
+                        );
                     }
                     let text = format!("Indexed {imported} photos");
                     refresh_status_label_for_events.set_text(&text);

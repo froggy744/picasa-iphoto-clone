@@ -29,6 +29,76 @@ struct GroupRange {
 }
 
 impl Gallery {
+    /// Apply additions from an authoritative, sorted Folder stream while
+    /// retaining existing PhotoObjects and list rows. Return false when an
+    /// existing photo changed or disappeared and a full replacement is needed.
+    pub fn apply_folder_stream_additions(&self, photos: &[crate::db::Photo]) -> bool {
+        if self.group_mode.get() != GroupMode::Folder {
+            return false;
+        }
+        if self.stream_building.get() {
+            return false;
+        }
+
+        let current = self.current_photos.borrow();
+        if photos.len() < current.len() {
+            return false;
+        }
+        let current_ids = current.iter().map(|photo| photo.id()).collect::<HashSet<_>>();
+        let mut current_index = 0usize;
+        let mut updated = Vec::with_capacity(photos.len());
+        let mut insertions = Vec::<(usize, Vec<PhotoObject>)>::new();
+
+        for (position, photo) in photos.iter().enumerate() {
+            if current_index < current.len() && current[current_index].id() == photo.id {
+                let object = &current[current_index];
+                if object.path() != photo.path
+                    || object.history_caption() != photo.history_caption
+                    || object.edited_at() != photo.edited_at
+                    || object.edit_recipe() != photo.edit_recipe
+                    || object.mtime() != photo.mtime.unwrap_or_default()
+                    || object.size_bytes() != photo.size_bytes.unwrap_or_default()
+                    || object.taken_at() != photo.taken_at
+                    || object.width() != photo.width.unwrap_or_default()
+                    || object.height() != photo.height.unwrap_or_default()
+                    || object.folder_id() != photo.folder_id.unwrap_or_default()
+                    || object.folder_path() != photo.folder_path
+                    || object.camera() != photo.camera
+                    || object.rotation() != photo.rotation
+                    || object.favorite() != photo.favorite
+                {
+                    return false;
+                }
+                updated.push(object.clone());
+                current_index += 1;
+            } else {
+                if current_ids.contains(&photo.id) {
+                    return false;
+                }
+                let object = PhotoObject::from_photo(photo);
+                match insertions.last_mut() {
+                    Some((start, objects)) if *start + objects.len() == position => {
+                        objects.push(object.clone());
+                    }
+                    _ => insertions.push((position, vec![object.clone()])),
+                }
+                updated.push(object);
+            }
+        }
+        if current_index != current.len() {
+            return false;
+        }
+        drop(current);
+
+        for (start, objects) in insertions.into_iter().rev() {
+            self.store.splice(start as u32, 0, &objects);
+        }
+        self.current_photos.replace(updated);
+        self.rebuild_group_ranges();
+        self.rebuild_folder_rows();
+        true
+    }
+
     pub fn set_grouping(&self, mode: GroupMode, date: GroupDate) {
         let old_mode = self.group_mode.replace(mode);
         let old_date = self.group_date.replace(date);
