@@ -1,4 +1,5 @@
 use crate::photo::PhotoObject;
+use libadwaita as adw;
 use adw::prelude::*;
 use gio::prelude::*;
 use gtk4 as gtk;
