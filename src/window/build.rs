@@ -1397,9 +1397,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let folder_scroll = gtk::ScrolledWindow::new();
     folder_scroll.set_vexpand(true);
     folder_scroll.set_hexpand(true);
-    // Folder mode uses its own virtualized ListView. Full-width folder headers
-    // are ordinary ListView rows, so they move away naturally with the photos.
-    folder_scroll.set_child(Some(&gallery.folder_root));
+    // Folder V2 uses one persistent section per folder, each containing a real
+    // GridView. Keep the legacy Folder ListView as the fallback.
+    folder_scroll.set_child(Some(if gallery_v2_enabled {
+        gallery.v2_folder.root.upcast_ref::<gtk::Widget>()
+    } else {
+        gallery.folder_root.upcast_ref::<gtk::Widget>()
+    }));
     let folder_scroll_overlay = gtk::Overlay::new();
     folder_scroll_overlay.set_hexpand(true);
     folder_scroll_overlay.set_vexpand(true);
@@ -1501,9 +1505,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             if folder_mode {
                 // Keep keyboard focus on the widget that is actually shown.
                 // Tab/search helpers used to target the hidden GridView.
-                let had_grid_focus = gallery_for_folder_view.root.has_focus();
+                let had_grid_focus = gallery_for_folder_view.root.has_focus()
+                    || gallery_for_folder_view.v2.root.has_focus();
                 if had_grid_focus {
-                    gallery_for_folder_view.folder_root.grab_focus();
+                    if std::env::var_os("PIC_GALLERY_V2").is_some() {
+                        gallery_for_folder_view.v2_folder.root.grab_focus();
+                    } else {
+                        gallery_for_folder_view.folder_root.grab_focus();
+                    }
                 }
                 // The Folder model rebuild is synchronous. This timeout runs
                 // after that work returns to GTK and paints only the final
