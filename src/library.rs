@@ -5,6 +5,7 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
 use std::cell::{Cell, RefCell};
+use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -34,6 +35,52 @@ enum ViewMode {
     Favorites,
     RecentlyAdded,
     Album(i64),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortField {
+    DateTaken,
+    Name,
+    FileSize,
+    Dimensions,
+    DateAdded,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortDirection {
+    Ascending,
+    Descending,
+}
+
+#[derive(Clone, Copy)]
+struct PhotoSort {
+    field: SortField,
+    direction: SortDirection,
+}
+
+impl PhotoSort {
+    fn load() -> Self {
+        let field = match crate::catalog::setting("photo-sort-field")
+            .ok()
+            .flatten()
+            .as_deref()
+        {
+            Some("name") => SortField::Name,
+            Some("file-size") => SortField::FileSize,
+            Some("dimensions") => SortField::Dimensions,
+            Some("date-added") => SortField::DateAdded,
+            _ => SortField::DateTaken,
+        };
+        let direction = match crate::catalog::setting("photo-sort-direction")
+            .ok()
+            .flatten()
+            .as_deref()
+        {
+            Some("ascending") => SortDirection::Ascending,
+            _ => SortDirection::Descending,
+        };
+        Self { field, direction }
+    }
 }
 
 struct FolderNavEntry {
@@ -1979,6 +2026,53 @@ fn update_grid_layout(
     }
 }
 
+fn sort_photo_records(
+    photos: &mut [crate::catalog::PhotoRecord],
+    sort: PhotoSort,
+) {
+    photos.sort_by(|left, right| {
+        let ordering = match sort.field {
+            SortField::DateTaken => left
+                .taken_at
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.taken_at.as_deref().unwrap_or("")),
+            SortField::Name => {
+                let left_name = Path::new(&left.path)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or(&left.path);
+                let right_name = Path::new(&right.path)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or(&right.path);
+                left_name.to_ascii_lowercase().cmp(&right_name.to_ascii_lowercase())
+            }
+            SortField::FileSize => left
+                .size_bytes
+                .unwrap_or_default()
+                .cmp(&right.size_bytes.unwrap_or_default()),
+            SortField::Dimensions => {
+                let left_area = left.width.unwrap_or_default()
+                    .saturating_mul(left.height.unwrap_or_default());
+                let right_area = right.width.unwrap_or_default()
+                    .saturating_mul(right.height.unwrap_or_default());
+                left_area.cmp(&right_area)
+            }
+            SortField::DateAdded => left.added_at.cmp(&right.added_at),
+        };
+        let ordering = if ordering == Ordering::Equal {
+            left.path.cmp(&right.path)
+        } else {
+            ordering
+        };
+        match sort.direction {
+            SortDirection::Ascending => ordering,
+            SortDirection::Descending => ordering.reverse(),
+        }
+    });
+}
+
 fn load_catalog_groups() -> Vec<FolderGroupData> {
     let mut by_folder = BTreeMap::<PathBuf, Vec<crate::catalog::PhotoRecord>>::new();
 
@@ -1995,7 +2089,9 @@ fn load_catalog_groups() -> Vec<FolderGroupData> {
     }
 
     let mut groups = Vec::with_capacity(by_folder.len());
-    for (folder, photos) in by_folder {
+    let sort = PhotoSort::load();
+    for (folder, mut photos) in by_folder {
+        sort_photo_records(&mut photos, sort);
         let model = gio::ListStore::new::<PhotoObject>();
         for photo in photos {
             model.append(&PhotoObject::new(
