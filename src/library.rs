@@ -685,6 +685,89 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     search_area.append(&search);
     right_header.set_title_widget(Some(&search_area));
 
+    let sort_button = gtk::MenuButton::new();
+    sort_button.set_icon_name("view-sort-descending-symbolic");
+    sort_button.set_tooltip_text(Some("Sort photos"));
+    sort_button.add_css_class("flat");
+    right_header.pack_end(&sort_button);
+
+    let sort_menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    sort_menu.set_margin_top(6);
+    sort_menu.set_margin_bottom(6);
+    sort_menu.set_margin_start(6);
+    sort_menu.set_margin_end(6);
+    let sort_heading = gtk::Label::new(Some("Sort by"));
+    sort_heading.set_xalign(0.0);
+    sort_heading.add_css_class("dim-label");
+    sort_menu.append(&sort_heading);
+
+    let initial_sort = PhotoSort::load();
+    for field in [
+        SortField::DateTaken,
+        SortField::Name,
+        SortField::FileSize,
+        SortField::Dimensions,
+        SortField::DateAdded,
+    ] {
+        let button = gtk::Button::with_label(field.label());
+        button.add_css_class("flat");
+        if field == initial_sort.field {
+            button.add_css_class("suggested-action");
+        }
+        let sort_changed = sort_changed.clone();
+        let popover_button = sort_button.clone();
+        button.connect_clicked(move |_| {
+            if let Err(error) = crate::catalog::set_setting("photo-sort-field", field.key()) {
+                eprintln!("PIC_REBUILD sort_save_failed error={error:#}");
+                return;
+            }
+            if let Some(callback) = sort_changed.borrow().as_ref().cloned() {
+                callback();
+            }
+            if let Some(popover) = popover_button.popover() {
+                popover.popdown();
+            }
+        });
+        sort_menu.append(&button);
+    }
+
+    let direction = Rc::new(Cell::new(initial_sort.direction));
+    let direction_button = gtk::Button::with_label(match initial_sort.direction {
+        SortDirection::Ascending => "Ascending",
+        SortDirection::Descending => "Descending",
+    });
+    direction_button.add_css_class("flat");
+    {
+        let direction = direction.clone();
+        let sort_changed = sort_changed.clone();
+        direction_button.connect_clicked(move |button| {
+            let next = match direction.get() {
+                SortDirection::Ascending => SortDirection::Descending,
+                SortDirection::Descending => SortDirection::Ascending,
+            };
+            direction.set(next);
+            button.set_label(match next {
+                SortDirection::Ascending => "Ascending",
+                SortDirection::Descending => "Descending",
+            });
+            if let Err(error) =
+                crate::catalog::set_setting("photo-sort-direction", next.key())
+            {
+                eprintln!("PIC_REBUILD sort_direction_save_failed error={error:#}");
+                return;
+            }
+            if let Some(callback) = sort_changed.borrow().as_ref().cloned() {
+                callback();
+            }
+        });
+    }
+    sort_menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    sort_menu.append(&direction_button);
+
+    let sort_popover = gtk::Popover::new();
+    sort_popover.set_child(Some(&sort_menu));
+    sort_button.set_popover(Some(&sort_popover));
+
     let theme_button = gtk::MenuButton::new();
     theme_button.set_icon_name("emblem-system-symbolic");
     theme_button.set_tooltip_text(Some("Appearance"));
@@ -1101,6 +1184,33 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let popover = gtk::Popover::new();
         popover.set_child(Some(&menu));
         theme_button.set_popover(Some(&popover));
+    }
+
+    {
+        let groups = groups.clone();
+        let master = master_groups.clone();
+        let mode = mode.clone();
+        let search_text = search_text.clone();
+        let count_label = count_label.clone();
+        let content_title = content_title.clone();
+        let photos_button = photos_button.clone();
+        let favorites_button = favorites_button.clone();
+        let recent_button = recent_button.clone();
+
+        sort_changed.replace(Some(Rc::new(move || {
+            master.replace(load_catalog_groups());
+            apply_view(
+                &groups,
+                &master.borrow(),
+                mode.get(),
+                &search_text.borrow(),
+                &count_label,
+                &content_title,
+                &photos_button,
+                &favorites_button,
+                &recent_button,
+            );
+        })));
     }
 
     {
