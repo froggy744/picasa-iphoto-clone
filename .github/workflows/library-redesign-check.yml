@@ -14,7 +14,7 @@ jobs:
       - name: Install GTK development packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libsmbclient-dev libnfs-dev
       - name: Cargo check
         run: cargo check --quiet
       - name: Gallery V2 tests
