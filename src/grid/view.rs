@@ -5,6 +5,7 @@ pub struct Gallery {
     // in a Box/Viewport to implement grouping.
     pub root: gtk::GridView,
     pub v2: Rc<crate::gallery_v2::GalleryV2>,
+    pub v2_folder: Rc<crate::gallery_v2::GalleryV2Folder>,
     pub folder_root: gtk::ListView,
     pub folder_rubberband: gtk::DrawingArea,
     pub group_header: gtk::Box,
@@ -731,6 +732,15 @@ impl Gallery {
             }),
         ));
 
+        let v2_folder = Rc::new(crate::gallery_v2::GalleryV2Folder::new(
+            tile_width.get(),
+            tile_height.get(),
+            selected.clone(),
+            activate.clone(),
+            context_menu.clone(),
+            unavailable.clone(),
+        ));
+
         {
             let v2 = v2.clone();
             let guard = v2_selection_guard.clone();
@@ -758,6 +768,7 @@ impl Gallery {
         let gallery = Self {
             root,
             v2,
+            v2_folder,
             folder_root,
             folder_rubberband,
             group_header,
@@ -813,6 +824,7 @@ impl Gallery {
 
     pub fn update_width(&self, width: i32) {
         self.v2.update_width(width);
+        self.v2_folder.update_width(width);
         self.update_layout(width, false);
     }
 
