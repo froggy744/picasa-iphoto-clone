@@ -739,16 +739,24 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             }
 
             let started = Instant::now();
-            let mut touched = 0usize;
-            let mut tiles = live_tiles.borrow_mut();
-            tiles.retain(|weak| {
-                let Some(widget) = weak.upgrade() else {
-                    return false;
-                };
+
+            let tile_widgets = {
+                let mut tiles = live_tiles.borrow_mut();
+                let mut widgets = Vec::with_capacity(tiles.len());
+                tiles.retain(|weak| {
+                    let Some(widget) = weak.upgrade() else {
+                        return false;
+                    };
+                    widgets.push(widget);
+                    true
+                });
+                widgets
+            };
+
+            let touched = tile_widgets.len();
+            for widget in tile_widgets {
                 widget.set_size_request(size, size);
-                touched += 1;
-                true
-            });
+            }
 
             update_grid_layout(
                 scroller.width(),
@@ -1198,18 +1206,26 @@ fn update_grid_layout(
         .clamp(1.0, MAX_COLUMNS as f64) as u32;
     current_columns.set(columns);
 
-    let mut grids = live_grids.borrow_mut();
-    grids.retain(|(weak, model)| {
-        let Some(grid) = weak.upgrade() else {
-            return false;
-        };
+    let grids_to_update = {
+        let mut grids = live_grids.borrow_mut();
+        let mut realized = Vec::with_capacity(grids.len());
+        grids.retain(|(weak, model)| {
+            let Some(grid) = weak.upgrade() else {
+                return false;
+            };
+            realized.push((grid, model.clone()));
+            true
+        });
+        realized
+    };
+
+    for (grid, model) in grids_to_update {
         grid.set_min_columns(columns);
         grid.set_max_columns(columns);
         let rows = (model.n_items() + columns - 1) / columns;
         grid.set_height_request((rows as i32 * (size + 12)).max(size + 12));
         grid.queue_resize();
-        true
-    });
+    }
 
     list.queue_resize();
 }
