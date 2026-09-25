@@ -73,25 +73,30 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             path.set_xalign(0.0);
             path.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
 
-            let photo_factory = make_photo_factory(tile_size.clone(), live_tiles.clone());
-            let grid = gtk::GridView::new(None::<gtk::NoSelection>, Some(photo_factory));
-            grid.add_css_class("folder-grid");
-            grid.set_min_columns(1);
-            grid.set_max_columns(30);
-            grid.set_single_click_activate(false);
-            grid.set_hexpand(true);
-            grid.set_vexpand(false);
-            grid.set_valign(gtk::Align::Start);
+            let flow = gtk::FlowBox::new();
+            flow.add_css_class("folder-grid");
+            flow.set_selection_mode(gtk::SelectionMode::None);
+            flow.set_homogeneous(true);
+            flow.set_row_spacing(8);
+            flow.set_column_spacing(8);
+            flow.set_min_children_per_line(1);
+            flow.set_max_children_per_line(30);
+            flow.set_hexpand(true);
+            flow.set_vexpand(false);
+            flow.set_valign(gtk::Align::Start);
 
             section.append(&title);
             section.append(&path);
-            section.append(&grid);
+            section.append(&flow);
 
             list_item.set_child(Some(&section));
         });
     }
 
-    folder_factory.connect_bind(|_, object| {
+    {
+        let tile_size = tile_size.clone();
+        let live_tiles = live_tiles.clone();
+        folder_factory.connect_bind(move |_, object| {
         let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
             return;
         };
@@ -109,15 +114,24 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let Some(path) = title.next_sibling().and_downcast::<gtk::Label>() else {
             return;
         };
-        let Some(grid) = path.next_sibling().and_downcast::<gtk::GridView>() else {
+        let Some(flow) = path.next_sibling().and_downcast::<gtk::FlowBox>() else {
             return;
         };
 
         title.set_label(&format!("{}   ·   {} photos", group.label, group.model.n_items()));
         path.set_label(&group.folder.display().to_string());
 
-        let selection = gtk::NoSelection::new(Some(group.model.clone()));
-        grid.set_model(Some(&selection));
+        while let Some(child) = flow.first_child() {
+            flow.remove(&child);
+        }
+
+        for index in 0..group.model.n_items() {
+            let Some(photo) = group.model.item(index).and_downcast::<PhotoObject>() else {
+                continue;
+            };
+            let frame = make_photo_tile(&photo, tile_size.get(), &live_tiles);
+            flow.insert(&frame, -1);
+        }
 
         if trace_enabled() {
             eprintln!(
@@ -126,7 +140,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 group.model.n_items()
             );
         }
-    });
+        });
+    }
 
     folder_factory.connect_unbind(|_, object| {
         let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -141,10 +156,12 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let Some(path) = title.next_sibling().and_downcast::<gtk::Label>() else {
             return;
         };
-        let Some(grid) = path.next_sibling().and_downcast::<gtk::GridView>() else {
+        let Some(flow) = path.next_sibling().and_downcast::<gtk::FlowBox>() else {
             return;
         };
-        grid.set_model(None::<&gtk::SelectionModel>);
+        while let Some(child) = flow.first_child() {
+            flow.remove(&child);
+        }
     });
 
     let list = gtk::ListView::new(Some(group_selection.clone()), Some(folder_factory.clone()));
@@ -312,85 +329,43 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     window
 }
 
-fn make_photo_factory(
-    tile_size: Rc<Cell<i32>>,
-    live_tiles: Rc<RefCell<Vec<glib::WeakRef<gtk::Widget>>>>,
-) -> gtk::SignalListItemFactory {
-    let factory = gtk::SignalListItemFactory::new();
+fn make_photo_tile(
+    photo: &PhotoObject,
+    size: i32,
+    live_tiles: &Rc<RefCell<Vec<glib::WeakRef<gtk::Widget>>>>,
+) -> gtk::Box {
+    let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    frame.add_css_class("prototype-photo-tile");
+    frame.set_overflow(gtk::Overflow::Hidden);
+    frame.set_size_request(size, size);
 
-    factory.connect_setup(move |_, object| {
-        let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
+    let picture = gtk::Picture::new();
+    picture.set_hexpand(true);
+    picture.set_vexpand(true);
+    picture.set_can_shrink(true);
+    picture.set_content_fit(gtk::ContentFit::Cover);
+    frame.append(&picture);
 
-        let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        frame.add_css_class("prototype-photo-tile");
-        frame.set_overflow(gtk::Overflow::Hidden);
-        frame.set_size_request(tile_size.get(), tile_size.get());
+    let widget: gtk::Widget = frame.clone().upcast();
+    live_tiles.borrow_mut().push(widget.downgrade());
 
-        let picture = gtk::Picture::new();
-        picture.set_hexpand(true);
-        picture.set_vexpand(true);
-        picture.set_can_shrink(true);
-        picture.set_content_fit(gtk::ContentFit::Cover);
-        frame.append(&picture);
+    let path = photo.path();
+    picture.set_tooltip_text(Some(&path));
 
-        let widget: gtk::Widget = frame.clone().upcast();
-        live_tiles.borrow_mut().push(widget.downgrade());
-        list_item.set_child(Some(&frame));
-    });
-
-    factory.connect_bind(|_, object| {
-        let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let Some(photo) = list_item.item().and_downcast::<PhotoObject>() else {
-            return;
-        };
-        let Some(frame) = list_item.child().and_downcast::<gtk::Box>() else {
-            return;
-        };
-        let Some(picture) = frame.first_child().and_downcast::<gtk::Picture>() else {
-            return;
-        };
-
-        let path = photo.path();
-        picture.set_tooltip_text(Some(&path));
-
-        if images_disabled() {
-            picture.set_paintable(None::<&gtk::gdk::Paintable>);
-            return;
-        }
-
+    if !images_disabled() {
         let started = Instant::now();
         let file = gio::File::for_path(&path);
         picture.set_file(Some(&file));
-
         if trace_enabled() {
             eprintln!(
-                "PIC_GROUP photo_bind position={} set_file_us={} path={}",
-                list_item.position(),
+                "PIC_GROUP photo_bind set_file_us={} path={}",
                 started.elapsed().as_micros(),
                 path
             );
         }
-    });
+    }
 
-    factory.connect_unbind(|_, object| {
-        let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let Some(frame) = list_item.child().and_downcast::<gtk::Box>() else {
-            return;
-        };
-        let Some(picture) = frame.first_child().and_downcast::<gtk::Picture>() else {
-            return;
-        };
-        picture.set_paintable(None::<&gtk::gdk::Paintable>);
-        picture.set_tooltip_text(None);
-    });
-
-    factory
+    frame
 }
 
 fn load_grouped_directories(
@@ -508,7 +483,7 @@ fn install_css() {
         }
 
         .folder-grid > child {
-            padding: 4px;
+            padding: 0;
         }
 
         .prototype-photo-tile {
