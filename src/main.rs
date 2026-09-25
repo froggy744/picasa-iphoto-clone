@@ -5,6 +5,7 @@ mod db;
 mod diagnostics;
 mod edit;
 mod grid;
+mod gallery_v2;
 mod image_format;
 mod infobar;
 mod lightbox;
