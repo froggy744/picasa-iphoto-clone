@@ -327,7 +327,12 @@ pub(crate) struct GalleryV2Folder {
     last_width: Cell<i32>,
     live_tiles: Rc<RefCell<Vec<glib::WeakRef<gtk::Overlay>>>>,
     live_pictures: Rc<RefCell<Vec<glib::WeakRef<gtk::Picture>>>>,
-    live_grids: Rc<RefCell<Vec<(glib::WeakRef<gtk::GridView>, gio::ListStore)>>>,
+    live_grids: Rc<RefCell<Vec<(
+        glib::WeakRef<gtk::GridView>,
+        i64,
+        gio::ListStore,
+        gtk::MultiSelection,
+    )>>>,
     fit_whole_photo: Rc<Cell<bool>>,
     layout_signature: RefCell<Vec<(i64, i64)>>,
     selected: Rc<dyn Fn(Option<PhotoObject>)>,
@@ -354,7 +359,9 @@ impl GalleryV2Folder {
         let live_pictures = Rc::new(RefCell::new(Vec::<glib::WeakRef<gtk::Picture>>::new()));
         let live_grids = Rc::new(RefCell::new(Vec::<(
             glib::WeakRef<gtk::GridView>,
+            i64,
             gio::ListStore,
+            gtk::MultiSelection,
         )>::new()));
         let fit_whole_photo = Rc::new(Cell::new(false));
 
@@ -460,9 +467,6 @@ impl GalleryV2Folder {
             let unavailable_for_setup = unavailable.clone();
             let activate_for_setup = activate.clone();
             let all_for_setup = current_photos.clone();
-            let groups_for_setup = groups.clone();
-            let positions_for_setup = folder_positions.clone();
-
             folder_factory.connect_setup(move |_, object| {
                 let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
                     return;
@@ -526,41 +530,6 @@ impl GalleryV2Folder {
                 grid.set_vexpand(false);
                 grid.set_halign(gtk::Align::Fill);
                 grid.set_valign(gtk::Align::Start);
-
-                // Do not attach every folder model while the outer ListView is
-                // measuring its rows. Attaching here caused all 22k photos to
-                // bind at once, defeating virtualization and leaving visible
-                // holes while thousands of thumbnail jobs drained.
-                {
-                    let groups = groups_for_setup.clone();
-                    let positions = positions_for_setup.clone();
-                    grid.connect_map(move |grid| {
-                        let Ok(folder_id) = grid.widget_name().parse::<i64>() else {
-                            return;
-                        };
-                        let Some(position) = positions.borrow().get(&folder_id).copied() else {
-                            return;
-                        };
-                        let Some(boxed) = groups
-                            .item(position)
-                            .and_downcast::<glib::BoxedAnyObject>()
-                        else {
-                            return;
-                        };
-                        let section = boxed.borrow::<Section>();
-                        grid.set_model(Some(&section.selection));
-                        if trace_enabled() {
-                            eprintln!(
-                                "PIC_V2_FOLDER map folder_id={} photos={}",
-                                section.folder_id,
-                                section.model.n_items()
-                            );
-                        }
-                    });
-                }
-                grid.connect_unmap(|grid| {
-                    grid.set_model(None::<&gtk::SelectionModel>);
-                });
 
                 let activate = activate_for_setup.clone();
                 let all = all_for_setup.clone();
@@ -636,9 +605,17 @@ impl GalleryV2Folder {
                 let row_height = tile_height_for_bind.get() + 12;
                 grid.set_height_request((rows as i32 * row_height).max(row_height));
 
-                live_grids_for_bind
-                    .borrow_mut()
-                    .push((grid.downgrade(), section.model.clone()));
+                // Keep the geometry for every section but attach photo models
+                // only to sections near the viewport. This is the key to
+                // keeping 20k+ libraries virtualized: an off-screen section is
+                // just a header + correctly-sized empty GridView.
+                grid.set_model(None::<&gtk::SelectionModel>);
+                live_grids_for_bind.borrow_mut().push((
+                    grid.downgrade(),
+                    section.folder_id,
+                    section.model.clone(),
+                    section.selection.clone(),
+                ));
 
                 if trace_enabled() {
                     eprintln!(
@@ -785,6 +762,7 @@ impl GalleryV2Folder {
             self.groups.splice(0, 0, &sections);
         }
         self.layout_signature.replace(signature);
+        self.update_visible_sections(0.0, self.root.height().max(800) as f64);
 
         if trace_enabled() {
             eprintln!(
@@ -922,17 +900,22 @@ impl GalleryV2Folder {
         let grids = {
             let mut weak = self.live_grids.borrow_mut();
             let mut realized = Vec::with_capacity(weak.len());
-            weak.retain(|(grid, model)| {
+            weak.retain(|(grid, folder_id, model, selection)| {
                 let Some(grid) = grid.upgrade() else {
                     return false;
                 };
-                realized.push((grid, model.clone()));
+                realized.push((
+                    grid,
+                    *folder_id,
+                    model.clone(),
+                    selection.clone(),
+                ));
                 true
             });
             realized
         };
 
-        for (grid, model) in grids {
+        for (grid, _folder_id, model, _selection) in grids {
             grid.set_min_columns(columns);
             grid.set_max_columns(columns);
             let rows = (model.n_items() + columns - 1) / columns;
@@ -941,6 +924,142 @@ impl GalleryV2Folder {
             grid.queue_resize();
         }
         self.root.queue_resize();
+    }
+
+    /// Attach photo models only to Folder sections close to the current
+    /// viewport. Every other section keeps its real calculated height but owns
+    /// no photo widgets, so the outer ListView can scroll/zoom without GTK
+    /// realizing all 22k thumbnails.
+    pub(crate) fn update_visible_sections(&self, scroll_y: f64, page_size: f64) {
+        let columns = self.current_columns.get().max(1);
+        let row_height = self.tile_height.get().max(1) + 12;
+        let header_height = 44_i32;
+        let page = page_size.max(600.0);
+        let wanted_start = (scroll_y - page).max(0.0);
+        let wanted_end = scroll_y + page * 2.0;
+
+        let mut active = HashSet::<i64>::new();
+        let mut y = 0.0_f64;
+        for position in 0..self.groups.n_items() {
+            let Some(boxed) = self.groups.item(position).and_downcast::<glib::BoxedAnyObject>() else {
+                continue;
+            };
+            let section = boxed.borrow::<Section>();
+            let rows = section.model.n_items().div_ceil(columns);
+            let height = f64::from(header_height + (rows as i32 * row_height).max(row_height));
+            let end = y + height;
+            if end >= wanted_start && y <= wanted_end {
+                active.insert(section.folder_id);
+            }
+            y = end;
+        }
+
+        let grids = {
+            let mut weak = self.live_grids.borrow_mut();
+            let mut realized = Vec::with_capacity(weak.len());
+            weak.retain(|(grid, folder_id, model, selection)| {
+                let Some(grid) = grid.upgrade() else {
+                    return false;
+                };
+                realized.push((
+                    grid,
+                    *folder_id,
+                    model.clone(),
+                    selection.clone(),
+                ));
+                true
+            });
+            realized
+        };
+
+        let mut attached = 0usize;
+        for (grid, folder_id, _model, selection) in grids {
+            let should_attach = active.contains(&folder_id);
+            let is_attached = grid.model().is_some();
+            if should_attach && !is_attached {
+                grid.set_model(Some(&selection));
+                attached += 1;
+            } else if !should_attach && is_attached {
+                grid.set_model(None::<&gtk::SelectionModel>);
+            }
+        }
+
+        if trace_enabled() {
+            eprintln!(
+                "PIC_V2_FOLDER viewport scroll={:.0} page={:.0} active_sections={} newly_attached={}",
+                scroll_y,
+                page,
+                active.len(),
+                attached
+            );
+        }
+    }
+
+    pub(crate) fn scroll_position(&self) -> f64 {
+        self.root
+            .vadjustment()
+            .map(|adjustment| adjustment.value())
+            .unwrap_or(0.0)
+    }
+
+    pub(crate) fn page_size(&self) -> f64 {
+        self.root
+            .vadjustment()
+            .map(|adjustment| adjustment.page_size())
+            .unwrap_or_else(|| self.root.height().max(1) as f64)
+    }
+
+    pub(crate) fn visible_photo(&self) -> Option<PhotoObject> {
+        let mut best: Option<(f32, PhotoObject)> = None;
+        let root: gtk::Widget = self.root.clone().upcast();
+        let viewport_height = self.root.height() as f32;
+        for weak in self.live_tiles.borrow().iter() {
+            let Some(tile) = weak.upgrade() else {
+                continue;
+            };
+            if !tile.is_mapped() || !tile.is_visible() {
+                continue;
+            }
+            let Some(picture) = tile.child().and_downcast::<gtk::Picture>() else {
+                continue;
+            };
+            let marker = picture.widget_name();
+            if marker.is_empty() {
+                continue;
+            }
+            let Some(bounds) = tile.compute_bounds(&root) else {
+                continue;
+            };
+            if bounds.y() + bounds.height() <= 0.0 || bounds.y() >= viewport_height {
+                continue;
+            }
+            let mut found = None;
+            'sections: for position in 0..self.groups.n_items() {
+                let Some(boxed) = self.groups.item(position).and_downcast::<glib::BoxedAnyObject>() else {
+                    continue;
+                };
+                let section = boxed.borrow::<Section>();
+                for item in 0..section.model.n_items() {
+                    let Some(photo) = section.model.item(item).and_downcast::<PhotoObject>() else {
+                        continue;
+                    };
+                    if visual_key(&photo)
+                        .map(|key| binding_marker(photo.id(), &key) == marker)
+                        .unwrap_or(false)
+                    {
+                        found = Some(photo);
+                        break 'sections;
+                    }
+                }
+            }
+            let Some(photo) = found else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|(y, _)| bounds.y() < *y) {
+                best = Some((bounds.y(), photo));
+            }
+        }
+        best.map(|(_, photo)| photo)
     }
 
     pub(crate) fn set_fit_whole_photo(&self, fit: bool) {
