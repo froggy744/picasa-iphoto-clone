@@ -460,6 +460,8 @@ impl GalleryV2Folder {
             let unavailable_for_setup = unavailable.clone();
             let activate_for_setup = activate.clone();
             let all_for_setup = current_photos.clone();
+            let groups_for_setup = groups.clone();
+            let positions_for_setup = folder_positions.clone();
 
             folder_factory.connect_setup(move |_, object| {
                 let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -514,6 +516,8 @@ impl GalleryV2Folder {
                 let grid = gtk::GridView::new(None::<gtk::MultiSelection>, Some(photo_factory));
                 grid.add_css_class("folder-grid");
                 grid.add_css_class("gallery-v2-folder-grid");
+                // Match the same presentation class used by Library/Photos.
+                grid.add_css_class("section-grid");
                 grid.set_min_columns(1);
                 grid.set_max_columns(12);
                 grid.set_single_click_activate(false);
@@ -522,6 +526,41 @@ impl GalleryV2Folder {
                 grid.set_vexpand(false);
                 grid.set_halign(gtk::Align::Fill);
                 grid.set_valign(gtk::Align::Start);
+
+                // Do not attach every folder model while the outer ListView is
+                // measuring its rows. Attaching here caused all 22k photos to
+                // bind at once, defeating virtualization and leaving visible
+                // holes while thousands of thumbnail jobs drained.
+                {
+                    let groups = groups_for_setup.clone();
+                    let positions = positions_for_setup.clone();
+                    grid.connect_map(move |grid| {
+                        let Ok(folder_id) = grid.widget_name().parse::<i64>() else {
+                            return;
+                        };
+                        let Some(position) = positions.borrow().get(&folder_id).copied() else {
+                            return;
+                        };
+                        let Some(boxed) = groups
+                            .item(position)
+                            .and_downcast::<glib::BoxedAnyObject>()
+                        else {
+                            return;
+                        };
+                        let section = boxed.borrow::<Section>();
+                        grid.set_model(Some(&section.selection));
+                        if trace_enabled() {
+                            eprintln!(
+                                "PIC_V2_FOLDER map folder_id={} photos={}",
+                                section.folder_id,
+                                section.model.n_items()
+                            );
+                        }
+                    });
+                }
+                grid.connect_unmap(|grid| {
+                    grid.set_model(None::<&gtk::SelectionModel>);
+                });
 
                 let activate = activate_for_setup.clone();
                 let all = all_for_setup.clone();
@@ -589,9 +628,9 @@ impl GalleryV2Folder {
                 count.set_label(&format!("{} photos", section.model.n_items()));
 
                 let current_columns = columns.get().max(1);
+                grid.set_widget_name(&section.folder_id.to_string());
                 grid.set_min_columns(current_columns);
                 grid.set_max_columns(current_columns);
-                grid.set_model(Some(&section.selection));
 
                 let rows = (section.model.n_items() + current_columns - 1) / current_columns;
                 let row_height = tile_height_for_bind.get() + 12;
@@ -629,6 +668,7 @@ impl GalleryV2Folder {
                 return;
             };
             grid.set_model(None::<&gtk::SelectionModel>);
+            grid.set_widget_name("");
         });
 
         let root = gtk::ListView::new(Some(group_selection), Some(folder_factory));
