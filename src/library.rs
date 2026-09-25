@@ -228,7 +228,13 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let search_text = Rc::new(RefCell::new(String::new()));
     let favorite_paths = Rc::new(RefCell::new(crate::catalog::favorite_paths().unwrap_or_default()));
 
-    let tile_size = Rc::new(Cell::new(DEFAULT_TILE));
+    let initial_tile_size = crate::catalog::setting("grid-thumbnail-size")
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<i32>().ok())
+        .map(|value| value.clamp(MIN_TILE, MAX_TILE))
+        .unwrap_or(DEFAULT_TILE);
+    let tile_size = Rc::new(Cell::new(initial_tile_size));
     let live_tiles: Rc<RefCell<Vec<glib::WeakRef<gtk::Widget>>>> =
         Rc::new(RefCell::new(Vec::new()));
     let live_grids: Rc<RefCell<Vec<(glib::WeakRef<gtk::GridView>, gio::ListStore)>>> =
@@ -668,7 +674,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         f64::from(MAX_TILE),
         1.0,
     );
-    zoom.set_value(f64::from(DEFAULT_TILE));
+    zoom.set_value(f64::from(initial_tile_size));
     zoom.set_draw_value(false);
     zoom.set_size_request(150, -1);
     zoom.set_tooltip_text(Some("Thumbnail size"));
@@ -1338,6 +1344,11 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             let size = scale.value().round() as i32;
             if size == tile_size.replace(size) {
                 return;
+            }
+            if let Err(error) =
+                crate::catalog::set_setting("grid-thumbnail-size", &size.to_string())
+            {
+                eprintln!("PIC_REBUILD zoom_save_failed error={error:#}");
             }
 
             let started = Instant::now();
