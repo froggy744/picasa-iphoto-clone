@@ -4,7 +4,7 @@ pub struct Gallery {
     // visible-item allocation and virtualization. Do not wrap this GridView
     // in a Box/Viewport to implement grouping.
     pub root: gtk::GridView,
-    pub v2: crate::gallery_v2::GalleryV2,
+    pub v2: Rc<crate::gallery_v2::GalleryV2>,
     pub folder_root: gtk::ListView,
     pub folder_rubberband: gtk::DrawingArea,
     pub group_header: gtk::Box,
@@ -703,7 +703,7 @@ impl Gallery {
         let store_for_v2 = store.clone();
         let v2_selection_guard = Rc::new(Cell::new(false));
         let guard_for_v2 = v2_selection_guard.clone();
-        let v2 = crate::gallery_v2::GalleryV2::new(
+        let v2 = Rc::new(crate::gallery_v2::GalleryV2::new(
             tile_width.get(),
             tile_height.get(),
             selected.clone(),
@@ -729,7 +729,31 @@ impl Gallery {
                 }
                 guard_for_v2.set(false);
             }),
-        );
+        ));
+
+        {
+            let v2 = v2.clone();
+            let guard = v2_selection_guard.clone();
+            selection.connect_selection_changed(move |selection, _, _| {
+                if guard.replace(true) {
+                    return;
+                }
+                let bitset = selection.selection();
+                let mut ids = Vec::new();
+                if let Some((iter, first)) = gtk::BitsetIter::init_first(&bitset) {
+                    if let Some(photo) = selection.item(first).and_downcast::<PhotoObject>() {
+                        ids.push(photo.id());
+                    }
+                    for position in iter {
+                        if let Some(photo) = selection.item(position).and_downcast::<PhotoObject>() {
+                            ids.push(photo.id());
+                        }
+                    }
+                }
+                v2.set_selected_ids(&ids);
+                guard.set(false);
+            });
+        }
 
         let gallery = Self {
             root,
