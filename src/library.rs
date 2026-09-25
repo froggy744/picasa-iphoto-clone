@@ -1480,7 +1480,7 @@ fn make_photo_factory(
     thumb_cache: Rc<RefCell<HashMap<String, gtk::gdk::Texture>>>,
     thumb_pending: Rc<RefCell<HashMap<String, Vec<glib::WeakRef<gtk::Picture>>>>>,
     thumb_inflight: Rc<RefCell<HashSet<String>>>,
-    thumb_job_tx: mpsc::Sender<String>,
+    thumb_job_tx: mpsc::Sender<ThumbJob>,
     favorite_paths: Rc<RefCell<HashSet<String>>>,
     favorite_changed: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
 ) -> gtk::SignalListItemFactory {
@@ -1514,6 +1514,17 @@ fn make_photo_factory(
             picture.set_can_shrink(true);
             picture.set_content_fit(gtk::ContentFit::Cover);
             overlay.set_child(Some(&picture));
+
+            let offline_badge = gtk::Button::with_label("!");
+            offline_badge.add_css_class("offline-badge");
+            offline_badge.set_halign(gtk::Align::End);
+            offline_badge.set_valign(gtk::Align::Start);
+            offline_badge.set_margin_top(6);
+            offline_badge.set_margin_end(38);
+            offline_badge.set_tooltip_text(Some("Original photo unavailable; cached thumbnail shown"));
+            offline_badge.set_sensitive(false);
+            offline_badge.set_visible(false);
+            overlay.add_overlay(&offline_badge);
 
             let favorite_icon = gtk::Image::from_icon_name("non-starred-symbolic");
             favorite_icon.set_pixel_size(16);
@@ -1656,8 +1667,15 @@ fn make_photo_factory(
             let Some(favorite_button) = overlay.last_child().and_downcast::<gtk::Button>() else {
                 return;
             };
+            let offline_badge = favorite_button
+                .prev_sibling()
+                .and_downcast::<gtk::Button>();
 
             let path = photo.path();
+            let cache_key = thumbnail_identity(&path, photo.mtime(), photo.size_bytes());
+            if let Some(badge) = offline_badge {
+                badge.set_visible(!Path::new(&path).is_file());
+            }
             picture.set_tooltip_text(Some(&path));
             picture.set_paintable(None::<&gtk::gdk::Paintable>);
 
@@ -1678,7 +1696,7 @@ fn make_photo_factory(
                 return;
             }
 
-            if let Some(texture) = cache.borrow().get(&path).cloned() {
+            if let Some(texture) = cache.borrow().get(&cache_key).cloned() {
                 picture.set_paintable(Some(&texture));
                 if trace_enabled() {
                     eprintln!(
@@ -1692,12 +1710,17 @@ fn make_photo_factory(
 
             pending
                 .borrow_mut()
-                .entry(path.clone())
+                .entry(cache_key.clone())
                 .or_default()
                 .push(picture.downgrade());
 
-            if inflight.borrow_mut().insert(path.clone()) {
-                let _ = jobs.send(path.clone());
+            if inflight.borrow_mut().insert(cache_key.clone()) {
+                let _ = jobs.send(ThumbJob {
+                    path: path.clone(),
+                    mtime: photo.mtime(),
+                    size_bytes: photo.size_bytes(),
+                    cache_key: cache_key.clone(),
+                });
                 if trace_enabled() {
                     eprintln!(
                         "PIC_PROTO thumb_queue position={} path={}",
@@ -1799,6 +1822,8 @@ fn load_catalog_groups() -> Vec<FolderGroupData> {
                 photo.path,
                 photo.favorite,
                 photo.rotation,
+                photo.mtime,
+                photo.size_bytes,
             ));
         }
 
