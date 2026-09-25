@@ -14,6 +14,64 @@ const CHUNK_COLUMNS: u32 = 5;
 /// Vertical pitch of one tile line inside an inner GridView: the tile plus
 /// the per-item padding the shared photo-grid CSS applies (6px top/bottom).
 const CHUNK_LINE_SPACING: i32 = 12;
+const CHUNK_HEADER_HEIGHT: i32 = 70;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChunkMeta {
+    folder_start: u32,
+    folder_end: u32,
+    logical_index: u32,
+    logical_count: u32,
+    label: String,
+    photo_count: u32,
+}
+
+fn logical_chunk_count(photo_count: u32) -> u32 {
+    photo_count.max(1).div_ceil(PHOTOS_PER_CHUNK)
+}
+
+fn aligned_chunk_bounds(meta: &ChunkMeta, columns: u32) -> (u32, u32) {
+    let columns = columns.max(1);
+    let count = meta.folder_end.saturating_sub(meta.folder_start);
+    let boundary = |index: u32| -> u32 {
+        if index == 0 {
+            return 0;
+        }
+        if index >= meta.logical_count {
+            return count;
+        }
+        let nominal = index.saturating_mul(PHOTOS_PER_CHUNK);
+        let aligned = ((nominal + columns / 2) / columns).saturating_mul(columns);
+        aligned.clamp(1, count.saturating_sub(1))
+    };
+    (
+        meta.folder_start + boundary(meta.logical_index),
+        meta.folder_start + boundary(meta.logical_index + 1),
+    )
+}
+
+fn build_chunk_meta(ranges: &[super::GroupRange]) -> Vec<ChunkMeta> {
+    let mut out = Vec::new();
+    for range in ranges {
+        let count = range.end.saturating_sub(range.start) as u32;
+        if count == 0 {
+            continue;
+        }
+        let logical_count = logical_chunk_count(count);
+        for logical_index in 0..logical_count {
+            out.push(ChunkMeta {
+                folder_start: range.start as u32,
+                folder_end: range.end as u32,
+                logical_index,
+                logical_count,
+                label: range.label.clone(),
+                photo_count: count,
+            });
+        }
+    }
+    out
+}
+
 /// How many chunk rows beyond the viewport keep their photo models mounted
 /// in each scroll direction. Keeps mounted tiles bounded while making
 /// ordinary scrolling and small jumps seamless.
@@ -104,6 +162,8 @@ pub(crate) struct ChunkedPrototype {
     grids: Rc<RefCell<Vec<glib::WeakRef<gtk::GridView>>>>,
     store: gio::ListStore,
     chunks: gio::ListStore,
+    section_ranges: Rc<RefCell<Vec<super::GroupRange>>>,
+    chunk_meta: Rc<RefCell<Vec<ChunkMeta>>>,
     reconcile_pending: Rc<Cell<bool>>,
     /// (tile_height, columns) the wrapper height requests are computed from.
     metrics: Rc<Cell<(i32, u32)>>,
@@ -139,17 +199,38 @@ fn reconcile_chunks(
     store: &gio::ListStore,
     chunks: &gio::ListStore,
     grids: &Rc<RefCell<Vec<glib::WeakRef<gtk::GridView>>>>,
+    ranges: &[super::GroupRange],
+    chunk_meta: &Rc<RefCell<Vec<ChunkMeta>>>,
+    columns: u32,
 ) {
-    let want = store.n_items().div_ceil(PHOTOS_PER_CHUNK);
-    if want == chunks.n_items() {
+    let wanted_meta = if ranges.is_empty() {
+        let count = store.n_items();
+        let logical_count = logical_chunk_count(count);
+        (0..logical_count)
+            .map(|logical_index| ChunkMeta {
+                folder_start: 0,
+                folder_end: count,
+                logical_index,
+                logical_count,
+                label: String::new(),
+                photo_count: count,
+            })
+            .collect::<Vec<_>>()
+    } else {
+        build_chunk_meta(ranges)
+    };
+
+    if *chunk_meta.borrow() == wanted_meta {
         return;
     }
-    for grid_weak in grids.borrow().iter().skip(want as usize) {
+
+    for grid_weak in grids.borrow().iter() {
         if let Some(grid) = grid_weak.upgrade() {
             grid.set_model(None::<&gtk::NoSelection>);
         }
     }
-    sync_chunks(store, chunks);
+    sync_chunks(store, chunks, &wanted_meta, columns);
+    chunk_meta.replace(wanted_meta);
 }
 
 impl ChunkedPrototype {
@@ -158,6 +239,13 @@ impl ChunkedPrototype {
         let chunks_for_updates = chunks.clone();
         let chunks_for_struct = chunks.clone();
         let store_for_updates = store.clone();
+        let section_ranges: Rc<RefCell<Vec<super::GroupRange>>> =
+            Rc::new(RefCell::new(Vec::new()));
+        let section_ranges_for_updates = section_ranges.clone();
+        let section_ranges_for_struct = section_ranges.clone();
+        let chunk_meta: Rc<RefCell<Vec<ChunkMeta>>> = Rc::new(RefCell::new(Vec::new()));
+        let chunk_meta_for_updates = chunk_meta.clone();
+        let chunk_meta_for_struct = chunk_meta.clone();
         let grids: Rc<RefCell<Vec<glib::WeakRef<gtk::GridView>>>> = Rc::new(RefCell::new(Vec::new()));
         let grids_for_sync = grids.clone();
         // Re-modeling the surplus GridViews synchronously inside the base
@@ -197,10 +285,23 @@ impl ChunkedPrototype {
                 // Rows the ListView recycles are not touched here (their
                 // unbind clears the model instead).
                 pending.set(false);
-                reconcile_chunks(&cols, &chunks, &grids);
+                reconcile_chunks(
+                    &cols,
+                    &chunks,
+                    &grids,
+                    &section_ranges_for_updates.borrow(),
+                    &chunk_meta_for_updates,
+                    metrics.get().1,
+                );
             });
         });
-        sync_chunks(store, &chunks);
+        sync_chunks(
+            store,
+            &chunks,
+            &section_ranges.borrow(),
+            &chunk_meta,
+            CHUNK_COLUMNS,
+        );
 
         let model = gtk::NoSelection::new(Some(chunks));
         let factory = gtk::SignalListItemFactory::new();
@@ -233,12 +334,40 @@ impl ChunkedPrototype {
             // The wrapper owns the row height so the outer ListView can size
             // and virtualize rows whose photos have not streamed in yet.
             let wrapper = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            wrapper.set_height_request(chunk_row_height_px(
-                PHOTOS_PER_CHUNK,
-                tile_height,
-                columns,
-            ));
+            wrapper.set_widget_name("picasa-chunk-wrapper");
+
+            let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            header.set_widget_name("picasa-chunk-header");
+            header.set_hexpand(true);
+            header.set_margin_start(6);
+            header.set_margin_end(6);
+            header.set_margin_top(10);
+            header.set_margin_bottom(8);
+
+            let icon = gtk::Image::from_icon_name("folder-symbolic");
+            icon.set_pixel_size(16);
+            header.append(&icon);
+
+            let title = gtk::Label::new(None);
+            title.set_widget_name("picasa-chunk-header-title");
+            title.set_xalign(0.0);
+            title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            title.add_css_class("folder-section-title");
+            header.append(&title);
+
+            let count = gtk::Label::new(None);
+            count.set_widget_name("picasa-chunk-header-count");
+            count.set_xalign(0.0);
+            count.add_css_class("dim-label");
+            count.add_css_class("folder-section-count");
+            header.append(&count);
+
+            wrapper.append(&header);
             wrapper.append(&grid);
+            wrapper.set_height_request(
+                CHUNK_HEADER_HEIGHT
+                    + chunk_row_height_px(PHOTOS_PER_CHUNK, tile_height, columns),
+            );
             item.set_child(Some(&wrapper));
             wrappers_for_setup.borrow_mut().push(wrapper.downgrade());
             items_for_setup.borrow_mut().push(item.downgrade());
@@ -255,6 +384,7 @@ impl ChunkedPrototype {
             }
         });
         let store_for_bind = store.clone();
+        let chunk_meta_for_bind = chunk_meta.clone();
         factory.connect_bind(move |_, object| {
             let self_root = bind_trace_root_for_bind.clone();
             let Some(item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -266,20 +396,45 @@ impl ChunkedPrototype {
             let Some(wrapper) = item.child().and_downcast::<gtk::Box>() else {
                 return;
             };
-            let Some(grid) = wrapper.first_child().and_downcast::<gtk::GridView>() else {
+            let Some(header) = wrapper.first_child().and_downcast::<gtk::Box>() else {
                 return;
             };
-            // Correct the final partial chunk's wrapper height once the
-            // position is known (setup optimistically assumes a full chunk).
+            let Some(grid) = wrapper.last_child().and_downcast::<gtk::GridView>() else {
+                return;
+            };
             let position = item.position();
             let total = store_for_bind.n_items();
-            let filled = total.saturating_sub(position * PHOTOS_PER_CHUNK).min(PHOTOS_PER_CHUNK);
             let (tile_height, columns) = metrics_for_bind.get();
-            wrapper.set_height_request(chunk_row_height_px(
-                filled.max(1),
-                tile_height,
-                columns,
-            ));
+            let meta = chunk_meta_for_bind
+                .borrow()
+                .get(position as usize)
+                .cloned();
+
+            let is_first = meta
+                .as_ref()
+                .is_some_and(|meta| meta.logical_index == 0);
+            header.set_visible(is_first);
+            if let Some(meta) = meta.as_ref().filter(|meta| meta.logical_index == 0) {
+                if let Some(title) = header
+                    .first_child()
+                    .and_then(|child| child.next_sibling())
+                    .and_downcast::<gtk::Label>()
+                {
+                    title.set_text(&meta.label);
+                }
+                if let Some(count) = header.last_child().and_downcast::<gtk::Label>() {
+                    count.set_text(&format!(
+                        "{} {}",
+                        meta.photo_count,
+                        if meta.photo_count == 1 { "photo" } else { "photos" }
+                    ));
+                }
+            }
+            let header_height = if is_first { CHUNK_HEADER_HEIGHT } else { 0 };
+            wrapper.set_height_request(
+                header_height
+                    + chunk_row_height_px(slice.n_items().max(1), tile_height, columns),
+            );
             // Mount photos only when the fill is complete AND this chunk is
             // near the viewport (viewport-windowed realization). Everything
             // else stays a cheap empty wrapper: bounded mounted tiles, and
@@ -347,7 +502,7 @@ impl ChunkedPrototype {
         factory.connect_unbind(|_, object| {
             if let Some(item) = object.downcast_ref::<gtk::ListItem>() {
                 if let Some(wrapper) = item.child().and_downcast::<gtk::Box>() {
-                    if let Some(grid) = wrapper.first_child().and_downcast::<gtk::GridView>() {
+                    if let Some(grid) = wrapper.last_child().and_downcast::<gtk::GridView>() {
                         grid.set_model(None::<&gtk::NoSelection>);
                     }
                 }
@@ -374,6 +529,8 @@ impl ChunkedPrototype {
             grids: grids.clone(),
             store: store.clone(),
             chunks: chunks_for_struct.clone(),
+            section_ranges: section_ranges_for_struct.clone(),
+            chunk_meta: chunk_meta_for_struct.clone(),
             reconcile_pending: reconcile_pending_for_struct.clone(),
             metrics: metrics.clone(),
             wrappers: wrappers.clone(),
@@ -459,6 +616,8 @@ impl ChunkedPrototype {
             grids,
             store: store.clone(),
             chunks: chunks_for_struct,
+            section_ranges: section_ranges_for_struct,
+            chunk_meta: chunk_meta_for_struct,
             reconcile_pending: reconcile_pending_for_struct,
             metrics,
             wrappers,
@@ -476,7 +635,14 @@ impl ChunkedPrototype {
         if !self.reconcile_pending.replace(false) {
             return;
         }
-        reconcile_chunks(&self.store, &self.chunks, &self.grids);
+        reconcile_chunks(
+            &self.store,
+            &self.chunks,
+            &self.grids,
+            &self.section_ranges.borrow(),
+            &self.chunk_meta,
+            self.metrics.get().1,
+        );
     }
 
     /// Adjustment signals can fire during GTK layout. Coalesce them into one
@@ -520,7 +686,7 @@ impl ChunkedPrototype {
             let Some(wrapper) = item.child().and_downcast::<gtk::Box>() else {
                 continue;
             };
-            let Some(grid) = wrapper.first_child().and_downcast::<gtk::GridView>() else {
+            let Some(grid) = wrapper.last_child().and_downcast::<gtk::GridView>() else {
                 continue;
             };
             let mount = chunk_in_realization_window_with_margin(
@@ -626,30 +792,41 @@ impl ChunkedPrototype {
 
     fn apply_row_metrics(&self) {
         let (tile_height, columns) = self.metrics.get();
+
+        let items = {
+            let mut items = self.bound_items.borrow_mut();
+            items.retain(|weak| weak.upgrade().is_some());
+            items.iter().filter_map(|weak| weak.upgrade()).collect::<Vec<_>>()
+        };
+        let meta = self.chunk_meta.borrow();
+        for item in items {
+            let Some(wrapper) = item.child().and_downcast::<gtk::Box>() else {
+                continue;
+            };
+            let Some(slice) = item.item().and_downcast::<gtk::SliceListModel>() else {
+                continue;
+            };
+            let position = item.position() as usize;
+            let header_height = meta
+                .get(position)
+                .is_some_and(|entry| entry.logical_index == 0)
+                .then_some(CHUNK_HEADER_HEIGHT)
+                .unwrap_or(0);
+            wrapper.set_height_request(
+                header_height
+                    + chunk_row_height_px(slice.n_items().max(1), tile_height, columns),
+            );
+            if let Some(grid) = wrapper.last_child().and_downcast::<gtk::GridView>() {
+                grid.set_min_columns(columns);
+                grid.set_max_columns(columns);
+                grid.queue_resize();
+            }
+        }
+
         let mut wrappers = self.wrappers.borrow_mut();
-        wrappers.retain(|weak| {
-            let Some(wrapper) = weak.upgrade() else {
-                return false;
-            };
-            // Rows keep the full-chunk height here; bind corrects the final
-            // partial chunk once its position is known.
-            wrapper.set_height_request(chunk_row_height_px(
-                PHOTOS_PER_CHUNK,
-                tile_height,
-                columns,
-            ));
-            true
-        });
+        wrappers.retain(|weak| weak.upgrade().is_some());
         let mut grids = self.grids.borrow_mut();
-        grids.retain(|weak| {
-            let Some(grid) = weak.upgrade() else {
-                return false;
-            };
-            grid.set_min_columns(columns);
-            grid.set_max_columns(columns);
-            grid.queue_resize();
-            true
-        });
+        grids.retain(|weak| weak.upgrade().is_some());
     }
 
     pub(crate) fn set_columns(&self, columns: u32) {
@@ -659,11 +836,49 @@ impl ChunkedPrototype {
             return;
         }
 
-        // Column changes are geometry-only for the stable 64-photo chunk
-        // model. Keep the outer chunks/ListStore untouched; only update the
-        // metrics of already-realized wrappers and their inner GridViews.
+        // Keep the OUTER section/chunk model stable. Only move each slice's
+        // internal photo boundary to a complete row for the new column count.
+        // That preserves gapless folder sections without a ListStore splice.
+        let meta = self.chunk_meta.borrow();
+        for (position, entry) in meta.iter().enumerate() {
+            let Some(slice) = self
+                .chunks
+                .item(position as u32)
+                .and_downcast::<gtk::SliceListModel>()
+            else {
+                continue;
+            };
+            let (start, end) = aligned_chunk_bounds(entry, columns);
+            slice.set_offset(start);
+            slice.set_size(end.saturating_sub(start));
+        }
+        drop(meta);
+
         self.metrics.set((tile_height, columns));
         self.apply_row_metrics();
+    }
+
+    pub(crate) fn set_folder_ranges(&self, ranges: &[super::GroupRange]) {
+        if self.section_ranges.borrow().as_slice() == ranges {
+            return;
+        }
+        self.section_ranges.replace(ranges.to_vec());
+        sync_chunks(
+            &self.store,
+            &self.chunks,
+            &self.section_ranges.borrow(),
+            &self.chunk_meta,
+            self.metrics.get().1,
+        );
+        self.apply_row_metrics();
+        self.request_realization_update();
+        if crate::diagnostics::trace_enabled() {
+            eprintln!(
+                "PIC_CHUNK sections ranges={} chunks={} outer_model_update=section_change",
+                ranges.len(),
+                self.chunks.n_items()
+            );
+        }
     }
 
     /// Scroll the visible outer chunk list so the photo at `position` in the
@@ -694,39 +909,47 @@ impl ChunkedPrototype {
 /// Same-count replacements and appends that land inside an existing window
 /// need no outer mutation at all — destroying/recreating slices there is what
 /// caused the mass outer-row rebind churn.
-fn sync_chunks(store: &gio::ListStore, chunks: &gio::ListStore) {
-    let want = store.n_items().div_ceil(PHOTOS_PER_CHUNK);
-    let have = chunks.n_items();
-    if want == have {
-        return;
+fn sync_chunks(
+    store: &gio::ListStore,
+    chunks: &gio::ListStore,
+    wanted_meta: &[ChunkMeta],
+    columns: u32,
+) {
+    if chunks.n_items() == wanted_meta.len() as u32 {
+        let all_match = wanted_meta.iter().enumerate().all(|(position, meta)| {
+            let Some(slice) = chunks
+                .item(position as u32)
+                .and_downcast::<gtk::SliceListModel>()
+            else {
+                return false;
+            };
+            let (start, end) = aligned_chunk_bounds(meta, columns);
+            slice.offset() == start && slice.size() == end.saturating_sub(start)
+        });
+        if all_match {
+            return;
+        }
     }
-    if want > have {
-        let mut created = 0u32;
-        let mut index = have;
-        while index < want {
-            chunks.append(&gtk::SliceListModel::new(
-                Some(store.clone()),
-                index * PHOTOS_PER_CHUNK,
-                PHOTOS_PER_CHUNK,
-            ));
-            index += 1;
-            created += 1;
-        }
-        if crate::diagnostics::trace_enabled() {
-            eprintln!(
-                "PIC_CHUNK sync action=create chunks={} created={} removed=0",
-                want, created
-            );
-        }
-    } else {
-        let removed = have - want;
-        chunks.splice(want, removed, &[] as &[gtk::SliceListModel]);
-        if crate::diagnostics::trace_enabled() {
-            eprintln!(
-                "PIC_CHUNK sync action=truncate chunks={} created=0 removed={}",
-                want, removed
-            );
-        }
+
+    let mut slices = Vec::with_capacity(wanted_meta.len());
+    for meta in wanted_meta {
+        let (start, end) = aligned_chunk_bounds(meta, columns);
+        slices.push(gtk::SliceListModel::new(
+            Some(store.clone()),
+            start,
+            end.saturating_sub(start),
+        ));
+    }
+    let removed = chunks.n_items();
+    chunks.splice(0, removed, &slices);
+
+    if crate::diagnostics::trace_enabled() {
+        eprintln!(
+            "PIC_CHUNK sync action=sections chunks={} replaced={} columns={}",
+            slices.len(),
+            removed,
+            columns
+        );
     }
 }
 
@@ -734,351 +957,53 @@ fn sync_chunks(store: &gio::ListStore, chunks: &gio::ListStore) {
 mod tests {
     use super::*;
 
-    // `gtk::SliceListModel::new` asserts that `gtk::init` ran on the calling
-    // thread, and `gtk::init` panics when a second thread initializes GTK.
-    // Follow the repo's display-test convention: keep these scenarios out of
-    // the parallel default harness with #[ignore] and initialize GTK on the
-    // harness thread, which is single when run with `--test-threads=1`.
-    fn init_gtk() {
-        gtk::init().unwrap();
-    }
-
-    fn strings(start: u32, count: u32) -> Vec<gtk::StringObject> {
-        (start..start + count)
-            .map(|i| gtk::StringObject::new(&format!("photo-{i}")))
-            .collect()
-    }
-
-    /// Mirrors `ChunkedPrototype::new`'s model wiring: connect `sync_chunks`
-    /// to the store, then perform the initial sync.
-    fn wired() -> (gio::ListStore, gio::ListStore) {
-        let store = gio::ListStore::new::<gtk::StringObject>();
-        let chunks = gio::ListStore::new::<gtk::SliceListModel>();
-        let store_for_updates = store.clone();
-        let chunks_for_updates = chunks.clone();
-        store.connect_items_changed(move |_, _, _, _| {
-            sync_chunks(&store_for_updates, &chunks_for_updates);
-        });
-        sync_chunks(&store, &chunks);
-        (store, chunks)
-    }
-
-    fn capture_chunks(chunks: &gio::ListStore) -> Vec<glib::Object> {
-        (0..chunks.n_items())
-            .map(|i| chunks.item(i).expect("chunk item"))
-            .collect()
-    }
-
-    fn slice(chunks: &gio::ListStore, index: u32) -> gtk::SliceListModel {
-        chunks
-            .item(index)
-            .and_downcast::<gtk::SliceListModel>()
-            .expect("slice")
-    }
-
-    fn record_outer_changes(chunks: &gio::ListStore) -> Rc<RefCell<Vec<(u32, u32, u32)>>> {
-        let log = Rc::new(RefCell::new(Vec::new()));
-        let log_for_handler = log.clone();
-        chunks.connect_items_changed(move |_, position, removed, added| {
-            log_for_handler.borrow_mut().push((position, removed, added));
-        });
-        log
-    }
-
-    #[test]
-    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
-    fn initial_sync_on_empty_store_then_fill() {
-        init_gtk();
-        let store = gio::ListStore::new::<gtk::StringObject>();
-        let chunks = gio::ListStore::new::<gtk::SliceListModel>();
-        sync_chunks(&store, &chunks);
-        assert_eq!(chunks.n_items(), 0);
-
-        store.extend_from_slice(&strings(0, 100));
-        sync_chunks(&store, &chunks);
-        assert_eq!(chunks.n_items(), 2);
-
-        let first = slice(&chunks, 0);
-        assert_eq!(first.offset(), 0);
-        assert_eq!(first.size(), PHOTOS_PER_CHUNK);
-        assert_eq!(first.n_items(), 64);
-
-        let second = slice(&chunks, 1);
-        assert_eq!(second.offset(), PHOTOS_PER_CHUNK);
-        assert_eq!(second.size(), PHOTOS_PER_CHUNK);
-        assert_eq!(second.n_items(), 36);
-    }
-
-    #[test]
-    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
-    fn tail_slice_grows_without_replacing_and_new_tail_appears() {
-        init_gtk();
-        let (store, chunks) = wired();
-        store.extend_from_slice(&strings(0, 100));
-        assert_eq!(chunks.n_items(), 2);
-        let before0 = chunks.item(0).expect("chunk0");
-        let before1 = chunks.item(1).expect("chunk1");
-
-        store.extend_from_slice(&strings(100, 40));
-        assert_eq!(chunks.n_items(), 3);
-        assert_eq!(chunks.item(0).expect("chunk0"), before0);
-        assert_eq!(chunks.item(1).expect("chunk1"), before1);
-
-        assert_eq!(slice(&chunks, 1).n_items(), 64);
-        let third = slice(&chunks, 2);
-        assert_eq!(third.offset(), 128);
-        assert_eq!(third.size(), PHOTOS_PER_CHUNK);
-        assert_eq!(third.n_items(), 12);
-    }
-
-    #[test]
-    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
-    fn progressive_batches_keep_chunk_identity_and_offsets() {
-        init_gtk();
-        let (store, chunks) = wired();
-        let mut total = 0u32;
-        let mut next_id = 0u32;
-        let mut previous: Vec<glib::Object> = Vec::new();
-
-        for batch in 0..4u32 {
-            let items = strings(next_id, 2000);
-            if batch == 0 {
-                store.splice(0, 0, &items);
-            } else {
-                store.splice(store.n_items(), 0, &items);
-            }
-            next_id += 2000;
-            total += 2000;
-
-            let want = total.div_ceil(PHOTOS_PER_CHUNK);
-            let now = capture_chunks(&chunks);
-            assert_eq!(now.len() as u32, want, "batch {batch} total {total}");
-            for (i, item) in now.iter().enumerate() {
-                let s = item
-                    .clone()
-                    .downcast::<gtk::SliceListModel>()
-                    .expect("slice");
-                assert_eq!(s.offset(), i as u32 * PHOTOS_PER_CHUNK, "batch {batch}");
-                assert_eq!(s.size(), PHOTOS_PER_CHUNK, "batch {batch}");
-            }
-            for (i, item) in previous.iter().enumerate() {
-                assert_eq!(now[i], *item, "batch {batch} replaced prefix chunk {i}");
-            }
-            previous = now;
+    fn range(start: usize, end: usize) -> super::super::GroupRange {
+        super::super::GroupRange {
+            start,
+            end,
+            label: "Folder".to_string(),
+            folder_id: 1,
         }
     }
 
     #[test]
-    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
-    fn same_count_full_replacement_leaves_outer_model_untouched() {
-        init_gtk();
-        let (store, chunks) = wired();
-        store.extend_from_slice(&strings(0, 100));
-        assert_eq!(chunks.n_items(), 2);
-        let before = capture_chunks(&chunks);
-        let changes = record_outer_changes(&chunks);
-
-        store.splice(0, store.n_items(), &strings(1000, 100));
-
-        assert_eq!(chunks.n_items(), 2);
-        assert_eq!(capture_chunks(&chunks), before);
-        assert!(
-            changes.borrow().is_empty(),
-            "outer chunks model must not emit items-changed on same-count replace, got {:?}",
-            changes.borrow()
-        );
-    }
-
-    #[test]
-    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
-    fn truncation_splices_only_surplus_tail_chunks() {
-        init_gtk();
-        let (store, chunks) = wired();
-        store.extend_from_slice(&strings(0, 200));
-        assert_eq!(chunks.n_items(), 4);
-        let before = capture_chunks(&chunks);
-        let changes = record_outer_changes(&chunks);
-
-        store.splice(100, 100, &[] as &[gtk::StringObject]);
-
-        assert_eq!(chunks.n_items(), 2);
-        assert_eq!(chunks.item(0).expect("chunk0"), before[0]);
-        assert_eq!(chunks.item(1).expect("chunk1"), before[1]);
-        let log = changes.borrow();
-        assert_eq!(log.len(), 1, "expected one outer splice, got {log:?}");
-        assert_eq!(log[0], (2, 2, 0));
-    }
-
-    #[test]
-    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
-    fn pure_appends_only_grow_the_chunks_model() {
-        init_gtk();
-        let (store, chunks) = wired();
-        store.extend_from_slice(&strings(0, 30));
-        assert_eq!(chunks.n_items(), 1);
-        let first = chunks.item(0).expect("chunk0");
-        let changes = record_outer_changes(&chunks);
-
-        store.extend_from_slice(&strings(30, 20));
-        assert_eq!(chunks.n_items(), 1);
-        assert!(changes.borrow().is_empty());
-        assert_eq!(chunks.item(0).expect("chunk0"), first);
-
-        store.extend_from_slice(&strings(50, 20));
-        assert_eq!(chunks.n_items(), 2);
-        assert_eq!(chunks.item(0).expect("chunk0"), first);
-        assert_eq!(*changes.borrow(), vec![(1, 0, 1)]);
-
-        store.extend_from_slice(&strings(70, 50));
-        assert_eq!(chunks.n_items(), 2);
-        assert_eq!(chunks.item(0).expect("chunk0"), first);
-        assert_eq!(*changes.borrow(), vec![(1, 0, 1)]);
-
-        store.extend_from_slice(&strings(120, 10));
-        assert_eq!(chunks.n_items(), 3);
-        assert_eq!(chunks.item(0).expect("chunk0"), first);
-        assert_eq!(*changes.borrow(), vec![(1, 0, 1), (2, 0, 1)]);
-    }
-
-    // Pure realization-window math, no GTK display required.
-
-    #[test]
-    fn filled_items_for_chunk_clamps_full_and_tail() {
-        assert_eq!(filled_items_for_chunk(0, 0), 0);
-        assert_eq!(filled_items_for_chunk(10, 0), 10);
-        assert_eq!(filled_items_for_chunk(PHOTOS_PER_CHUNK, 0), PHOTOS_PER_CHUNK);
-        assert_eq!(filled_items_for_chunk(PHOTOS_PER_CHUNK + 1, 0), PHOTOS_PER_CHUNK);
-        assert_eq!(filled_items_for_chunk(PHOTOS_PER_CHUNK + 1, 1), 1);
-        assert_eq!(filled_items_for_chunk(2 * PHOTOS_PER_CHUNK, 1), PHOTOS_PER_CHUNK);
-        assert_eq!(filled_items_for_chunk(3 * PHOTOS_PER_CHUNK, 2), PHOTOS_PER_CHUNK);
-        assert_eq!(filled_items_for_chunk(3 * PHOTOS_PER_CHUNK + 7, 3), 7);
-        assert_eq!(filled_items_for_chunk(3 * PHOTOS_PER_CHUNK + 7, 99), 0);
-    }
-
-    #[test]
-    fn realization_window_is_bounded_and_clamped() {
-        assert_eq!(realization_window(0, 0), (0, 0));
-        assert_eq!(realization_window(-50, 354), (0, 4));
-        assert_eq!(realization_window(0, 354), (0, 4));
-        assert_eq!(realization_window(5, 354), (1, 9));
-        assert_eq!(realization_window(50, 354), (46, 54));
-        assert_eq!(realization_window(353, 354), (349, 353));
-        assert_eq!(realization_window(999, 354), (349, 353));
-        assert_eq!(realization_window(1, 1), (0, 0));
-        // Window width is 2*overscan+1 chunk rows except at the ends.
-        let (start, end) = realization_window(50, 1000);
-        assert_eq!(end - start, 8);
-    }
-
-    #[test]
-    fn realization_window_empty_store_bounds() {
-        assert_eq!(realization_window(0, 1), (0, 0));
-        // Overscan larger than the list: the whole (tiny) list is the window.
-        assert_eq!(realization_window(i64::MIN, 3), (0, 2));
-        assert_eq!(realization_window(i64::MAX, 3), (0, 2));
-    }
-
-    #[test]
-    fn chunk_not_mounted_while_fill_in_progress() {
-        // fill_complete=false gates every chunk, even the one under the
-        // viewport: a partially-filled slice measures a few px tall and would
-        // poison the adjustment upper.
-        assert!(!chunk_in_realization_window(0, 0.0, 64, 2272, 5, false));
-        assert!(!chunk_in_realization_window(0, 0.0, 0, 2272, 5, false));
-        assert!(!chunk_in_realization_window(50, 50.0, 64, 2272, 5, false));
-    }
-
-    #[test]
-    fn incomplete_slice_not_mounted_after_fill() {
-        // Store thinks the chunk holds PHOTOS_PER_CHUNK but the slice only
-        // grew 13: not mounted — mounting a half-filled slice repeats the
-        // measurement poisoning.
-        assert!(!chunk_in_realization_window(0, 0.0, 13, 2272, 5, true));
-    }
-
-    #[test]
-    fn mount_window_matches_realization_window() {
-        let total_chunks = 354u32;
-        let total_items = total_chunks * PHOTOS_PER_CHUNK;
-        let (start, end) = realization_window(50, total_chunks);
-        assert_eq!((start, end), (46, 54));
-        // Every chunk inside the raw window mounts...
-        for pos in start..=end {
-            assert!(
-                chunk_in_realization_window(pos, 50.0, PHOTOS_PER_CHUNK, total_items, 5, true),
-                "chunk {pos} inside realization window must mount"
-            );
-        }
-        // The applied window uses chunk units throughout; the old code
-        // subtracted 64/5 photo lines from a chunk-index distance and mounted
-        // 34 GridViews instead of the intended 9.
-        let mut mounted = 0u32;
-        for pos in 0..total_chunks {
-            if chunk_in_realization_window(pos, 50.0, PHOTOS_PER_CHUNK, total_items, 5, true) {
-                mounted += 1;
+    fn aligned_chunks_cover_each_folder_without_gaps() {
+        for columns in [2_u32, 3, 4, 5, 6, 7, 8, 9, 11, 12] {
+            for count in [1_usize, 63, 64, 65, 127, 128, 129, 1000] {
+                let metas = build_chunk_meta(&[range(0, count)]);
+                assert!(!metas.is_empty());
+                let mut cursor = 0_u32;
+                for (index, meta) in metas.iter().enumerate() {
+                    let (start, end) = aligned_chunk_bounds(meta, columns);
+                    assert_eq!(start, cursor, "columns={columns} count={count}");
+                    assert!(end > start, "columns={columns} count={count}");
+                    if index + 1 < metas.len() {
+                        assert_eq!(
+                            end % columns,
+                            0,
+                            "internal boundary columns={columns} count={count}"
+                        );
+                    }
+                    cursor = end;
+                }
+                assert_eq!(cursor, count as u32, "columns={columns} count={count}");
             }
         }
-        assert_eq!(mounted, 2 * REALIZATION_OVERSCAN_CHUNKS as u32 + 1);
     }
 
     #[test]
-    fn final_partial_chunk_mounts_when_filled_and_near() {
-        let total_items = 354 * PHOTOS_PER_CHUNK + 7;
-        let tail = filled_items_for_chunk(total_items, 354);
-        assert_eq!(tail, 7);
-        assert!(chunk_in_realization_window(
-            354, 354.0, tail, total_items, 5, true
-        ));
-        // If the fill never delivered those 7, the tail stays unmounted.
-        assert!(!chunk_in_realization_window(
-            354, 354.0, 0, total_items, 5, true
-        ));
-    }
-
-    #[test]
-    fn distant_chunk_stays_unmounted() {
-        let total_items = 354 * PHOTOS_PER_CHUNK;
-        assert!(chunk_in_realization_window(
-            0, 0.0, PHOTOS_PER_CHUNK, total_items, 5, true
-        ));
-        assert!(!chunk_in_realization_window(
-            200, 0.0, PHOTOS_PER_CHUNK, total_items, 5, true
-        ));
-        assert!(!chunk_in_realization_window(
-            0, 200.0, PHOTOS_PER_CHUNK, total_items, 5, true
-        ));
-        // One chunk outside the applied bound must remain unmounted.
-        assert!(!chunk_in_realization_window(
-            55, 50.0, PHOTOS_PER_CHUNK, total_items, 5, true
-        ));
-    }
-
-    #[test]
-    fn mounted_edge_survives_scroll_estimate_jitter() {
-        let total_items = 354 * PHOTOS_PER_CHUNK;
-        let edge = 35;
-        for center in [30.80, 30.77] {
-            assert!(!chunk_in_realization_window(
-                edge, center, PHOTOS_PER_CHUNK, total_items, 5, true
-            ));
-            assert!(chunk_in_realization_window_with_margin(
-                edge,
-                center,
-                PHOTOS_PER_CHUNK,
-                total_items,
-                5,
-                true,
-                REALIZATION_RETAIN_MARGIN_CHUNKS,
-            ));
+    fn chunk_count_is_independent_of_columns() {
+        for count in [1_usize, 63, 64, 65, 127, 128, 129, 1000] {
+            let metas = build_chunk_meta(&[range(10, 10 + count)]);
+            let expected = (count as u32).div_ceil(PHOTOS_PER_CHUNK);
+            assert_eq!(metas.len() as u32, expected);
+            for columns in [2_u32, 3, 4, 5, 6, 7, 8, 9, 11, 12] {
+                assert_eq!(metas.len() as u32, expected);
+                let first = aligned_chunk_bounds(&metas[0], columns).0;
+                let last = aligned_chunk_bounds(metas.last().unwrap(), columns).1;
+                assert_eq!(first, 10);
+                assert_eq!(last, (10 + count) as u32);
+            }
         }
-        assert!(!chunk_in_realization_window_with_margin(
-            edge,
-            30.4,
-            PHOTOS_PER_CHUNK,
-            total_items,
-            5,
-            true,
-            REALIZATION_RETAIN_MARGIN_CHUNKS,
-        ));
     }
 }
