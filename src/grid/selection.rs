@@ -362,6 +362,15 @@ impl Gallery {
     }
 
     pub fn selected_photo_ids(&self, fallback_id: Option<i64>) -> Vec<i64> {
+        if std::env::var_os("PIC_GALLERY_V2").is_some()
+            && self.group_mode.get() == GroupMode::Folder
+        {
+            let ids = self.v2_folder.selected_photo_ids();
+            return match fallback_id {
+                Some(fallback) if !ids.contains(&fallback) => vec![fallback],
+                _ => ids,
+            };
+        }
         if self.collage_selection_mode.get() {
             return self.collage_selected_ids.borrow().iter().copied().collect();
         }
@@ -391,6 +400,11 @@ impl Gallery {
     }
 
     pub fn set_selected_photo_ids(&self, ids: &[i64]) {
+        if std::env::var_os("PIC_GALLERY_V2").is_some()
+            && self.group_mode.get() == GroupMode::Folder
+        {
+            self.v2_folder.set_selected_ids(ids);
+        }
         self.collage_selected_ids
             .borrow_mut()
             .extend(ids.iter().copied());
@@ -473,6 +487,10 @@ impl Gallery {
 
     pub fn grab_focus(&self) {
         if self.group_mode.get() == GroupMode::Folder {
+            if std::env::var_os("PIC_GALLERY_V2").is_some() {
+                self.v2_folder.root.grab_focus();
+                return;
+            }
             self.folder_root.grab_focus();
         } else {
             self.root.grab_focus();
@@ -484,6 +502,9 @@ impl Gallery {
     /// hardcode the GridView.
     pub fn visible_root(&self) -> gtk::Widget {
         if self.group_mode.get() == GroupMode::Folder {
+            if std::env::var_os("PIC_GALLERY_V2").is_some() {
+                return self.v2_folder.root.clone().upcast();
+            }
             self.folder_root.clone().upcast()
         } else {
             self.root.clone().upcast()
@@ -578,6 +599,18 @@ impl Gallery {
     }
 
     pub fn select_photo(&self, photo_id: i64) -> bool {
+        if std::env::var_os("PIC_GALLERY_V2").is_some()
+            && self.group_mode.get() == GroupMode::Folder
+        {
+            let selected = self.v2_folder.select_photo(photo_id);
+            if selected {
+                if let Some(position) = self.current_photos.borrow().iter().position(|photo| photo.id() == photo_id) {
+                    self.selection.select_item(position as u32, true);
+                }
+            }
+            return selected;
+        }
+
         let Some(model) = self.selection.model() else {
             return false;
         };
@@ -634,6 +667,14 @@ impl Gallery {
         else {
             return false;
         };
+
+        if std::env::var_os("PIC_GALLERY_V2").is_some()
+            && self.group_mode.get() == GroupMode::Folder
+        {
+            let actual_folder_id = self.current_photos.borrow()[photo_position].folder_id();
+            self.selection.select_item(photo_position as u32, true);
+            return self.v2_folder.scroll_to_folder(actual_folder_id);
+        }
 
         self.selection.select_item(photo_position as u32, true);
         if self.group_mode.get() == GroupMode::Folder {
