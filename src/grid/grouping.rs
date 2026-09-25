@@ -83,6 +83,14 @@ impl Gallery {
         self.folder_view_changed.replace(Some(handler));
     }
 
+    /// True only while the gallery is showing the continuous grouped Folder
+    /// stream. Active global search temporarily switches Folder mode to
+    /// `GroupMode::None`, so delayed search work can use this to detect that a
+    /// Folder navigation has already won and must not be overwritten.
+    pub(crate) fn folder_grouping_active(&self) -> bool {
+        self.group_mode.get() == GroupMode::Folder
+    }
+
     pub fn update_group_header_for_scroll(&self, scroll_y: f64) {
         self.last_scroll_y.set(scroll_y.max(0.0));
         let mode = self.group_mode.get();

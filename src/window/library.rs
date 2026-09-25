@@ -70,6 +70,16 @@ fn refresh_grid_to_folder(
     );
 }
 
+fn stale_folder_search_refresh(
+    filter: sidebar::SidebarFilter,
+    search: &str,
+    folder_grouping_active: bool,
+) -> bool {
+    matches!(filter, sidebar::SidebarFilter::Folder(_))
+        && !search.is_empty()
+        && folder_grouping_active
+}
+
 fn refresh_grid_inner(
     connection: &Rc<RefCell<Connection>>,
     filter: sidebar::SidebarFilter,
@@ -85,6 +95,20 @@ fn refresh_grid_inner(
     {
         return;
     }
+    // Folder search is a temporary global-search view. Its handlers switch
+    // grouping to None before scheduling. Opening a Folder result restores
+    // Folder grouping; any later non-empty Folder search refresh is stale and
+    // must not advance the generation or replace the Folder stream again.
+    if stale_folder_search_refresh(filter, search, gallery.folder_grouping_active()) {
+        if crate::diagnostics::trace_enabled() {
+            eprintln!(
+                "PIC_NAV nav_stage=refresh_drop reason=stale_folder_search caller={caller} filter={filter:?} search={search:?} t={}",
+                crate::diagnostics::t_ms()
+            );
+        }
+        return;
+    }
+
     let generation = REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let search = search.to_owned();
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -660,5 +684,37 @@ mod photo_action_tests {
             sorted_paths(SortField::DateAdded, SortDirection::Ascending),
             ["/photos/m.jpg", "/photos/z.jpg", "/photos/A.jpg"]
         );
+    }
+}
+
+#[cfg(test)]
+mod stale_folder_search_refresh_tests {
+    use super::{sidebar, stale_folder_search_refresh};
+
+    #[test]
+    fn delayed_folder_search_is_dropped_after_folder_navigation() {
+        assert!(stale_folder_search_refresh(
+            sidebar::SidebarFilter::Folder(266),
+            "drone",
+            true,
+        ));
+    }
+
+    #[test]
+    fn active_folder_search_is_allowed_while_grouping_is_none() {
+        assert!(!stale_folder_search_refresh(
+            sidebar::SidebarFilter::Folder(266),
+            "drone",
+            false,
+        ));
+    }
+
+    #[test]
+    fn empty_folder_refresh_is_not_a_stale_search() {
+        assert!(!stale_folder_search_refresh(
+            sidebar::SidebarFilter::Folder(266),
+            "",
+            true,
+        ));
     }
 }
