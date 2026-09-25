@@ -559,13 +559,14 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             grid.set_min_columns(columns);
             grid.set_max_columns(columns);
 
-            let selection = gtk::SingleSelection::new(Some(group.model.clone()));
-            selection.set_autoselect(false);
-            selection.set_can_unselect(true);
+            let selection = gtk::MultiSelection::new(Some(group.model.clone()));
             {
                 let selection_changed = selection_changed.clone();
                 selection.connect_selection_changed(move |selection, _, _| {
-                    let selected = selection.selected_item().and_downcast::<PhotoObject>();
+                    let selected_bits = selection.selection();
+                    let selected = gtk::BitsetIter::init_first(&selected_bits)
+                        .and_then(|(_, position)| selection.item(position))
+                        .and_downcast::<PhotoObject>();
                     if let Some(callback) = selection_changed.borrow().as_ref().cloned() {
                         callback(selected);
                     }
