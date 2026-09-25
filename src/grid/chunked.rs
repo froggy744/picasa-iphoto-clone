@@ -19,10 +19,6 @@ const CHUNK_LINE_SPACING: i32 = 12;
 /// ordinary scrolling and small jumps seamless.
 const REALIZATION_OVERSCAN_CHUNKS: i64 = 4;
 
-fn slice_size_for(filled_items: u32) -> u32 {
-    filled_items
-}
-
 /// Final height of one chunk row holding `items` photos on `CHUNK_COLUMNS`
 /// lines. Wrapped around the inner GridView so GtkListView measures the row's
 /// FINAL size immediately: without it, rows measure a few px while their
@@ -32,6 +28,51 @@ fn slice_size_for(filled_items: u32) -> u32 {
 fn chunk_row_height_px(items: u32, tile_height: i32, columns: u32) -> i32 {
     let lines = (items as f64 / columns.max(1) as f64).ceil() as i32;
     lines * (tile_height.max(1) + CHUNK_LINE_SPACING)
+}
+
+/// Photo count the `position`-th chunk would hold in a store of `total_items`
+/// photos: a full chunk, or only the remainder for the final one.
+fn filled_items_for_chunk(total_items: u32, position: u32) -> u32 {
+    total_items
+        .saturating_sub(position * PHOTOS_PER_CHUNK)
+        .min(PHOTOS_PER_CHUNK)
+}
+
+/// Inclusive `[start, end]` window of chunk indices whose photo models stay
+/// mounted for a viewport centered on chunk row `center_chunk`, bounded by
+/// the total chunk count. Everything outside the window is an empty wrapper:
+/// a bounded mount cost regardless of how far the user scrolls.
+pub(crate) fn realization_window(center_chunk: i64, total_chunks: u32) -> (u32, u32) {
+    if total_chunks == 0 {
+        return (0, 0);
+    }
+    let center = center_chunk.clamp(0, total_chunks as i64 - 1);
+    let start = (center - REALIZATION_OVERSCAN_CHUNKS).max(0) as u32;
+    let end = (center + REALIZATION_OVERSCAN_CHUNKS).max(0).min(total_chunks as i64 - 1) as u32;
+    (start, end)
+}
+
+/// Whether chunk `position` should keep its photo models mounted: the stream
+/// fill must be complete, the chunk's own slice fully filled, and the chunk
+/// within `REALIZATION_OVERSCAN_CHUNKS` chunk-rows of the viewport center.
+/// During a progressive fill slices measure a few px tall and the adjustment
+/// upper collapses to one viewport, so unmounted chunks must stay model-less
+/// until measurement is trustworthy again.
+fn chunk_in_realization_window(
+    position: u32,
+    viewport_center_chunks: f64,
+    slice_n_items: u32,
+    total_items: u32,
+    columns: u32,
+    fill_complete: bool,
+) -> bool {
+    let filled = filled_items_for_chunk(total_items, position);
+    if !fill_complete || slice_n_items < filled {
+        return false;
+    }
+    let distance = (position as f64 - viewport_center_chunks).abs()
+        - (filled as f64 / columns.max(1) as f64);
+    distance <= REALIZATION_OVERSCAN_CHUNKS as f64
 }
 
 #[derive(Clone)]
@@ -231,8 +272,6 @@ impl ChunkedPrototype {
                     );
                 });
             }
-            let filling = !fill_complete_for_bind.get()
-                || slice.n_items() < slice_size_for(filled);
             let row_height = chunk_row_height_px(PHOTOS_PER_CHUNK, tile_height, columns) as f64;
             let viewport_center = if row_height > 0.0 {
                 let adjustment = self_root.borrow().as_ref().and_then(|root| root.vadjustment());
@@ -242,9 +281,15 @@ impl ChunkedPrototype {
             } else {
                 0.0
             };
-            let distance =
-                (position as f64 - viewport_center).abs() - (filled as f64 / columns.max(1) as f64);
-            if filling || distance > REALIZATION_OVERSCAN_CHUNKS as f64 {
+            let mount = chunk_in_realization_window(
+                position,
+                viewport_center,
+                slice.n_items(),
+                total,
+                columns,
+                fill_complete_for_bind.get(),
+            );
+            if mount {
                 grid.set_model(None::<&gtk::NoSelection>);
             } else {
                 grid.set_model(Some(&gtk::NoSelection::new(Some(slice))));
@@ -780,5 +825,122 @@ mod tests {
         assert_eq!(chunks.n_items(), 3);
         assert_eq!(chunks.item(0).expect("chunk0"), first);
         assert_eq!(*changes.borrow(), vec![(1, 0, 1), (2, 0, 1)]);
+    }
+
+    // Pure realization-window math, no GTK display required.
+
+    #[test]
+    fn filled_items_for_chunk_clamps_full_and_tail() {
+        assert_eq!(filled_items_for_chunk(0, 0), 0);
+        assert_eq!(filled_items_for_chunk(10, 0), 10);
+        assert_eq!(filled_items_for_chunk(PHOTOS_PER_CHUNK, 0), PHOTOS_PER_CHUNK);
+        assert_eq!(filled_items_for_chunk(PHOTOS_PER_CHUNK + 1, 0), PHOTOS_PER_CHUNK);
+        assert_eq!(filled_items_for_chunk(PHOTOS_PER_CHUNK + 1, 1), 1);
+        assert_eq!(filled_items_for_chunk(2 * PHOTOS_PER_CHUNK, 1), PHOTOS_PER_CHUNK);
+        assert_eq!(filled_items_for_chunk(3 * PHOTOS_PER_CHUNK, 2), PHOTOS_PER_CHUNK);
+        assert_eq!(filled_items_for_chunk(3 * PHOTOS_PER_CHUNK + 7, 3), 7);
+        assert_eq!(filled_items_for_chunk(3 * PHOTOS_PER_CHUNK + 7, 99), 0);
+    }
+
+    #[test]
+    fn realization_window_is_bounded_and_clamped() {
+        assert_eq!(realization_window(0, 0), (0, 0));
+        assert_eq!(realization_window(-50, 354), (0, 4));
+        assert_eq!(realization_window(0, 354), (0, 4));
+        assert_eq!(realization_window(5, 354), (1, 9));
+        assert_eq!(realization_window(50, 354), (46, 54));
+        assert_eq!(realization_window(353, 354), (349, 353));
+        assert_eq!(realization_window(999, 354), (349, 353));
+        assert_eq!(realization_window(1, 1), (0, 0));
+        // Window width is 2*overscan+1 chunk rows except at the ends.
+        let (start, end) = realization_window(50, 1000);
+        assert_eq!(end - start, 8);
+    }
+
+    #[test]
+    fn realization_window_empty_store_bounds() {
+        assert_eq!(realization_window(0, 1), (0, 0));
+        assert_eq!(realization_window(i64::MIN, 3), (0, 1));
+        assert_eq!(realization_window(i64::MAX, 3), (1, 2));
+    }
+
+    #[test]
+    fn chunk_not_mounted_while_fill_in_progress() {
+        // fill_complete=false gates every chunk, even the one under the
+        // viewport: a partially-filled slice measures a few px tall and would
+        // poison the adjustment upper.
+        assert!(!chunk_in_realization_window(0, 0.0, 64, 2272, 5, false));
+        assert!(!chunk_in_realization_window(0, 0.0, 64, 2272, 5, true));
+        assert!(!chunk_in_realization_window(0, 0.0, 0, 2272, 5, false));
+        assert!(!chunk_in_realization_window(50, 50.0, 64, 2272, 5, false));
+    }
+
+    #[test]
+    fn incomplete_slice_not_mounted_after_fill() {
+        // Store thinks the chunk holds PHOTOS_PER_CHUNK but the slice only
+        // grew 13: not mounted — mounting a half-filled slice repeats the
+        // measurement poisoning.
+        assert!(!chunk_in_realization_window(0, 0.0, 13, 2272, 5, true));
+    }
+
+    #[test]
+    fn mount_window_matches_realization_window() {
+        let total_chunks = 354u32;
+        let total_items = total_chunks * PHOTOS_PER_CHUNK;
+        let (start, end) = realization_window(50, total_chunks);
+        // Chunk just inside the window mounts...
+        assert!(chunk_in_realization_window(
+            start,
+            50.0,
+            PHOTOS_PER_CHUNK,
+            total_items,
+            5,
+            true
+        ));
+        assert!(chunk_in_realization_window(
+            end,
+            50.0,
+            PHOTOS_PER_CHUNK,
+            total_items,
+            5,
+            true
+        ));
+        // ...one chunk past the window's far edge does not.
+        assert!(!chunk_in_realization_window(
+            end + 1,
+            50.0,
+            PHOTOS_PER_CHUNK,
+            total_items,
+            5,
+            true
+        ));
+    }
+
+    #[test]
+    fn final_partial_chunk_mounts_when_filled_and_near() {
+        let total_items = 354 * PHOTOS_PER_CHUNK + 7;
+        let tail = filled_items_for_chunk(total_items, 354);
+        assert_eq!(tail, 7);
+        assert!(chunk_in_realization_window(
+            354, 354.0, tail, total_items, 5, true
+        ));
+        // If the fill never delivered those 7, the tail stays unmounted.
+        assert!(!chunk_in_realization_window(
+            354, 354.0, 0, total_items, 5, true
+        ));
+    }
+
+    #[test]
+    fn distant_chunk_stays_unmounted() {
+        let total_items = 354 * PHOTOS_PER_CHUNK;
+        assert!(chunk_in_realization_window(
+            0, 0.0, PHOTOS_PER_CHUNK, total_items, 5, true
+        ));
+        assert!(!chunk_in_realization_window(
+            200, 0.0, PHOTOS_PER_CHUNK, total_items, 5, true
+        ));
+        assert!(!chunk_in_realization_window(
+            0, 200.0, PHOTOS_PER_CHUNK, total_items, 5, true
+        ));
     }
 }
