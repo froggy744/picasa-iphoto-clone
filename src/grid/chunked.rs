@@ -803,6 +803,26 @@ impl ChunkedPrototype {
             }
             pending_self.fill_complete.set(true);
             pending_self.remount_pending.borrow_mut().take();
+
+            // Section-aware chunks already carry explicit final wrapper
+            // heights and stable slice geometry. A full model detach/reattach
+            // here only destroys and recreates every outer row, which was the
+            // navigation hitch seen in the first stable-chunk trace.
+            if !pending_self.section_ranges.borrow().is_empty() {
+                pending_self.apply_row_metrics();
+                pending_self.root.queue_resize();
+                pending_self.request_realization_update();
+                if crate::diagnostics::trace_enabled() {
+                    eprintln!(
+                        "PIC_NAV chunk_realization settle action=geometry_only chunks={} store={} t={}",
+                        pending_self.chunks.n_items(),
+                        pending_self.store.n_items(),
+                        crate::diagnostics::t_ms()
+                    );
+                }
+                return glib::ControlFlow::Break;
+            }
+
             if crate::diagnostics::trace_enabled() {
                 eprintln!(
                     "PIC_NAV chunk_realization remount t={} chunks={} store={}",
