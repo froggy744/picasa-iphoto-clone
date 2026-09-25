@@ -181,20 +181,6 @@ impl Gallery {
         true
     }
 
-    fn restore_folder_cache(&self) -> bool {
-        let Some(cache) = self.folder_cache.borrow().clone() else {
-            return false;
-        };
-        if cache.columns != self.current_columns.get() || cache.order != *self.folder_order.borrow()
-        {
-            return false;
-        }
-        self.current_photos.replace(cache.photos.clone());
-        self.group_ranges.replace(cache.ranges.clone());
-        self.store.splice(0, self.store.n_items(), &cache.photos);
-        
-        true
-    }
 
     /// Supply the folder hierarchy/order used by the sidebar. The catalog is
     /// ordering metadata only: folders without direct photos must not become
