@@ -5,6 +5,13 @@ build-logs/
 .flatpak-builder/
 
 # session progress notes; never commit
+
+# session progress / agent files; never commit
 .agent-progress.md
-.log
-.zip
+.agent-codex-handoff.md
+.agent-implement
+
+# generated diagnostics / archives
+*.log
+*.zip
+FIX-NOTE.txt
