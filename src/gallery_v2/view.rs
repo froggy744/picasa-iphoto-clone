@@ -630,6 +630,21 @@ impl GalleryV2 {
         }
     }
 
+    pub(crate) fn objects_for(&self, photos: &[Photo]) -> Vec<PhotoObject> {
+        let mut cache = self.object_cache.borrow_mut();
+        photos
+            .iter()
+            .map(|photo| {
+                let object = cache
+                    .entry(photo.id)
+                    .or_insert_with(|| PhotoObject::from_photo(photo))
+                    .clone();
+                object.set_from_photo(photo);
+                object
+            })
+            .collect()
+    }
+
     pub(crate) fn photo_objects(&self) -> Vec<PhotoObject> {
         self.current_photos.borrow().clone()
     }
