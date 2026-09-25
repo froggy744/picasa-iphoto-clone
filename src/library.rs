@@ -59,6 +59,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             let section = gtk::Box::new(gtk::Orientation::Vertical, 4);
             section.add_css_class("folder-section");
             section.set_hexpand(true);
+            section.set_vexpand(false);
+            section.set_valign(gtk::Align::Start);
 
             let title = gtk::Label::new(None);
             title.add_css_class("folder-title");
@@ -79,6 +81,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             grid.set_single_click_activate(false);
             grid.set_hexpand(true);
             grid.set_vexpand(false);
+            grid.set_valign(gtk::Align::Start);
 
             section.append(&title);
             section.append(&path);
@@ -486,7 +489,7 @@ fn install_css() {
         }
 
         .folder-section {
-            padding: 14px 14px 18px 14px;
+            padding: 10px 14px 10px 14px;
         }
 
         .folder-title {
@@ -497,7 +500,7 @@ fn install_css() {
 
         .folder-path {
             font-size: 0.88em;
-            margin-bottom: 6px;
+            margin-bottom: 3px;
         }
 
         .folder-grid {
