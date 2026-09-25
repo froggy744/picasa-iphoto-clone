@@ -6,3 +6,5 @@ build-logs/
 
 # session progress notes; never commit
 .agent-progress.md
+.log
+.zip
