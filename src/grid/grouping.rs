@@ -187,6 +187,12 @@ impl Gallery {
     /// cleared. The Folder rows reference the restored PhotoObjects by index and
     /// `selection` reads them through `store`, so both must be replaced.
     pub fn can_restore_folder_cache(&self) -> bool {
+        if std::env::var_os("PIC_GALLERY_V2").is_some() && self.v2_folder.has_sections() {
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("PIC_V2_FOLDER cache_reuse result=hit");
+            }
+            return true;
+        }
         let Some(cache) = self.folder_cache.borrow().as_ref().cloned() else {
             if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=no_cached_rows"); }
             return false;
