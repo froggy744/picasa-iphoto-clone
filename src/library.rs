@@ -802,6 +802,27 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     minus.add_css_class("photo-action-button");
     minus.set_tooltip_text(Some("Smaller thumbnails"));
 
+    let grid_zoom_scroll =
+        gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    {
+        let zoom = zoom.clone();
+        grid_zoom_scroll.connect_scroll(move |controller, _, dy| {
+            if controller
+                .current_event_state()
+                .contains(gtk::gdk::ModifierType::CONTROL_MASK)
+            {
+                if dy < 0.0 {
+                    zoom.set_value((zoom.value() + 20.0).min(f64::from(MAX_TILE)));
+                } else if dy > 0.0 {
+                    zoom.set_value((zoom.value() - 20.0).max(f64::from(MIN_TILE)));
+                }
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+    }
+    scroller.add_controller(grid_zoom_scroll);
+
     let bottom_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     bottom_bar.set_height_request(58);
     bottom_bar.set_margin_start(16);
