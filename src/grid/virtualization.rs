@@ -259,6 +259,7 @@ impl Gallery {
         }
         self.fit_whole_photo.set(fit);
         self.v2.set_fit_whole_photo(fit);
+        self.v2_folder.set_fit_whole_photo(fit);
         let content_fit = if fit {
             gtk::ContentFit::Contain
         } else {
@@ -350,6 +351,7 @@ impl Gallery {
         self.tile_width.set(width);
         self.tile_height.set(height);
         self.v2.set_tile_size(width, height);
+        self.v2_folder.set_tile_size(width, height);
         if persist {
             (self.on_zoom_changed)(width);
         }
@@ -1279,7 +1281,13 @@ impl Gallery {
     }
 
     pub fn replace(&self, photos: &[Photo]) {
-        self.v2.replace(photos);
+        if std::env::var_os("PIC_GALLERY_V2").is_some()
+            && self.group_mode.get() == GroupMode::Folder
+        {
+            self.v2_folder.replace(photos);
+        } else {
+            self.v2.replace(photos);
+        }
         if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV gallery_replace photos={}", photos.len()); }
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
