@@ -8,6 +8,12 @@ static REFRESH_GENERATION: std::sync::atomic::AtomicU64 =
 /// refresh, so it must still advance this generation to prevent an older
 /// Albums/Photos -> Folder timer from pulling the view back later.
 fn invalidate_pending_grid_navigation() {
+    if crate::diagnostics::trace_enabled() {
+        eprintln!(
+            "PIC_NAV nav_stage=generation_invalidated t={}",
+            crate::diagnostics::t_ms()
+        );
+    }
     REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 

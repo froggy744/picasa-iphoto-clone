@@ -89,6 +89,8 @@ impl ChunkedPrototype {
         let factory = gtk::SignalListItemFactory::new();
         let grids_for_setup = grids.clone();
         let item_factory = photo_factory.clone();
+        let bind_trace_root: Rc<RefCell<Option<gtk::ListView>>> = Rc::new(RefCell::new(None));
+        let bind_trace_root_for_bind = bind_trace_root.clone();
         factory.connect_setup(move |_, object| {
             let Some(item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
@@ -102,8 +104,19 @@ impl ChunkedPrototype {
             grid.add_css_class("section-grid");
             item.set_child(Some(&grid));
             grids_for_setup.borrow_mut().push(grid.downgrade());
+            if crate::diagnostics::trace_enabled() {
+                static SETUP_COUNT: std::sync::atomic::AtomicU32 =
+                    std::sync::atomic::AtomicU32::new(0);
+                let count =
+                    SETUP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                eprintln!(
+                    "PIC_NAV chunk_factory setup n={count} t={}",
+                    crate::diagnostics::t_ms()
+                );
+            }
         });
-        factory.connect_bind(|_, object| {
+        factory.connect_bind(move |_, object| {
+            let self_root = bind_trace_root_for_bind.clone();
             let Some(item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
@@ -114,12 +127,40 @@ impl ChunkedPrototype {
                 return;
             };
             grid.set_model(Some(&gtk::NoSelection::new(Some(slice))));
+            if crate::diagnostics::trace_enabled() {
+                static BIND_COUNT: std::sync::atomic::AtomicU32 =
+                    std::sync::atomic::AtomicU32::new(0);
+                let count = BIND_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let adjust = self_root.borrow().as_ref().and_then(|root| {
+                    let adjustment = root.vadjustment()?;
+                    Some(format!(
+                        "value={:.0} upper={:.0} page={:.0}",
+                        adjustment.value(),
+                        adjustment.upper(),
+                        adjustment.page_size()
+                    ))
+                });
+                eprintln!(
+                    "PIC_NAV chunk_factory bind n={count} {} t={}",
+                    adjust.unwrap_or_default(),
+                    crate::diagnostics::t_ms()
+                );
+            }
         });
         factory.connect_unbind(|_, object| {
             if let Some(item) = object.downcast_ref::<gtk::ListItem>() {
                 if let Some(grid) = item.child().and_downcast::<gtk::GridView>() {
                     grid.set_model(None::<&gtk::NoSelection>);
                 }
+            }
+            if crate::diagnostics::trace_enabled() {
+                static UNBIND_COUNT: std::sync::atomic::AtomicU32 =
+                    std::sync::atomic::AtomicU32::new(0);
+                let count = UNBIND_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                eprintln!(
+                    "PIC_NAV chunk_factory unbind n={count} t={}",
+                    crate::diagnostics::t_ms()
+                );
             }
         });
 
@@ -128,8 +169,9 @@ impl ChunkedPrototype {
         root.set_hexpand(true);
         root.set_vexpand(true);
         root.add_css_class("folder-stream");
+        *bind_trace_root.borrow_mut() = Some(root.clone());
         Self {
-            root,
+            root: root.clone(),
             grids,
             store: store.clone(),
             chunks: chunks_for_struct,
@@ -155,6 +197,20 @@ impl ChunkedPrototype {
     /// Call from outside any items-changed emission, pair with
     /// `reattach_after_replace` on a later idle.
     pub(crate) fn detach_for_replace(&self) {
+        if crate::diagnostics::trace_enabled() {
+            let tracked = self.grids.borrow().len();
+            let alive = self
+                .grids
+                .borrow()
+                .iter()
+                .filter(|weak| weak.upgrade().is_some())
+                .count();
+            eprintln!(
+                "PIC_NAV chunk_detach tracked_grids={tracked} alive_grids={alive} chunks={} t={}",
+                self.chunks.n_items(),
+                crate::diagnostics::t_ms()
+            );
+        }
         self.root.set_model(None::<&gtk::NoSelection>);
     }
 

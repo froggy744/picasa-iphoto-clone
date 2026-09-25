@@ -1523,7 +1523,14 @@ impl Gallery {
             })
             .cloned();
         if let Some(chunked) = &chunked_detach {
-            chunked.detach_for_replace();
+            // GTK frees the hidden folder view's mounted rows on the frame
+            // clock, not during the visibility swap. Unmounting the model
+            // synchronously here tore down every live chunk GridView and its
+            // tiles inside the navigation frame (~600 ms for the full
+            // library stream, measured); by the next idle the unmap has
+            // already released them and the same call is cheap.
+            let chunked = chunked.clone();
+            glib::idle_add_local_once(move || chunked.detach_for_replace());
         }
         let detach_done = replace_started.map(|s| s.elapsed());
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
@@ -1621,8 +1628,15 @@ impl Gallery {
             );
             // Frame clock and main-loop recovery after the replacement: the
             // tick callback fires once per rendered frame, the low-priority
-            // idle fires when nothing higher-priority is pending.
-            let frame_root = self.root.clone();
+            // idle fires when nothing higher-priority is pending. It hangs
+            // off the toplevel because the mode-specific grid widgets are
+            // not guaranteed to be the mapped child of the stack.
+            let frame_root: gtk4::Widget = self
+                .root
+                .root()
+                .and_downcast::<gtk::Window>()
+                .map(|window| window.upcast())
+                .unwrap_or_else(|| self.root.clone().upcast());
             let frame_ticks = Rc::new(std::cell::Cell::new(0u32));
             let replace_end = std::time::Instant::now();
             frame_root.add_tick_callback(move |_, _| {
