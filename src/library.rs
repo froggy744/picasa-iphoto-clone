@@ -49,6 +49,7 @@ struct ThumbJob {
     path: String,
     mtime: i64,
     size_bytes: i64,
+    rotation: i32,
     cache_key: String,
 }
 
@@ -80,8 +81,8 @@ fn app_cache_dir() -> PathBuf {
         .join("picasa-rs")
 }
 
-fn thumbnail_identity(source: &str, mtime: i64, size_bytes: i64) -> String {
-    format!("{source}\0{mtime}\0{size_bytes}")
+fn thumbnail_identity(source: &str, mtime: i64, size_bytes: i64, rotation: i32) -> String {
+    format!("{source}\0{mtime}\0{size_bytes}\0{}", rotation.rem_euclid(360))
 }
 
 fn thumbnail_cache_path(
@@ -146,6 +147,12 @@ fn decode_thumb_cached(job: &ThumbJob, cache_dir: &Path) -> ThumbResult {
         thumb
     };
 
+    let image = match job.rotation.rem_euclid(360) {
+        90 => image.rotate90(),
+        180 => image.rotate180(),
+        270 => image.rotate270(),
+        _ => image,
+    };
     let rgba = image.to_rgba8();
     let (width, height) = rgba.dimensions();
     ThumbResult {
@@ -1774,7 +1781,8 @@ fn make_photo_factory(
                 .and_downcast::<gtk::Button>();
 
             let path = photo.path();
-            let cache_key = thumbnail_identity(&path, photo.mtime(), photo.size_bytes());
+            let cache_key =
+                thumbnail_identity(&path, photo.mtime(), photo.size_bytes(), photo.rotation());
             if let Some(badge) = offline_badge {
                 badge.set_visible(!Path::new(&path).is_file());
             }
@@ -1821,6 +1829,7 @@ fn make_photo_factory(
                     path: path.clone(),
                     mtime: photo.mtime(),
                     size_bytes: photo.size_bytes(),
+                    rotation: photo.rotation(),
                     cache_key: cache_key.clone(),
                 });
                 if trace_enabled() {
