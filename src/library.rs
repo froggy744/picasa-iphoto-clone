@@ -7,11 +7,20 @@ use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Instant;
 use walkdir::WalkDir;
 
 const MIN_TILE: i32 = 84;
 const MAX_TILE: i32 = 320;
 const DEFAULT_TILE: i32 = 176;
+
+fn trace_enabled() -> bool {
+    std::env::var_os("PICASA_TRACE").is_some()
+}
+
+fn images_disabled() -> bool {
+    std::env::var_os("PIC_NO_IMAGES").is_some()
+}
 
 pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let window = adw::ApplicationWindow::builder()
@@ -68,9 +77,32 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let Some(picture) = frame.first_child().and_downcast::<gtk::Picture>() else {
             return;
         };
-        let file = gio::File::for_path(photo.path());
+        let path = photo.path();
+        picture.set_tooltip_text(Some(&path));
+
+        if images_disabled() {
+            picture.set_paintable(None::<&gtk::gdk::Paintable>);
+            if trace_enabled() {
+                eprintln!(
+                    "PIC_PROTO bind position={} images=disabled path={}",
+                    list_item.position(),
+                    path
+                );
+            }
+            return;
+        }
+
+        let started = Instant::now();
+        let file = gio::File::for_path(&path);
         picture.set_file(Some(&file));
-        picture.set_tooltip_text(Some(&photo.path()));
+        if trace_enabled() {
+            eprintln!(
+                "PIC_PROTO bind position={} set_file_us={} path={}",
+                list_item.position(),
+                started.elapsed().as_micros(),
+                path
+            );
+        }
     });
 
     factory.connect_unbind(|_, object| {
@@ -100,6 +132,18 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         .vscrollbar_policy(gtk::PolicyType::Automatic)
         .child(&grid)
         .build();
+
+    if trace_enabled() {
+        let adjustment = scroller.vadjustment();
+        adjustment.connect_value_changed(move |adj| {
+            eprintln!(
+                "PIC_PROTO scroll value={:.0} upper={:.0} page={:.0}",
+                adj.value(),
+                adj.upper(),
+                adj.page_size()
+            );
+        });
+    }
 
     let header = adw::HeaderBar::new();
 
@@ -220,6 +264,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
 }
 
 fn load_directory(model: &gio::ListStore, count_label: &gtk::Label, root: &Path) {
+    let started = Instant::now();
     let mut paths = WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -237,6 +282,14 @@ fn load_directory(model: &gio::ListStore, count_label: &gtk::Label, root: &Path)
     }
 
     count_label.set_label(&format!("{} photos", model.n_items()));
+    if trace_enabled() {
+        eprintln!(
+            "PIC_PROTO library_loaded photos={} elapsed_ms={} root={}",
+            model.n_items(),
+            started.elapsed().as_millis(),
+            root.display()
+        );
+    }
 }
 
 fn is_displayable_photo(path: &Path) -> bool {
