@@ -27,7 +27,11 @@ struct ChunkMeta {
 }
 
 fn logical_chunk_count(photo_count: u32) -> u32 {
-    photo_count.max(1).div_ceil(PHOTOS_PER_CHUNK)
+    if photo_count == 0 {
+        0
+    } else {
+        photo_count.div_ceil(PHOTOS_PER_CHUNK)
+    }
 }
 
 fn aligned_chunk_bounds(meta: &ChunkMeta, columns: u32) -> (u32, u32) {
@@ -144,7 +148,7 @@ fn chunk_in_realization_window_with_margin(
     viewport_center_chunks: f64,
     slice_n_items: u32,
     total_items: u32,
-    _columns: u32,
+    columns: u32,
     fill_complete: bool,
     retain_margin: f64,
 ) -> bool {
@@ -276,6 +280,9 @@ impl ChunkedPrototype {
             let chunks = chunks_for_updates.clone();
             let grids = grids_for_sync.clone();
             let pending = reconcile_pending_for_sync.clone();
+            let ranges = section_ranges_for_updates.clone();
+            let meta = chunk_meta_for_updates.clone();
+            let metrics = metrics_for_updates.clone();
             glib::idle_add_local_once(move || {
                 // Dropping the last photos at teardown lets their inner
                 // GridViews die while still realized with a model, which GTK
@@ -290,9 +297,9 @@ impl ChunkedPrototype {
                     &cols,
                     &chunks,
                     &grids,
-                    &section_ranges_for_updates.borrow(),
-                    &chunk_meta_for_updates,
-                    metrics_for_updates.get().1,
+                    &ranges.borrow(),
+                    &meta,
+                    metrics.get().1,
                 );
             });
         });
