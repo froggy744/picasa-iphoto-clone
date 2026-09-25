@@ -190,6 +190,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let master_groups: Rc<RefCell<Vec<FolderGroupData>>> = Rc::new(RefCell::new(Vec::new()));
     let roots: Rc<RefCell<Vec<PathBuf>>> = Rc::new(RefCell::new(Vec::new()));
     let mode = Rc::new(Cell::new(ViewMode::Photos));
+    let search_text = Rc::new(RefCell::new(String::new()));
     let favorite_paths = Rc::new(RefCell::new(load_favorites()));
 
     let tile_size = Rc::new(Cell::new(DEFAULT_TILE));
@@ -532,6 +533,12 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     header.set_title_widget(Some(&content_title));
     header.pack_start(&count_label);
 
+    let search = gtk::SearchEntry::new();
+    search.set_placeholder_text(Some("Search photos or folders"));
+    search.set_size_request(260, -1);
+    search.set_tooltip_text(Some("Search filename, folder name, or path"));
+    header.pack_end(&search);
+
     let zoom = gtk::Scale::with_range(
         gtk::Orientation::Horizontal,
         f64::from(MIN_TILE),
@@ -579,6 +586,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let photos_button = photos_button.clone();
         let favorites_button = favorites_button.clone();
         let favorites_count = favorites_count.clone();
+        let search_text = search_text.clone();
 
         let refresh: Rc<dyn Fn()> = Rc::new(move || {
             let favorite_total = count_favorites(&master.borrow());
@@ -593,6 +601,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                     &content_title,
                     &photos_button,
                     &favorites_button,
+                    &search_text.borrow(),
                 );
             }
         });
@@ -607,6 +616,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let title = content_title.clone();
         let photos_button_for_style = photos_button.clone();
         let favorites_button_for_style = favorites_button.clone();
+        let search_text = search_text.clone();
 
         photos_button.connect_clicked(move |_| {
             mode.set(ViewMode::Photos);
@@ -618,6 +628,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &title,
                 &photos_button_for_style,
                 &favorites_button_for_style,
+                &search_text.borrow(),
             );
         });
     }
@@ -631,6 +642,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let photos_button_for_style = photos_button.clone();
         let favorites_button_for_style = favorites_button.clone();
 
+        let search_text = search_text.clone();
+
         favorites_button.connect_clicked(move |_| {
             mode.set(ViewMode::Favorites);
             apply_view(
@@ -641,6 +654,32 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &title,
                 &photos_button_for_style,
                 &favorites_button_for_style,
+                &search_text.borrow(),
+            );
+        });
+    }
+
+    {
+        let groups = groups.clone();
+        let master = master_groups.clone();
+        let mode = mode.clone();
+        let count_label = count_label.clone();
+        let title = content_title.clone();
+        let photos_button = photos_button.clone();
+        let favorites_button = favorites_button.clone();
+        let search_text = search_text.clone();
+
+        search.connect_search_changed(move |entry| {
+            search_text.replace(entry.text().trim().to_string());
+            apply_view(
+                &groups,
+                &master.borrow(),
+                mode.get(),
+                &count_label,
+                &title,
+                &photos_button,
+                &favorites_button,
+                &search_text.borrow(),
             );
         });
     }
@@ -654,8 +693,14 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let list = list.clone();
         let photos_button = photos_button.clone();
         let favorites_button = favorites_button.clone();
+        let search_text = search_text.clone();
+        let search = search.clone();
 
         Rc::new(move |index| {
+            if !search_text.borrow().is_empty() {
+                search_text.borrow_mut().clear();
+                search.set_text("");
+            }
             if mode.get() != ViewMode::Photos {
                 mode.set(ViewMode::Photos);
                 apply_view(
@@ -666,6 +711,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                     &title,
                     &photos_button,
                     &favorites_button,
+                    "",
                 );
             }
 
@@ -1228,53 +1274,73 @@ fn apply_view(
     content_title: &gtk::Label,
     photos_button: &gtk::Button,
     favorites_button: &gtk::Button,
+    query: &str,
 ) {
     groups.remove_all();
     let mut photo_count = 0u32;
     let mut folder_count = 0u32;
+    let needle = query.trim().to_lowercase();
+
+    for group in master {
+        let folder_match = needle.is_empty()
+            || group.label.to_lowercase().contains(&needle)
+            || group.folder.to_string_lossy().to_lowercase().contains(&needle);
+
+        let filtered = gio::ListStore::new::<PhotoObject>();
+
+        for position in 0..group.model.n_items() {
+            let Some(photo) = group.model.item(position).and_downcast::<PhotoObject>() else {
+                continue;
+            };
+
+            if mode == ViewMode::Favorites && !photo.favorite() {
+                continue;
+            }
+
+            let photo_match = needle.is_empty()
+                || folder_match
+                || Path::new(&photo.path())
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.to_lowercase().contains(&needle))
+                || photo.path().to_lowercase().contains(&needle);
+
+            if photo_match {
+                filtered.append(&photo);
+            }
+        }
+
+        if filtered.n_items() == 0 {
+            continue;
+        }
+
+        photo_count += filtered.n_items();
+        folder_count += 1;
+        groups.append(&glib::BoxedAnyObject::new(FolderGroupData {
+            folder: group.folder.clone(),
+            label: group.label.clone(),
+            model: filtered,
+        }));
+    }
 
     match mode {
         ViewMode::Photos => {
-            for group in master {
-                photo_count += group.model.n_items();
-                folder_count += 1;
-                groups.append(&glib::BoxedAnyObject::new(group.clone()));
-            }
-            content_title.set_label("Photos");
+            content_title.set_label(if needle.is_empty() { "Photos" } else { "Search · Photos" });
             photos_button.add_css_class("sidebar-active");
             favorites_button.remove_css_class("sidebar-active");
         }
         ViewMode::Favorites => {
-            for group in master {
-                let filtered = gio::ListStore::new::<PhotoObject>();
-                for position in 0..group.model.n_items() {
-                    let Some(photo) = group.model.item(position).and_downcast::<PhotoObject>() else {
-                        continue;
-                    };
-                    if photo.favorite() {
-                        filtered.append(&photo);
-                    }
-                }
-
-                if filtered.n_items() == 0 {
-                    continue;
-                }
-
-                photo_count += filtered.n_items();
-                folder_count += 1;
-                groups.append(&glib::BoxedAnyObject::new(FolderGroupData {
-                    folder: group.folder.clone(),
-                    label: group.label.clone(),
-                    model: filtered,
-                }));
-            }
-            content_title.set_label("Favourites");
+            content_title.set_label(if needle.is_empty() { "Favourites" } else { "Search · Favourites" });
             favorites_button.add_css_class("sidebar-active");
             photos_button.remove_css_class("sidebar-active");
         }
     }
 
-    count_label.set_label(&format!("{} photos · {} folders", photo_count, folder_count));
+    if needle.is_empty() {
+        count_label.set_label(&format!("{} photos · {} folders", photo_count, folder_count));
+    } else {
+        count_label.set_label(&format!("{} matches · {} folders", photo_count, folder_count));
+    }
 }
 
 fn count_photos(groups: &[FolderGroupData]) -> u32 {
@@ -1405,6 +1471,7 @@ fn refresh_library_chrome(
         content_title,
         photos_button,
         favorites_button,
+        "",
     );
 }
 
@@ -1451,6 +1518,10 @@ fn install_css() {
 
         .sidebar-row.sidebar-active {
             background: alpha(@accent_bg_color, 0.18);
+        }
+
+        searchentry {
+            min-height: 32px;
         }
 
         .sidebar-count {
