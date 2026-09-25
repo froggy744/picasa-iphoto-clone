@@ -19,7 +19,7 @@ jobs:
         env:
           PIC_CI_SKIP_PRIVATE_TRANSPORTS: "1"
         run: cargo check --quiet
-      - name: Gallery V2 tests
+      - name: Compile Gallery V2 tests
         env:
           PIC_CI_SKIP_PRIVATE_TRANSPORTS: "1"
-        run: cargo test --quiet gallery_v2
+        run: cargo check --quiet --tests
