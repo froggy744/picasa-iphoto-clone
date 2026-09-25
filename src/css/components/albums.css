@@ -1,0 +1,15 @@
+/* Album-index component styling shared across appearance themes. */
+.albums-index-title { font-size: 24px; font-weight: 700; text-shadow: none; }
+    .plain-album-cover { border-radius: 8px; border: 1px solid alpha(@theme_fg_color, 0.14); background: alpha(@theme_fg_color, 0.045); box-shadow: none; }
+    .plain-album-cover .thumbnail { border-radius: 7px; }
+    .albums-standard > flowboxchild { padding: 0; margin: 0; min-height: 0; background: transparent; box-shadow: none; }
+    .albums-standard button.album-card { color: inherit; min-width: 0; padding: 0; margin: 0; border: none; border-radius: 8px; background: transparent; background-image: none; box-shadow: none; }
+    .albums-standard button.album-card:hover .album-cover { border-color: alpha(@accent_bg_color, 0.65); }
+    .albums-standard button.album-card:hover { background: alpha(@theme_fg_color, 0.035); }
+    .albums-standard button.album-card:focus-visible { outline: 2px solid @accent_bg_color; outline-offset: 3px; }
+    .albums-standard .album-name { font-weight: 600; font-size: 14px; }
+    .albums-standard .album-photo-count { font-size: 12px; }
+
+.albums-bookshelf-photo-count { color: #3a210f; }
+button.album-card.framed-album-card { color: #302014; transition: opacity 120ms ease; }
+button.album-card.framed-album-card:hover { opacity: 0.90; }

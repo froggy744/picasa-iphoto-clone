@@ -1,0 +1,11 @@
+/* Optional flat look (Settings > Library): square corners for every photo
+   surface. Loaded as its own provider above the theme (+1) and album (+3)
+   providers so the zero radius always wins while the "square-corners" class
+   is present on the main window. */
+.square-corners .photo-tile,
+.square-corners .thumbnail,
+.square-corners .info-preview,
+.square-corners .filter-tile-preview,
+.square-corners .album-cover {
+    border-radius: 0;
+}

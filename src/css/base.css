@@ -1,0 +1,86 @@
+.edit-panel-tabs { margin-bottom: 4px; }
+    .edit-panel-tabs button { min-height: 34px; padding: 4px 10px; font-weight: 600; }
+    .edit-panel-pages { background: @window_bg_color; }
+    .edit-section-label { font-size: 11px; font-weight: 700; color: alpha(@theme_fg_color, 0.62); }
+    .edit-adjustment-group { margin-bottom: 6px; }
+    .edit-adjustment-row { margin-bottom: 3px; }
+    .edit-adjustment-value { font-variant-numeric: tabular-nums; min-width: 42px; }
+    .edit-adjustment-scale { margin-top: -2px; }
+    .edit-preview { background: alpha(@theme_fg_color, 0.045); border: 1px solid alpha(@theme_fg_color, 0.07); border-radius: 10px; }
+    .edit-canvas-stage, .edit-canvas-stage viewport { background: transparent; }
+    .crop-aspect-grid { margin-bottom: 4px; }
+    .crop-aspect-button { min-height: 32px; padding: 3px 8px; }
+    .crop-orientation-row { margin-bottom: 4px; }
+    .crop-orientation-row button { min-height: 32px; padding: 3px 8px; }
+    .crop-straighten { margin-bottom: 2px; }
+    .crop-straighten .edit-adjustment-row { margin-bottom: 0; }
+    .crop-reset-button, .crop-apply-button { min-height: 32px; margin-top: 4px; }
+    .overlay-list { background: alpha(@theme_fg_color, 0.03); border: 1px solid alpha(@theme_fg_color, 0.07); border-radius: 8px; }
+    .overlay-list row { min-height: 34px; padding: 4px 8px; }
+    .overlay-list row:selected { background: alpha(@accent_bg_color, 0.18); }
+    .overlay-selected-section { margin-top: 4px; }
+    .overlay-anchor-row { margin-top: 2px; }
+    .overlay-anchor-row button { min-height: 30px; padding: 3px 4px; font-size: 11px; }
+    .text-position-grid { border-spacing: 0; }
+    .text-position-grid button { min-width: 34px; min-height: 34px; margin: 0; padding: 0; border-radius: 0; }
+    button.text-colour-swatch { min-width: 12px; min-height: 30px; padding: 3px; border: 1px solid alpha(currentColor, 0.35); border-radius: 4px; }
+    button.text-swatch-white { background-color: #ffffff; }
+    button.text-swatch-black { background-color: #111111; }
+    button.text-swatch-red { background-color: #f21f1f; }
+    button.text-swatch-orange { background-color: #ff7a00; }
+    button.text-swatch-yellow { background-color: #ffe60d; }
+    button.text-swatch-green { background-color: #1fb848; }
+    button.text-swatch-blue { background-color: #266bff; }
+    button.text-swatch-purple { background-color: #ad4de0; }
+    .quick-fix-row button { min-height: 30px; padding: 4px 8px; }
+    .filter-grid > flowboxchild { padding: 0; margin: 0; min-width: 0; background: transparent; }
+    button.filter-tile, button.filter-tile:hover, button.filter-tile:active, button.filter-tile:checked { min-width: 0; padding: 0; border: none; background: transparent; box-shadow: none; outline: none; }
+    .filter-tile-preview { padding: 0; border: 2px solid transparent; border-radius: 9px; background: alpha(@theme_fg_color, 0.04); box-shadow: none; }
+    button.filter-tile:hover .filter-tile-preview { border-color: alpha(@theme_fg_color, 0.18); }
+    button.filter-tile:checked .filter-tile-preview { border-color: @accent_bg_color; }
+    .filter-tile-label { font-size: 11px; font-weight: 600; }
+
+/* Sidebar section dividers: keep the Folders / Network Shares boundary visible on every theme and give the divider a grabbable hit area. */
+paned.sidebar-section-paned > separator {
+  min-height: 6px;
+  background-color: transparent;
+  border-top: 1px solid alpha(@theme_fg_color, 0.35);
+}
+
+/* libadwaita's -8px thumb outline can invert the 3px overlay scrollbar
+ * during its all-property transition. Keep the slim outline inside the thumb
+ * and animate its color without interpolating its geometry. */
+scrollbar.overlay-indicator > range > trough > slider {
+  transition-property: background-color, outline-color;
+  outline-offset: -1px;
+}
+
+/* The disclosure button uses GTK's compact dark tooltip for Collapse/Expand.
+ * Its right-click Reveal All / Collapse All menu is deliberately styled as
+ * the same surface so the action does not change appearance with its label. */
+popover.sidebar-section-tooltip-menu > contents {
+  padding: 6px 10px;
+  color: #ffffff;
+  background-color: rgba(0, 0, 6, 0.80);
+  background-clip: padding-box;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 9px;
+  box-shadow: none;
+}
+
+popover.sidebar-section-tooltip-menu button.sidebar-section-tooltip-item,
+popover.sidebar-section-tooltip-menu button.sidebar-section-tooltip-item:hover,
+popover.sidebar-section-tooltip-menu button.sidebar-section-tooltip-item:focus,
+popover.sidebar-section-tooltip-menu button.sidebar-section-tooltip-item:active {
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  color: #ffffff;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  box-shadow: none;
+  outline: none;
+  font-weight: normal;
+}

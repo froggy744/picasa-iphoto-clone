@@ -1,0 +1,395 @@
+/* picasa-theme
+   version: 1
+   name: TRON Legacy
+   dark: true
+   mode: overlay
+*/
+
+/* ==========================================================================
+   TRON Legacy — welcome to the Grid.
+   Cold blue-black voids, ice-cyan light lines (Sam), and CLU's orange for
+   energy and warnings. Glow everywhere, but disciplined: thin bright lines
+   on near-black, white-hot cores on activated controls. Tiles keep their
+   light-line border cheap at rest (thousands of them) and ignite on
+   hover/selection. Built on the full selector set from docs/theme-template.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. PALETTE.
+   -------------------------------------------------------------------------- */
+
+@define-color accent_bg_color #5BD1F0;      /* TRON ice cyan: selection, rails, lines */
+@define-color accent_fg_color #04121C;      /* near-black text on glowing fills       */
+@define-color accent_color #A5E8FF;         /* pale ice cyan for icons/text           */
+
+@define-color window_bg_color #060A12;      /* window + sidebar: the void             */
+@define-color view_bg_color #091120;        /* photo grid background                  */
+@define-color headerbar_bg_color #0D1626;   /* toolbars, menus, popovers              */
+@define-color theme_fg_color #D6E9F5;       /* primary text: cold white-blue          */
+
+/* CLU orange: energy states, the browsing marker, warnings. */
+@define-color clu_orange #FF9E2C;
+/* Burning red-orange for favourites. */
+@define-color tron_red #FF5C39;
+
+/* --------------------------------------------------------------------------
+   2. SURFACES — window, sidebar, toolbars. Light lines over the void.
+   -------------------------------------------------------------------------- */
+
+window {
+    background-image: linear-gradient(180deg, #0B1526 0%, #05070D 45%, #081020 100%);
+    color: @theme_fg_color;
+}
+    .layout-left-column, .navigation-sidebar { background: alpha(@window_bg_color, 0.60); color: @theme_fg_color; }
+    .layout-left-column {
+        border-right: 1px solid alpha(@accent_bg_color, 0.50);
+        box-shadow: inset -6px 0 20px alpha(@accent_bg_color, 0.08);
+    }
+    .layout-left-header, .layout-right-header {
+        background: alpha(@headerbar_bg_color, 0.90);
+        border-bottom: 1px solid alpha(@accent_bg_color, 0.60);
+        box-shadow: 0 2px 16px alpha(@accent_bg_color, 0.25), inset 0 -10px 20px alpha(@accent_bg_color, 0.05);
+        color: @theme_fg_color;
+    }
+    .app-title {
+        color: #F2FBFF;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-shadow: 0 0 6px alpha(@accent_bg_color, 0.95),
+                     0 0 20px alpha(@accent_bg_color, 0.65),
+                     0 0 40px alpha(@accent_bg_color, 0.35);
+    }
+    .layout-left-header button, .layout-right-header button { color: @theme_fg_color; }
+    .layout-left-header .sidebar-toggle-button, .layout-left-header .sidebar-toggle-button image {
+        color: @accent_color;
+        opacity: 1;
+        text-shadow: 0 0 8px alpha(@accent_bg_color, 0.75);
+    }
+    .layout-left-header button:hover, .layout-right-header button:hover {
+        background: alpha(@accent_bg_color, 0.15);
+        box-shadow: 0 0 8px alpha(@accent_bg_color, 0.55), inset 0 0 10px alpha(@accent_bg_color, 0.25);
+    }
+
+/* --------------------------------------------------------------------------
+   3. SEARCH FIELD — a glowing identity-disc port.
+   -------------------------------------------------------------------------- */
+
+    .search-field {
+        min-height: 36px;
+        border-radius: 9999px;
+        background: alpha(@accent_bg_color, 0.06);
+        border: 1px solid alpha(@accent_bg_color, 0.50);
+        color: @theme_fg_color;
+        box-shadow: 0 0 12px alpha(@accent_bg_color, 0.20), inset 0 0 8px alpha(@accent_bg_color, 0.08);
+    }
+    .search-field:focus-within {
+        border-color: @accent_color;
+        background: alpha(@accent_bg_color, 0.12);
+        box-shadow: 0 0 0 2px alpha(@accent_bg_color, 0.35),
+                    0 0 22px alpha(@accent_bg_color, 0.50),
+                    inset 0 0 12px alpha(@accent_bg_color, 0.15);
+    }
+    .search-field image { color: @accent_color; text-shadow: 0 0 6px alpha(@accent_bg_color, 0.65); }
+    .search-field entry { background: transparent; color: @theme_fg_color; }
+
+/* --------------------------------------------------------------------------
+   4. PHOTO GRID — group headers, tiles, selection.
+   -------------------------------------------------------------------------- */
+
+    .photo-grid {
+        background-image: linear-gradient(180deg, #0C1828 0%, @view_bg_color 30%, #0A1424 100%);
+    }
+    .group-heading-bar { background: transparent; padding: 0; }
+    .section-heading-box { margin-top: 16px; margin-bottom: 8px; }
+    .section-heading {
+        color: @accent_color;
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        text-shadow: 0 0 6px alpha(@accent_bg_color, 0.90),
+                     0 0 22px alpha(@accent_bg_color, 0.50);
+    }
+    .section-more-btn { color: @accent_color; font-weight: 700; }
+    .section-more-btn:hover {
+        background: alpha(@accent_bg_color, 0.15);
+        box-shadow: 0 0 10px alpha(@accent_bg_color, 0.45);
+        color: @theme_fg_color;
+    }
+
+    .photo-frame { box-shadow: none; }
+    .photo-tile {
+        border-radius: 4px;
+        border: 2px solid alpha(@accent_bg_color, 0.32);
+        background: alpha(@theme_fg_color, 0.04);
+        box-shadow: none;
+    }
+    .photo-tile:hover {
+        border-color: @accent_color;
+        box-shadow: 0 0 0 1px alpha(@accent_bg_color, 0.70),
+                    0 0 14px alpha(@accent_bg_color, 0.60),
+                    0 0 30px alpha(@accent_bg_color, 0.30);
+    }
+    .thumbnail { border-radius: 2px; }
+    .missing-thumbnail { background: alpha(@theme_fg_color, 0.05); }
+
+    /* Multi-selection ring: white-hot core with cyan bloom. */
+    .folder-photo-selected.photo-tile {
+        border-color: #EAF9FF;
+        box-shadow: 0 0 0 1px alpha(@accent_bg_color, 0.90),
+                    0 0 14px alpha(@accent_bg_color, 0.75),
+                    0 0 32px alpha(@accent_bg_color, 0.35);
+    }
+    .folder-photo-selected .selection-badge { opacity: 1; }
+    gridview.section-grid > child:selected .photo-tile,
+    gridview.section-grid > item:selected .photo-tile {
+        border-color: #EAF9FF;
+        box-shadow: 0 0 0 1px alpha(@accent_bg_color, 0.90),
+                    0 0 14px alpha(@accent_bg_color, 0.75),
+                    0 0 32px alpha(@accent_bg_color, 0.35);
+    }
+    .selection-badge {
+        background: @accent_bg_color;
+        color: @accent_fg_color;
+        font-weight: 800;
+        box-shadow: 0 0 0 1px @window_bg_color,
+                    0 0 8px alpha(@accent_bg_color, 0.95),
+                    0 0 20px alpha(@accent_bg_color, 0.60);
+    }
+
+    .offline-badge, .sidebar-offline-badge {
+        border-radius: 9999px;
+        color: #1E1400;
+        background: #FFC145;
+        font-weight: 800;
+        box-shadow: 0 0 6px alpha(#FF9E2C, 0.85),
+                    0 0 18px alpha(#FF9E2C, 0.45);
+    }
+
+/* --------------------------------------------------------------------------
+   5. FOLDER CONTENT VIEW — keep list/grid rows transparent so only the
+      photo tiles carry the styling.
+   -------------------------------------------------------------------------- */
+
+    listview.folder-stream { background: transparent; padding: 0 20px 24px 20px; }
+    listview.folder-stream > row,
+    listview.folder-stream > row:hover,
+    listview.folder-stream > row:selected,
+    listview.folder-stream > row:focus,
+    listview.folder-stream > row:active {
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .folder-section-header { background: transparent; }
+    .folder-section-title {
+        color: @accent_color;
+        font-weight: 800;
+        font-size: 14px;
+        letter-spacing: 0.16em;
+        text-shadow: 0 0 6px alpha(@accent_bg_color, 0.90),
+                     0 0 22px alpha(@accent_bg_color, 0.50);
+    }
+    .folder-section-count { color: alpha(@theme_fg_color, 0.50); font-size: 12px; }
+    .folder-section-icon { color: @accent_color; text-shadow: 0 0 8px alpha(@accent_bg_color, 0.60); }
+    .folder-section-separator { margin-top: 7px; opacity: 0.50; }
+    .folder-photo-row { background: transparent; }
+
+    gridview.section-grid > child,
+    gridview.section-grid > item,
+    gridview.section-grid > child:hover,
+    gridview.section-grid > child:selected,
+    gridview.section-grid > child:focus,
+    gridview.section-grid > child:active,
+    gridview.section-grid > item:hover,
+    gridview.section-grid > item:selected,
+    gridview.section-grid > item:focus,
+    gridview.section-grid > item:active {
+        padding: 6px;
+        margin: 0;
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+    .folder-photo-flow > flowboxchild,
+    .folder-photo-flow > flowboxchild:hover,
+    .folder-photo-flow > flowboxchild:focus,
+    .folder-photo-flow > flowboxchild:active,
+    .folder-photo-flow > flowboxchild:selected {
+        padding: 6px;
+        margin: 0;
+        min-height: 0;
+        background: transparent;
+        background-image: none;
+        outline: none;
+        box-shadow: none;
+    }
+
+/* --------------------------------------------------------------------------
+   6. ALBUMS HOME.
+   -------------------------------------------------------------------------- */
+
+    .albums-home-grid > flowboxchild { padding: 0; margin: 0; min-height: 0; }
+    button.album-card {
+        min-width: 0; padding: 0; margin: 0;
+        background: transparent; background-image: none;
+        border: none; box-shadow: none;
+    }
+    button.album-card:hover, button.album-card:focus, button.album-card:active {
+        background: transparent; background-image: none; box-shadow: none;
+    }
+
+/* --------------------------------------------------------------------------
+   7. SIDEBAR — library rows, selected state, and the scroll-follow folder
+      marker. Selected rows glow ice cyan (Sam); the browsing marker burns
+      CLU orange, so the two are always distinguishable.
+   -------------------------------------------------------------------------- */
+
+    .navigation-sidebar row { color: @theme_fg_color; }
+    .navigation-sidebar row:hover {
+        background: alpha(@accent_bg_color, 0.10);
+        box-shadow: inset 3px 0 0 0 alpha(@accent_bg_color, 0.65),
+                    inset 0 0 12px alpha(@accent_bg_color, 0.10);
+    }
+    .navigation-sidebar row:selected {
+        background-image: linear-gradient(90deg, alpha(@accent_bg_color, 0.24) 0%, alpha(@accent_bg_color, 0.05) 100%);
+        box-shadow: inset 3px 0 0 0 @accent_color,
+                    0 0 12px alpha(@accent_bg_color, 0.40),
+                    inset 0 0 16px alpha(@accent_bg_color, 0.12);
+        color: @theme_fg_color;
+        font-weight: 700;
+    }
+    .navigation-sidebar row.sidebar-scroll-location {
+        background-image: linear-gradient(90deg, alpha(@clu_orange, 0.26) 0%, alpha(@clu_orange, 0.05) 100%);
+        box-shadow: inset 3px 0 0 0 @clu_orange,
+                    0 0 12px alpha(@clu_orange, 0.45),
+                    inset 0 0 14px alpha(@clu_orange, 0.14);
+        color: @theme_fg_color;
+        font-weight: 600;
+    }
+    .navigation-sidebar .heading { color: alpha(@theme_fg_color, 0.50); }
+    .navigation-sidebar .sidebar-section-heading { margin-top: 8px; padding-top: 0; }
+    .navigation-sidebar .sidebar-section-heading-title {
+        color: @accent_color;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.20em;
+        text-shadow: 0 0 8px alpha(@accent_bg_color, 0.70);
+    }
+    .navigation-sidebar .folder-count { color: alpha(@theme_fg_color, 0.60); font-variant-numeric: tabular-nums; }
+    .folder-disclosure { opacity: 0.75; }
+    .sidebar-count { min-width: 38px; font-variant-numeric: tabular-nums; color: alpha(@theme_fg_color, 0.55); }
+    .section-count { font-size: 13px; color: alpha(@theme_fg_color, 0.55); }
+
+/* --------------------------------------------------------------------------
+   8. SEGMENTED TOGGLES — crop aspect presets (Free/Original/1:1…), crop
+      orientation (Landscape/Portrait), collage layout tiles (Mosaic/Smart/
+      Grid) and the collage fit/orientation row. Checked ignites a white-hot
+      identity-disc core fading to ice cyan.
+   -------------------------------------------------------------------------- */
+
+    .crop-aspect-button:checked,
+    .crop-orientation-row button:checked,
+    .collage-layout-tile:checked,
+    .collage-tabs > button:checked {
+        background-image: linear-gradient(180deg, #EAF9FF 0%, #9FE0FA 40%, @accent_bg_color 100%);
+        color: #04121C;
+        font-weight: 800;
+        box-shadow: 0 0 6px alpha(#EAF9FF, 0.75),
+                    0 0 16px alpha(@accent_bg_color, 0.55),
+                    inset 0 0 6px alpha(#FFFFFF, 0.35);
+    }
+    .crop-aspect-button:checked:hover,
+    .crop-orientation-row button:checked:hover,
+    .collage-layout-tile:checked:hover,
+    .collage-tabs > button:checked:hover {
+        box-shadow: 0 0 10px alpha(#EAF9FF, 0.90),
+                    0 0 26px alpha(@accent_bg_color, 0.70),
+                    inset 0 0 8px alpha(#FFFFFF, 0.45);
+    }
+
+/* --------------------------------------------------------------------------
+   9. INFO BAR, CONTEXT MENU, MISC ACTIONS.
+   -------------------------------------------------------------------------- */
+
+    .photo-info-bar {
+        background: alpha(@headerbar_bg_color, 0.94);
+        border-top: 1px solid alpha(@accent_bg_color, 0.65);
+        box-shadow: 0 -4px 18px alpha(@accent_bg_color, 0.16);
+        color: @theme_fg_color;
+    }
+    .info-preview {
+        border-radius: 8px;
+        background: alpha(@accent_bg_color, 0.07);
+        border: 1px solid alpha(@accent_bg_color, 0.55);
+        box-shadow: inset 0 0 10px alpha(@accent_bg_color, 0.12);
+    }
+    .info-title, .metric-val { color: @theme_fg_color; font-weight: 700; }
+    .metric-key, .navigation-sidebar .dim-label, .photo-info-bar .dim-label { color: alpha(@theme_fg_color, 0.50); }
+
+    .photo-context-menu, .photo-context-menu viewport { background: @headerbar_bg_color; }
+    .photo-context-menu {
+        border: 1px solid alpha(@accent_bg_color, 0.75);
+        border-radius: 8px;
+        box-shadow: 0 12px 32px alpha(#000000, 0.65),
+                    0 0 20px alpha(@accent_bg_color, 0.40),
+                    inset 0 0 24px alpha(@accent_bg_color, 0.05);
+    }
+    .photo-context-menu button { color: @theme_fg_color; }
+    .photo-context-menu button:hover {
+        background: alpha(@accent_bg_color, 0.18);
+        color: @accent_color;
+        box-shadow: inset 0 0 10px alpha(@accent_bg_color, 0.22);
+    }
+
+    .photo-action-button {
+        border-radius: 6px;
+        color: @theme_fg_color;
+        background: alpha(@theme_fg_color, 0.05);
+        border: 1px solid alpha(@accent_bg_color, 0.50);
+        box-shadow: 0 0 6px alpha(@accent_bg_color, 0.18);
+    }
+    .photo-action-button:hover {
+        background: alpha(@accent_bg_color, 0.15);
+        box-shadow: 0 0 12px alpha(@accent_bg_color, 0.50), inset 0 0 8px alpha(@accent_bg_color, 0.20);
+    }
+
+    button.clear-action-button { color: #D6E9F5; background: #14243A; border: 1px solid #31506E; }
+    button.clear-action-button:hover { color: @accent_color; background: #1B3050; border-color: alpha(@accent_bg_color, 0.60); box-shadow: 0 0 8px alpha(@accent_bg_color, 0.35); }
+    button.clear-action-button:active { background: #0E1B2E; }
+
+    /* Favourites burn Clu-red. */
+    .favorite-btn.active, .favorite-btn.active image {
+        color: @tron_red;
+        text-shadow: 0 0 8px alpha(@tron_red, 0.85), 0 0 18px alpha(@clu_orange, 0.40);
+    }
+    .favorite-badge {
+        color: @tron_red;
+        text-shadow: 0 0 8px alpha(@tron_red, 0.75);
+    }
+    .edited-badge {
+        color: @accent_color;
+        text-shadow: 0 0 6px alpha(@accent_bg_color, 0.60);
+    }
+    .one-to-one-btn:checked {
+        color: @accent_fg_color;
+        background: @accent_bg_color;
+        box-shadow: 0 0 8px alpha(#EAF9FF, 0.80), 0 0 20px alpha(@accent_bg_color, 0.55);
+    }
+
+    .scroll-scrub-date {
+        padding: 8px 16px;
+        border-radius: 9999px;
+        background: alpha(@headerbar_bg_color, 0.95);
+        color: @accent_color;
+        font-weight: 800;
+        letter-spacing: 0.10em;
+        border: 1px solid alpha(@accent_bg_color, 0.85);
+        box-shadow: 0 8px 24px alpha(#000000, 0.60),
+                    0 0 10px alpha(@accent_bg_color, 0.60),
+                    0 0 28px alpha(@accent_bg_color, 0.32),
+                    inset 0 0 10px alpha(@accent_bg_color, 0.10);
+    }

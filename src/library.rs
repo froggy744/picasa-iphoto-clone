@@ -190,9 +190,9 @@ fn decode_thumb_cached(path: &str, cache_dir: &Path) -> ThumbResult {
 pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("PIC Library Prototype")
-        .default_width(1380)
-        .default_height(860)
+        .title("Picasa iPhoto Clone")
+        .default_width(1440)
+        .default_height(900)
         .build();
 
     let groups = gio::ListStore::new::<glib::BoxedAnyObject>();
@@ -300,6 +300,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
 
     let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
     sidebar.add_css_class("library-sidebar");
+    sidebar.add_css_class("navigation-sidebar");
     sidebar.set_size_request(250, -1);
 
     let library_heading = gtk::Label::new(Some("Library"));
@@ -517,6 +518,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
 
     let list = gtk::ListView::new(Some(group_selection.clone()), Some(folder_factory));
     list.add_css_class("folder-list");
+    list.add_css_class("photo-grid");
     list.set_single_click_activate(false);
     list.set_hexpand(true);
     list.set_vexpand(true);
@@ -539,15 +541,60 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         });
     }
 
-    let header = adw::HeaderBar::new();
-    header.set_title_widget(Some(&content_title));
-    header.pack_start(&count_label);
+    let left_header = adw::HeaderBar::new();
+    left_header.set_height_request(46);
+    left_header.set_show_start_title_buttons(true);
+    left_header.set_show_end_title_buttons(false);
+    left_header.add_css_class("layout-left-header");
+
+    let app_title = gtk::Label::new(Some("PIC"));
+    app_title.add_css_class("app-title");
+    left_header.set_title_widget(Some(&app_title));
+
+    let hide_sidebar = gtk::Button::from_icon_name("sidebar-hide-symbolic");
+    hide_sidebar.set_tooltip_text(Some("Hide sidebar"));
+    hide_sidebar.add_css_class("flat");
+    hide_sidebar.set_size_request(28, 28);
+    left_header.pack_end(&hide_sidebar);
+
+    let left_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    left_column.set_vexpand(true);
+    left_column.add_css_class("layout-left-column");
+    sidebar.set_vexpand(true);
+    left_column.append(&left_header);
+    left_column.append(&sidebar);
+
+    let right_header = adw::HeaderBar::new();
+    right_header.set_height_request(46);
+    right_header.set_hexpand(true);
+    right_header.set_show_start_title_buttons(false);
+    right_header.set_show_end_title_buttons(true);
+    right_header.add_css_class("layout-right-header");
+
+    let show_sidebar = gtk::Button::from_icon_name("sidebar-show-symbolic");
+    show_sidebar.set_tooltip_text(Some("Show sidebar"));
+    show_sidebar.add_css_class("flat");
+    show_sidebar.set_visible(false);
+    right_header.pack_start(&show_sidebar);
 
     let search = gtk::SearchEntry::new();
-    search.set_placeholder_text(Some("Search photos or folders"));
-    search.set_size_request(280, -1);
-    search.set_tooltip_text(Some("Search filename, folder name, or full path"));
-    header.pack_end(&search);
+    search.set_placeholder_text(Some("Search photos"));
+    search.set_width_chars(18);
+    search.set_size_request(220, -1);
+    search.set_hexpand(true);
+    search.add_css_class("search-field");
+
+    let search_area = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    search_area.set_valign(gtk::Align::Center);
+    search_area.set_size_request(220, -1);
+    search_area.set_hexpand(true);
+    search_area.append(&search);
+    right_header.set_title_widget(Some(&search_area));
+
+    let open = gtk::Button::from_icon_name("folder-new-symbolic");
+    open.set_tooltip_text(Some("Import Folder"));
+    open.add_css_class("flat");
+    right_header.pack_end(&open);
 
     let zoom = gtk::Scale::with_range(
         gtk::Orientation::Horizontal,
@@ -557,33 +604,75 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     );
     zoom.set_value(f64::from(DEFAULT_TILE));
     zoom.set_draw_value(false);
-    zoom.set_size_request(180, -1);
+    zoom.set_size_request(150, -1);
     zoom.set_tooltip_text(Some("Thumbnail size"));
-    header.pack_end(&zoom);
 
-    let plus = gtk::Button::from_icon_name("zoom-in-symbolic");
+    let plus = gtk::Button::with_label("+");
+    plus.add_css_class("photo-action-button");
     plus.set_tooltip_text(Some("Larger thumbnails"));
-    let minus = gtk::Button::from_icon_name("zoom-out-symbolic");
+    let minus = gtk::Button::with_label("−");
+    minus.add_css_class("photo-action-button");
     minus.set_tooltip_text(Some("Smaller thumbnails"));
-    header.pack_end(&plus);
-    header.pack_end(&minus);
 
-    let open = gtk::Button::with_label("Open Folder");
-    header.pack_start(&open);
+    let bottom_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    bottom_bar.set_height_request(58);
+    bottom_bar.set_margin_start(16);
+    bottom_bar.set_margin_end(16);
+    bottom_bar.add_css_class("photo-info-bar");
 
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.append(&header);
-    content.append(&scroller);
+    let status = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    status.set_valign(gtk::Align::Center);
+    content_title.set_xalign(0.0);
+    content_title.add_css_class("info-title");
+    count_label.set_xalign(0.0);
+    count_label.add_css_class("dim-label");
+    status.append(&content_title);
+    status.append(&count_label);
+    bottom_bar.append(&status);
 
-    let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-    paned.set_start_child(Some(&sidebar));
-    paned.set_end_child(Some(&content));
-    paned.set_position(250);
-    paned.set_resize_start_child(false);
-    paned.set_shrink_start_child(false);
-    paned.set_resize_end_child(true);
-    paned.set_shrink_end_child(false);
-    window.set_content(Some(&paned));
+    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    bottom_bar.append(&spacer);
+    bottom_bar.append(&minus);
+    bottom_bar.append(&zoom);
+    bottom_bar.append(&plus);
+
+    let right_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    right_column.set_hexpand(true);
+    right_column.set_vexpand(true);
+    right_column.append(&right_header);
+    right_column.append(&scroller);
+    right_column.append(&bottom_bar);
+
+    let main_split = adw::OverlaySplitView::new();
+    main_split.set_sidebar(Some(&left_column));
+    main_split.set_content(Some(&right_column));
+    main_split.set_min_sidebar_width(200.0);
+    main_split.set_max_sidebar_width(600.0);
+    main_split.set_sidebar_width_fraction(0.22);
+    main_split.set_show_sidebar(true);
+    main_split.set_enable_show_gesture(true);
+    main_split.set_enable_hide_gesture(true);
+
+    {
+        let main_split = main_split.clone();
+        hide_sidebar.connect_clicked(move |_| main_split.set_show_sidebar(false));
+    }
+    {
+        let main_split = main_split.clone();
+        show_sidebar.connect_clicked(move |_| main_split.set_show_sidebar(true));
+    }
+    {
+        let show_sidebar = show_sidebar.clone();
+        let right_header = right_header.clone();
+        main_split.connect_show_sidebar_notify(move |split| {
+            let visible = split.shows_sidebar();
+            show_sidebar.set_visible(!visible);
+            right_header.set_show_start_title_buttons(!visible);
+        });
+    }
+
+    window.set_content(Some(&main_split));
 
     install_css();
 
@@ -1008,12 +1097,15 @@ fn make_photo_factory(
 
             let overlay = gtk::Overlay::new();
             overlay.add_css_class("prototype-photo-tile");
+            overlay.add_css_class("photo-frame");
+            overlay.add_css_class("photo-tile");
             overlay.set_overflow(gtk::Overflow::Hidden);
             overlay.set_size_request(tile_size.get(), tile_size.get());
             overlay.set_hexpand(false);
             overlay.set_vexpand(false);
 
             let picture = gtk::Picture::new();
+            picture.add_css_class("thumbnail");
             picture.set_size_request(1, 1);
             picture.set_hexpand(true);
             picture.set_vexpand(true);
@@ -1575,13 +1667,14 @@ fn is_displayable_photo(path: &Path) -> bool {
 }
 
 fn install_css() {
-    let css = gtk::CssProvider::new();
-    css.load_from_data(
+    let theme = gtk::CssProvider::new();
+    theme.load_from_data(include_str!("../themes/standard/theme.css"));
+
+    let compatibility = gtk::CssProvider::new();
+    compatibility.load_from_data(
         r#"
         .library-sidebar {
-            background: alpha(@window_fg_color, 0.025);
-            border-right: 1px solid alpha(@window_fg_color, 0.10);
-            padding: 8px 6px 8px 6px;
+            padding: 8px 6px;
         }
 
         .sidebar-heading {
@@ -1602,24 +1695,16 @@ fn install_css() {
 
         .sidebar-row:hover,
         .folder-sidebar-row:hover {
-            background: alpha(@window_fg_color, 0.06);
+            background: alpha(@theme_fg_color, 0.06);
         }
 
         .sidebar-row.sidebar-active {
-            background: alpha(@accent_bg_color, 0.18);
-        }
-
-        searchentry {
-            min-height: 32px;
+            background: alpha(@accent_bg_color, 0.15);
         }
 
         .sidebar-count {
             min-width: 34px;
             font-variant-numeric: tabular-nums;
-        }
-
-        .folder-list {
-            background: @window_bg_color;
         }
 
         .folder-list > row {
@@ -1681,12 +1766,11 @@ fn install_css() {
         }
 
         .prototype-photo-tile {
-            background: alpha(@window_fg_color, 0.06);
-            border-radius: 6px;
+            border-radius: 10px;
         }
 
         .prototype-photo-tile picture {
-            border-radius: 6px;
+            border-radius: 8px;
         }
 
         .favorite-tile-button {
@@ -1701,14 +1785,27 @@ fn install_css() {
         .favorite-tile-button:hover {
             background: alpha(@window_bg_color, 0.94);
         }
+
+        .photo-info-bar {
+            min-height: 58px;
+        }
+
+        .photo-info-bar scale {
+            min-width: 120px;
+        }
         "#,
     );
 
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
             &display,
-            &css,
+            &theme,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &compatibility,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 5,
         );
     }
 }
