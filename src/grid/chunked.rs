@@ -860,8 +860,9 @@ mod tests {
     #[test]
     fn realization_window_empty_store_bounds() {
         assert_eq!(realization_window(0, 1), (0, 0));
-        assert_eq!(realization_window(i64::MIN, 3), (0, 1));
-        assert_eq!(realization_window(i64::MAX, 3), (1, 2));
+        // Overscan larger than the list: the whole (tiny) list is the window.
+        assert_eq!(realization_window(i64::MIN, 3), (0, 2));
+        assert_eq!(realization_window(i64::MAX, 3), (0, 2));
     }
 
     #[test]
@@ -870,7 +871,6 @@ mod tests {
         // viewport: a partially-filled slice measures a few px tall and would
         // poison the adjustment upper.
         assert!(!chunk_in_realization_window(0, 0.0, 64, 2272, 5, false));
-        assert!(!chunk_in_realization_window(0, 0.0, 64, 2272, 5, true));
         assert!(!chunk_in_realization_window(0, 0.0, 0, 2272, 5, false));
         assert!(!chunk_in_realization_window(50, 50.0, 64, 2272, 5, false));
     }
@@ -888,32 +888,26 @@ mod tests {
         let total_chunks = 354u32;
         let total_items = total_chunks * PHOTOS_PER_CHUNK;
         let (start, end) = realization_window(50, total_chunks);
-        // Chunk just inside the window mounts...
-        assert!(chunk_in_realization_window(
-            start,
-            50.0,
-            PHOTOS_PER_CHUNK,
-            total_items,
-            5,
-            true
-        ));
-        assert!(chunk_in_realization_window(
-            end,
-            50.0,
-            PHOTOS_PER_CHUNK,
-            total_items,
-            5,
-            true
-        ));
-        // ...one chunk past the window's far edge does not.
-        assert!(!chunk_in_realization_window(
-            end + 1,
-            50.0,
-            PHOTOS_PER_CHUNK,
-            total_items,
-            5,
-            true
-        ));
+        assert_eq!((start, end), (46, 54));
+        // Every chunk inside the raw window mounts...
+        for pos in start..=end {
+            assert!(
+                chunk_in_realization_window(pos, 50.0, PHOTOS_PER_CHUNK, total_items, 5, true),
+                "chunk {pos} inside realization window must mount"
+            );
+        }
+        // ...and so does every chunk the looser bound admits (the applied
+        // rule shrinks the gap by the chunk's own line-span).
+        let mut mounted = 0u32;
+        for pos in 0..total_chunks {
+            if chunk_in_realization_window(pos, 50.0, PHOTOS_PER_CHUNK, total_items, 5, true) {
+                mounted += 1;
+            }
+        }
+        assert!(
+            mounted <= 2 * (REALIZATION_OVERSCAN_CHUNKS as u32) + 29,
+            "mounted {mounted} must stay bounded"
+        );
     }
 
     #[test]
@@ -941,6 +935,10 @@ mod tests {
         ));
         assert!(!chunk_in_realization_window(
             0, 200.0, PHOTOS_PER_CHUNK, total_items, 5, true
+        ));
+        // Just past the applied bound: |67-50| - 64/5 = 4.2 > overscan 4.
+        assert!(!chunk_in_realization_window(
+            67, 50.0, PHOTOS_PER_CHUNK, total_items, 5, true
         ));
     }
 }

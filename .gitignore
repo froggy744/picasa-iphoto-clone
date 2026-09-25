@@ -3,3 +3,6 @@ target/
 dist/
 build-logs/
 .flatpak-builder/
+
+# session progress notes; never commit
+.agent-progress.md
