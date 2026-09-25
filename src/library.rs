@@ -5,9 +5,10 @@ use gtk4 as gtk;
 use gtk::prelude::*;
 use libadwaita as adw;
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 use walkdir::WalkDir;
 
@@ -20,6 +21,33 @@ struct FolderGroupData {
     folder: PathBuf,
     label: String,
     model: gio::ListStore,
+}
+
+struct ThumbResult {
+    path: String,
+    width: i32,
+    height: i32,
+    stride: usize,
+    rgba: Vec<u8>,
+}
+
+fn decode_thumb(path: &str) -> Option<ThumbResult> {
+    let image = image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?
+        .thumbnail(384, 384)
+        .to_rgba8();
+    let (width, height) = image.dimensions();
+    Some(ThumbResult {
+        path: path.to_string(),
+        width: width as i32,
+        height: height as i32,
+        stride: width as usize * 4,
+        rgba: image.into_raw(),
+    })
 }
 
 fn trace_enabled() -> bool {
@@ -47,6 +75,90 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let live_grids: Rc<RefCell<Vec<(glib::WeakRef<gtk::GridView>, gio::ListStore)>>> =
         Rc::new(RefCell::new(Vec::new()));
     let current_columns = Rc::new(Cell::new(6u32));
+
+    let thumb_cache: Rc<RefCell<HashMap<String, gtk::gdk::Texture>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    let thumb_pending: Rc<
+        RefCell<HashMap<String, Vec<glib::WeakRef<gtk::Picture>>>>,
+    > = Rc::new(RefCell::new(HashMap::new()));
+    let thumb_inflight: Rc<RefCell<HashSet<String>>> =
+        Rc::new(RefCell::new(HashSet::new()));
+
+    let (thumb_job_tx, thumb_job_rx) = mpsc::channel::<String>();
+    let (thumb_result_tx, thumb_result_rx) = mpsc::channel::<ThumbResult>();
+    let shared_jobs = Arc::new(Mutex::new(thumb_job_rx));
+
+    for _ in 0..3 {
+        let jobs = shared_jobs.clone();
+        let results = thumb_result_tx.clone();
+        std::thread::spawn(move || loop {
+            let path = {
+                let Ok(receiver) = jobs.lock() else {
+                    return;
+                };
+                match receiver.recv() {
+                    Ok(path) => path,
+                    Err(_) => return,
+                }
+            };
+
+            if let Some(decoded) = decode_thumb(&path) {
+                if results.send(decoded).is_err() {
+                    return;
+                }
+            }
+        });
+    }
+
+    {
+        let cache = thumb_cache.clone();
+        let pending = thumb_pending.clone();
+        let inflight = thumb_inflight.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+            while let Ok(result) = thumb_result_rx.try_recv() {
+                inflight.borrow_mut().remove(&result.path);
+
+                let bytes = glib::Bytes::from_owned(result.rgba);
+                let memory = gtk::gdk::MemoryTexture::new(
+                    result.width,
+                    result.height,
+                    gtk::gdk::MemoryFormat::R8g8b8a8,
+                    &bytes,
+                    result.stride,
+                );
+                let texture: gtk::gdk::Texture = memory.upcast();
+
+                {
+                    let mut cache = cache.borrow_mut();
+                    if cache.len() >= 128 {
+                        cache.clear();
+                    }
+                    cache.insert(result.path.clone(), texture.clone());
+                }
+
+                if let Some(waiters) = pending.borrow_mut().remove(&result.path) {
+                    for weak in waiters {
+                        let Some(picture) = weak.upgrade() else {
+                            continue;
+                        };
+                        if picture.tooltip_text().as_deref() == Some(result.path.as_str()) {
+                            picture.set_paintable(Some(&texture));
+                        }
+                    }
+                }
+
+                if trace_enabled() {
+                    eprintln!(
+                        "PIC_GROUP thumb_ready path={} size={}x{}",
+                        result.path,
+                        result.width,
+                        result.height
+                    );
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
 
     let folder_factory = gtk::SignalListItemFactory::new();
 
@@ -90,7 +202,14 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
             separator.add_css_class("folder-section-separator");
 
-            let photo_factory = make_photo_factory(tile_size.clone(), live_tiles.clone());
+            let photo_factory = make_photo_factory(
+                tile_size.clone(),
+                live_tiles.clone(),
+                thumb_cache.clone(),
+                thumb_pending.clone(),
+                thumb_inflight.clone(),
+                thumb_job_tx.clone(),
+            );
             let grid = gtk::GridView::new(None::<gtk::NoSelection>, Some(photo_factory));
             grid.add_css_class("folder-grid");
             grid.set_min_columns(current_columns.get());
@@ -380,6 +499,10 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
 fn make_photo_factory(
     tile_size: Rc<Cell<i32>>,
     live_tiles: Rc<RefCell<Vec<glib::WeakRef<gtk::Widget>>>>,
+    thumb_cache: Rc<RefCell<HashMap<String, gtk::gdk::Texture>>>,
+    thumb_pending: Rc<RefCell<HashMap<String, Vec<glib::WeakRef<gtk::Picture>>>>>,
+    thumb_inflight: Rc<RefCell<HashSet<String>>>,
+    thumb_job_tx: mpsc::Sender<String>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
@@ -408,41 +531,60 @@ fn make_photo_factory(
         list_item.set_child(Some(&frame));
     });
 
-    factory.connect_bind(|_, object| {
-        let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let Some(photo) = list_item.item().and_downcast::<PhotoObject>() else {
-            return;
-        };
-        let Some(frame) = list_item.child().and_downcast::<gtk::Box>() else {
-            return;
-        };
-        let Some(picture) = frame.first_child().and_downcast::<gtk::Picture>() else {
-            return;
-        };
+    {
+        let cache = thumb_cache.clone();
+        let pending = thumb_pending.clone();
+        let inflight = thumb_inflight.clone();
+        let jobs = thumb_job_tx.clone();
 
-        let path = photo.path();
-        picture.set_tooltip_text(Some(&path));
+        factory.connect_bind(move |_, object| {
+            let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let Some(photo) = list_item.item().and_downcast::<PhotoObject>() else {
+                return;
+            };
+            let Some(frame) = list_item.child().and_downcast::<gtk::Box>() else {
+                return;
+            };
+            let Some(picture) = frame.first_child().and_downcast::<gtk::Picture>() else {
+                return;
+            };
 
-        if images_disabled() {
+            let path = photo.path();
+            picture.set_tooltip_text(Some(&path));
             picture.set_paintable(None::<&gtk::gdk::Paintable>);
-            return;
-        }
 
-        let started = Instant::now();
-        let file = gio::File::for_path(&path);
-        picture.set_file(Some(&file));
+            if images_disabled() {
+                return;
+            }
 
-        if trace_enabled() {
-            eprintln!(
-                "PIC_GROUP photo_bind position={} set_file_us={} path={}",
-                list_item.position(),
-                started.elapsed().as_micros(),
-                path
-            );
-        }
-    });
+            if let Some(texture) = cache.borrow().get(&path).cloned() {
+                picture.set_paintable(Some(&texture));
+                if trace_enabled() {
+                    eprintln!("PIC_GROUP thumb_cache_hit path={}", path);
+                }
+                return;
+            }
+
+            pending
+                .borrow_mut()
+                .entry(path.clone())
+                .or_default()
+                .push(picture.downgrade());
+
+            if inflight.borrow_mut().insert(path.clone()) {
+                let _ = jobs.send(path.clone());
+                if trace_enabled() {
+                    eprintln!(
+                        "PIC_GROUP thumb_queue position={} path={}",
+                        list_item.position(),
+                        path
+                    );
+                }
+            }
+        });
+    }
 
     factory.connect_unbind(|_, object| {
         let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
