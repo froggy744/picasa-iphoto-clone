@@ -1535,7 +1535,23 @@ impl Gallery {
         );
         self.store.splice(0, self.store.n_items(), &objects);
         if old_objects.len() > 1_000 {
-            glib::idle_add_local_once(move || drop(old_objects));
+            // Release the superseded PhotoObjects in small idle slices: one
+            // 20k-object finalization pass (textures, paintables) would run
+            // as a single long frame right after the navigation paint.
+            let remaining = Rc::new(RefCell::new(old_objects));
+            glib::idle_add_local(move || {
+                let mut remaining = remaining.borrow_mut();
+                if remaining.is_empty() {
+                    return glib::ControlFlow::Break;
+                }
+                let take = remaining.len().min(4_000);
+                remaining.drain(0..take);
+                if remaining.is_empty() {
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            });
         }
         if let Some(chunked) = chunked_detach {
             // After the reconcile idle the chunk list matches the new store,
