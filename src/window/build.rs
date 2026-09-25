@@ -1397,18 +1397,12 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let folder_scroll = gtk::ScrolledWindow::new();
     folder_scroll.set_vexpand(true);
     folder_scroll.set_hexpand(true);
-    // Folder V2 uses one persistent section per folder, each containing a real
-    // GridView. Keep the legacy Folder ListView as the fallback.
-    folder_scroll.set_child(Some(if gallery_v2_enabled {
-        gallery.v2_folder.root.upcast_ref::<gtk::Widget>()
-    } else {
-        gallery.folder_root.upcast_ref::<gtk::Widget>()
-    }));
+    // Folder has a single implementation path: Gallery V2.
+    folder_scroll.set_child(Some(gallery.v2_folder.root.upcast_ref::<gtk::Widget>()));
     let folder_scroll_overlay = gtk::Overlay::new();
     folder_scroll_overlay.set_hexpand(true);
     folder_scroll_overlay.set_vexpand(true);
     folder_scroll_overlay.set_child(Some(&folder_scroll));
-    folder_scroll_overlay.add_overlay(&gallery.folder_rubberband);
 
     // A temporary date bubble makes a long chronological All Photos scrollbar
     // usable like a timeline. It is deliberately attached only to the GridView
@@ -1690,252 +1684,27 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         glib::ControlFlow::Continue
     });
 
-    let gallery_for_folder_scroll = gallery.clone();
-    let latest_folder_scroll_y = Rc::new(Cell::new(0.0_f64));
-    // Last scroll direction, used to warm thumbnails ahead of the user rather
-    // than both sides equally.
-    let folder_scroll_direction = Rc::new(Cell::new(0.0_f64));
-    let folder_scroll_direction_for_event = folder_scroll_direction.clone();
-    // Thumbnail loading is intentionally debounced until Folder motion stops.
-    // GtkListView may rebind thousands of intermediate rows during a scrollbar
-    // jump; loading thumbnails from each bind is pure wasted main-thread work.
-    let folder_thumbnail_debounce: Rc<RefCell<Option<glib::SourceId>>> =
-        Rc::new(RefCell::new(None));
-    let folder_thumbnail_debounce_for_event = folder_thumbnail_debounce.clone();
-    let folder_thumbnail_prefetch: Rc<RefCell<Option<glib::SourceId>>> =
-        Rc::new(RefCell::new(None));
-    let folder_thumbnail_prefetch_for_event = folder_thumbnail_prefetch.clone();
-    // Coalesces scrub-target sampling: one sample in the jump frame itself,
-    // then at most once per 50 ms while the drag continues. Frame-driven from
-    // the motion tick below, not from a wall-clock timeout.
-    let folder_scrub_sampler = Rc::new(RefCell::new(FolderScrollbarScrub::default()));
-    let folder_scrub_sampler_for_event = folder_scrub_sampler.clone();
-    let folder_scrub_sampler_for_tick = folder_scrub_sampler.clone();
-    let latest_folder_scroll_y_for_tick = latest_folder_scroll_y.clone();
-    let folder_vadjustment = folder_scroll.vadjustment();
-    // True only for a real multi-page Folder scrollbar scrub. Page Up/Down is
-    // deliberately excluded: Folder row bind now submits its own async visible
-    // request, so page navigation must not repeatedly replace the queue.
-    let folder_direct_scrub_active = Rc::new(Cell::new(false));
-    let folder_direct_scrub_active_for_event = folder_direct_scrub_active.clone();
-    let folder_direct_scrub_active_for_tick = folder_direct_scrub_active.clone();
-    // The settled loader paints the final viewport after motion stops. During
-    // active motion, drive thumbnail work from GTK frame ticks instead of a
-    // 16 ms timeout. A timeout can run before GtkListView has rebound/allocated
-    // the rows for a large scrollbar jump, which warms the old viewport and
-    // leaves the new one blank. The short frame pump keeps retrying long enough
-    // for recycled rows and async cache decodes to catch up.
-    const FOLDER_THUMBNAIL_MOTION_PUMP_FRAMES: u8 = 12;
-    let folder_thumbnail_motion_frames = Rc::new(Cell::new(0u8));
-    let folder_thumbnail_motion_frames_for_event = folder_thumbnail_motion_frames.clone();
-    let folder_thumbnail_motion_frames_for_tick = folder_thumbnail_motion_frames.clone();
-    let folder_thumbnail_motion_phase = Rc::new(Cell::new(0u8));
-    let folder_thumbnail_motion_phase_for_tick = folder_thumbnail_motion_phase.clone();
-    let gallery_for_thumbnail_motion_tick = gallery.clone();
-    let folder_scroll_direction_for_tick = folder_scroll_direction.clone();
-    folder_scroll.add_tick_callback(move |_, _| {
-        let frames_left = folder_thumbnail_motion_frames_for_tick.get();
-        if frames_left == 0 {
-            return glib::ControlFlow::Continue;
-        }
-        folder_thumbnail_motion_frames_for_tick.set(frames_left.saturating_sub(1));
-
-        // Always prioritise the tiles actually visible in the frame GTK is
-        // about to paint. queue_visible... uses reserved async capacity, so
-        // stale prefetch requests cannot starve a scrollbar jump.
-        if folder_direct_scrub_active_for_tick.get() {
-            // The model-derived scrub target is authoritative while the thumb is
-            // teleporting. GtkListView may still expose rows from the previous
-            // viewport, so never let those recycled widgets replace the target
-            // queue during an active direct scrub. Thumbnails the workers have
-            // already finished must still be displayed: rows bind once, usually
-            // before their decode completes, and the completion drain misses
-            // rows recycled again mid-scrub. Applying RAM hits every frame
-            // heals those rows without touching the decode queue.
-            gallery_for_thumbnail_motion_tick.apply_visible_folder_cached_paintables();
-        } else {
-            gallery_for_thumbnail_motion_tick.queue_visible_folder_cached_tiles_async(96);
-        }
-
-        // Scrub decode targets are frame-driven: the first sample fires in the
-        // jump frame itself (not a wall-clock interval later), then at most
-        // every 50 ms while the drag continues. Coalescing keeps the decode
-        // queue owned by one destination instead of one per ±1 px anchor
-        // correction GtkListView emits during drags.
-        let _scrub_target_queued = if folder_direct_scrub_active_for_tick.get()
-            && folder_scrub_sampler_for_tick
-                .borrow_mut()
-                .sample_due(Instant::now())
-        {
-            let page = folder_vadjustment.page_size().max(1.0);
-            gallery_for_thumbnail_motion_tick.queue_folder_scroll_target_cached_tiles_async(
-                latest_folder_scroll_y_for_tick.get(),
-                page,
-                192,
-            )
-        } else {
-            0
-        };
-
-        // Warming ahead is useful, but doing the larger offscreen scan on every
-        // frame is unnecessary. Run it every third pump frame so visible work
-        // remains dominant and GTK has plenty of time to render.
-        let phase = folder_thumbnail_motion_phase_for_tick
-            .get()
-            .wrapping_add(1);
-        folder_thumbnail_motion_phase_for_tick.set(phase);
-        if !folder_direct_scrub_active_for_tick.get() && phase % 3 == 0 {
-            gallery_for_thumbnail_motion_tick.prefetch_folder_cached_tiles(
-                24,
-                folder_scroll_direction_for_tick.get(),
-            );
-        }
-
-        glib::ControlFlow::Continue
-    });
-
-    folder_scroll
-        .vadjustment()
-        .connect_value_changed(move |adjustment| {
-            let raw_scroll_y = adjustment.value();
-            // GtkListView keeps its scroll anchor on device-pixel boundaries
-            // (same reason the wheel path quantizes in
-            // install_smooth_gallery_scroll). Fractional scrollbar-drag values
-            // make GTK immediately write a rounded value back, which reads as
-            // a tiny bounce at drag end. Snap to whole pixels instead; the
-            // re-entrant value_changed sees an integral value and no-ops.
-            let scroll_y = raw_scroll_y.round();
-            if scroll_y != raw_scroll_y {
-                adjustment.set_value(scroll_y);
-            }
-            let previous_y = latest_folder_scroll_y.replace(scroll_y);
-            let direction = scroll_y - previous_y;
-            if direction != 0.0 {
-                folder_scroll_direction_for_event.set(direction);
-            }
-
-            // Folder bind now submits its own visible-priority async request on
-            // every RAM miss. That is sufficient for wheel motion and Page
-            // Up/Down, and avoids the old failure mode where each ~one-page
-            // adjustment step replaced another 30-60 useful requests.
-            //
-            // Only true multi-page scrollbar teleports use model-derived target
-            // preloading. Coalesce those samples so workers can finish useful
-            // work instead of decoding every intermediate thumb position.
-            let page_size = adjustment.page_size().max(1.0);
-            let direct_scrub = direction.abs() > page_size * 1.60;
-            if direct_scrub {
-                folder_direct_scrub_active_for_event.set(true);
-                // Folder and grid views are never visible at the same time,
-                // so reuse the shared scrub thread-local: it keeps recycled
-                // folder tiles from being blanked at unbind while rows are
-                // rebound faster than thumbnail decodes can land. The folder
-                // settle callback clears it again.
-                crate::grid::set_grid_scrub_active(true);
-                // First target sample fires in the next frame tick; further
-                // samples are coalesced to one per 50 ms by the sampler.
-                folder_scrub_sampler_for_event.borrow_mut().begin();
-            }
-
-            // Keep only the cheap position bookkeeping in the raw adjustment
-            // callback. Widget picking and sidebar work are throttled below so
-            // wheel/touchpad/scrollbar motion cannot spend a frame walking GTK
-            // widgets merely to update a visual location marker.
-            gallery_for_folder_scroll.update_group_header_for_scroll(scroll_y);
-
-            // Cancel the previous settle callback and arm a new one. Only the
-            // final viewport after ~90 ms of idle motion gets a full visible
-            // refresh. During sustained scrolling, separately warm a tiny
-            // budgeted batch so the viewport does not remain blank until the
-            // user fully stops.
-            if let Some(source) = folder_thumbnail_debounce_for_event.borrow_mut().take() {
-                source.remove();
-            }
-            if let Some(source) = folder_thumbnail_prefetch_for_event.borrow_mut().take() {
-                source.remove();
-            }
-            // Keep a frame-synchronised thumbnail pump alive after every
-            // movement. Re-arming it is cheap and covers wheel/touchpad motion,
-            // kinetic scrolling, and direct scrollbar jumps with the same path.
-            // The pump runs after GtkListView has had frame opportunities to
-            // recycle/rebind rows, so it follows the new viewport instead of a
-            // stale one captured by a wall-clock timeout.
-            folder_thumbnail_motion_frames_for_event
-                .set(FOLDER_THUMBNAIL_MOTION_PUMP_FRAMES);
-            let gallery_for_visible = gallery_for_folder_scroll.clone();
-            let debounce_slot = folder_thumbnail_debounce_for_event.clone();
-            let prefetch_slot = folder_thumbnail_prefetch_for_event.clone();
-            let direction_for_settle = folder_scroll_direction_for_event.get();
-            let final_scroll_y = latest_folder_scroll_y.clone();
-            let final_page_size = adjustment.page_size().max(1.0);
-            let direct_scrub_active_for_settle = folder_direct_scrub_active_for_event.clone();
-            let folder_scrub_sampler_for_settle = folder_scrub_sampler_for_event.clone();
-            let source = glib::timeout_add_local(Duration::from_millis(110), move || {
-                debounce_slot.borrow_mut().take();
-                direct_scrub_active_for_settle.set(false);
-                folder_scrub_sampler_for_settle.borrow_mut().end();
-                // End the shared scrub window before the visible refresh so
-                // tiles that never received their thumbnail drop the stale
-                // backstop image and return to the normal placeholder state.
-                crate::grid::set_grid_scrub_active(false);
-                gallery_for_visible.queue_folder_scroll_target_cached_tiles_async(
-                    final_scroll_y.get(),
-                    final_page_size,
-                    192,
-                );
-                // Defer the visible refresh to the next main-loop pass so GTK
-                // can finish this frame's post-jump anchor/allocation work
-                // before tiles drop their stale backstop paintables. Unloading
-                // in the same callback interleaves with the ListView's row
-                // re-positioning and reads as a small bounce at drag end.
-                // Queueing decodes stays inline; it does not touch widgets.
-                let gallery_for_settle_refresh = gallery_for_visible.clone();
-                glib::timeout_add_local_once(Duration::ZERO, move || {
-                    gallery_for_settle_refresh.refresh_visible_folder_tiles();
-                });
-
-                // GtkListView can realize the last destination row a few frames
-                // *after* the settle callback above. Give those newly-created
-                // tiles a short visible-only catch-up window before spending
-                // worker capacity on speculative ahead/behind prefetch. This is
-                // deliberately additive: it never replaces queued visible work.
-                let gallery_for_prefetch = gallery_for_visible.clone();
-                let prefetch_slot_for_tick = prefetch_slot.clone();
-                let catchup_frames = Rc::new(Cell::new(6u8));
-                let catchup_frames_for_tick = catchup_frames.clone();
-                let prefetch_source = glib::timeout_add_local(
-                    Duration::from_millis(16),
-                    move || {
-                        let frames_left = catchup_frames_for_tick.get();
-                        if frames_left > 0 {
-                            gallery_for_prefetch.refresh_visible_folder_tiles();
-                            catchup_frames_for_tick.set(frames_left - 1);
-                            return glib::ControlFlow::Continue;
-                        }
-
-                        let loaded =
-                            gallery_for_prefetch.prefetch_folder_cached_tiles(24, direction_for_settle);
-                        if loaded == 0 && !gallery_for_prefetch.thumbnail_display_work_pending() {
-                            prefetch_slot_for_tick.borrow_mut().take();
-                            glib::ControlFlow::Break
-                        } else {
-                            glib::ControlFlow::Continue
-                        }
-                    },
-                );
-                prefetch_slot.replace(Some(prefetch_source));
-                glib::ControlFlow::Break
-            });
-            folder_thumbnail_debounce_for_event.replace(Some(source));
-
+    // Folder V2 owns thumbnail scheduling. The scroll callback only changes
+    // which section models are attached near the viewport; there is no legacy
+    // row prefetch/debounce/scrub pipeline.
+    {
+        let folder = gallery.v2_folder.clone();
+        let adjustment = folder_scroll.vadjustment();
+        adjustment.connect_value_changed(move |adjustment| {
+            folder.update_visible_sections(adjustment.value(), adjustment.page_size());
         });
-
-    
+    }
+    {
+        let folder = gallery.v2_folder.clone();
+        let adjustment = folder_scroll.vadjustment();
+        glib::idle_add_local_once(move || {
+            folder.update_visible_sections(adjustment.value(), adjustment.page_size());
+        });
+    }
 
     install_smooth_gallery_scroll(&grid_scroll, gallery.clone(), true);
-    // Folder mode uses a variable-height GtkListView. Use relative wheel
-    // easing rather than an absolute spring target so GTK anchor corrections
-    // cannot pull the viewport backwards. Precision touchpads remain native.
+    // Folder V2 is still a variable-height ListView, so keep the relative
+    // wheel easing; it no longer drives any legacy row rebuild/prefetch path.
     install_folder_smooth_gallery_scroll(&folder_scroll, gallery.clone());
 
     // While the sidebar divider is being dragged, keep the gallery column
