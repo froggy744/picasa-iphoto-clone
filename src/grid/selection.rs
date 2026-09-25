@@ -596,7 +596,4 @@ fn tile_ancestor(widget: &gtk::Widget) -> Option<SquareTile> {
     None
 }
 
-/// Resolve a point inside the Folder ListView to the bound SquareTile under it.
-/// Folder rows now contain direct tile children, so GTK's normal `pick` result
-/// is sufficient; there is no nested FlowBox child to resolve manually.
 
