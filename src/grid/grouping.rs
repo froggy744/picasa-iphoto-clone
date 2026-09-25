@@ -252,9 +252,11 @@ impl Gallery {
     }
 
     fn rebuild_folder_rows(&self) {
-        if crate::grid::folder_gridview_experiment_enabled() {
-            // The experimental Folder view binds the already ordered photo
-            // model directly to GtkGridView; virtual row GObjects are unused.
+        if crate::grid::folder_gridview_experiment_enabled()
+            || crate::grid::folder_chunked_experiment_enabled()
+        {
+            // Experimental Folder views bind the ordered photo model directly;
+            // the production visual-row ListStore is unused.
             self.save_folder_cache();
             return;
         }
