@@ -572,6 +572,7 @@ impl GalleryV2 {
         self.store.remove_all();
         self.current_photos.borrow_mut().clear();
 
+        let total_photos = photos.len();
         let photos = Rc::new(photos.to_vec());
         let offset = Rc::new(Cell::new(0usize));
         let store = self.store.clone();
@@ -624,7 +625,7 @@ impl GalleryV2 {
         if std::env::var_os("PICASA_TRACE").is_some() {
             eprintln!(
                 "PIC_V2 replace photos={} mode=progressive missing={}",
-                photos.len(),
+                total_photos,
                 missing.len()
             );
         }
