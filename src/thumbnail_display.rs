@@ -358,7 +358,7 @@ fn worker_loop(queue: Arc<Queue>) {
     }
 }
 
-fn load_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
+pub(crate) fn load_display_thumbnail(request: &DisplayRequest) -> DisplayOutcome {
     load_thumbnail_with_policy(request, true)
 }
 
