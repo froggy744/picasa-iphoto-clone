@@ -58,6 +58,37 @@ struct PhotoSort {
     direction: SortDirection,
 }
 
+impl SortField {
+    fn key(self) -> &'static str {
+        match self {
+            Self::DateTaken => "date-taken",
+            Self::Name => "name",
+            Self::FileSize => "file-size",
+            Self::Dimensions => "dimensions",
+            Self::DateAdded => "date-added",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::DateTaken => "Date Taken",
+            Self::Name => "Name",
+            Self::FileSize => "File Size",
+            Self::Dimensions => "Dimensions",
+            Self::DateAdded => "Date Added",
+        }
+    }
+}
+
+impl SortDirection {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Ascending => "ascending",
+            Self::Descending => "descending",
+        }
+    }
+}
+
 impl PhotoSort {
     fn load() -> Self {
         let field = match crate::catalog::setting("photo-sort-field")
@@ -241,6 +272,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         Rc::new(RefCell::new(Vec::new()));
     let current_columns = Rc::new(Cell::new(6u32));
     let favorite_changed: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
+        Rc::new(RefCell::new(None));
+    let sort_changed: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
         Rc::new(RefCell::new(None));
     let selection_changed: Rc<RefCell<Option<Rc<dyn Fn(Option<PhotoObject>)>>>> =
         Rc::new(RefCell::new(None));
