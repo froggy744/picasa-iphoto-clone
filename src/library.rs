@@ -1,10 +1,11 @@
 use crate::photo::PhotoObject;
-use libadwaita as adw;
 use adw::prelude::*;
 use gio::prelude::*;
 use gtk4 as gtk;
 use gtk::prelude::*;
+use libadwaita as adw;
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
@@ -13,6 +14,13 @@ use walkdir::WalkDir;
 const MIN_TILE: i32 = 84;
 const MAX_TILE: i32 = 320;
 const DEFAULT_TILE: i32 = 176;
+
+#[derive(Clone)]
+struct FolderGroupData {
+    folder: PathBuf,
+    label: String,
+    model: gio::ListStore,
+}
 
 fn trace_enabled() -> bool {
     std::env::var_os("PICASA_TRACE").is_some()
@@ -25,119 +33,134 @@ fn images_disabled() -> bool {
 pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("PIC Library Prototype")
+        .title("PIC Library Prototype · Folder Groups")
         .default_width(1280)
         .default_height(820)
         .build();
 
-    let model = gio::ListStore::new::<PhotoObject>();
-    let selection = gtk::NoSelection::new(Some(model.clone()));
+    let groups = gio::ListStore::new::<glib::BoxedAnyObject>();
+    let group_selection = gtk::NoSelection::new(Some(groups.clone()));
 
     let tile_size = Rc::new(Cell::new(DEFAULT_TILE));
     let live_tiles: Rc<RefCell<Vec<glib::WeakRef<gtk::Widget>>>> =
         Rc::new(RefCell::new(Vec::new()));
 
-    let factory = gtk::SignalListItemFactory::new();
+    let folder_factory = gtk::SignalListItemFactory::new();
 
     {
         let tile_size = tile_size.clone();
         let live_tiles = live_tiles.clone();
-        factory.connect_setup(move |_, object| {
+
+        folder_factory.connect_setup(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
-            let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            frame.add_css_class("prototype-photo-tile");
-            frame.set_overflow(gtk::Overflow::Hidden);
-            frame.set_size_request(tile_size.get(), tile_size.get());
 
-            let picture = gtk::Picture::new();
-            picture.set_hexpand(true);
-            picture.set_vexpand(true);
-            picture.set_can_shrink(true);
-            picture.set_content_fit(gtk::ContentFit::Cover);
-            frame.append(&picture);
+            let section = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            section.add_css_class("folder-section");
+            section.set_hexpand(true);
 
-            let widget: gtk::Widget = frame.clone().upcast();
-            live_tiles.borrow_mut().push(widget.downgrade());
-            list_item.set_child(Some(&frame));
+            let title = gtk::Label::new(None);
+            title.add_css_class("folder-title");
+            title.set_xalign(0.0);
+            title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+
+            let path = gtk::Label::new(None);
+            path.add_css_class("folder-path");
+            path.add_css_class("dim-label");
+            path.set_xalign(0.0);
+            path.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+
+            let photo_factory = make_photo_factory(tile_size.clone(), live_tiles.clone());
+            let grid = gtk::GridView::new(None::<gtk::NoSelection>, Some(photo_factory));
+            grid.add_css_class("folder-grid");
+            grid.set_min_columns(1);
+            grid.set_max_columns(30);
+            grid.set_single_click_activate(false);
+            grid.set_hexpand(true);
+            grid.set_vexpand(false);
+
+            section.append(&title);
+            section.append(&path);
+            section.append(&grid);
+
+            list_item.set_child(Some(&section));
         });
     }
 
-    factory.connect_bind(|_, object| {
+    folder_factory.connect_bind(|_, object| {
         let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(photo) = list_item.item().and_downcast::<PhotoObject>() else {
+        let Some(group_object) = list_item.item().and_downcast::<glib::BoxedAnyObject>() else {
             return;
         };
-        let Some(frame) = list_item.child().and_downcast::<gtk::Box>() else {
-            return;
-        };
-        let Some(picture) = frame.first_child().and_downcast::<gtk::Picture>() else {
-            return;
-        };
-        let path = photo.path();
-        picture.set_tooltip_text(Some(&path));
+        let group = group_object.borrow::<FolderGroupData>();
 
-        if images_disabled() {
-            picture.set_paintable(None::<&gtk::gdk::Paintable>);
-            if trace_enabled() {
-                eprintln!(
-                    "PIC_PROTO bind position={} images=disabled path={}",
-                    list_item.position(),
-                    path
-                );
-            }
+        let Some(section) = list_item.child().and_downcast::<gtk::Box>() else {
             return;
-        }
+        };
+        let Some(title) = section.first_child().and_downcast::<gtk::Label>() else {
+            return;
+        };
+        let Some(path) = title.next_sibling().and_downcast::<gtk::Label>() else {
+            return;
+        };
+        let Some(grid) = path.next_sibling().and_downcast::<gtk::GridView>() else {
+            return;
+        };
 
-        let started = Instant::now();
-        let file = gio::File::for_path(&path);
-        picture.set_file(Some(&file));
+        title.set_label(&format!("{}   ·   {} photos", group.label, group.model.n_items()));
+        path.set_label(&group.folder.display().to_string());
+
+        let selection = gtk::NoSelection::new(Some(group.model.clone()));
+        grid.set_model(Some(&selection));
+
         if trace_enabled() {
             eprintln!(
-                "PIC_PROTO bind position={} set_file_us={} path={}",
-                list_item.position(),
-                started.elapsed().as_micros(),
-                path
+                "PIC_GROUP bind folder={} photos={}",
+                group.folder.display(),
+                group.model.n_items()
             );
         }
     });
 
-    factory.connect_unbind(|_, object| {
+    folder_factory.connect_unbind(|_, object| {
         let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(frame) = list_item.child().and_downcast::<gtk::Box>() else {
+        let Some(section) = list_item.child().and_downcast::<gtk::Box>() else {
             return;
         };
-        let Some(picture) = frame.first_child().and_downcast::<gtk::Picture>() else {
+        let Some(title) = section.first_child().and_downcast::<gtk::Label>() else {
             return;
         };
-        picture.set_paintable(None::<&gtk::gdk::Paintable>);
-        picture.set_tooltip_text(None);
+        let Some(path) = title.next_sibling().and_downcast::<gtk::Label>() else {
+            return;
+        };
+        let Some(grid) = path.next_sibling().and_downcast::<gtk::GridView>() else {
+            return;
+        };
+        grid.set_model(None::<&gtk::SelectionModel>);
     });
 
-    let grid = gtk::GridView::new(Some(selection.clone()), Some(factory.clone()));
-    grid.add_css_class("prototype-grid");
-    grid.set_min_columns(1);
-    grid.set_max_columns(30);
-    grid.set_single_click_activate(false);
-    grid.set_hexpand(true);
-    grid.set_vexpand(true);
+    let list = gtk::ListView::new(Some(group_selection.clone()), Some(folder_factory.clone()));
+    list.add_css_class("folder-list");
+    list.set_single_click_activate(false);
+    list.set_hexpand(true);
+    list.set_vexpand(true);
 
     let scroller = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .child(&grid)
+        .child(&list)
         .build();
 
     if trace_enabled() {
         let adjustment = scroller.vadjustment();
         adjustment.connect_value_changed(move |adj| {
             eprintln!(
-                "PIC_PROTO scroll value={:.0} upper={:.0} page={:.0}",
+                "PIC_GROUP scroll value={:.0} upper={:.0} page={:.0}",
                 adj.value(),
                 adj.upper(),
                 adj.page_size()
@@ -147,11 +170,11 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
 
     let header = adw::HeaderBar::new();
 
-    let title = gtk::Label::new(Some("Library"));
+    let title = gtk::Label::new(Some("Library · Folders"));
     title.add_css_class("title");
     header.set_title_widget(Some(&title));
 
-    let count_label = gtk::Label::new(Some("0 photos"));
+    let count_label = gtk::Label::new(Some("0 photos · 0 folders"));
     count_label.add_css_class("dim-label");
     header.pack_start(&count_label);
 
@@ -185,25 +208,34 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     {
         let live_tiles = live_tiles.clone();
         let tile_size = tile_size.clone();
-        let grid = grid.clone();
+        let list = list.clone();
         zoom.connect_value_changed(move |scale| {
             let size = scale.value().round() as i32;
             if size == tile_size.replace(size) {
                 return;
             }
 
+            let started = Instant::now();
+            let mut touched = 0usize;
             let mut tiles = live_tiles.borrow_mut();
             tiles.retain(|weak| {
                 let Some(widget) = weak.upgrade() else {
                     return false;
                 };
                 widget.set_size_request(size, size);
+                touched += 1;
                 true
             });
+            list.queue_resize();
 
-            // Critical prototype rule:
-            // model / ordering / selection are untouched during zoom.
-            grid.queue_resize();
+            if trace_enabled() {
+                eprintln!(
+                    "PIC_GROUP zoom size={} realized_tiles={} elapsed_us={}",
+                    size,
+                    touched,
+                    started.elapsed().as_micros()
+                );
+            }
         });
     }
 
@@ -221,7 +253,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     }
 
     {
-        let model = model.clone();
+        let groups = groups.clone();
         let count_label = count_label.clone();
         let window_weak = window.downgrade();
         open.connect_clicked(move |_| {
@@ -232,7 +264,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 .title("Choose photo library folder")
                 .modal(true)
                 .build();
-            let model = model.clone();
+            let groups = groups.clone();
             let count_label = count_label.clone();
             dialog.select_folder(
                 Some(&window),
@@ -244,7 +276,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                     let Some(path) = folder.path() else {
                         return;
                     };
-                    load_directory(&model, &count_label, &path);
+                    load_grouped_directory(&groups, &count_label, &path);
                 },
             );
         });
@@ -257,35 +289,158 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Pictures")));
 
     if let Some(path) = startup_path.filter(|path| path.is_dir()) {
-        load_directory(&model, &count_label, &path);
+        load_grouped_directory(&groups, &count_label, &path);
     }
 
     window
 }
 
-fn load_directory(model: &gio::ListStore, count_label: &gtk::Label, root: &Path) {
+fn make_photo_factory(
+    tile_size: Rc<Cell<i32>>,
+    live_tiles: Rc<RefCell<Vec<glib::WeakRef<gtk::Widget>>>>,
+) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+
+    factory.connect_setup(move |_, object| {
+        let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+
+        let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        frame.add_css_class("prototype-photo-tile");
+        frame.set_overflow(gtk::Overflow::Hidden);
+        frame.set_size_request(tile_size.get(), tile_size.get());
+
+        let picture = gtk::Picture::new();
+        picture.set_hexpand(true);
+        picture.set_vexpand(true);
+        picture.set_can_shrink(true);
+        picture.set_content_fit(gtk::ContentFit::Cover);
+        frame.append(&picture);
+
+        let widget: gtk::Widget = frame.clone().upcast();
+        live_tiles.borrow_mut().push(widget.downgrade());
+        list_item.set_child(Some(&frame));
+    });
+
+    factory.connect_bind(|_, object| {
+        let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(photo) = list_item.item().and_downcast::<PhotoObject>() else {
+            return;
+        };
+        let Some(frame) = list_item.child().and_downcast::<gtk::Box>() else {
+            return;
+        };
+        let Some(picture) = frame.first_child().and_downcast::<gtk::Picture>() else {
+            return;
+        };
+
+        let path = photo.path();
+        picture.set_tooltip_text(Some(&path));
+
+        if images_disabled() {
+            picture.set_paintable(None::<&gtk::gdk::Paintable>);
+            return;
+        }
+
+        let started = Instant::now();
+        let file = gio::File::for_path(&path);
+        picture.set_file(Some(&file));
+
+        if trace_enabled() {
+            eprintln!(
+                "PIC_GROUP photo_bind position={} set_file_us={} path={}",
+                list_item.position(),
+                started.elapsed().as_micros(),
+                path
+            );
+        }
+    });
+
+    factory.connect_unbind(|_, object| {
+        let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(frame) = list_item.child().and_downcast::<gtk::Box>() else {
+            return;
+        };
+        let Some(picture) = frame.first_child().and_downcast::<gtk::Picture>() else {
+            return;
+        };
+        picture.set_paintable(None::<&gtk::gdk::Paintable>);
+        picture.set_tooltip_text(None);
+    });
+
+    factory
+}
+
+fn load_grouped_directory(
+    groups: &gio::ListStore,
+    count_label: &gtk::Label,
+    root: &Path,
+) {
     let started = Instant::now();
-    let mut paths = WalkDir::new(root)
+
+    let mut by_folder = BTreeMap::<PathBuf, Vec<PathBuf>>::new();
+
+    for entry in WalkDir::new(root)
         .follow_links(false)
         .into_iter()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .filter(|path| is_displayable_photo(path))
-        .collect::<Vec<_>>();
-
-    paths.sort_unstable();
-
-    model.remove_all();
-    for path in paths {
-        model.append(&PhotoObject::new(path.to_string_lossy().into_owned()));
+    {
+        let path = entry.into_path();
+        if !is_displayable_photo(&path) {
+            continue;
+        }
+        let folder = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| root.to_path_buf());
+        by_folder.entry(folder).or_default().push(path);
     }
 
-    count_label.set_label(&format!("{} photos", model.n_items()));
+    groups.remove_all();
+
+    let mut total_photos = 0u32;
+
+    for (folder, mut paths) in by_folder {
+        paths.sort_unstable();
+
+        let model = gio::ListStore::new::<PhotoObject>();
+        for path in paths {
+            model.append(&PhotoObject::new(path.to_string_lossy().into_owned()));
+        }
+
+        total_photos += model.n_items();
+
+        let label = folder
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| root.to_str().unwrap_or("Photos"))
+            .to_string();
+
+        groups.append(&glib::BoxedAnyObject::new(FolderGroupData {
+            folder,
+            label,
+            model,
+        }));
+    }
+
+    count_label.set_label(&format!(
+        "{} photos · {} folders",
+        total_photos,
+        groups.n_items()
+    ));
+
     if trace_enabled() {
         eprintln!(
-            "PIC_PROTO library_loaded photos={} elapsed_ms={} root={}",
-            model.n_items(),
+            "PIC_GROUP library_loaded photos={} folders={} elapsed_ms={} root={}",
+            total_photos,
+            groups.n_items(),
             started.elapsed().as_millis(),
             root.display()
         );
@@ -306,12 +461,34 @@ fn install_css() {
     let css = gtk::CssProvider::new();
     css.load_from_data(
         r#"
-        .prototype-grid {
+        .folder-list {
             background: @window_bg_color;
-            padding: 8px;
         }
 
-        .prototype-grid > child {
+        .folder-list > row {
+            padding: 0;
+        }
+
+        .folder-section {
+            padding: 14px 14px 18px 14px;
+        }
+
+        .folder-title {
+            font-weight: 700;
+            font-size: 1.08em;
+            margin-top: 4px;
+        }
+
+        .folder-path {
+            font-size: 0.88em;
+            margin-bottom: 6px;
+        }
+
+        .folder-grid {
+            background: transparent;
+        }
+
+        .folder-grid > child {
             padding: 4px;
         }
 
