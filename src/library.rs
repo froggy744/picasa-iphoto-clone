@@ -920,11 +920,13 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             dialog.content_area().append(&entry);
             dialog.set_default_response(gtk::ResponseType::Accept);
 
+            entry.grab_focus();
+            let entry_for_response = entry.clone();
             let album_box = album_box.clone();
             let album_activate = album_activate.clone();
             dialog.connect_response(move |dialog, response| {
                 if response == gtk::ResponseType::Accept {
-                    let name = entry.text();
+                    let name = entry_for_response.text();
                     if let Err(error) = crate::catalog::create_album(name.as_str()) {
                         eprintln!("PIC_REBUILD album_create_failed error={error:#}");
                     } else {
@@ -934,7 +936,6 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 dialog.close();
             });
             dialog.present();
-            entry.grab_focus();
         });
     }
 
@@ -1666,11 +1667,11 @@ fn apply_view(
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| "Album".to_string());
-            content_title.set_label(if needle.is_empty() {
-                &name
+            if needle.is_empty() {
+                content_title.set_label(&name);
             } else {
-                &format!("Search · {name}")
-            });
+                content_title.set_label(&format!("Search · {name}"));
+            }
         }
     }
 
