@@ -1,9 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use chrono::{Local, TimeZone};
+use exif::{In, Reader as ExifReader, Tag, Value};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use walkdir::WalkDir;
 
@@ -287,22 +290,50 @@ pub fn import_root(root: &Path) -> Result<ImportSummary> {
             .and_then(|value| value.modified().ok())
             .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
             .map(|value| value.as_secs() as i64);
+        let path = entry.path().to_string_lossy().into_owned();
+        let existing_fingerprint = transaction
+            .query_row(
+                "SELECT mtime, size_bytes FROM photos WHERE path = ?1",
+                [&path],
+                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()?;
+        if existing_fingerprint == Some((mtime, size_bytes)) {
+            summary.photos_seen += 1;
+            continue;
+        }
+
         let dimensions = image::image_dimensions(entry.path()).ok();
         let width = dimensions.map(|(width, _)| i64::from(width));
         let height = dimensions.map(|(_, height)| i64::from(height));
-        let path = entry.path().to_string_lossy().into_owned();
+        let (taken_at, camera) = read_photo_metadata(entry.path(), mtime);
 
         transaction.execute(
-            "INSERT INTO photos(path, folder_id, width, height, size_bytes, mtime, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO photos(
+                path, folder_id, taken_at, camera, width, height,
+                size_bytes, mtime, added_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(path) DO UPDATE SET
                folder_id = excluded.folder_id,
-               width = COALESCE(photos.width, excluded.width),
-               height = COALESCE(photos.height, excluded.height),
+               taken_at = COALESCE(excluded.taken_at, photos.taken_at),
+               camera = COALESCE(excluded.camera, photos.camera),
+               width = COALESCE(excluded.width, photos.width),
+               height = COALESCE(excluded.height, photos.height),
                size_bytes = excluded.size_bytes,
                mtime = excluded.mtime,
                trashed = 0",
-            params![path, folder_id, width, height, size_bytes, mtime, added_at],
+            params![
+                path,
+                folder_id,
+                taken_at,
+                camera,
+                width,
+                height,
+                size_bytes,
+                mtime,
+                added_at
+            ],
         )?;
         summary.photos_seen += 1;
     }
@@ -352,6 +383,73 @@ fn ensure_folder(
         parent_id = id;
     }
     Ok(parent_id)
+}
+
+fn read_photo_metadata(path: &Path, mtime: Option<i64>) -> (Option<String>, Option<String>) {
+    let exif = fs::File::open(path).ok().and_then(|file| {
+        ExifReader::new()
+            .read_from_container(&mut BufReader::new(file))
+            .ok()
+    });
+
+    let taken_at = exif
+        .as_ref()
+        .and_then(|data| {
+            data.get_field(Tag::DateTimeOriginal, In::PRIMARY)
+                .or_else(|| data.get_field(Tag::DateTime, In::PRIMARY))
+        })
+        .and_then(exif_text)
+        .map(normalize_exif_date)
+        .or_else(|| {
+            mtime.and_then(|seconds| {
+                Local
+                    .timestamp_opt(seconds, 0)
+                    .single()
+                    .map(|date| date.to_rfc3339())
+            })
+        });
+
+    let camera = exif.as_ref().and_then(|data| {
+        let make = data
+            .get_field(Tag::Make, In::PRIMARY)
+            .and_then(exif_text);
+        let model = data
+            .get_field(Tag::Model, In::PRIMARY)
+            .and_then(exif_text);
+        match (make, model) {
+            (Some(make), Some(model)) if model.starts_with(&make) => Some(model),
+            (Some(make), Some(model)) => Some(format!("{make} {model}")),
+            (Some(make), None) => Some(make),
+            (None, Some(model)) => Some(model),
+            _ => None,
+        }
+    });
+
+    (taken_at, camera)
+}
+
+fn exif_text(field: &exif::Field) -> Option<String> {
+    match &field.value {
+        Value::Ascii(values) => values
+            .first()
+            .map(|value| String::from_utf8_lossy(value).trim().to_string())
+            .filter(|value| !value.is_empty()),
+        _ => Some(field.display_value().to_string()),
+    }
+}
+
+fn normalize_exif_date(value: String) -> String {
+    if value.len() >= 10
+        && value.as_bytes().get(4) == Some(&b':')
+        && value.as_bytes().get(7) == Some(&b':')
+    {
+        let mut bytes = value.into_bytes();
+        bytes[4] = b'-';
+        bytes[7] = b'-';
+        String::from_utf8(bytes).unwrap_or_default()
+    } else {
+        value
+    }
 }
 
 fn folder_name(path: &Path) -> String {
