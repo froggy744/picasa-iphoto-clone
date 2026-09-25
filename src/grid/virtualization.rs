@@ -1,209 +1,10 @@
 /// Lightweight folder metadata used only to keep Folder sections in the same
-/// hierarchy order as the sidebar. Parent/container folders that do not own
-/// photos directly are navigation nodes only; they never become blank rows in
-/// the continuous photo stream.
+/// hierarchy order as the sidebar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FolderCatalogEntry {
     folder_id: i64,
     parent_id: Option<i64>,
     photo_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FolderSectionPlan {
-    folder_id: i64,
-    range_index: Option<usize>,
-}
-
-/// A fully built Folder stream kept alive between view switches.
-///
-/// The Folder virtual rows in `folder_store` reference photos by index and the
-/// shared selection model reads them through `store`, so keeping the exact
-/// PhotoObjects plus their group ranges lets re-entering Folder mode reuse an
-/// already populated model instead of rebuilding ~12k rows with GTK.
-#[derive(Clone)]
-struct FolderStreamCache {
-    photos: Vec<PhotoObject>,
-    ranges: Vec<GroupRange>,
-    columns: u32,
-    order: Vec<i64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum FolderRowKind {
-    #[default]
-    Header,
-    Photos,
-}
-
-/// Minimum height needed by the Folder section header's contents.
-const FOLDER_HEADER_HEIGHT: i32 = 70;
-
-/// Exact height of one Folder model row. Headers stay compact while photo
-/// lines continue to follow the current thumbnail zoom. Every scroll/anchor
-/// calculation uses this helper so GtkListView allocation and our own geometry
-/// stay in sync even though the two row kinds have different heights.
-fn folder_model_row_height(kind: FolderRowKind, tile_height: i32) -> i32 {
-    match kind {
-        FolderRowKind::Header => FOLDER_HEADER_HEIGHT,
-        FolderRowKind::Photos => folder_line_height(tile_height),
-    }
-}
-
-fn folder_chunk_size(columns: u32) -> usize {
-    columns.max(1) as usize
-}
-
-/// Exact vertical offset for a virtual Folder row. Folder mode deliberately
-/// gives every model row a fixed height, so we do not need GtkListView's
-/// estimated far-row position when restoring an anchor after a column change.
-fn folder_row_offset(rows: &[FolderVirtualRow], target_row: usize, tile_height: i32) -> f64 {
-    rows.iter()
-        .take(target_row)
-        .map(|row| f64::from(folder_model_row_height(row.kind, tile_height)))
-        .sum()
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct FolderRowData {
-    kind: FolderRowKind,
-    folder_id: i64,
-    folder_path: String,
-    label: String,
-    count: usize,
-    start: usize,
-    end: usize,
-    // Lightweight identity for the photos represented by this visual line.
-    // Range geometry alone is not enough: a refresh can replace photo ids in
-    // place while leaving folder/count/start/end unchanged.
-    photo_ids: Vec<i64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FolderVirtualRow {
-    kind: FolderRowKind,
-    start: usize,
-    end: usize,
-}
-
-/// Folder mode uses a flat virtualized model: one lightweight header row plus
-/// fixed photo lines containing at most `columns` photos. GtkListView therefore
-/// virtualizes one stable-height visual line at a time.
-fn folder_virtual_rows(ranges: &[GroupRange], chunk_size: usize) -> Vec<FolderVirtualRow> {
-    let chunk_size = chunk_size.max(1);
-    let mut rows = Vec::new();
-    for range in ranges {
-        rows.push(FolderVirtualRow {
-            kind: FolderRowKind::Header,
-            start: range.start,
-            end: range.start,
-        });
-        let mut start = range.start;
-        while start < range.end {
-            let end = (start + chunk_size).min(range.end);
-            rows.push(FolderVirtualRow {
-                kind: FolderRowKind::Photos,
-                start,
-                end,
-            });
-            start = end;
-        }
-    }
-    rows
-}
-
-mod folder_row_object {
-    use std::cell::RefCell;
-
-    use glib::subclass::prelude::*;
-
-    use super::FolderRowData;
-
-    #[derive(Default)]
-    pub(crate) struct FolderRowObject {
-        pub(crate) data: RefCell<FolderRowData>,
-    }
-
-    #[glib::object_subclass]
-    impl ObjectSubclass for FolderRowObject {
-        const NAME: &'static str = "PicasaFolderRowObject";
-        type Type = super::FolderRowObject;
-    }
-
-    impl ObjectImpl for FolderRowObject {}
-}
-
-glib::wrapper! {
-    pub(crate) struct FolderRowObject(ObjectSubclass<folder_row_object::FolderRowObject>);
-}
-
-impl FolderRowObject {
-    fn new(data: FolderRowData) -> Self {
-        let object: Self = glib::Object::new();
-        object.imp().data.replace(data);
-        object
-    }
-
-    fn data(&self) -> FolderRowData {
-        self.imp().data.borrow().clone()
-    }
-
-    /// Cheap membership test that does not clone the row data. This runs over
-    /// tens of thousands of rows when a zoom/column change re-anchors the
-    /// viewport, so it must not allocate.
-    fn contains_photo(&self, photo_id: i64) -> bool {
-        let data = self.imp().data.borrow();
-        data.kind == FolderRowKind::Photos && data.photo_ids.contains(&photo_id)
-    }
-}
-
-fn make_folder_tile(
-    tile_width: i32,
-    tile_height: i32,
-    unavailable: &Rc<dyn Fn(PhotoObject, gtk::Widget)>,
-) -> SquareTile {
-    let frame = gtk::Overlay::new();
-    frame.set_overflow(gtk::Overflow::Hidden);
-    frame.add_css_class("photo-frame");
-    frame.add_css_class("photo-tile");
-
-    let picture = gtk::Picture::new();
-    picture.set_content_fit(gtk::ContentFit::Cover);
-    picture.set_can_shrink(true);
-    picture.set_size_request(1, 1);
-    picture.set_hexpand(true);
-    picture.set_vexpand(true);
-    picture.set_halign(gtk::Align::Fill);
-    picture.set_valign(gtk::Align::Fill);
-    picture.add_css_class("thumbnail");
-    frame.set_child(Some(&picture));
-
-    let placeholder = gtk::Image::from_icon_name("image-x-generic-symbolic");
-    placeholder.set_pixel_size(32);
-    placeholder.add_css_class("dim-label");
-    placeholder.set_visible(false);
-    frame.add_overlay(&placeholder);
-
-    // Badges (selection / favourite / edited / offline) are deliberately NOT
-    // built here. GtkListView destroys and re-creates every realized Folder row
-    // on a column change, so four extra widgets per tile dominated the rebuild
-    // (~250-520 ms) and made the sidebar animation jerk. Each badge is created
-    // lazily by ensure_*_badge() only when a photo actually needs it.
-    let tile = SquareTile::new(tile_width, tile_height, &frame);
-    tile.set_unavailable_handler(unavailable.clone());
-    // The old FlowBoxChild supplied 6 px padding around each thumbnail. Keep
-    // the same geometry directly on the tile now that the nested FlowBox is
-    // gone, and let the horizontal line distribute spare width evenly.
-    tile.set_hexpand(true);
-    tile.set_vexpand(false);
-    tile.set_valign(gtk::Align::Start);
-    tile.set_margin_start(6);
-    tile.set_margin_end(6);
-    tile.set_margin_top(6);
-    tile.set_margin_bottom(6);
-    tile.set_focusable(true);
-
-    tile
 }
 
 impl Gallery {
@@ -384,40 +185,7 @@ impl Gallery {
     /// close to the actual viewport. GtkListView keeps a much larger recycled
     /// widget pool than the visible rows, so loading every bound tile causes
     /// thousands of unnecessary thumbnail operations during scrollbar jumps.
-    pub fn refresh_visible_folder_tiles(&self) -> usize {
-        if self.group_mode.get() != GroupMode::Folder || self.folder_root.height() <= 0 {
-            return 0;
-        }
 
-        let viewport = self.folder_root.height() as f32;
-        let mut tiles = Vec::new();
-        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        let mut loaded = 0usize;
-
-        for tile in tiles {
-            if !tile.is_mapped() || tile.height() <= 0 {
-                tile.unload_visual();
-                continue;
-            }
-            let is_near = tile
-                .compute_bounds(&self.folder_root)
-                .is_some_and(|bounds| {
-                    bounds.y() + bounds.height() >= -viewport * 0.25
-                        && bounds.y() <= viewport * 1.25
-                });
-            if is_near {
-                if !tile.imp().visual_loaded.get() {
-                    loaded += 1;
-                }
-                tile.load_folder_cached_visual();
-            } else {
-                tile.unload_visual();
-            }
-        }
-
-
-        loaded
-    }
 
     /// Replace stale GridView visible requests with the thumbnails GTK is
     /// painting in the current frame. This is the non-Folder equivalent of the
@@ -695,81 +463,12 @@ impl Gallery {
     /// visible-thumbnail worker capacity even when background prefetch already
     /// occupies its smaller quota, so a scrollbar jump cannot be blocked by
     /// thumbnails for rows the user has already passed.
-    pub fn queue_visible_folder_cached_tiles_async(&self, budget: usize) -> usize {
-        if budget == 0
-            || self.group_mode.get() != GroupMode::Folder
-            || self.folder_root.height() <= 0
-        {
-            return 0;
-        }
 
-        let viewport = self.folder_root.height() as f32;
-        let mut tiles = Vec::new();
-        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        let mut candidates: Vec<(f32, SquareTile)> = Vec::new();
-
-        for tile in tiles {
-            if tile.height() <= 0 || tile.imp().visual_loaded.get() {
-                continue;
-            }
-            let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
-                continue;
-            };
-            let center = bounds.y() + bounds.height() * 0.5;
-            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
-                continue;
-            }
-            // Start near the viewport centre, then fan out. This makes a large
-            // scrollbar jump paint the part the user is looking at first.
-            candidates.push(((center - viewport * 0.5).abs(), tile));
-        }
-
-        candidates.sort_by(|left, right| left.0.total_cmp(&right.0));
-        let mut queued = 0usize;
-        for (_, tile) in candidates.into_iter().take(budget) {
-            if tile.queue_folder_cached_visual_async(true) {
-                queued += 1;
-            }
-        }
-        queued
-    }
 
     /// Folder counterpart of apply_visible_grid_cached_paintables: paint RAM
     /// thumbnails onto currently visible rows during a direct scrub without
     /// replacing the model-derived decode target.
-    pub fn apply_visible_folder_cached_paintables(&self) -> usize {
-        if self.group_mode.get() != GroupMode::Folder || self.folder_root.height() <= 0 {
-            return 0;
-        }
 
-        let viewport = self.folder_root.height() as f32;
-        let mut tiles = Vec::new();
-        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        let mut applied = 0usize;
-        for tile in tiles {
-            if tile.height() <= 0 || tile.imp().visual_loaded.get() {
-                continue;
-            }
-            let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
-                continue;
-            };
-            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
-                continue;
-            }
-            let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
-                continue;
-            };
-            let Some(key) = photo_presentation_key(&photo) else {
-                continue;
-            };
-            if let Some(paintable) = folder_thumbnail_cache_get(&key) {
-                if tile.apply_presentation_paintable(&key, &paintable) {
-                    applied += 1;
-                }
-            }
-        }
-        applied
-    }
 
     /// Queue the Folder destination directly from virtual-row geometry.
     ///
@@ -778,115 +477,7 @@ impl Gallery {
     /// widgets. That makes it suitable for Page Up/Down and direct scrollbar
     /// jumps, where the adjustment can move many rows before GTK has realized
     /// the new viewport.
-    pub fn queue_folder_scroll_target_cached_tiles_async(
-        &self,
-        scroll_y: f64,
-        viewport_height: f64,
-        budget: usize,
-    ) -> usize {
-        if budget == 0 || self.group_mode.get() != GroupMode::Folder {
-            return 0;
-        }
 
-        let photos = self.current_photos.borrow();
-        let ranges = self.group_ranges.borrow();
-        if photos.is_empty() || ranges.is_empty() {
-            return 0;
-        }
-
-        let columns = self.current_columns.get().max(1) as usize;
-        let tile_height = self.tile_height.get().max(1);
-        let header_height = f64::from(folder_model_row_height(FolderRowKind::Header, tile_height));
-        let photo_row_height =
-            f64::from(folder_model_row_height(FolderRowKind::Photos, tile_height));
-        let smallest_row_height = header_height.min(photo_row_height).max(1.0);
-        let view_start = scroll_y.max(0.0);
-        let view_end = view_start + viewport_height.max(smallest_row_height);
-        // Include one photo line on either side so a page jump paints the edge
-        // rows too, without wasting decode work on several speculative screens.
-        let target_start = (view_start - photo_row_height).max(0.0);
-        let target_end = view_end + photo_row_height;
-
-        let mut y = 0.0_f64;
-        let mut indexes = Vec::<usize>::new();
-
-        for range in ranges.iter() {
-            let photo_count = range.end.saturating_sub(range.start);
-            let photo_rows = photo_count.div_ceil(columns);
-            let section_height = header_height + photo_rows as f64 * photo_row_height;
-            let section_end = y + section_height;
-
-            if section_end < target_start {
-                y = section_end;
-                continue;
-            }
-            if y > target_end {
-                break;
-            }
-
-            let photo_rows_y = y + header_height;
-            for row in 0..photo_rows {
-                let row_top = photo_rows_y + row as f64 * photo_row_height;
-                let row_bottom = row_top + photo_row_height;
-                if row_bottom < target_start {
-                    continue;
-                }
-                if row_top > target_end {
-                    break;
-                }
-
-                let start = range.start + row * columns;
-                let end = (start + columns).min(range.end).min(photos.len());
-                indexes.extend(start..end);
-                if indexes.len() >= budget {
-                    break;
-                }
-            }
-            if indexes.len() >= budget {
-                break;
-            }
-            y = section_end;
-        }
-
-        if indexes.is_empty() {
-            return 0;
-        }
-
-        // Queue centre-out so the middle of the viewport becomes useful first.
-        let midpoint = indexes.len() / 2;
-        let mut ordered = Vec::with_capacity(indexes.len());
-        for distance in 0..=indexes.len() {
-            if midpoint >= distance {
-                ordered.push(indexes[midpoint - distance]);
-            }
-            if distance != 0 && midpoint + distance < indexes.len() {
-                ordered.push(indexes[midpoint + distance]);
-            }
-            if ordered.len() >= indexes.len() {
-                break;
-            }
-        }
-
-        let mut requests = Vec::with_capacity(ordered.len().min(budget));
-        for index in ordered.into_iter().take(budget) {
-            let Some(photo) = photos.get(index) else {
-                continue;
-            };
-            let Some(request) = photo_presentation_request(photo, true) else {
-                continue;
-            };
-            if folder_thumbnail_cache_get(&request.key).is_some() {
-                continue;
-            }
-            requests.push(request);
-        }
-        drop(ranges);
-        drop(photos);
-
-        let queued = requests.len();
-        crate::thumbnail_display::replace_visible_requests(requests);
-        queued
-    }
 
     /// Warm a RAM thumbnail buffer around the Folder viewport.
     ///
@@ -898,86 +489,12 @@ impl Gallery {
     /// Cache-file I/O and JPEG decode are queued on bounded worker threads;
     /// only texture creation/application returns to GTK. The hot ListView bind
     /// path stays strictly RAM-only.
-    fn visible_folder_photo_index_span(&self) -> Option<(usize, usize)> {
-        if self.group_mode.get() != GroupMode::Folder || self.folder_root.height() <= 0 {
-            return None;
-        }
-        let viewport = self.folder_root.height() as f32;
-        let mut tiles = Vec::new();
-        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        let mut first = usize::MAX;
-        let mut last = 0usize;
-        let mut found = false;
-        for tile in tiles {
-            if tile.height() <= 0 {
-                continue;
-            }
-            let Some(index) = tile.imp().photo_index.get() else {
-                continue;
-            };
-            let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
-                continue;
-            };
-            if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
-                continue;
-            }
-            first = first.min(index);
-            last = last.max(index);
-            found = true;
-        }
-        found.then_some((first, last))
-    }
+
 
     /// Warm decoded presentation thumbnails from the photo model, not just from
     /// GTK's realized row pool. That gives a scrollbar jump several screens of
     /// cache runway even before GtkListView has created/rebound those widgets.
-    pub fn prefetch_folder_cached_tiles(&self, budget: usize, direction: f64) -> usize {
-        if budget == 0 || self.group_mode.get() != GroupMode::Folder {
-            return 0;
-        }
-        let Some((first_visible, last_visible)) = self.visible_folder_photo_index_span() else {
-            return 0;
-        };
-        let photos = self.current_photos.borrow();
-        if photos.is_empty() {
-            return 0;
-        }
 
-        let visible_count = last_visible
-            .saturating_sub(first_visible)
-            .saturating_add(1)
-            .max(self.current_columns.get() as usize);
-        let ahead = visible_count.saturating_mul(6);
-        let behind = visible_count.saturating_mul(2);
-        let mut indexes = Vec::with_capacity((ahead + behind).min(photos.len()));
-
-        if direction < 0.0 {
-            let ahead_start = first_visible.saturating_sub(ahead);
-            indexes.extend((ahead_start..first_visible).rev());
-            let behind_end = (last_visible + 1 + behind).min(photos.len());
-            indexes.extend((last_visible + 1)..behind_end);
-        } else {
-            let ahead_end = (last_visible + 1 + ahead).min(photos.len());
-            indexes.extend((last_visible + 1)..ahead_end);
-            let behind_start = first_visible.saturating_sub(behind);
-            indexes.extend((behind_start..first_visible).rev());
-        }
-
-        let mut queued = 0usize;
-        for index in indexes {
-            if queued >= budget {
-                break;
-            }
-            let Some(photo) = photos.get(index) else {
-                continue;
-            };
-            if queue_photo_presentation_async(photo, false) {
-                queued += 1;
-            }
-        }
-
-        queued
-    }
 
     pub fn thumbnail_display_work_pending(&self) -> bool {
         crate::thumbnail_display::pending_count() > 0
@@ -1128,13 +645,12 @@ impl Gallery {
             }
         }
 
-        if self.group_mode.get() != GroupMode::None {
+        if self.group_mode.get() == GroupMode::Folder {
+            let snapshot = self.current_photos.borrow().clone();
+            self.v2_folder.replace_objects(&snapshot);
+        } else if self.group_mode.get() != GroupMode::None {
             self.rebuild_group_ranges();
-            if self.group_mode.get() == GroupMode::Folder {
-                self.rebuild_folder_rows();
-            } else {
-                self.update_group_header_for_scroll(scroll_y);
-            }
+            self.update_group_header_for_scroll(scroll_y);
         }
 
         // Invalidate any pending progressive replacement before restoring the
@@ -1223,21 +739,6 @@ impl Gallery {
                     .then(|| photo.clone())
             })
             .collect::<Vec<_>>();
-        // Folder mode keeps its own stream so re-entering it does not rebuild
-        // tens of thousands of objects. Keep that inactive stream in sync as
-        // well; otherwise it can retain badges from before a drive remount.
-        // These are model updates only: availability was already determined
-        // from registered folders above, with no original-file access.
-        if self.group_mode.get() != GroupMode::Folder {
-            if let Some(cache) = self.folder_cache.borrow().as_ref() {
-                photos.extend(cache.photos.iter().filter_map(|photo| {
-                    updates
-                        .get(&photo.folder_id())
-                        .is_some_and(|available| photo.original_available() != *available)
-                        .then(|| photo.clone())
-                }));
-            }
-        }
         if photos.is_empty() {
             return;
         }
@@ -1281,9 +782,7 @@ impl Gallery {
     }
 
     pub fn replace(&self, photos: &[Photo]) {
-        if std::env::var_os("PIC_GALLERY_V2").is_some()
-            && self.group_mode.get() == GroupMode::Folder
-        {
+        if self.group_mode.get() == GroupMode::Folder {
             let started = std::time::Instant::now();
             let objects = self.v2.objects_for(photos);
             self.v2_folder.replace_objects(&objects);
@@ -1329,16 +828,6 @@ impl Gallery {
                     })
         };
         if unchanged {
-            // Entering Folder mode can intentionally clear the transient
-            // Folder ListView while the correctly ordered stream is prepared.
-            // If the DB result happens to have the same id order (for example
-            // a library containing only one folder), rebuild those rows rather
-            // than leaving the Folder view blank.
-            if self.group_mode.get() == GroupMode::Folder && self.folder_store.n_items() == 0 {
-                self.rebuild_group_ranges();
-                self.rebuild_folder_rows();
-            }
-
             self.stream_building.set(false);
             return;
         }
@@ -1384,11 +873,7 @@ impl Gallery {
             }
             if self.group_mode.get() != GroupMode::None {
                 self.rebuild_group_ranges();
-                if self.group_mode.get() == GroupMode::Folder {
-                    self.rebuild_folder_rows();
-                } else {
-                    self.update_group_header_for_scroll(self.last_scroll_y.get());
-                }
+                self.update_group_header_for_scroll(self.last_scroll_y.get());
             }
 
             self.stream_building.set(false);
@@ -1421,11 +906,7 @@ impl Gallery {
         }
         if self.group_mode.get() != GroupMode::None {
             self.rebuild_group_ranges();
-            if self.group_mode.get() == GroupMode::Folder {
-                self.rebuild_folder_rows();
-            } else {
-                self.update_group_header_for_scroll(self.last_scroll_y.get());
-            }
+            self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
 
         self.stream_building.set(false);
@@ -1460,11 +941,6 @@ impl Gallery {
         let last_scroll_y = self.last_scroll_y.clone();
         let current_columns = self.current_columns.clone();
         let tile_height = self.tile_height.clone();
-        let folder_store = self.folder_store.clone();
-        let folder_order = self.folder_order.clone();
-        let folder_catalog = self.folder_catalog.clone();
-        let folder_cache = self.folder_cache.clone();
-        let _folder_root = self.folder_root.clone();
         let replace_generation = self.replace_generation.clone();
         let stream_building = self.stream_building.clone();
 
@@ -1496,24 +972,6 @@ impl Gallery {
             if end >= photos.len() {
                 rebuild_group_ranges_for(&current_photos, &group_mode, &group_date, &group_ranges);
                 if group_mode.get() == GroupMode::Folder {
-                    rebuild_folder_rows_for(
-                        &current_photos,
-                        &group_ranges,
-                        &current_columns,
-                        &folder_order,
-                        &folder_catalog,
-                        &folder_store,
-                    );
-                    if group_mode.get() == GroupMode::Folder {
-                        save_folder_cache_for(
-                            &folder_cache,
-                            &current_photos,
-                            &group_ranges,
-                            &current_columns,
-                            &folder_order,
-                        );
-                    }
-
                     group_header.set_visible(false);
                     group_title.set_text("");
                     group_count.set_text("");
@@ -1567,13 +1025,12 @@ impl Gallery {
             .borrow_mut()
             .extend(objects.iter().cloned());
         self.store.splice(self.store.n_items(), 0, &objects);
-        if self.group_mode.get() != GroupMode::None {
+        if self.group_mode.get() == GroupMode::Folder {
+            let snapshot = self.current_photos.borrow().clone();
+            self.v2_folder.replace_objects(&snapshot);
+        } else if self.group_mode.get() != GroupMode::None {
             self.rebuild_group_ranges();
-            if self.group_mode.get() == GroupMode::Folder {
-                self.rebuild_folder_rows();
-            } else {
-                self.update_group_header_for_scroll(self.last_scroll_y.get());
-            }
+            self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
 
     }
@@ -1590,227 +1047,4 @@ impl Gallery {
     }
 
 }
-fn folder_section_plan(
-    ranges: &[GroupRange],
-    catalog: &[FolderCatalogEntry],
-    folder_order: &[i64],
-) -> Vec<FolderSectionPlan> {
-    let mut plan = Vec::new();
-    let mut emitted_ranges = HashSet::new();
-    let mut seen_folder_ids = HashSet::new();
 
-    // Prefer the sidebar/tree order when available. Parent/container folders
-    // can appear in that order, but only ids backed by a real photo range are
-    // emitted below.
-    let ordered_ids: Vec<i64> = if folder_order.is_empty() {
-        catalog
-            .iter()
-            .filter(|folder| folder.photo_count > 0)
-            .map(|folder| folder.folder_id)
-            .collect()
-    } else {
-        folder_order.to_vec()
-    };
-
-    for folder_id in ordered_ids {
-        if !seen_folder_ids.insert(folder_id) {
-            continue;
-        }
-        for (range_index, range) in ranges.iter().enumerate() {
-            if range.folder_id == folder_id {
-                plan.push(FolderSectionPlan {
-                    folder_id,
-                    range_index: Some(range_index),
-                });
-                emitted_ranges.insert(range_index);
-            }
-        }
-        // No direct range means this is only a parent/container navigation
-        // node. Do not emit a blank header row for it; scroll_to_folder() will
-        // resolve such a target to the first photo-bearing descendant header.
-    }
-
-    // Never hide a real photo range just because the folder catalog/order was
-    // stale or incomplete. Append any unplanned ranges in their source order.
-    for (range_index, range) in ranges.iter().enumerate() {
-        if emitted_ranges.insert(range_index) {
-            plan.push(FolderSectionPlan {
-                folder_id: range.folder_id,
-                range_index: Some(range_index),
-            });
-        }
-    }
-
-    plan
-}
-
-fn build_folder_virtual_objects(
-    ranges: &[GroupRange],
-    photos: &[PhotoObject],
-    line_size: usize,
-    catalog: &[FolderCatalogEntry],
-    folder_order: &[i64],
-) -> Vec<FolderRowObject> {
-    let line_size = line_size.max(1);
-    let plan = folder_section_plan(ranges, catalog, folder_order);
-    let estimated_rows = ranges.iter().fold(plan.len(), |total, range| {
-        let photos_in_range = range.end.saturating_sub(range.start);
-        total + photos_in_range.div_ceil(line_size)
-    });
-    let mut rows = Vec::with_capacity(estimated_rows);
-
-    for section in plan {
-        if let Some(range_index) = section.range_index {
-            let range = &ranges[range_index];
-            rows.push(FolderRowObject::new(FolderRowData {
-                kind: FolderRowKind::Header,
-                folder_id: range.folder_id,
-                folder_path: photos
-                    .get(range.start)
-                    .and_then(|photo| photo.folder_path())
-                    .unwrap_or_default(),
-                label: range.label.clone(),
-                count: range.end.saturating_sub(range.start),
-                start: range.start,
-                end: range.start,
-                photo_ids: Vec::new(),
-            }));
-
-            let mut start = range.start;
-            while start < range.end {
-                let end = (start + line_size).min(range.end);
-                let photo_ids = photos
-                    .get(start..end)
-                    .map(|slice| slice.iter().map(|photo| photo.id()).collect())
-                    .unwrap_or_default();
-                rows.push(FolderRowObject::new(FolderRowData {
-                    kind: FolderRowKind::Photos,
-                    folder_id: range.folder_id,
-                    // Photo lines need only folder/range/photo identity. Avoid
-                    // cloning heading strings into thousands of rows.
-                    folder_path: String::new(),
-                    label: String::new(),
-                    count: 0,
-                    start,
-                    end,
-                    photo_ids,
-                }));
-                start = end;
-            }
-        }
-    }
-
-    rows
-}
-
-fn folder_virtual_row_matches(old: &FolderRowData, new: &FolderRowData) -> bool {
-    old.kind == new.kind
-        && old.folder_id == new.folder_id
-        && old.folder_path == new.folder_path
-        && old.label == new.label
-        && old.count == new.count
-        && old.start == new.start
-        && old.end == new.end
-        && old.photo_ids == new.photo_ids
-}
-
-fn save_folder_cache_for(
-    cache: &Rc<RefCell<Option<FolderStreamCache>>>,
-    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
-    group_ranges: &Rc<RefCell<Vec<GroupRange>>>,
-    current_columns: &Rc<Cell<u32>>,
-    folder_order: &Rc<RefCell<Vec<i64>>>,
-) {
-    cache.replace(Some(FolderStreamCache {
-        photos: current_photos.borrow().clone(),
-        ranges: group_ranges.borrow().clone(),
-        columns: current_columns.get(),
-        order: folder_order.borrow().clone(),
-    }));
-}
-
-fn rebuild_folder_rows_for(
-    current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
-    group_ranges: &Rc<RefCell<Vec<GroupRange>>>,
-    current_columns: &Rc<Cell<u32>>,
-    folder_order: &Rc<RefCell<Vec<i64>>>,
-    folder_catalog: &Rc<RefCell<Vec<FolderCatalogEntry>>>,
-    folder_store: &gio::ListStore,
-) {
-    let ranges = group_ranges.borrow();
-    let photos = current_photos.borrow();
-    let old_rows = folder_store.n_items();
-    let line_size = folder_chunk_size(current_columns.get());
-    let catalog = folder_catalog.borrow();
-    let order = folder_order.borrow();
-    let new_rows = build_folder_virtual_objects(&ranges, &photos, line_size, &catalog, &order);
-
-
-    let old_len = old_rows as usize;
-    let new_len = new_rows.len();
-    let mut prefix = 0usize;
-    while prefix < old_len && prefix < new_len {
-        let Some(old_row) = folder_store
-            .item(prefix as u32)
-            .and_downcast::<FolderRowObject>()
-        else {
-            break;
-        };
-        let old = old_row.data();
-        let new = new_rows[prefix].data();
-        if folder_virtual_row_matches(&old, &new) {
-            prefix += 1;
-            continue;
-        }
-        // Progressive appends change the last folder header's count. Replace
-        // that one row and keep scanning so the unchanged photo rows retain
-        // their GTK objects and the final splice only appends the new tail.
-        if old.kind == FolderRowKind::Header
-            && new.kind == FolderRowKind::Header
-            && old.folder_id == new.folder_id
-            && old.folder_path == new.folder_path
-            && old.start == new.start
-            && old.end == new.end
-        {
-            folder_store.splice(prefix as u32, 1, &new_rows[prefix..prefix + 1]);
-            prefix += 1;
-            continue;
-        }
-        break;
-    }
-    let mut suffix = 0usize;
-    while suffix < old_len - prefix
-        && suffix < new_len - prefix
-        && folder_store
-            .item((old_len - 1 - suffix) as u32)
-            .and_downcast::<FolderRowObject>()
-            .is_some_and(|old_row| {
-                folder_virtual_row_matches(&old_row.data(), &new_rows[new_len - 1 - suffix].data())
-            })
-    {
-        suffix += 1;
-    }
-
-
-    if prefix == old_len && prefix == new_len {
-
-        return;
-    }
-
-    let removed = (old_len - prefix - suffix) as u32;
-    let inserted = &new_rows[prefix..new_len - suffix];
-    // Keep the ListView attached. Fixed-height photo lines give GTK a stable
-    // geometry estimate, so normal ListStore splicing can reuse the realized
-    // row pool without a detach/re-attach storm.
-    //
-    // Note: this splice is the dominant cost of opening a folder (~400 ms for
-    // the ~11.7k-row 66k stream). Measurement showed the ListStore splice itself
-    // is ~0-1 ms; GTK's GtkListView spends the time incorporating the new rows.
-    // Detaching the model before the splice and re-attaching with set_model
-    // moved the cost to the re-attach (413 ms), so it is the ListView
-    // population, not the store, that is expensive. Making folder open instant
-    // therefore requires reusing an already-populated folder model instead of
-    // rebuilding it.
-    folder_store.splice(prefix as u32, removed, inserted);
-
-}
