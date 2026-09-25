@@ -70,47 +70,6 @@ fn app_cache_dir() -> PathBuf {
         .join("pic-library-prototype")
 }
 
-fn app_config_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
-        return PathBuf::from(dir).join("pic-library-prototype");
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".config")
-        .join("pic-library-prototype")
-}
-
-fn favorites_file() -> PathBuf {
-    app_config_dir().join("favorites.txt")
-}
-
-fn load_favorites() -> HashSet<String> {
-    let Ok(text) = fs::read_to_string(favorites_file()) else {
-        return HashSet::new();
-    };
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-fn save_favorites(favorites: &HashSet<String>) {
-    let file = favorites_file();
-    if let Some(parent) = file.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let mut paths = favorites.iter().cloned().collect::<Vec<_>>();
-    paths.sort();
-    let text = if paths.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", paths.join("\n"))
-    };
-    let _ = fs::write(file, text);
-}
-
 fn thumbnail_cache_path(source: &str, cache_dir: &Path) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
@@ -201,7 +160,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let roots: Rc<RefCell<Vec<PathBuf>>> = Rc::new(RefCell::new(Vec::new()));
     let mode = Rc::new(Cell::new(ViewMode::Photos));
     let search_text = Rc::new(RefCell::new(String::new()));
-    let favorite_paths = Rc::new(RefCell::new(load_favorites()));
+    let favorite_paths = Rc::new(RefCell::new(crate::catalog::favorite_paths().unwrap_or_default()));
 
     let tile_size = Rc::new(Cell::new(DEFAULT_TILE));
     let live_tiles: Rc<RefCell<Vec<glib::WeakRef<gtk::Widget>>>> =
@@ -967,85 +926,105 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                     return;
                 };
 
-                let new_roots = vec![path];
-                let scanned = scan_directories(&new_roots, &favorite_paths.borrow());
-                roots_state.replace(new_roots.clone());
-                master.replace(scanned);
-                mode.set(ViewMode::Photos);
+                let (finished_tx, finished_rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let result = crate::catalog::import_root(&path);
+                    let _ = finished_tx.send(result);
+                });
 
-                refresh_library_chrome(
-                    &groups,
-                    &master,
-                    &new_roots,
-                    &folder_box,
-                    &folder_activate,
-                    &count_label,
-                    &title,
-                    &photos_button,
-                    &favorites_button,
-                    &photos_count,
-                    &favorites_count,
-                );
+                let groups = groups.clone();
+                let master = master.clone();
+                let roots_state = roots_state.clone();
+                let count_label = count_label.clone();
+                let title = title.clone();
+                let photos_button = photos_button.clone();
+                let favorites_button = favorites_button.clone();
+                let photos_count = photos_count.clone();
+                let favorites_count = favorites_count.clone();
+                let folder_box = folder_box.clone();
+                let folder_activate = folder_activate.clone();
+                let mode = mode.clone();
+                let favorite_paths = favorite_paths.clone();
+
+                glib::timeout_add_local(Duration::from_millis(50), move || {
+                    match finished_rx.try_recv() {
+                        Ok(Ok(summary)) => {
+                            if trace_enabled() {
+                                eprintln!(
+                                    "PIC_REBUILD import_complete photos={} folders={}",
+                                    summary.photos_seen, summary.folders_seen
+                                );
+                            }
+                            let new_roots = crate::catalog::roots().unwrap_or_default();
+                            favorite_paths.replace(
+                                crate::catalog::favorite_paths().unwrap_or_default(),
+                            );
+                            roots_state.replace(new_roots.clone());
+                            master.replace(load_catalog_groups());
+                            mode.set(ViewMode::Photos);
+                            refresh_library_chrome(
+                                &groups,
+                                &master,
+                                &new_roots,
+                                &folder_box,
+                                &folder_activate,
+                                &count_label,
+                                &title,
+                                &photos_button,
+                                &favorites_button,
+                                &photos_count,
+                                &favorites_count,
+                            );
+                            glib::ControlFlow::Break
+                        }
+                        Ok(Err(error)) => {
+                            eprintln!("PIC_REBUILD import_failed error={error:#}");
+                            glib::ControlFlow::Break
+                        }
+                        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                        Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+                    }
+                });
             });
         });
     }
 
-    let mut startup_paths = std::env::args_os()
+    let explicit_roots = std::env::args_os()
         .skip(1)
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
         .collect::<Vec<_>>();
-
-    if startup_paths.is_empty() {
-        if let Some(path) = std::env::var_os("PIC_LIBRARY_DIR")
-            .map(PathBuf::from)
-            .filter(|path| path.is_dir())
-        {
-            startup_paths.push(path);
-        } else if let Some(path) = std::env::var_os("HOME")
-            .map(|home| PathBuf::from(home).join("Pictures"))
-            .filter(|path| path.is_dir())
-        {
-            startup_paths.push(path);
+    for root in explicit_roots {
+        if let Err(error) = crate::catalog::import_root(&root) {
+            eprintln!("PIC_REBUILD startup_import_failed path={} error={error:#}", root.display());
         }
     }
 
-    if !startup_paths.is_empty() {
-        if trace_enabled() {
-            eprintln!(
-                "PIC_TRACE startup roots={} paths={:?}",
-                startup_paths.len(),
-                startup_paths
-            );
-        }
-        let started = Instant::now();
-        let scanned = scan_directories(&startup_paths, &favorite_paths.borrow());
-        roots.replace(startup_paths.clone());
-        master_groups.replace(scanned);
+    let startup_paths = crate::catalog::roots().unwrap_or_default();
+    roots.replace(startup_paths.clone());
+    master_groups.replace(load_catalog_groups());
 
-        refresh_library_chrome(
-            &groups,
-            &master_groups,
-            &startup_paths,
-            &folder_box,
-            &folder_activate,
-            &count_label,
-            &content_title,
-            &photos_button,
-            &favorites_button,
-            &photos_count,
-            &favorites_count,
+    refresh_library_chrome(
+        &groups,
+        &master_groups,
+        &startup_paths,
+        &folder_box,
+        &folder_activate,
+        &count_label,
+        &content_title,
+        &photos_button,
+        &favorites_button,
+        &photos_count,
+        &favorites_count,
+    );
+
+    if trace_enabled() {
+        eprintln!(
+            "PIC_REBUILD library_loaded photos={} folders={} roots={}",
+            count_photos(&master_groups.borrow()),
+            master_groups.borrow().len(),
+            startup_paths.len()
         );
-
-        if trace_enabled() {
-            eprintln!(
-                "PIC_PROTO library_loaded photos={} folders={} roots={} elapsed_ms={}",
-                count_photos(&master_groups.borrow()),
-                master_groups.borrow().len(),
-                startup_paths.len(),
-                started.elapsed().as_millis()
-            );
-        }
     }
 
     window
@@ -1148,7 +1127,7 @@ fn make_photo_factory(
                     } else {
                         favorites.remove(&path);
                     }
-                    save_favorites(&favorites);
+                    let _ = crate::catalog::set_favorite_by_path(&path, new_value);
                 }
 
                 if trace_enabled() {
@@ -1376,37 +1355,31 @@ fn update_grid_layout(
     }
 }
 
-fn scan_directories(roots: &[PathBuf], favorites: &HashSet<String>) -> Vec<FolderGroupData> {
-    let mut by_folder = BTreeMap::<PathBuf, Vec<PathBuf>>::new();
+fn load_catalog_groups() -> Vec<FolderGroupData> {
+    let mut by_folder = BTreeMap::<PathBuf, Vec<crate::catalog::PhotoRecord>>::new();
 
-    for root in roots {
-        for entry in WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_file())
-        {
-            let path = entry.into_path();
-            if !is_displayable_photo(&path) {
-                continue;
-            }
-            let folder = path
+    for photo in crate::catalog::photos().unwrap_or_default() {
+        let folder = if photo.folder_path.is_empty() {
+            Path::new(&photo.path)
                 .parent()
                 .map(Path::to_path_buf)
-                .unwrap_or_else(|| root.to_path_buf());
-            by_folder.entry(folder).or_default().push(path);
-        }
+                .unwrap_or_default()
+        } else {
+            PathBuf::from(&photo.folder_path)
+        };
+        by_folder.entry(folder).or_default().push(photo);
     }
 
     let mut groups = Vec::with_capacity(by_folder.len());
-
-    for (folder, mut paths) in by_folder {
-        paths.sort_unstable();
+    for (folder, photos) in by_folder {
         let model = gio::ListStore::new::<PhotoObject>();
-
-        for path in paths {
-            let path = path.to_string_lossy().into_owned();
-            model.append(&PhotoObject::new(path.clone(), favorites.contains(&path)));
+        for photo in photos {
+            model.append(&PhotoObject::new(
+                photo.id,
+                photo.path,
+                photo.favorite,
+                photo.rotation,
+            ));
         }
 
         let label = folder
@@ -1422,7 +1395,6 @@ fn scan_directories(roots: &[PathBuf], favorites: &HashSet<String>) -> Vec<Folde
             model,
         });
     }
-
     groups
 }
 
@@ -1654,16 +1626,6 @@ fn refresh_library_chrome(
         photos_button,
         favorites_button,
     );
-}
-
-fn is_displayable_photo(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
-        return false;
-    };
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "gif" | "tif" | "tiff"
-    )
 }
 
 fn install_css() {

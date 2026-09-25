@@ -1,3 +1,4 @@
+mod catalog;
 mod library;
 mod photo;
 
