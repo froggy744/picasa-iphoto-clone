@@ -228,9 +228,18 @@ impl Gallery {
     /// size. Falls back to the ladder level nearest the legacy fixed default
     /// before the first real layout is known.
     pub fn reset_zoom(self: &Rc<Self>) {
-        let folder_list_mode = self.group_mode.get() == GroupMode::Folder
-            && !crate::grid::folder_gridview_experiment_enabled();
-        let width = if folder_list_mode {
+        let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        let folder_chunked_mode =
+            folder_mode && crate::grid::folder_chunked_experiment_enabled();
+        let folder_list_mode = folder_mode
+            && !crate::grid::folder_gridview_experiment_enabled()
+            && !folder_chunked_mode;
+        let width = if folder_chunked_mode {
+            self.chunked_prototype
+                .as_ref()
+                .map(|chunked| chunked.root.width())
+                .unwrap_or_else(|| self.root.width())
+        } else if folder_list_mode {
             self.folder_root.width()
         } else {
             self.root.width()
@@ -268,6 +277,9 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        if let Some(chunked) = self.chunked_prototype.as_ref() {
+            collect_tiles(chunked.root.upcast_ref(), &mut tiles);
+        }
         crate::window::debug_log(&format!(
             "GALLERY: set_fit_whole_photo({fit}) applying to {} realized tiles",
             tiles.len()
@@ -288,6 +300,9 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        if let Some(chunked) = self.chunked_prototype.as_ref() {
+            collect_tiles(chunked.root.upcast_ref(), &mut tiles);
+        }
         for tile in tiles {
             tile.set_filename_visible(show);
         }
@@ -354,7 +369,11 @@ impl Gallery {
 
         // Capture the visible photo before the tile resize disturbs the layout.
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
-        let folder_list_mode = folder_mode && !crate::grid::folder_gridview_experiment_enabled();
+        let folder_chunked_mode =
+            folder_mode && crate::grid::folder_chunked_experiment_enabled();
+        let folder_list_mode = folder_mode
+            && !crate::grid::folder_gridview_experiment_enabled()
+            && !folder_chunked_mode;
         let anchor_started = trace_zoom.then(Instant::now);
         if folder_mode {
             self.zoom_anchor.set(
@@ -381,7 +400,11 @@ impl Gallery {
 
 
         let mut tiles = Vec::new();
-        if folder_list_mode {
+        if folder_chunked_mode {
+            if let Some(chunked) = self.chunked_prototype.as_ref() {
+                collect_tiles(chunked.root.upcast_ref(), &mut tiles);
+            }
+        } else if folder_list_mode {
             collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
         } else {
             collect_tiles(self.root.upcast_ref(), &mut tiles);
@@ -403,6 +426,11 @@ impl Gallery {
         let layout_width = self.last_layout_width.get();
         let root_width = if layout_width > 100 {
             layout_width
+        } else if folder_chunked_mode {
+            self.chunked_prototype
+                .as_ref()
+                .map(|chunked| chunked.root.width())
+                .unwrap_or_else(|| self.root.width())
         } else if folder_list_mode {
             self.folder_root.width()
         } else {
@@ -414,6 +442,20 @@ impl Gallery {
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
+        if folder_chunked_mode {
+            if let Some(anchor_id) = self.zoom_anchor.get() {
+                if let Some(position) = self
+                    .current_photos
+                    .borrow()
+                    .iter()
+                    .position(|photo| photo.id() == anchor_id)
+                {
+                    if let Some(chunked) = self.chunked_prototype.as_ref() {
+                        chunked.scroll_to_photo(position);
+                    }
+                }
+            }
+        }
         let layout_us = layout_started.map_or(0, |started| started.elapsed().as_micros());
         self.zoom_anchor.set(None);
 
@@ -424,7 +466,9 @@ impl Gallery {
                 width,
                 height,
                 if folder_mode { "folder" } else { "grid" },
-                if folder_list_mode {
+                if folder_chunked_mode {
+                    "folder_chunked"
+                } else if folder_list_mode {
                     "folder_list"
                 } else {
                     "photo_grid"
