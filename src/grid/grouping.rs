@@ -19,7 +19,7 @@ pub enum GroupDate {
     Added,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct GroupRange {
     start: usize,
     end: usize,
