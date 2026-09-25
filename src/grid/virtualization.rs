@@ -1016,6 +1016,62 @@ impl Gallery {
         });
     }
 
+    /// Cold-start loader for Folder mode. The startup idle loop arrives in
+    /// small batches so GTK can render quickly, but Folder section membership
+    /// must not be rebuilt for every partial batch. Accumulate the shared
+    /// PhotoObjects here and build Folder V2 exactly once on the final batch.
+    pub fn load_startup_batch(&self, photos: &[Photo], first: bool, final_batch: bool) {
+        if self.group_mode.get() != GroupMode::Folder {
+            if first {
+                self.replace(photos);
+            } else {
+                self.append_photos(photos);
+            }
+            return;
+        }
+
+        if photos.is_empty() {
+            if final_batch {
+                let snapshot = self.current_photos.borrow().clone();
+                self.v2_folder.replace_objects(&snapshot);
+                self.stream_building.set(false);
+            }
+            return;
+        }
+
+        self.stream_building.set(!final_batch);
+        let objects = self.v2.objects_for(photos);
+
+        if first {
+            self.current_photos.replace(objects.clone());
+            self.store.splice(0, self.store.n_items(), &objects);
+        } else {
+            self.current_photos.borrow_mut().extend(objects.iter().cloned());
+            self.store.splice(self.store.n_items(), 0, &objects);
+        }
+
+        if final_batch {
+            let snapshot = self.current_photos.borrow().clone();
+            let started = std::time::Instant::now();
+            self.v2_folder.replace_objects(&snapshot);
+            self.stream_building.set(false);
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "PIC_V2_FOLDER startup_finalize photos={} sections={} elapsed_ms={}",
+                    snapshot.len(),
+                    self.v2_folder.section_count(),
+                    started.elapsed().as_millis()
+                );
+            }
+        } else if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "PIC_V2_FOLDER startup_accumulate added={} total={}",
+                photos.len(),
+                self.current_photos.borrow().len()
+            );
+        }
+    }
+
     pub fn append_photos(&self, photos: &[Photo]) {
         if photos.is_empty() {
             return;
