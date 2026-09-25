@@ -1,3 +1,0 @@
-/* macOS typography: native Apple-style stack, independent from the selected visual theme. */
-window, button, entry, label, text, .navigation-sidebar { font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif; font-size: 13px; }
-.app-title { font-family: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif; font-size: 15px; font-weight: 700; }

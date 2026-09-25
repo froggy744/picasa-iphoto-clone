@@ -1,7 +1,0 @@
-/* Windows typography: all Windows-specific font tuning belongs here. */
-window, button, entry, label, text, .navigation-sidebar { font-family: "Segoe UI"; font-size: 14px; }
-.app-title { font-size: 15px; font-weight: 700; }
-.folder-section-title, .section-heading { font-size: 14px; font-weight: 700; }
-.folder-section-count, .album-photo-count { font-size: 12px; }
-.info-title, .metric-val, .section-count { font-size: 13px; }
-.metric-key, .navigation-sidebar .heading, .edit-section-label, .filter-tile-label { font-size: 11px; }
