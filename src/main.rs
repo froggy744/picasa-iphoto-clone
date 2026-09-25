@@ -15,5 +15,7 @@ fn main() -> glib::ExitCode {
         window.present();
     });
 
-    app.run()
+    // Do not let GApplication interpret our optional photo-folder argument as a file-open request.
+    // library.rs reads std::env::args_os() directly.
+    app.run_with_args(&["pic-library-prototype"])
 }
