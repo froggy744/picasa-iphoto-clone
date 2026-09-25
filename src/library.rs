@@ -276,20 +276,34 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                     let Some(path) = folder.path() else {
                         return;
                     };
-                    load_grouped_directory(&groups, &count_label, &path);
+                    load_grouped_directories(&groups, &count_label, &[path]);
                 },
             );
         });
     }
 
-    let startup_path = std::env::args_os()
-        .nth(1)
+    let mut startup_paths = std::env::args_os()
+        .skip(1)
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("PIC_LIBRARY_DIR").map(PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Pictures")));
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
 
-    if let Some(path) = startup_path.filter(|path| path.is_dir()) {
-        load_grouped_directory(&groups, &count_label, &path);
+    if startup_paths.is_empty() {
+        if let Some(path) = std::env::var_os("PIC_LIBRARY_DIR")
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
+        {
+            startup_paths.push(path);
+        } else if let Some(path) = std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join("Pictures"))
+            .filter(|path| path.is_dir())
+        {
+            startup_paths.push(path);
+        }
+    }
+
+    if !startup_paths.is_empty() {
+        load_grouped_directories(&groups, &count_label, &startup_paths);
     }
 
     window
@@ -376,30 +390,32 @@ fn make_photo_factory(
     factory
 }
 
-fn load_grouped_directory(
+fn load_grouped_directories(
     groups: &gio::ListStore,
     count_label: &gtk::Label,
-    root: &Path,
+    roots: &[PathBuf],
 ) {
     let started = Instant::now();
 
     let mut by_folder = BTreeMap::<PathBuf, Vec<PathBuf>>::new();
 
-    for entry in WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-    {
-        let path = entry.into_path();
-        if !is_displayable_photo(&path) {
-            continue;
+    for root in roots {
+        for entry in WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.into_path();
+            if !is_displayable_photo(&path) {
+                continue;
+            }
+            let folder = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| root.to_path_buf());
+            by_folder.entry(folder).or_default().push(path);
         }
-        let folder = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| root.to_path_buf());
-        by_folder.entry(folder).or_default().push(path);
     }
 
     groups.remove_all();
@@ -420,7 +436,7 @@ fn load_grouped_directory(
             .file_name()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| root.to_str().unwrap_or("Photos"))
+            .unwrap_or("Photos")
             .to_string();
 
         groups.append(&glib::BoxedAnyObject::new(FolderGroupData {
@@ -438,11 +454,11 @@ fn load_grouped_directory(
 
     if trace_enabled() {
         eprintln!(
-            "PIC_GROUP library_loaded photos={} folders={} elapsed_ms={} root={}",
+            "PIC_GROUP library_loaded photos={} folders={} roots={} elapsed_ms={}",
             total_photos,
             groups.n_items(),
-            started.elapsed().as_millis(),
-            root.display()
+            roots.len(),
+            started.elapsed().as_millis()
         );
     }
 }
