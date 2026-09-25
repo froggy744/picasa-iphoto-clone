@@ -1032,29 +1032,13 @@ impl ChunkedPrototype {
                 (position >= start && position < end).then_some(index as u32)
             })
             .unwrap_or_else(|| position / PHOTOS_PER_CHUNK);
-        let exact_offset = self.scroll_offset_for_photo(position);
-        if let (Some(offset), Some(adjustment)) = (exact_offset, self.root.vadjustment()) {
-            let healthy = self.root.is_mapped()
-                && adjustment.page_size() > 0.0
-                && adjustment.upper() > adjustment.page_size();
-            if healthy {
-                // One direct adjustment jump is enough because section chunks
-                // have explicit geometry. Calling ListView::scroll_to first
-                // makes GTK recycle/bind rows for an intermediate position,
-                // then the exact adjustment immediately recycles them again.
-                // That double pass is the Folder-click flicker seen in traces.
-                let upper = (adjustment.upper() - adjustment.page_size())
-                    .max(adjustment.lower());
-                adjustment.set_value(offset.clamp(adjustment.lower(), upper));
-            } else {
-                self.root
-                    .scroll_to(chunk_index, gtk::ListScrollFlags::FOCUS, None);
-            }
-        } else {
-            self.root
-                .scroll_to(chunk_index, gtk::ListScrollFlags::FOCUS, None);
-        }
-        self.root.grab_focus();
+        // Let GtkListView perform the jump itself. A raw vadjustment
+        // teleport invalidates the old viewport before GTK has realized the
+        // destination rows, which produces the visible blank/flicker frame on
+        // Folder-to-Folder navigation. scroll_to() can realize the target as
+        // part of the list operation instead.
+        self.root
+            .scroll_to(chunk_index, gtk::ListScrollFlags::empty(), None);
     }
 }
 
