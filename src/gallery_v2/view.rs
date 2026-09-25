@@ -86,6 +86,8 @@ pub(crate) struct GalleryV2 {
     live_tiles: Rc<RefCell<Vec<glib::WeakRef<gtk::Overlay>>>>,
     live_pictures: Rc<RefCell<Vec<glib::WeakRef<gtk::Picture>>>>,
     fit_whole_photo: Rc<Cell<bool>>,
+    object_cache: Rc<RefCell<HashMap<i64, PhotoObject>>>,
+    replace_generation: Rc<Cell<u64>>,
 }
 
 impl GalleryV2 {
@@ -493,23 +495,138 @@ impl GalleryV2 {
             live_tiles,
             live_pictures,
             fit_whole_photo,
+            object_cache: Rc::new(RefCell::new(HashMap::new())),
+            replace_generation: Rc::new(Cell::new(0)),
         }
     }
 
     pub(crate) fn replace(&self, photos: &[Photo]) {
-        let objects = photos
-            .iter()
-            .map(PhotoObject::from_photo)
-            .collect::<Vec<_>>();
+        const PROGRESSIVE_THRESHOLD: usize = 1_000;
+        const BATCH_SIZE: usize = 1_000;
 
-        self.store.remove_all();
-        for photo in &objects {
-            self.store.append(photo);
+        let generation = self.replace_generation.get().wrapping_add(1);
+        self.replace_generation.set(generation);
+        let started = std::time::Instant::now();
+
+        // Reuse persistent PhotoObjects by database id. Switching between
+        // Folder/Album/Favourites and All Photos must not rebuild tens of
+        // thousands of GObjects every time.
+        let mut ready = Vec::with_capacity(photos.len());
+        let mut missing = Vec::new();
+        {
+            let cache = self.object_cache.borrow();
+            for (index, photo) in photos.iter().enumerate() {
+                if let Some(object) = cache.get(&photo.id).cloned() {
+                    object.set_from_photo(photo);
+                    ready.push((index, object));
+                } else {
+                    missing.push((index, photo.clone()));
+                }
+            }
         }
-        self.current_photos.replace(objects);
+
+        // If everything is already cached, this is just a cheap model reorder.
+        if missing.is_empty() {
+            ready.sort_by_key(|(index, _)| *index);
+            let objects = ready.into_iter().map(|(_, object)| object).collect::<Vec<_>>();
+            self.store.splice(0, self.store.n_items(), &objects);
+            self.current_photos.replace(objects);
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "PIC_V2 replace photos={} mode=reuse elapsed_ms={}",
+                    photos.len(),
+                    started.elapsed().as_millis()
+                );
+            }
+            return;
+        }
+
+        // Small destinations are cheap enough to finish synchronously.
+        if photos.len() <= PROGRESSIVE_THRESHOLD {
+            let mut cache = self.object_cache.borrow_mut();
+            let mut objects = Vec::with_capacity(photos.len());
+            for photo in photos {
+                let object = cache
+                    .entry(photo.id)
+                    .or_insert_with(|| PhotoObject::from_photo(photo))
+                    .clone();
+                object.set_from_photo(photo);
+                objects.push(object);
+            }
+            drop(cache);
+            self.store.splice(0, self.store.n_items(), &objects);
+            self.current_photos.replace(objects);
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "PIC_V2 replace photos={} mode=sync elapsed_ms={}",
+                    photos.len(),
+                    started.elapsed().as_millis()
+                );
+            }
+            return;
+        }
+
+        // Large first loads are progressive: clear immediately, then create
+        // only a bounded batch per GTK idle turn. The UI stays responsive while
+        // the cache warms; later visits become the fast reuse path above.
+        self.store.remove_all();
+        self.current_photos.borrow_mut().clear();
+
+        let photos = Rc::new(photos.to_vec());
+        let offset = Rc::new(Cell::new(0usize));
+        let store = self.store.clone();
+        let current = self.current_photos.clone();
+        let object_cache = self.object_cache.clone();
+        let replace_generation = self.replace_generation.clone();
+
+        glib::idle_add_local(move || {
+            if replace_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+
+            let start = offset.get();
+            if start >= photos.len() {
+                return glib::ControlFlow::Break;
+            }
+            let end = (start + BATCH_SIZE).min(photos.len());
+
+            let mut batch = Vec::with_capacity(end - start);
+            {
+                let mut cache = object_cache.borrow_mut();
+                for photo in &photos[start..end] {
+                    let object = cache
+                        .entry(photo.id)
+                        .or_insert_with(|| PhotoObject::from_photo(photo))
+                        .clone();
+                    object.set_from_photo(photo);
+                    batch.push(object);
+                }
+            }
+
+            store.splice(store.n_items(), 0, &batch);
+            current.borrow_mut().extend(batch);
+            offset.set(end);
+
+            if end >= photos.len() {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "PIC_V2 replace_complete photos={} elapsed_ms={}",
+                        photos.len(),
+                        started.elapsed().as_millis()
+                    );
+                }
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
 
         if std::env::var_os("PICASA_TRACE").is_some() {
-            eprintln!("PIC_V2 replace photos={}", photos.len());
+            eprintln!(
+                "PIC_V2 replace photos={} mode=progressive missing={}",
+                photos.len(),
+                missing.len()
+            );
         }
     }
 
