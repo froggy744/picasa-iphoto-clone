@@ -674,7 +674,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 list.scroll_to(
                     index as u32,
                     gtk::ListScrollFlags::FOCUS,
-                    None::<&gtk::ScrollInfo>,
+                    None::<gtk::ScrollInfo>,
                 );
             });
         })
