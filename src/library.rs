@@ -12,7 +12,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 const MIN_TILE: i32 = 84;
 const MAX_TILE: i32 = 320;
@@ -44,8 +44,17 @@ struct FolderNavEntry {
     target_index: usize,
 }
 
+#[derive(Clone)]
+struct ThumbJob {
+    path: String,
+    mtime: i64,
+    size_bytes: i64,
+    cache_key: String,
+}
+
 struct ThumbResult {
     path: String,
+    cache_key: String,
     width: i32,
     height: i32,
     stride: usize,
@@ -62,41 +71,41 @@ fn images_disabled() -> bool {
 
 fn app_cache_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_CACHE_HOME") {
-        return PathBuf::from(dir).join("pic-library-prototype");
+        return PathBuf::from(dir).join("picasa-rs");
     }
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".cache")
-        .join("pic-library-prototype")
+        .join("picasa-rs")
 }
 
-fn thumbnail_cache_path(source: &str, cache_dir: &Path) -> PathBuf {
+fn thumbnail_identity(source: &str, mtime: i64, size_bytes: i64) -> String {
+    format!("{source}\0{mtime}\0{size_bytes}")
+}
+
+fn thumbnail_cache_path(
+    source: &str,
+    mtime: i64,
+    size_bytes: i64,
+    cache_dir: &Path,
+) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
-
-    if let Ok(metadata) = fs::metadata(source) {
-        metadata.len().hash(&mut hasher);
-        if let Ok(modified) = metadata.modified() {
-            if let Ok(age) = modified.duration_since(UNIX_EPOCH) {
-                age.as_secs().hash(&mut hasher);
-                age.subsec_nanos().hash(&mut hasher);
-            }
-        }
-    }
-
+    mtime.hash(&mut hasher);
+    size_bytes.hash(&mut hasher);
     cache_dir.join(format!("{:016x}.png", hasher.finish()))
 }
 
-fn decode_thumb_cached(path: &str, cache_dir: &Path) -> ThumbResult {
-    let cached = thumbnail_cache_path(path, cache_dir);
+fn decode_thumb_cached(job: &ThumbJob, cache_dir: &Path) -> ThumbResult {
+    let cached = thumbnail_cache_path(&job.path, job.mtime, job.size_bytes, cache_dir);
 
     let disk_hit = cached.is_file();
     if trace_enabled() {
         eprintln!(
             "PIC_TRACE thumb_disk_cache hit={} source={} cache={}",
             disk_hit,
-            path,
+            job.path,
             cached.display()
         );
     }
@@ -113,14 +122,15 @@ fn decode_thumb_cached(path: &str, cache_dir: &Path) -> ThumbResult {
     let image = if let Some(image) = decoded {
         image
     } else {
-        let source = image::ImageReader::open(path)
+        let source = image::ImageReader::open(&job.path)
             .ok()
             .and_then(|reader| reader.with_guessed_format().ok())
             .and_then(|reader| reader.decode().ok());
 
         let Some(source) = source else {
             return ThumbResult {
-                path: path.to_string(),
+                path: job.path.clone(),
+                cache_key: job.cache_key.clone(),
                 width: 0,
                 height: 0,
                 stride: 0,
@@ -139,7 +149,8 @@ fn decode_thumb_cached(path: &str, cache_dir: &Path) -> ThumbResult {
     let rgba = image.to_rgba8();
     let (width, height) = rgba.dimensions();
     ThumbResult {
-        path: path.to_string(),
+        path: job.path.clone(),
+        cache_key: job.cache_key.clone(),
         width: width as i32,
         height: height as i32,
         stride: width as usize * 4,
@@ -184,7 +195,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let thumb_inflight: Rc<RefCell<HashSet<String>>> =
         Rc::new(RefCell::new(HashSet::new()));
 
-    let (thumb_job_tx, thumb_job_rx) = mpsc::channel::<String>();
+    let (thumb_job_tx, thumb_job_rx) = mpsc::channel::<ThumbJob>();
     let (thumb_result_tx, thumb_result_rx) = mpsc::channel::<ThumbResult>();
     let shared_jobs = Arc::new(Mutex::new(thumb_job_rx));
     let disk_cache_dir = app_cache_dir().join("thumbs");
@@ -195,17 +206,17 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let results = thumb_result_tx.clone();
         let cache_dir = disk_cache_dir.clone();
         std::thread::spawn(move || loop {
-            let path = {
+            let job = {
                 let Ok(receiver) = jobs.lock() else {
                     return;
                 };
                 match receiver.recv() {
-                    Ok(path) => path,
+                    Ok(job) => job,
                     Err(_) => return,
                 }
             };
 
-            let decoded = decode_thumb_cached(&path, &cache_dir);
+            let decoded = decode_thumb_cached(&job, &cache_dir);
             if results.send(decoded).is_err() {
                 return;
             }
@@ -218,8 +229,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let inflight = thumb_inflight.clone();
         glib::timeout_add_local(Duration::from_millis(16), move || {
             while let Ok(result) = thumb_result_rx.try_recv() {
-                inflight.borrow_mut().remove(&result.path);
-                let waiters = pending.borrow_mut().remove(&result.path).unwrap_or_default();
+                inflight.borrow_mut().remove(&result.cache_key);
+                let waiters = pending.borrow_mut().remove(&result.cache_key).unwrap_or_default();
 
                 if result.width <= 0 || result.height <= 0 || result.rgba.is_empty() {
                     continue;
@@ -240,7 +251,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                     if cache.len() >= MEMORY_THUMB_CACHE {
                         cache.clear();
                     }
-                    cache.insert(result.path.clone(), texture.clone());
+                    cache.insert(result.cache_key.clone(), texture.clone());
                 }
 
                 for weak in waiters {
