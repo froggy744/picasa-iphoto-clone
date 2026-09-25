@@ -598,6 +598,11 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     theme_button.add_css_class("flat");
     right_header.pack_end(&theme_button);
 
+    let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
+    refresh.set_tooltip_text(Some("Refresh library folders"));
+    refresh.add_css_class("flat");
+    right_header.pack_end(&refresh);
+
     let open = gtk::Button::from_icon_name("folder-new-symbolic");
     open.set_tooltip_text(Some("Import Folder"));
     open.add_css_class("flat");
@@ -1404,6 +1409,103 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                         Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
                     }
                 });
+            });
+        });
+    }
+
+    {
+        let groups = groups.clone();
+        let master = master_groups.clone();
+        let roots_state = roots.clone();
+        let favorite_paths = favorite_paths.clone();
+        let count_label = count_label.clone();
+        let title = content_title.clone();
+        let photos_button = photos_button.clone();
+        let favorites_button = favorites_button.clone();
+        let photos_count = photos_count.clone();
+        let favorites_count = favorites_count.clone();
+        let recent_count = recent_count.clone();
+        let recent_button = recent_button.clone();
+        let folder_box = folder_box.clone();
+        let folder_activate = folder_activate.clone();
+        let mode = mode.clone();
+        let refresh_button = refresh.clone();
+
+        refresh.connect_clicked(move |_| {
+            let roots_to_refresh = crate::catalog::roots().unwrap_or_default();
+            if roots_to_refresh.is_empty() {
+                return;
+            }
+            refresh_button.set_sensitive(false);
+
+            let (finished_tx, finished_rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut failed = 0usize;
+                for root in roots_to_refresh {
+                    if let Err(error) = crate::catalog::import_root(&root) {
+                        failed += 1;
+                        eprintln!(
+                            "PIC_REBUILD refresh_root_failed path={} error={error:#}",
+                            root.display()
+                        );
+                    }
+                }
+                let _ = finished_tx.send(failed);
+            });
+
+            let groups = groups.clone();
+            let master = master.clone();
+            let roots_state = roots_state.clone();
+            let favorite_paths = favorite_paths.clone();
+            let count_label = count_label.clone();
+            let title = title.clone();
+            let photos_button = photos_button.clone();
+            let favorites_button = favorites_button.clone();
+            let photos_count = photos_count.clone();
+            let favorites_count = favorites_count.clone();
+            let recent_count = recent_count.clone();
+            let recent_button = recent_button.clone();
+            let folder_box = folder_box.clone();
+            let folder_activate = folder_activate.clone();
+            let mode = mode.clone();
+            let refresh_button = refresh_button.clone();
+
+            glib::timeout_add_local(Duration::from_millis(50), move || {
+                match finished_rx.try_recv() {
+                    Ok(failed) => {
+                        let new_roots = crate::catalog::roots().unwrap_or_default();
+                        favorite_paths
+                            .replace(crate::catalog::favorite_paths().unwrap_or_default());
+                        roots_state.replace(new_roots.clone());
+                        master.replace(load_catalog_groups());
+                        mode.set(ViewMode::Photos);
+                        refresh_library_chrome(
+                            &groups,
+                            &master,
+                            &new_roots,
+                            &folder_box,
+                            &folder_activate,
+                            &count_label,
+                            &title,
+                            &photos_button,
+                            &favorites_button,
+                            &photos_count,
+                            &favorites_count,
+                            &recent_count,
+                            &recent_button,
+                        );
+                        refresh_button.set_sensitive(true);
+                        if trace_enabled() {
+                            eprintln!("PIC_REBUILD refresh_complete failed_roots={failed}");
+                        }
+                        glib::ControlFlow::Break
+                    }
+                    Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        refresh_button.set_sensitive(true);
+                        glib::ControlFlow::Break
+                    }
+                }
             });
         });
     }
