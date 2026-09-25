@@ -329,6 +329,8 @@ pub(crate) struct GalleryV2Folder {
     live_pictures: Rc<RefCell<Vec<glib::WeakRef<gtk::Picture>>>>,
     live_grids: Rc<RefCell<Vec<(glib::WeakRef<gtk::GridView>, gio::ListStore)>>>,
     fit_whole_photo: Rc<Cell<bool>>,
+    layout_signature: RefCell<Vec<(i64, i64)>>,
+    selected: Rc<dyn Fn(Option<PhotoObject>)>,
 }
 
 impl GalleryV2Folder {
@@ -550,7 +552,6 @@ impl GalleryV2Folder {
             let columns = current_columns.clone();
             let tile_height_for_bind = tile_height.clone();
             let live_grids_for_bind = live_grids.clone();
-            let selected_for_bind = selected.clone();
 
             folder_factory.connect_bind(move |_, object| {
                 let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -595,15 +596,6 @@ impl GalleryV2Folder {
                 let rows = (section.model.n_items() + current_columns - 1) / current_columns;
                 let row_height = tile_height_for_bind.get() + 12;
                 grid.set_height_request((rows as i32 * row_height).max(row_height));
-
-                let selected = selected_for_bind.clone();
-                section.selection.connect_selection_changed(move |selection, _, _| {
-                    let selected_set = selection.selection();
-                    let first = gtk::BitsetIter::init_first(&selected_set)
-                        .and_then(|(_, position)| selection.item(position))
-                        .and_downcast::<PhotoObject>();
-                    selected(first);
-                });
 
                 live_grids_for_bind
                     .borrow_mut()
@@ -659,6 +651,8 @@ impl GalleryV2Folder {
             live_pictures,
             live_grids,
             fit_whole_photo,
+            layout_signature: RefCell::new(Vec::new()),
+            selected,
         }
     }
 
@@ -669,10 +663,34 @@ impl GalleryV2Folder {
 
     pub(crate) fn replace_objects(&self, objects: &[PhotoObject]) {
         let started = std::time::Instant::now();
+
+        // Folder layout depends only on stable photo order + folder membership.
+        // When returning to Folder view with the same library, keep the
+        // existing section objects, per-folder ListStores and GridViews alive.
+        // Metadata on the shared PhotoObjects has already been refreshed by
+        // GalleryV2::objects_for(), so no section/model rebuild is required.
+        let signature = objects
+            .iter()
+            .map(|photo| (photo.id(), photo.folder_id()))
+            .collect::<Vec<_>>();
+        if self.groups.n_items() > 0 && *self.layout_signature.borrow() == signature {
+            self.current_photos.replace(objects.to_vec());
+            if trace_enabled() {
+                eprintln!(
+                    "PIC_V2_FOLDER replace photos={} sections={} mode=reuse elapsed_ms={}",
+                    objects.len(),
+                    self.groups.n_items(),
+                    started.elapsed().as_millis()
+                );
+            }
+            return;
+        }
+
         self.groups.remove_all();
         self.folder_positions.borrow_mut().clear();
         self.current_photos.replace(objects.to_vec());
 
+        let mut sections = Vec::<glib::BoxedAnyObject>::new();
         let mut start = 0usize;
         let mut section_index = 0u32;
         while start < objects.len() {
@@ -687,10 +705,20 @@ impl GalleryV2Folder {
             }
 
             let model = gio::ListStore::new::<PhotoObject>();
-            for photo in &objects[start..end] {
-                model.append(photo);
-            }
+            model.splice(0, 0, &objects[start..end]);
             let selection = gtk::MultiSelection::new(Some(model.clone()));
+
+            // Install this once per persistent section. Doing it from the
+            // ListItem bind callback would accumulate handlers on rebind.
+            let selected = self.selected.clone();
+            selection.connect_selection_changed(move |selection, _, _| {
+                let selected_set = selection.selection();
+                let first = gtk::BitsetIter::init_first(&selected_set)
+                    .and_then(|(_, position)| selection.item(position))
+                    .and_downcast::<PhotoObject>();
+                selected(first);
+            });
+
             let label = if folder_path.is_empty() {
                 "Photos".to_string()
             } else {
@@ -700,7 +728,7 @@ impl GalleryV2Folder {
             self.folder_positions
                 .borrow_mut()
                 .insert(folder_id, section_index);
-            self.groups.append(&glib::BoxedAnyObject::new(Section {
+            sections.push(glib::BoxedAnyObject::new(Section {
                 folder_id,
                 folder_path,
                 label,
@@ -713,9 +741,14 @@ impl GalleryV2Folder {
             start = end;
         }
 
+        if !sections.is_empty() {
+            self.groups.splice(0, 0, &sections);
+        }
+        self.layout_signature.replace(signature);
+
         if trace_enabled() {
             eprintln!(
-                "PIC_V2_FOLDER replace photos={} sections={} elapsed_ms={}",
+                "PIC_V2_FOLDER replace photos={} sections={} mode=rebuild elapsed_ms={}",
                 objects.len(),
                 self.groups.n_items(),
                 started.elapsed().as_millis()
