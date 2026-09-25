@@ -691,6 +691,12 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     export_action.set_sensitive(false);
     bottom_bar.append(&export_action);
 
+    let rotate_action = gtk::Button::from_icon_name("object-rotate-right-symbolic");
+    rotate_action.add_css_class("photo-action-button");
+    rotate_action.set_tooltip_text(Some("Rotate clockwise"));
+    rotate_action.set_sensitive(false);
+    bottom_bar.append(&rotate_action);
+
     let one_to_one = gtk::ToggleButton::with_label("1:1");
     one_to_one.add_css_class("photo-action-button");
     one_to_one.set_tooltip_text(Some("Show photo at 100%"));
@@ -731,6 +737,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let size_label = size_label.clone();
         let favorite_action = favorite_action.clone();
         let export_action = export_action.clone();
+        let rotate_action = rotate_action.clone();
 
         selection_changed.replace(Some(Rc::new(move |photo| {
             selected_photo.replace(photo.clone());
@@ -738,6 +745,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 selected_info.set_visible(false);
                 favorite_action.set_sensitive(false);
                 export_action.set_sensitive(false);
+                rotate_action.set_sensitive(false);
                 favorite_action.remove_css_class("active");
                 return;
             };
@@ -768,6 +776,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
 
             favorite_action.set_sensitive(true);
             export_action.set_sensitive(true);
+            rotate_action.set_sensitive(true);
             if photo.favorite() {
                 favorite_action.set_icon_name("starred-symbolic");
                 favorite_action.add_css_class("active");
@@ -779,6 +788,24 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             }
             selected_info.set_visible(true);
         })));
+    }
+
+    {
+        let selection_changed = selection_changed.clone();
+        viewer.set_photo_changed_handler(move |photo| {
+            if let Some(callback) = selection_changed.borrow().as_ref().cloned() {
+                callback(Some(photo));
+            }
+        });
+    }
+
+    {
+        let one_to_one_button = one_to_one.clone();
+        viewer.set_one_to_one_changed_handler(move |enabled| {
+            if one_to_one_button.is_active() != enabled {
+                one_to_one_button.set_active(enabled);
+            }
+        });
     }
 
     {
@@ -817,6 +844,49 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             if let Some(callback) = favorite_changed.borrow().as_ref().cloned() {
                 glib::idle_add_local_once(move || callback());
             }
+        });
+    }
+
+    {
+        let selected_photo = selected_photo.clone();
+        let viewer = viewer.clone();
+        let thumb_cache = thumb_cache.clone();
+        let groups = groups.clone();
+        let master = master_groups.clone();
+        let mode = mode.clone();
+        let search_text = search_text.clone();
+        let count_label = count_label.clone();
+        let title = content_title.clone();
+        let photos_button = photos_button.clone();
+        let favorites_button = favorites_button.clone();
+        let recent_button = recent_button.clone();
+
+        rotate_action.connect_clicked(move |_| {
+            let photo = viewer
+                .current_photo()
+                .or_else(|| selected_photo.borrow().clone());
+            let Some(photo) = photo else {
+                return;
+            };
+            let rotation = (photo.rotation() + 90).rem_euclid(360);
+            if let Err(error) = crate::catalog::set_rotation(photo.id(), rotation) {
+                eprintln!("PIC_REBUILD rotate_failed error={error:#}");
+                return;
+            }
+            photo.set_rotation(rotation);
+            thumb_cache.borrow_mut().clear();
+            apply_view(
+                &groups,
+                &master.borrow(),
+                mode.get(),
+                &search_text.borrow(),
+                &count_label,
+                &title,
+                &photos_button,
+                &favorites_button,
+                &recent_button,
+            );
+            viewer.refresh_current();
         });
     }
 
