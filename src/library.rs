@@ -536,13 +536,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Search photos or folders"));
     search.set_size_request(280, -1);
-    search.set_tooltip_text(Some("Search file names and folder paths"));
-    header.pack_end(&search);
-
-    let search = gtk::SearchEntry::new();
-    search.set_placeholder_text(Some("Search photos or folders"));
-    search.set_size_request(260, -1);
-    search.set_tooltip_text(Some("Search filename, folder name, or path"));
+    search.set_tooltip_text(Some("Search filename, folder name, or full path"));
     header.pack_end(&search);
 
     let zoom = gtk::Scale::with_range(
@@ -587,7 +581,6 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let groups = groups.clone();
         let master = master_groups.clone();
         let mode = mode.clone();
-        let search_query = search_query.clone();
         let count_label = count_label.clone();
         let content_title = content_title.clone();
         let photos_button = photos_button.clone();
@@ -599,19 +592,16 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             let favorite_total = count_favorites(&master.borrow());
             favorites_count.set_label(&favorite_total.to_string());
 
-            if mode.get() == ViewMode::Favorites {
-                apply_view(
-                    &groups,
-                    &master.borrow(),
-                    ViewMode::Favorites,
-                    &search_query.borrow(),
-                    &count_label,
-                    &content_title,
-                    &photos_button,
-                    &favorites_button,
-                    &search_text.borrow(),
-                );
-            }
+            apply_view(
+                &groups,
+                &master.borrow(),
+                mode.get(),
+                &search_text.borrow(),
+                &count_label,
+                &content_title,
+                &photos_button,
+                &favorites_button,
+            );
         });
         favorite_changed.replace(Some(refresh));
     }
@@ -620,7 +610,6 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let groups = groups.clone();
         let master = master_groups.clone();
         let mode = mode.clone();
-        let search_query = search_query.clone();
         let count_label = count_label.clone();
         let title = content_title.clone();
         let photos_button_for_style = photos_button.clone();
@@ -633,12 +622,11 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &groups,
                 &master.borrow(),
                 ViewMode::Photos,
-                &search_query.borrow(),
+                &search_text.borrow(),
                 &count_label,
                 &title,
                 &photos_button_for_style,
                 &favorites_button_for_style,
-                &search_text.borrow(),
             );
         });
     }
@@ -647,12 +635,10 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let groups = groups.clone();
         let master = master_groups.clone();
         let mode = mode.clone();
-        let search_query = search_query.clone();
         let count_label = count_label.clone();
         let title = content_title.clone();
         let photos_button_for_style = photos_button.clone();
         let favorites_button_for_style = favorites_button.clone();
-
         let search_text = search_text.clone();
 
         favorites_button.connect_clicked(move |_| {
@@ -661,12 +647,11 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &groups,
                 &master.borrow(),
                 ViewMode::Favorites,
-                &search_query.borrow(),
+                &search_text.borrow(),
                 &count_label,
                 &title,
                 &photos_button_for_style,
                 &favorites_button_for_style,
-                &search_text.borrow(),
             );
         });
     }
@@ -687,33 +672,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &groups,
                 &master.borrow(),
                 mode.get(),
-                &count_label,
-                &title,
-                &photos_button,
-                &favorites_button,
                 &search_text.borrow(),
-            );
-        });
-    }
-
-    {
-        let groups = groups.clone();
-        let master = master_groups.clone();
-        let mode = mode.clone();
-        let search_query = search_query.clone();
-        let count_label = count_label.clone();
-        let title = content_title.clone();
-        let photos_button = photos_button.clone();
-        let favorites_button = favorites_button.clone();
-
-        search.connect_search_changed(move |entry| {
-            let query = entry.text().to_string();
-            search_query.replace(query.clone());
-            apply_view(
-                &groups,
-                &master.borrow(),
-                mode.get(),
-                &query,
                 &count_label,
                 &title,
                 &photos_button,
@@ -726,7 +685,6 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let groups = groups.clone();
         let master = master_groups.clone();
         let mode = mode.clone();
-        let search_query = search_query.clone();
         let count_label = count_label.clone();
         let title = content_title.clone();
         let list = list.clone();
@@ -734,25 +692,24 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let photos_button = photos_button.clone();
         let favorites_button = favorites_button.clone();
         let search_text = search_text.clone();
-        let search = search.clone();
 
         Rc::new(move |index| {
             if !search_text.borrow().is_empty() {
                 search_text.borrow_mut().clear();
                 search.set_text("");
             }
+
             if mode.get() != ViewMode::Photos {
                 mode.set(ViewMode::Photos);
                 apply_view(
                     &groups,
                     &master.borrow(),
                     ViewMode::Photos,
-                    &search_query.borrow(),
+                    "",
                     &count_label,
                     &title,
                     &photos_button,
                     &favorites_button,
-                    "",
                 );
             }
 
@@ -1518,7 +1475,6 @@ fn refresh_library_chrome(
         content_title,
         photos_button,
         favorites_button,
-        "",
     );
 }
 
@@ -1536,10 +1492,6 @@ fn install_css() {
     let css = gtk::CssProvider::new();
     css.load_from_data(
         r#"
-        searchentry {
-            min-height: 34px;
-        }
-
         .library-sidebar {
             background: alpha(@window_fg_color, 0.025);
             border-right: 1px solid alpha(@window_fg_color, 0.10);
