@@ -16,6 +16,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libsmbclient-dev libnfs-dev
       - name: Cargo check
+        env:
+          PIC_CI_SKIP_PRIVATE_TRANSPORTS: "1"
         run: cargo check --quiet
       - name: Gallery V2 tests
+        env:
+          PIC_CI_SKIP_PRIVATE_TRANSPORTS: "1"
         run: cargo test --quiet gallery_v2
