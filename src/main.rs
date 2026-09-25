@@ -1,6 +1,7 @@
 mod catalog;
 mod library;
 mod photo;
+mod viewer;
 
 use libadwaita as adw;
 use adw::prelude::*;

@@ -172,6 +172,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let favorite_changed: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
         Rc::new(RefCell::new(None));
 
+    let viewer = Rc::new(crate::viewer::Viewer::new());
+
     let thumb_cache: Rc<RefCell<HashMap<String, gtk::gdk::Texture>>> =
         Rc::new(RefCell::new(HashMap::new()));
     let thumb_pending: Rc<RefCell<HashMap<String, Vec<glib::WeakRef<gtk::Picture>>>>> =
@@ -331,7 +333,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let jobs = thumb_job_tx.clone();
         let favorites = favorite_paths.clone();
         let changed = favorite_changed.clone();
-        let window_weak = window.downgrade();
+        let viewer = viewer.clone();
 
         folder_factory.connect_setup(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -388,19 +390,15 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             grid.set_halign(gtk::Align::Fill);
             grid.set_valign(gtk::Align::Start);
 
-            let parent = window_weak.clone();
+            let viewer = viewer.clone();
             grid.connect_activate(move |grid, position| {
-                let Some(photo) = grid
-                    .model()
-                    .and_then(|model| model.item(position))
-                    .and_downcast::<PhotoObject>()
-                else {
+                let Some(model) = grid.model() else {
                     return;
                 };
-                let Some(parent) = parent.upgrade() else {
-                    return;
-                };
-                open_lightbox(&parent, &photo);
+                let photos = (0..model.n_items())
+                    .filter_map(|item| model.item(item).and_downcast::<PhotoObject>())
+                    .collect::<Vec<_>>();
+                viewer.open(photos, position as usize);
             });
 
             section.append(&header_line);
@@ -612,6 +610,11 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     bottom_bar.append(&spacer);
+
+    let one_to_one = gtk::ToggleButton::with_label("1:1");
+    one_to_one.add_css_class("photo-action-button");
+    one_to_one.set_tooltip_text(Some("Show photo at 100%"));
+    bottom_bar.append(&one_to_one);
     bottom_bar.append(&minus);
     bottom_bar.append(&zoom);
     bottom_bar.append(&plus);
@@ -620,7 +623,13 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     right_column.set_hexpand(true);
     right_column.set_vexpand(true);
     right_column.append(&right_header);
-    right_column.append(&scroller);
+
+    let gallery_overlay = gtk::Overlay::new();
+    gallery_overlay.set_hexpand(true);
+    gallery_overlay.set_vexpand(true);
+    gallery_overlay.set_child(Some(&scroller));
+    gallery_overlay.add_overlay(&viewer.root);
+    right_column.append(&gallery_overlay);
     right_column.append(&bottom_bar);
 
     let main_split = adw::OverlaySplitView::new();
@@ -632,6 +641,19 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     main_split.set_show_sidebar(true);
     main_split.set_enable_show_gesture(true);
     main_split.set_enable_hide_gesture(true);
+
+    {
+        let viewer = viewer.clone();
+        one_to_one.connect_toggled(move |button| viewer.set_one_to_one(button.is_active()));
+    }
+    {
+        let one_to_one = one_to_one.clone();
+        viewer.root.connect_visible_notify(move |root| {
+            if !root.is_visible() {
+                one_to_one.set_active(false);
+            }
+        });
+    }
 
     {
         let main_split = main_split.clone();
@@ -1445,58 +1467,6 @@ fn make_photo_factory(
     factory
 }
 
-fn open_lightbox(parent: &adw::ApplicationWindow, photo: &PhotoObject) {
-    let path = photo.path();
-
-    if trace_enabled() {
-        eprintln!("PIC_TRACE lightbox_open path={}", path);
-    }
-    let name = Path::new(&path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("Photo");
-
-    let lightbox = gtk::Window::builder()
-        .transient_for(parent)
-        .modal(true)
-        .title(name)
-        .default_width(1100)
-        .default_height(760)
-        .build();
-
-    let header = gtk::HeaderBar::new();
-    let close = gtk::Button::from_icon_name("window-close-symbolic");
-    close.set_tooltip_text(Some("Close"));
-    header.pack_end(&close);
-
-    let picture = gtk::Picture::new();
-    picture.set_hexpand(true);
-    picture.set_vexpand(true);
-    picture.set_can_shrink(true);
-    picture.set_content_fit(gtk::ContentFit::Contain);
-    picture.set_file(Some(&gio::File::for_path(&path)));
-
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    root.append(&header);
-    root.append(&picture);
-    lightbox.set_child(Some(&root));
-
-    let lightbox_for_close = lightbox.clone();
-    close.connect_clicked(move |_| lightbox_for_close.close());
-
-    let key = gtk::EventControllerKey::new();
-    let lightbox_for_key = lightbox.clone();
-    key.connect_key_pressed(move |_, key, _, _| {
-        if key == gtk::gdk::Key::Escape {
-            lightbox_for_key.close();
-            return glib::Propagation::Stop;
-        }
-        glib::Propagation::Proceed
-    });
-    lightbox.add_controller(key);
-    lightbox.present();
-}
-
 fn update_grid_layout(
     width: i32,
     size: i32,
@@ -2013,6 +1983,18 @@ fn install_css() {
 
         .photo-info-bar scale {
             min-width: 120px;
+        }
+
+        .lightbox-backdrop {
+            background: #292929;
+        }
+
+        .lightbox-picture {
+            background: transparent;
+        }
+
+        .lightbox-backdrop + * {
+            background: transparent;
         }
         "#,
     );
