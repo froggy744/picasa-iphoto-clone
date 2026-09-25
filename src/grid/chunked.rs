@@ -654,16 +654,16 @@ impl ChunkedPrototype {
 
     pub(crate) fn set_columns(&self, columns: u32) {
         let columns = columns.max(1);
-        let mut grids = self.grids.borrow_mut();
-        grids.retain(|weak| {
-            let Some(grid) = weak.upgrade() else {
-                return false;
-            };
-            grid.set_min_columns(columns);
-            grid.set_max_columns(columns);
-            grid.queue_resize();
-            true
-        });
+        let (tile_height, old_columns) = self.metrics.get();
+        if old_columns == columns {
+            return;
+        }
+
+        // Column changes are geometry-only for the stable 64-photo chunk
+        // model. Keep the outer chunks/ListStore untouched; only update the
+        // metrics of already-realized wrappers and their inner GridViews.
+        self.metrics.set((tile_height, columns));
+        self.apply_row_metrics();
     }
 
     /// Scroll the visible outer chunk list so the photo at `position` in the
