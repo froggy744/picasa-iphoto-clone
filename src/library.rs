@@ -131,7 +131,17 @@ fn thumbnail_cache_path(source: &str, cache_dir: &Path) -> PathBuf {
 fn decode_thumb_cached(path: &str, cache_dir: &Path) -> ThumbResult {
     let cached = thumbnail_cache_path(path, cache_dir);
 
-    let decoded = if cached.is_file() {
+    let disk_hit = cached.is_file();
+    if trace_enabled() {
+        eprintln!(
+            "PIC_TRACE thumb_disk_cache hit={} source={} cache={}",
+            disk_hit,
+            path,
+            cached.display()
+        );
+    }
+
+    let decoded = if disk_hit {
         image::ImageReader::open(&cached)
             .ok()
             .and_then(|reader| reader.with_guessed_format().ok())
@@ -694,6 +704,10 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let search_text = search_text.clone();
 
         Rc::new(move |index| {
+            if trace_enabled() {
+                eprintln!("PIC_TRACE folder_jump target_index={}", index);
+            }
+
             if !search_text.borrow().is_empty() {
                 search_text.borrow_mut().clear();
                 search.set_text("");
@@ -768,8 +782,10 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
 
             if trace_enabled() {
                 eprintln!(
-                    "PIC_PROTO zoom size={} realized_tiles={} elapsed_us={}",
+                    "PIC_TRACE zoom size={} columns={} width={} realized_tiles={} elapsed_us={}",
                     size,
+                    current_columns.get(),
+                    scroller.width(),
                     touched,
                     started.elapsed().as_micros()
                 );
@@ -906,6 +922,13 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     }
 
     if !startup_paths.is_empty() {
+        if trace_enabled() {
+            eprintln!(
+                "PIC_TRACE startup roots={} paths={:?}",
+                startup_paths.len(),
+                startup_paths
+            );
+        }
         let started = Instant::now();
         let scanned = scan_directories(&startup_paths, &favorite_paths.borrow());
         roots.replace(startup_paths.clone());
@@ -1036,6 +1059,14 @@ fn make_photo_factory(
                     save_favorites(&favorites);
                 }
 
+                if trace_enabled() {
+                    eprintln!(
+                        "PIC_TRACE favourite changed={} path={}",
+                        new_value,
+                        path
+                    );
+                }
+
                 if let Some(image) = button.child().and_downcast::<gtk::Image>() {
                     image.set_icon_name(Some(if new_value {
                         "starred-symbolic"
@@ -1106,6 +1137,13 @@ fn make_photo_factory(
 
             if let Some(texture) = cache.borrow().get(&path).cloned() {
                 picture.set_paintable(Some(&texture));
+                if trace_enabled() {
+                    eprintln!(
+                        "PIC_TRACE thumb_memory_cache_hit position={} path={}",
+                        list_item.position(),
+                        path
+                    );
+                }
                 return;
             }
 
@@ -1147,6 +1185,10 @@ fn make_photo_factory(
 
 fn open_lightbox(parent: &adw::ApplicationWindow, photo: &PhotoObject) {
     let path = photo.path();
+
+    if trace_enabled() {
+        eprintln!("PIC_TRACE lightbox_open path={}", path);
+    }
     let name = Path::new(&path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -1204,7 +1246,7 @@ fn update_grid_layout(
     let columns = ((available as f64) / (size as f64 + 18.0))
         .floor()
         .clamp(1.0, MAX_COLUMNS as f64) as u32;
-    current_columns.set(columns);
+    let previous_columns = current_columns.replace(columns);
 
     let grids_to_update = {
         let mut grids = live_grids.borrow_mut();
@@ -1219,6 +1261,7 @@ fn update_grid_layout(
         realized
     };
 
+    let realized_grid_count = grids_to_update.len();
     for (grid, model) in grids_to_update {
         grid.set_min_columns(columns);
         grid.set_max_columns(columns);
@@ -1228,6 +1271,17 @@ fn update_grid_layout(
     }
 
     list.queue_resize();
+
+    if trace_enabled() && previous_columns != columns {
+        eprintln!(
+            "PIC_TRACE layout width={} tile={} columns={} previous_columns={} realized_grids={}",
+            width,
+            size,
+            columns,
+            previous_columns,
+            realized_grid_count
+        );
+    }
 }
 
 fn scan_directories(roots: &[PathBuf], favorites: &HashSet<String>) -> Vec<FolderGroupData> {
@@ -1290,6 +1344,7 @@ fn apply_view(
     photos_button: &gtk::Button,
     favorites_button: &gtk::Button,
 ) {
+    let started = Instant::now();
     groups.remove_all();
     let mut photo_count = 0u32;
     let mut folder_count = 0u32;
@@ -1360,6 +1415,21 @@ fn apply_view(
     }
 
     count_label.set_label(&format!("{} photos · {} folders", photo_count, folder_count));
+
+    if trace_enabled() {
+        let mode_name = match mode {
+            ViewMode::Photos => "photos",
+            ViewMode::Favorites => "favourites",
+        };
+        eprintln!(
+            "PIC_TRACE view_apply mode={} query={:?} photos={} folders={} elapsed_us={}",
+            mode_name,
+            query,
+            photo_count,
+            folder_count,
+            started.elapsed().as_micros()
+        );
+    }
 }
 
 fn count_photos(groups: &[FolderGroupData]) -> u32 {
