@@ -9,14 +9,9 @@ pub struct Gallery {
     // Alias of v2_folder.root kept while window/navigation call sites are
     // migrated. It is not a legacy Folder renderer.
     pub folder_root: gtk::ListView,
-    pub folder_rubberband: gtk::DrawingArea,
     pub group_header: gtk::Box,
     group_title: gtk::Label,
     group_count: gtk::Label,
-    folder_store: gio::ListStore,
-    // Reusable Folder stream. Populated whenever the Folder rows are rebuilt
-    // and restored when re-entering Folder mode so Open in Folder is instant.
-    folder_cache: Rc<RefCell<Option<FolderStreamCache>>>,
     // Presentation-only Folder section order. This must never reorder the
     // shared Library photo model. Empty means use the natural range order.
     folder_order: Rc<RefCell<Vec<i64>>>,
@@ -431,10 +426,6 @@ impl Gallery {
         // Transitional field alias for callers that only need a focus/scroll
         // root. It points at the V2 ListView; there is no second Folder widget.
         let folder_root = v2_folder.root.clone();
-        let folder_rubberband = gtk::DrawingArea::new();
-        folder_rubberband.set_can_target(false);
-        folder_rubberband.set_visible(false);
-        let folder_store = gio::ListStore::new::<glib::Object>();
 
         {
             let v2 = v2.clone();
@@ -465,12 +456,9 @@ impl Gallery {
             v2,
             v2_folder,
             folder_root,
-            folder_rubberband,
             group_header,
             group_title,
             group_count,
-            folder_store,
-            folder_cache: Rc::new(RefCell::new(None)),
             folder_order: Rc::new(RefCell::new(Vec::new())),
             folder_catalog: Rc::new(RefCell::new(Vec::new())),
             folder_view_changed: Rc::new(RefCell::new(None)),
@@ -543,38 +531,16 @@ impl Gallery {
         }
         self.last_layout_width.set(width);
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
-        let folder_v2 = folder_mode && std::env::var_os("PIC_GALLERY_V2").is_some();
+        if folder_mode {
+            // Folder V2 already received width/tile geometry above. No hidden
+            // model, anchor, row-rebuild or reframe work remains here.
+            self.last_layout_width.set(width);
+            self.current_columns.set(columns);
+            return;
+        }
         if columns == old_columns {
-            // Zooming within the same column count only changes tile geometry.
-            // Replacing the Folder ListStore here used to invalidate every
-            // realized row and cost ~0.8-1.1s for a 4.5k-photo library.
-            if folder_mode && tile_size_changed {
-                if folder_v2 {
-                    // Folder V2 already received the exact same tile geometry
-                    // through set_tile_size/update_width above. Do not run the
-                    // legacy Folder anchor/row machinery on a hidden widget.
-                    return;
-                }
-                // Tile size changed within the same columns: the rows keep
-                // their photos but their heights change, so re-anchor the
-                // viewport to the photo that was at the top.
-                let anchor = self.take_reframe_anchor();
-                update_folder_realized_rows(
-                    self.folder_root.upcast_ref(),
-                    self.tile_width.get(),
-                    self.tile_height.get(),
-                );
-                self.folder_root.queue_resize();
-                if let Some(anchor) = anchor {
-                    self.scroll_folder_to_photo(anchor);
-                }
-            } else if !folder_mode {
-                self.root.queue_resize();
-                self.update_group_header_for_scroll(self.last_scroll_y.get());
-            }
-            // Width-only changes with the same columns need no vertical layout
-            // work. GTK stretches the row boxes itself. Re-anchoring here made
-            // every sidebar animation frame issue competing scroll requests.
+            self.root.queue_resize();
+            self.update_group_header_for_scroll(self.last_scroll_y.get());
             return;
         }
 
@@ -583,22 +549,7 @@ impl Gallery {
         self.root.set_min_columns(columns);
         self.root.set_max_columns(columns);
         self.root.queue_resize();
-        if folder_mode {
-            if folder_v2 {
-                // V2 changes only GridView geometry; section/photo membership
-                // remains persistent across zoom.
-                return;
-            }
-            // Each model item is one visual photo line. A column change must
-            // rebuild those lines to keep the layout gapless.
-            let anchor = self.take_reframe_anchor();
-            self.rebuild_folder_rows();
-            if let Some(anchor) = anchor {
-                self.scroll_folder_to_photo(anchor);
-            }
-        } else {
-            self.update_group_header_for_scroll(self.last_scroll_y.get());
-        }
+        self.update_group_header_for_scroll(self.last_scroll_y.get());
     }
 
 }
