@@ -3222,7 +3222,9 @@ fn start_photo_export_single(
             };
             
             let control = spawn_tagged_scan(root, generation, scan_sender.clone());
-            scan_job.borrow_mut().active = Some(control);
+            let mut job = scan_job.borrow_mut();
+            job.active = Some(control);
+            job.thumbnails_active = false;
         })
     };
 
@@ -3317,13 +3319,22 @@ fn start_photo_export_single(
         let refresh_status_label = refresh_status_label.clone();
         Rc::new(move || {
             let mut job = scan_job.borrow_mut();
+            let phase = if job.kind.is_none() {
+                "idle"
+            } else if job.thumbnails_active {
+                "thumbnails"
+            } else {
+                "scan"
+            };
+            eprintln!("PIC_SCAN_UI stop_clicked phase={phase}");
+            if job.kind.is_none() {
+                return;
+            }
             // Stop means the whole current job. In particular, a library refresh
             // must not continue with the next queued folder after cancellation.
             job.stop_requested = true;
             job.pending.clear();
-            if matches!(job.kind, Some(ScanJobKind::Refresh | ScanJobKind::FolderRefresh)) {
-                refresh_status_label.set_text("Stopping refresh…");
-            }
+            refresh_status_label.set_text("Stopping…");
             if let Some(control) = job.active.as_ref() {
                 control.cancel();
             }
@@ -3336,11 +3347,15 @@ fn start_photo_export_single(
     {
         let cancel = cancel_scan_job.clone();
         let progress = operation_progress.clone();
+        let scan_job = scan_job.clone();
         refresh_status_stop.connect_clicked(move |_| {
-            if progress.is_running() {
-                progress.request_cancel();
-            } else {
+            if scan_job.borrow().kind.is_some() {
                 cancel();
+            } else {
+                eprintln!("PIC_SCAN_UI stop_clicked phase=idle");
+                if progress.is_running() {
+                    progress.request_cancel();
+                }
             }
         });
     }
@@ -3383,6 +3398,7 @@ fn start_photo_export_single(
             let mut job = scan_job.borrow_mut();
             job.generation = job.generation.wrapping_add(1);
             job.kind = Some(ScanJobKind::Maintenance);
+            job.thumbnails_active = false;
             job.imported_total = 0;
             job.failed_total = 0;
             job.stop_requested = false;
@@ -3740,6 +3756,7 @@ fn start_photo_export_single(
             let event = ui_event.event;
             match &event {
                 scanner::ScanEvent::Started { root } => {
+                    scan_job_for_events.borrow_mut().thumbnails_active = false;
                     
                     scan_count = 0;
                     thumbnail_total = 0;
@@ -3843,6 +3860,7 @@ fn start_photo_export_single(
                     
                 }
                 scanner::ScanEvent::ThumbnailsStarted { total } => {
+                    scan_job_for_events.borrow_mut().thumbnails_active = true;
                     if crate::diagnostics::trace_enabled() {
                         eprintln!(
                             "PIC_SCAN_UI thumbnails_started queued_ms={} total={total}",
@@ -3900,6 +3918,7 @@ fn start_photo_export_single(
                     let (kind, has_more, total_imported, total_failed) = {
                         let mut job = scan_job_for_events.borrow_mut();
                         job.active = None;
+                        job.thumbnails_active = false;
                         job.imported_total += *imported;
                         job.failed_total += *failed;
                         (
@@ -4001,6 +4020,7 @@ fn start_photo_export_single(
                     let kind = {
                         let mut job = scan_job_for_events.borrow_mut();
                         job.active = None;
+                        job.thumbnails_active = false;
                         job.pending.clear();
                         job.imported_total += *imported;
                         let kind = job.kind;
@@ -4082,6 +4102,11 @@ fn start_photo_export_single(
             
         }
 
+        if scan_job_for_events.borrow().kind.is_some()
+            && scan_job_for_events.borrow().stop_requested
+        {
+            refresh_status_label_for_events.set_text("Stopping…");
+        }
         if crate::diagnostics::trace_enabled()
             && (ui_tick_started.elapsed() >= Duration::from_millis(100)
                 || max_event_queue_wait >= Duration::from_millis(500))

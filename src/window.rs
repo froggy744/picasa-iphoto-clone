@@ -393,6 +393,7 @@ struct ScanJobState {
     kind: Option<ScanJobKind>,
     pending: VecDeque<String>,
     active: Option<scanner::ScanControl>,
+    thumbnails_active: bool,
     imported_total: usize,
     failed_total: usize,
     stop_requested: bool,
@@ -408,6 +409,7 @@ impl ScanJobState {
         }
         self.generation = self.generation.wrapping_add(1);
         self.kind = None;
+        self.thumbnails_active = false;
         self.pending.clear();
         self.stop_requested = false;
         true
@@ -422,6 +424,7 @@ impl ScanJobState {
         }
         self.generation = self.generation.wrapping_add(1);
         self.kind = Some(kind);
+        self.thumbnails_active = false;
         self.pending.clear();
         self.imported_total = 0;
         self.failed_total = 0;

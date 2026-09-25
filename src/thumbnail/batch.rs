@@ -44,7 +44,7 @@ pub fn create_many_cancellable(
         .num_threads(workers)
         .build()
         .expect("thumbnail worker pool should be constructible");
-    pool.install(|| {
+    let results: Vec<Option<Result<PathBuf>>> = pool.install(|| {
         items
             .par_iter()
             .map(|(path, mtime, size)| {
@@ -57,12 +57,24 @@ pub fn create_many_cancellable(
                     }
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
+                if cancelled() {
+                    return None;
+                }
                 let result = create(path, *mtime, *size);
                 completed(path);
                 Some(result)
             })
             .collect()
-    })
+    });
+    let completed_count = results.iter().filter(|result| result.is_some()).count();
+    if completed_count < items.len() && cancelled() {
+        eprintln!(
+            "PIC_THUMBNAIL bulk_cancelled completed={} total={}",
+            completed_count,
+            items.len()
+        );
+    }
+    results
 }
 
 /// Size the thumbnail worker pool to the machine instead of a flat constant.
