@@ -62,31 +62,44 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             section.set_vexpand(false);
             section.set_valign(gtk::Align::Start);
 
+            let header_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            header_line.add_css_class("folder-section-header");
+            header_line.set_hexpand(true);
+
+            let icon = gtk::Image::from_icon_name("folder-symbolic");
+            icon.add_css_class("folder-section-icon");
+
             let title = gtk::Label::new(None);
-            title.add_css_class("folder-title");
+            title.add_css_class("folder-section-title");
             title.set_xalign(0.0);
             title.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
-            let path = gtk::Label::new(None);
-            path.add_css_class("folder-path");
-            path.add_css_class("dim-label");
-            path.set_xalign(0.0);
-            path.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+            let count = gtk::Label::new(None);
+            count.add_css_class("folder-section-count");
+            count.set_xalign(0.0);
+
+            header_line.append(&icon);
+            header_line.append(&title);
+            header_line.append(&count);
+
+            let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+            separator.add_css_class("folder-section-separator");
 
             let flow = gtk::FlowBox::new();
             flow.add_css_class("folder-grid");
             flow.set_selection_mode(gtk::SelectionMode::None);
-            flow.set_homogeneous(true);
+            flow.set_homogeneous(false);
             flow.set_row_spacing(8);
             flow.set_column_spacing(8);
             flow.set_min_children_per_line(1);
             flow.set_max_children_per_line(30);
             flow.set_hexpand(true);
             flow.set_vexpand(false);
+            flow.set_halign(gtk::Align::Fill);
             flow.set_valign(gtk::Align::Start);
 
-            section.append(&title);
-            section.append(&path);
+            section.append(&header_line);
+            section.append(&separator);
             section.append(&flow);
 
             list_item.set_child(Some(&section));
@@ -108,18 +121,27 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let Some(section) = list_item.child().and_downcast::<gtk::Box>() else {
             return;
         };
-        let Some(title) = section.first_child().and_downcast::<gtk::Label>() else {
+        let Some(header_line) = section.first_child().and_downcast::<gtk::Box>() else {
             return;
         };
-        let Some(path) = title.next_sibling().and_downcast::<gtk::Label>() else {
+        let Some(icon) = header_line.first_child().and_downcast::<gtk::Image>() else {
             return;
         };
-        let Some(flow) = path.next_sibling().and_downcast::<gtk::FlowBox>() else {
+        let Some(title) = icon.next_sibling().and_downcast::<gtk::Label>() else {
+            return;
+        };
+        let Some(count) = title.next_sibling().and_downcast::<gtk::Label>() else {
+            return;
+        };
+        let Some(separator) = header_line.next_sibling().and_downcast::<gtk::Separator>() else {
+            return;
+        };
+        let Some(flow) = separator.next_sibling().and_downcast::<gtk::FlowBox>() else {
             return;
         };
 
-        title.set_label(&format!("{}   ·   {} photos", group.label, group.model.n_items()));
-        path.set_label(&group.folder.display().to_string());
+        title.set_label(&group.label);
+        count.set_label(&format!("{} photos", group.model.n_items()));
 
         while let Some(child) = flow.first_child() {
             flow.remove(&child);
@@ -150,13 +172,13 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let Some(section) = list_item.child().and_downcast::<gtk::Box>() else {
             return;
         };
-        let Some(title) = section.first_child().and_downcast::<gtk::Label>() else {
+        let Some(header_line) = section.first_child().and_downcast::<gtk::Box>() else {
             return;
         };
-        let Some(path) = title.next_sibling().and_downcast::<gtk::Label>() else {
+        let Some(separator) = header_line.next_sibling().and_downcast::<gtk::Separator>() else {
             return;
         };
-        let Some(flow) = path.next_sibling().and_downcast::<gtk::FlowBox>() else {
+        let Some(flow) = separator.next_sibling().and_downcast::<gtk::FlowBox>() else {
             return;
         };
         while let Some(child) = flow.first_child() {
@@ -338,10 +360,17 @@ fn make_photo_tile(
     frame.add_css_class("prototype-photo-tile");
     frame.set_overflow(gtk::Overflow::Hidden);
     frame.set_size_request(size, size);
+    frame.set_hexpand(false);
+    frame.set_vexpand(false);
+    frame.set_halign(gtk::Align::Start);
+    frame.set_valign(gtk::Align::Start);
 
     let picture = gtk::Picture::new();
+    picture.set_size_request(1, 1);
     picture.set_hexpand(true);
     picture.set_vexpand(true);
+    picture.set_halign(gtk::Align::Fill);
+    picture.set_valign(gtk::Align::Fill);
     picture.set_can_shrink(true);
     picture.set_content_fit(gtk::ContentFit::Cover);
     frame.append(&picture);
@@ -464,26 +493,43 @@ fn install_css() {
         }
 
         .folder-section {
-            padding: 10px 14px 10px 14px;
+            padding: 14px 20px 18px 20px;
         }
 
-        .folder-title {
+        .folder-section-header {
+            margin-top: 8px;
+            margin-bottom: 2px;
+        }
+
+        .folder-section-title {
             font-weight: 700;
-            font-size: 1.08em;
-            margin-top: 4px;
+            font-size: 14px;
         }
 
-        .folder-path {
-            font-size: 0.88em;
-            margin-bottom: 3px;
+        .folder-section-count {
+            font-size: 12px;
+            opacity: 0.58;
+        }
+
+        .folder-section-icon {
+            opacity: 0.65;
+        }
+
+        .folder-section-separator {
+            margin-top: 5px;
+            margin-bottom: 8px;
+            opacity: 0.45;
         }
 
         .folder-grid {
             background: transparent;
         }
 
-        .folder-grid > child {
+        .folder-grid > flowboxchild {
             padding: 0;
+            margin: 0;
+            min-height: 0;
+            background: transparent;
         }
 
         .prototype-photo-tile {
