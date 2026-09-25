@@ -259,7 +259,15 @@ impl Gallery {
             &self.folder_catalog,
             &self.folder_store,
         );
+        let started = crate::diagnostics::trace_enabled().then(std::time::Instant::now);
         self.save_folder_cache();
+        if let Some(started) = started {
+            eprintln!(
+                "PIC_ZOOM rebuild_stage stage=save_cache elapsed_us={} items={}",
+                started.elapsed().as_micros(),
+                self.current_photos.borrow().len()
+            );
+        }
     }
 
     /// Remember the current Folder stream so re-entering Folder mode can reuse

@@ -1892,13 +1892,23 @@ fn build_folder_virtual_objects(
     catalog: &[FolderCatalogEntry],
     folder_order: &[i64],
 ) -> Vec<FolderRowObject> {
+    let trace = crate::diagnostics::trace_enabled();
     let line_size = line_size.max(1);
+    let plan_started = trace.then(std::time::Instant::now);
     let plan = folder_section_plan(ranges, catalog, folder_order);
+    if let Some(started) = plan_started {
+        eprintln!(
+            "PIC_ZOOM rebuild_stage stage=section_plan elapsed_us={} items={}",
+            started.elapsed().as_micros(),
+            plan.len()
+        );
+    }
     let estimated_rows = ranges.iter().fold(plan.len(), |total, range| {
         let photos_in_range = range.end.saturating_sub(range.start);
         total + photos_in_range.div_ceil(line_size)
     });
     let mut rows = Vec::with_capacity(estimated_rows);
+    let rows_started = trace.then(std::time::Instant::now);
 
     for section in plan {
         if let Some(range_index) = section.range_index {
@@ -1941,6 +1951,13 @@ fn build_folder_virtual_objects(
         }
     }
 
+    if let Some(started) = rows_started {
+        eprintln!(
+            "PIC_ZOOM rebuild_stage stage=create_virtual_rows elapsed_us={} items={}",
+            started.elapsed().as_micros(),
+            rows.len()
+        );
+    }
     rows
 }
 
@@ -1992,18 +2009,28 @@ fn rebuild_folder_rows_for(
     folder_catalog: &Rc<RefCell<Vec<FolderCatalogEntry>>>,
     folder_store: &gio::ListStore,
 ) {
+    let trace = crate::diagnostics::trace_enabled();
     let ranges = group_ranges.borrow();
     let photos = current_photos.borrow();
     let old_rows = folder_store.n_items();
     let line_size = folder_chunk_size(current_columns.get());
     let catalog = folder_catalog.borrow();
     let order = folder_order.borrow();
+    let build_started = trace.then(std::time::Instant::now);
     let new_rows = build_folder_virtual_objects(&ranges, &photos, line_size, &catalog, &order);
+    if let Some(started) = build_started {
+        eprintln!(
+            "PIC_ZOOM rebuild_stage stage=build_rows elapsed_us={} items={}",
+            started.elapsed().as_micros(),
+            new_rows.len()
+        );
+    }
 
 
     let old_len = old_rows as usize;
     let new_len = new_rows.len();
     let mut prefix = 0usize;
+    let prefix_started = trace.then(std::time::Instant::now);
     while prefix < old_len && prefix < new_len {
         let Some(old_row) = folder_store
             .item(prefix as u32)
@@ -2033,7 +2060,15 @@ fn rebuild_folder_rows_for(
         }
         break;
     }
+    if let Some(started) = prefix_started {
+        eprintln!(
+            "PIC_ZOOM rebuild_stage stage=prefix_compare elapsed_us={} items={}",
+            started.elapsed().as_micros(),
+            prefix
+        );
+    }
     let mut suffix = 0usize;
+    let suffix_started = trace.then(std::time::Instant::now);
     while suffix < old_len - prefix
         && suffix < new_len - prefix
         && folder_store
@@ -2045,9 +2080,19 @@ fn rebuild_folder_rows_for(
     {
         suffix += 1;
     }
+    if let Some(started) = suffix_started {
+        eprintln!(
+            "PIC_ZOOM rebuild_stage stage=suffix_compare elapsed_us={} items={}",
+            started.elapsed().as_micros(),
+            suffix
+        );
+    }
 
 
     if prefix == old_len && prefix == new_len {
+        if trace {
+            eprintln!("PIC_ZOOM rebuild_stage stage=list_splice elapsed_us=0 items=0");
+        }
 
         return;
     }
@@ -2066,6 +2111,14 @@ fn rebuild_folder_rows_for(
     // population, not the store, that is expensive. Making folder open instant
     // therefore requires reusing an already-populated folder model instead of
     // rebuilding it.
+    let splice_started = trace.then(std::time::Instant::now);
     folder_store.splice(prefix as u32, removed, inserted);
+    if let Some(started) = splice_started {
+        eprintln!(
+            "PIC_ZOOM rebuild_stage stage=list_splice elapsed_us={} items={}",
+            started.elapsed().as_micros(),
+            removed as usize + inserted.len()
+        );
+    }
 
 }

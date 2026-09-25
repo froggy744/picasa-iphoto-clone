@@ -840,10 +840,35 @@ impl Gallery {
         if folder_list_mode {
             // Each model item is one visual photo line. A column change must
             // rebuild those lines to keep the layout gapless.
+            let trace = trace_started.is_some();
+            let anchor_started = trace.then(std::time::Instant::now);
             let anchor = self.take_reframe_anchor();
+            if let Some(started) = anchor_started {
+                eprintln!(
+                    "PIC_ZOOM rebuild_stage stage=capture_anchor elapsed_us={} items={}",
+                    started.elapsed().as_micros(),
+                    usize::from(anchor.is_some())
+                );
+            }
+            let rows_started = trace.then(std::time::Instant::now);
             self.rebuild_folder_rows();
+            if let Some(started) = rows_started {
+                eprintln!(
+                    "PIC_ZOOM rebuild_stage stage=rebuild_folder_rows elapsed_us={} items={}",
+                    started.elapsed().as_micros(),
+                    self.folder_store.n_items()
+                );
+            }
+            let restore_started = trace.then(std::time::Instant::now);
             if let Some(anchor) = anchor {
                 self.scroll_folder_to_photo(anchor);
+            }
+            if let Some(started) = restore_started {
+                eprintln!(
+                    "PIC_ZOOM rebuild_stage stage=restore_anchor elapsed_us={} items={}",
+                    started.elapsed().as_micros(),
+                    usize::from(anchor.is_some())
+                );
             }
             if let Some(started) = trace_started {
                 eprintln!("PIC_ZOOM layout mode=folder action=rebuild_rows old_columns={} columns={} width={} elapsed_us={}", old_columns, columns, width, started.elapsed().as_micros());
