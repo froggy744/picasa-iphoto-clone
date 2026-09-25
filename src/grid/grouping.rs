@@ -38,21 +38,10 @@ impl Gallery {
         }
 
         if mode == GroupMode::Folder {
-            // Folder headers live inside the scrolling ListView. The old
-            // external heading would be sticky, which is deliberately not
-            // Picasa-style.
+            // Folder headers live in Gallery V2's section ListView.
             self.group_header.set_visible(false);
             self.group_title.set_text("");
             self.group_count.set_text("");
-            if old_mode != GroupMode::Folder && !self.restore_folder_cache() {
-                // The current model may still contain All Photos/Favourites in
-                // a global date order. Do not briefly render that as hundreds
-                // of false folder sections while the correctly ordered Folder
-                // stream is loading. The subsequent photo replacement builds
-                // the Folder rows once; reapplying Folder grouping must not
-                // build the same store a second time.
-                self.folder_store.remove_all();
-            }
         } else {
             let visible = mode != GroupMode::None && !self.group_ranges.borrow().is_empty();
             self.group_header.set_visible(visible);
@@ -93,7 +82,7 @@ impl Gallery {
     /// modes keep the existing GridView geometry.
     pub fn photo_for_scroll_position(&self, scroll_y: f64) -> Option<PhotoObject> {
         if self.group_mode.get() == GroupMode::Folder {
-            return self.photo_for_visible_folder_row();
+            return self.v2_folder.visible_photo();
         }
         self.current_photos
             .borrow()
@@ -153,60 +142,12 @@ impl Gallery {
         self.group_ranges.replace(ranges);
     }
 
-    fn rebuild_folder_rows(&self) {
-        rebuild_folder_rows_for(
-            &self.current_photos,
-            &self.group_ranges,
-            &self.current_columns,
-            &self.folder_order,
-            &self.folder_catalog,
-            &self.folder_store,
-        );
-        self.save_folder_cache();
-    }
-
-    /// Remember the current Folder stream so re-entering Folder mode can reuse
-    /// the already built PhotoObjects and virtual rows.
-    fn save_folder_cache(&self) {
-        if self.group_mode.get() != GroupMode::Folder {
-            return;
-        }
-        save_folder_cache_for(
-            &self.folder_cache,
-            &self.current_photos,
-            &self.group_ranges,
-            &self.current_columns,
-            &self.folder_order,
-        );
-    }
-
-    /// Restore a previously built Folder stream when re-entering Folder mode.
-    ///
-    /// Returns true when the cached rows can be reused as-is (tile geometry and
-    /// section order unchanged), in which case `folder_store` must not be
-    /// cleared. The Folder rows reference the restored PhotoObjects by index and
-    /// `selection` reads them through `store`, so both must be replaced.
     pub fn can_restore_folder_cache(&self) -> bool {
-        if std::env::var_os("PIC_GALLERY_V2").is_some() && self.v2_folder.has_sections() {
-            if std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!("PIC_V2_FOLDER cache_reuse result=hit");
-            }
-            return true;
+        let hit = self.v2_folder.has_sections();
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!("PIC_V2_FOLDER cache_reuse result={}", if hit { "hit" } else { "miss" });
         }
-        let Some(cache) = self.folder_cache.borrow().as_ref().cloned() else {
-            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=no_cached_rows"); }
-            return false;
-        };
-        if cache.columns != self.current_columns.get() {
-            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=current_columns_mismatch cached={} current={}", cache.columns, self.current_columns.get()); }
-            return false;
-        }
-        if cache.order != *self.folder_order.borrow() {
-            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=folder_order_mismatch"); }
-            return false;
-        }
-        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=hit"); }
-        true
+        hit
     }
 
     pub fn set_pending_folder_target(&self, folder_id: i64, folder_path: String) {
@@ -276,67 +217,16 @@ impl Gallery {
 
         self.folder_catalog.replace(catalog);
         self.folder_order.replace(folder_order.to_vec());
-        // Cached rows encode the previous catalog/order. Force the next Folder
-        // entry to use the new anchors instead of reusing stale rows.
-        self.folder_cache.replace(None);
-        if self.group_mode.get() == GroupMode::Folder {
-            self.rebuild_folder_rows();
-        }
+        // Gallery V2 section membership comes from the ordered photo stream.
+        // The catalog/order remain navigation metadata only.
     }
 
-    /// Folder id at the leading visible row. This is intentionally cheaper
-    /// than `photo_for_visible_folder_row`: passive sidebar follow needs only
-    /// the row's folder identity, not a PhotoObject or a group-range scan.
+    /// Folder id represented by the leading visible V2 photo.
     pub fn visible_folder_id(&self) -> Option<i64> {
         if self.group_mode.get() != GroupMode::Folder {
             return None;
         }
-        let width = self.folder_root.width().max(1) as f64;
-        for y in [4.0_f64, 20.0, 40.0, 64.0] {
-            let picked = self
-                .folder_root
-                .pick(width * 0.5, y, gtk::PickFlags::DEFAULT);
-            if let Some(folder_id) = picked
-                .as_ref()
-                .and_then(folder_id_from_named_ancestor)
-                .filter(|folder_id| *folder_id > 0)
-            {
-                return Some(folder_id);
-            }
-        }
-        None
-    }
-
-    fn photo_for_visible_folder_row(&self) -> Option<PhotoObject> {
-        // A hit-test at the viewport centre can land between columns (especially
-        // with an even column count). Falling back to the folder's first photo
-        // then jumps thousands of rows. Use actual visible tile bounds instead.
-        let mut tiles = Vec::new();
-        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
-        let height = self.folder_root.height() as f32;
-        let preferred = self.folder_anchor_photo.get();
-        tiles
-            .into_iter()
-            .filter_map(|tile| {
-                if !tile.is_mapped() || !tile.is_visible() {
-                    return None;
-                }
-                let photo = tile.imp().photo.borrow().clone()?;
-                let bounds = tile.compute_bounds(&self.folder_root)?;
-                if bounds.y() + bounds.height() <= 0.0 || bounds.y() >= height {
-                    return None;
-                }
-                Some((bounds.y(), bounds.x(), photo))
-            })
-            // Keep the same logical photo while it remains in the leading row.
-            // Choosing the leftmost slot anew on every 6↔7-column transition
-            // rounds backwards each time and gradually scrolls up the folder.
-            .min_by(|a, b| {
-                a.0.total_cmp(&b.0)
-                    .then_with(|| (Some(b.2.id()) == preferred).cmp(&(Some(a.2.id()) == preferred)))
-                    .then_with(|| a.1.total_cmp(&b.1))
-            })
-            .map(|(_, _, photo)| photo)
+        self.v2_folder.visible_photo().map(|photo| photo.folder_id())
     }
 
     fn update_group_header_for_index(&self, index: usize) {
