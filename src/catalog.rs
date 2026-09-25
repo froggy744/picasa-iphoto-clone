@@ -198,7 +198,7 @@ pub fn import_root(root: &Path) -> Result<ImportSummary> {
     for entry in WalkDir::new(&root)
         .follow_links(false)
         .into_iter()
-        .filter_map(Result::ok)
+        .filter_map(|entry| entry.ok())
     {
         if entry.file_type().is_dir() {
             if entry.path() != root {
