@@ -753,6 +753,79 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     }
 
     {
+        let selected_photo = selected_photo.clone();
+        let favorite_changed = favorite_changed.clone();
+        let favorite_paths = favorite_paths.clone();
+        favorite_action.connect_clicked(move |button| {
+            let Some(photo) = selected_photo.borrow().clone() else {
+                return;
+            };
+            let favorite = !photo.favorite();
+            if let Err(error) = crate::catalog::set_favorite_by_path(&photo.path(), favorite) {
+                eprintln!("PIC_REBUILD favourite_update_failed error={error:#}");
+                return;
+            }
+            photo.set_favorite(favorite);
+            {
+                let mut paths = favorite_paths.borrow_mut();
+                let path = photo.path();
+                if favorite {
+                    paths.insert(path);
+                } else {
+                    paths.remove(&path);
+                }
+            }
+            button.set_icon_name(if favorite {
+                "starred-symbolic"
+            } else {
+                "non-starred-symbolic"
+            });
+            if favorite {
+                button.add_css_class("active");
+            } else {
+                button.remove_css_class("active");
+            }
+            if let Some(callback) = favorite_changed.borrow().as_ref().cloned() {
+                glib::idle_add_local_once(move || callback());
+            }
+        });
+    }
+
+    {
+        let selected_photo = selected_photo.clone();
+        let parent = window.clone();
+        export_action.connect_clicked(move |_| {
+            let Some(photo) = selected_photo.borrow().clone() else {
+                return;
+            };
+            let source = gio::File::for_path(photo.path());
+            let path = photo.path();
+            let suggested_name = Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("photo.jpg")
+                .to_string();
+            let dialog = gtk::FileDialog::builder()
+                .title("Export Photo")
+                .initial_name(&suggested_name)
+                .build();
+            dialog.save(Some(&parent), gio::Cancellable::NONE, move |result| {
+                let Ok(destination) = result else {
+                    return;
+                };
+                if let Err(error) = source.copy(
+                    &destination,
+                    gio::FileCopyFlags::OVERWRITE,
+                    gio::Cancellable::NONE,
+                    None,
+                ) {
+                    eprintln!("PIC_REBUILD export_failed error={error}");
+                }
+            });
+        });
+    }
+
+    {
         let viewer = viewer.clone();
         one_to_one.connect_toggled(move |button| viewer.set_one_to_one(button.is_active()));
     }
