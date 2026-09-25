@@ -689,6 +689,7 @@ impl ChunkedPrototype {
             wrappers,
             bound_items,
             realization_pending,
+            realization_retry_pending,
             fill_complete: fill_complete.clone(),
             remount_pending: remount_pending.clone(),
         }
