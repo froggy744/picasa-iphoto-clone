@@ -1497,23 +1497,16 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 "grid"
             });
             if folder_mode {
-                // Keep keyboard focus on the widget that is actually shown.
-                // Tab/search helpers used to target the hidden GridView.
+                // Folder has one renderer: V2. Attach only the sections around
+                // the current viewport and focus that ListView.
                 let had_grid_focus = gallery_for_folder_view.root.has_focus()
                     || gallery_for_folder_view.v2.root.has_focus();
                 if had_grid_focus {
-                    if std::env::var_os("PIC_GALLERY_V2").is_some() {
-                        gallery_for_folder_view.v2_folder.root.grab_focus();
-                    } else {
-                        gallery_for_folder_view.folder_root.grab_focus();
-                    }
+                    gallery_for_folder_view.v2_folder.root.grab_focus();
                 }
-                // The Folder model rebuild is synchronous. This timeout runs
-                // after that work returns to GTK and paints only the final
-                // visible viewport instead of every intermediate bound row.
-                let gallery = gallery_for_folder_view.clone();
-                glib::timeout_add_local_once(Duration::from_millis(90), move || {
-                    gallery.refresh_visible_folder_tiles();
+                let folder = gallery_for_folder_view.v2_folder.clone();
+                glib::idle_add_local_once(move || {
+                    folder.update_visible_sections(folder.scroll_position(), folder.page_size());
                 });
             }
         });
