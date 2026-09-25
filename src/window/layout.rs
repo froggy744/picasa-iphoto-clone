@@ -127,6 +127,23 @@
                 }
                 return;
             }
+            // A Folder-to-Folder cache hit already scrolled the live,
+            // correctly grouped Folder stream above. Re-applying the photos
+            // stack/grouping here calls the Folder view-changed handler again,
+            // which re-selects the chunked stack child, grabs focus and queues
+            // a delayed tile refresh. That produces a visible flash even
+            // though no model change is required.
+            if restored_scroll {
+                if let Some(started) = nav_started.filter(|_| nav_trace) {
+                    eprintln!(
+                        "PIC_NAV nav_stage=folder_reuse_done t={} since_click_us={}",
+                        crate::diagnostics::t_ms(),
+                        started.elapsed().as_micros()
+                    );
+                }
+                return;
+            }
+
             main_stack.set_visible_child_name("photos");
             if let Some(started) = nav_started.filter(|_| nav_trace) {
                 eprintln!(
