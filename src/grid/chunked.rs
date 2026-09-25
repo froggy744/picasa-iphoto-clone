@@ -147,6 +147,26 @@ impl ChunkedPrototype {
         reconcile_chunks(&self.store, &self.chunks, &self.grids);
     }
 
+    /// Unmount the outer chunk rows before a wholesale base-store
+    /// replacement. With no mounted chunk GridViews, the splice's
+    /// items-changed dispatch becomes plain GObject disposal instead of
+    /// per-chunk list item manager work across hundreds of slices
+    /// (measured ~700 ms for a 22k-photo folder to a small album view).
+    /// Call from outside any items-changed emission, pair with
+    /// `reattach_after_replace` on a later idle.
+    pub(crate) fn detach_for_replace(&self) {
+        self.root.set_model(None::<&gtk::NoSelection>);
+    }
+
+    /// Re-mount the outer chunk model after a replacement splice. The
+    /// pending reconcile (if any) must run first so the chunk list matches
+    /// the new store size; `flush_reconcile` is a no-op otherwise.
+    pub(crate) fn reattach_after_replace(&self) {
+        self.flush_reconcile();
+        let model = gtk::NoSelection::new(Some(self.chunks.clone()));
+        self.root.set_model(Some(&model));
+    }
+
     pub(crate) fn set_columns(&self, columns: u32) {
         let columns = columns.max(1);
         let mut grids = self.grids.borrow_mut();

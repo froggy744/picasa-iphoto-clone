@@ -1401,6 +1401,9 @@ impl Gallery {
 
     pub fn replace(&self, photos: &[Photo]) {
         if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV gallery_replace photos={}", photos.len()); }
+        if std::env::var_os("PICASA_TRACE_BACKTRACE").is_some() {
+            eprintln!("PIC_NAV replace_backtrace\n{}", std::backtrace::Backtrace::force_capture());
+        }
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
         // Assume a build is in progress until each completion path clears it.
@@ -1504,9 +1507,30 @@ impl Gallery {
         if !self.collage_selection_mode.get() {
             (self.selected)(None);
         }
+        // A wholesale shrink under the chunked Folder prototype (folder
+        // stream -> album/history/favorites) unmounts the outer chunk rows
+        // first: splicing thousands of items while hundreds of chunk
+        // GridViews are mounted costs seconds of item-manager teardown for
+        // content the user cannot see mid-transition anyway.
+        let old_items = self.store.n_items();
+        let chunked_detach = self
+            .chunked_prototype
+            .as_ref()
+            .filter(|_| {
+                old_items > 1_000 && (photos.len() as u32) * 4 < old_items
+            })
+            .cloned();
+        if let Some(chunked) = &chunked_detach {
+            chunked.detach_for_replace();
+        }
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
         self.current_photos.replace(objects.clone());
         self.store.splice(0, self.store.n_items(), &objects);
+        if let Some(chunked) = chunked_detach {
+            // After the reconcile idle the chunk list matches the new store,
+            // so re-mounting binds only the new content.
+            glib::idle_add_local_once(move || chunked.reattach_after_replace());
+        }
         if self.collage_selection_mode.get() {
             self.restore_collage_selection();
         } else if objects.is_empty() {

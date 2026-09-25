@@ -3100,10 +3100,24 @@ fn start_photo_export_single(
         })
     };
     const STARTUP_BATCH_SIZE: usize = 500;
+    // `Gallery::replace` (any real navigation) advances the generation while
+    // the startup `append_photos` batches do not. Once a user navigation has
+    // swapped the model mid-startup, the remaining stale batches must not
+    // splice photos of the wrong view into the store.
+    let mut startup_generation: Option<u64> = None;
     glib::idle_add_local(move || {
         if startup_offset >= startup_total {
             restore_startup_view();
             return glib::ControlFlow::Break;
+        }
+        if let Some(generation) = startup_generation {
+            if startup_gallery.replace_generation() != generation {
+                // A real navigation replaced the model mid-startup: it owns
+                // the view now. Only make sure the sidebar gate opens; the
+                // startup scroll restore must not fight that navigation.
+                sidebar::set_navigation_enabled(true);
+                return glib::ControlFlow::Break;
+            }
         }
 
         let end = (startup_offset + STARTUP_BATCH_SIZE).min(startup_total);
@@ -3112,6 +3126,9 @@ fn start_photo_export_single(
             startup_gallery.replace(batch);
         } else {
             startup_gallery.append_photos(batch);
+        }
+        if startup_generation.is_none() {
+            startup_generation = Some(startup_gallery.replace_generation());
         }
         startup_offset = end;
 

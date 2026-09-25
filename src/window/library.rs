@@ -147,7 +147,7 @@ fn refresh_grid_inner(
                         && replace_started.elapsed() >= std::time::Duration::from_millis(20)
                     {
                         eprintln!(
-                            "PIC_SCAN_UI gallery_replace photos={count} elapsed_ms={}",
+                            "PIC_SCAN_UI gallery_replace photos={count} elapsed_ms={} filter={filter:?} folder_target={folder_target:?}",
                             replace_started.elapsed().as_millis()
                         );
                     }

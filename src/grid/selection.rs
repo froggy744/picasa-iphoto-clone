@@ -588,6 +588,13 @@ impl Gallery {
         self.stream_building.get()
     }
 
+    /// Monotonic counter advanced by every `Gallery::replace` (appends do not
+    /// count). Startup batching uses it to notice that a real navigation has
+    /// swapped the model and stop splicing stale batches into the new view.
+    pub fn replace_generation(&self) -> u64 {
+        self.replace_generation.get()
+    }
+
     pub fn select_photo(&self, photo_id: i64) -> bool {
         let Some(model) = self.selection.model() else {
             return false;
