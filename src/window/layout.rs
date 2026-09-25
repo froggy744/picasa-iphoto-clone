@@ -22,6 +22,15 @@
         let album_home_click_slot = album_home_click_slot.clone();
         let open_in_folder_exact_target = open_in_folder_exact_target.clone();
         Rc::new(move |new_filter, exact_photo_target| {
+            let nav_trace = crate::diagnostics::trace_enabled();
+            let nav_started = nav_trace.then(std::time::Instant::now);
+            if nav_trace {
+                eprintln!(
+                    "PIC_NAV nav_stage=destination_click t={} first={} filter={new_filter:?} exact_photo={exact_photo_target}",
+                    crate::diagnostics::t_ms(),
+                    !exact_photo_target && crate::diagnostics::claim_first_nav()
+                );
+            }
             // Cancel stale async refresh/folder-scroll work before this new
             // destination is established. This also covers Folder-to-Folder
             // reuse, which otherwise would not bump the refresh generation.
@@ -119,9 +128,24 @@
                 return;
             }
             main_stack.set_visible_child_name("photos");
+            if let Some(started) = nav_started.filter(|_| nav_trace) {
+                eprintln!(
+                    "PIC_NAV nav_stage=stack_switch t={} since_click_us={}",
+                    crate::diagnostics::t_ms(),
+                    started.elapsed().as_micros()
+                );
+            }
             // destination_click clears the search entry above, so History
             // grouping can safely re-enable here.
             apply_gallery_grouping(&gallery, new_filter, sort.get(), group_mode.get(), true);
+            if let Some(started) = nav_started.filter(|_| nav_trace) {
+                eprintln!(
+                    "PIC_NAV nav_stage=grouping_applied t={} since_click_us={}",
+                    crate::diagnostics::t_ms(),
+                    started.elapsed().as_micros()
+                );
+            }
+            let nav_plan_started = nav_started.filter(|_| nav_trace);
             match folder_destination_plan(exact_photo_target, reuse_folder_stream) {
                 FolderDestinationPlan::ReuseWithoutFolderScroll => {
                     // Open in Folder will select/scroll the exact photo below.
@@ -159,6 +183,13 @@
                         refresh_grid(&connection, new_filter, "", sort.get(), &gallery);
                     }
                 }
+            }
+            if let Some(started) = nav_plan_started {
+                eprintln!(
+                    "PIC_NAV nav_stage=refresh_scheduled t={} since_click_us={}",
+                    crate::diagnostics::t_ms(),
+                    started.elapsed().as_micros()
+                );
             }
         })
     };

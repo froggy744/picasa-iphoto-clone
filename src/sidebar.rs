@@ -223,6 +223,13 @@ pub fn build(
     // while the startup restore is still running.
     let on_filter: Rc<dyn Fn(SidebarFilter)> = Rc::new(move |filter| {
         if navigation_enabled() {
+            if crate::diagnostics::trace_enabled() {
+                eprintln!(
+                    "PIC_NAV nav_stage=sidebar_select t={} first={} filter={filter:?}",
+                    crate::diagnostics::t_ms(),
+                    crate::diagnostics::claim_first_nav()
+                );
+            }
             startup_on_filter(filter);
         }
     });

@@ -1507,6 +1507,8 @@ impl Gallery {
         if !self.collage_selection_mode.get() {
             (self.selected)(None);
         }
+        let replace_trace = crate::diagnostics::trace_enabled();
+        let replace_started = replace_trace.then(std::time::Instant::now);
         // A wholesale shrink under the chunked Folder prototype (folder
         // stream -> album/history/favorites) unmounts the outer chunk rows
         // first: splicing thousands of items while hundreds of chunk
@@ -1523,7 +1525,9 @@ impl Gallery {
         if let Some(chunked) = &chunked_detach {
             chunked.detach_for_replace();
         }
+        let detach_done = replace_started.map(|s| s.elapsed());
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
+        let objects_done = replace_started.map(|s| s.elapsed());
         // Swap the model vec first and defer dropping the old PhotoObjects:
         // with the model vec no longer holding references, the splice's
         // unrefs are cheap refcount decrements and the expensive GObject
@@ -1533,19 +1537,40 @@ impl Gallery {
             &mut *self.current_photos.borrow_mut(),
             objects.clone(),
         );
+        let swap_done = replace_started.map(|s| s.elapsed());
         self.store.splice(0, self.store.n_items(), &objects);
+        let splice_done = replace_started.map(|s| s.elapsed());
         if old_objects.len() > 1_000 {
             // Release the superseded PhotoObjects in small idle slices: one
             // 20k-object finalization pass (textures, paintables) would run
             // as a single long frame right after the navigation paint.
+            let dispose_traced = replace_trace;
             let remaining = Rc::new(RefCell::new(old_objects));
             glib::idle_add_local(move || {
+                let started = dispose_traced.then(std::time::Instant::now);
                 let mut remaining = remaining.borrow_mut();
                 if remaining.is_empty() {
                     return glib::ControlFlow::Break;
                 }
                 let take = remaining.len().min(4_000);
+                let drained = take;
                 remaining.drain(0..take);
+                if dispose_traced {
+                    let took = started
+                        .map(|s| s.elapsed().as_micros())
+                        .unwrap_or_default();
+                    let left = remaining.len();
+                    drop(remaining);
+                    eprintln!(
+                        "PIC_NAV nav_stage=dispose_slice drained={drained} remaining={left} took_us={took} t={}",
+                        crate::diagnostics::t_ms()
+                    );
+                    return if left == 0 {
+                        glib::ControlFlow::Break
+                    } else {
+                        glib::ControlFlow::Continue
+                    };
+                }
                 if remaining.is_empty() {
                     glib::ControlFlow::Break
                 } else {
@@ -1565,6 +1590,7 @@ impl Gallery {
         } else {
             self.selection.select_item(0, true);
         }
+        let select_done = replace_started.map(|s| s.elapsed());
         if self.group_mode.get() != GroupMode::None {
             self.rebuild_group_ranges();
             if self.group_mode.get() == GroupMode::Folder {
@@ -1573,8 +1599,56 @@ impl Gallery {
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
             }
         }
+        let groups_done = replace_started.map(|s| s.elapsed());
 
         self.stream_building.set(false);
+        if let Some(started) = replace_started {
+            let phase = |done: Option<std::time::Duration>| {
+                done.map(|d| d.as_micros()).unwrap_or_default()
+            };
+            let old_items_us = old_items as u64;
+            eprintln!(
+                "PIC_NAV nav_stage=replace_phases t={} old_items={old_items_us} new_items={} detach_us={} objects_us={} swap_us={} splice_us={} select_us={} groups_us={} total_us={}",
+                crate::diagnostics::t_ms(),
+                photos.len(),
+                phase(detach_done),
+                phase(objects_done).saturating_sub(phase(detach_done)),
+                phase(swap_done).saturating_sub(phase(objects_done)),
+                phase(splice_done).saturating_sub(phase(swap_done)),
+                phase(select_done).saturating_sub(phase(splice_done)),
+                phase(groups_done).saturating_sub(phase(select_done)),
+                started.elapsed().as_micros()
+            );
+            // Frame clock and main-loop recovery after the replacement: the
+            // tick callback fires once per rendered frame, the low-priority
+            // idle fires when nothing higher-priority is pending.
+            let frame_root = self.root.clone();
+            let frame_ticks = Rc::new(std::cell::Cell::new(0u32));
+            let replace_end = std::time::Instant::now();
+            frame_root.add_tick_callback(move |_, _| {
+                let ticks = frame_ticks.get() + 1;
+                frame_ticks.set(ticks);
+                if ticks <= 3 {
+                    eprintln!(
+                        "PIC_NAV nav_stage=frame_tick n={ticks} t={} since_replace_us={}",
+                        crate::diagnostics::t_ms(),
+                        replace_end.elapsed().as_micros()
+                    );
+                }
+                if ticks >= 3 {
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            });
+            glib::idle_add_local_once(move || {
+                eprintln!(
+                    "PIC_NAV nav_stage=app_idle t={} since_replace_us={}",
+                    crate::diagnostics::t_ms(),
+                    replace_end.elapsed().as_micros()
+                );
+            });
+        }
     }
 
     fn replace_progressive(

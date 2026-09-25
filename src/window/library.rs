@@ -78,8 +78,17 @@ fn refresh_grid_inner(
     let generation = REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let search = search.to_owned();
     let (sender, receiver) = std::sync::mpsc::channel();
+    let nav_trace = crate::diagnostics::trace_enabled();
+    let spawn_started = nav_trace.then(std::time::Instant::now);
+    if nav_trace {
+        eprintln!(
+            "PIC_NAV nav_stage=refresh_spawn t={} generation={generation} filter={filter:?} target={folder_target:?}",
+            crate::diagnostics::t_ms()
+        );
+    }
 
     std::thread::spawn(move || {
+        let query_started = std::time::Instant::now();
         let Ok(connection) = db::open_default() else {
             let _ = sender.send(None);
             return;
@@ -92,6 +101,7 @@ fn refresh_grid_inner(
 
         let folder_stream = search.is_empty()
             && matches!(filter, sidebar::SidebarFilter::Folder(_));
+        let db_started = std::time::Instant::now();
         let mut photos = if !search.is_empty() {
             // An active search is a library-wide view, regardless of the
             // destination that was selected before typing began.
@@ -117,6 +127,7 @@ fn refresh_grid_inner(
             };
             db::photos(&connection, folder_id, favorites, None).unwrap_or_default()
         };
+        let query_done = std::time::Instant::now();
 
         retain_enabled_formats(&connection, &mut photos);
         limit_recently_added(&connection, filter, &mut photos);
@@ -132,13 +143,36 @@ fn refresh_grid_inner(
         } else if filter != sidebar::SidebarFilter::History || !search.is_empty() {
             sort_photos(&mut photos, sort);
         }
+        let photos_len_for_trace = photos.len();
         let _ = sender.send(Some(photos));
+        if crate::diagnostics::trace_enabled() {
+            eprintln!(
+                "PIC_NAV nav_stage=db_query_done t={} open_ms={} query_ms={} post_ms={} photos={}",
+                crate::diagnostics::t_ms(),
+                db_started.duration_since(query_started).as_millis(),
+                query_done.duration_since(db_started).as_millis(),
+                query_done.elapsed().as_millis(),
+                photos_len_for_trace
+            );
+        }
     });
 
     let gallery = gallery.clone();
+    let mut polls: u32 = 0;
     glib::timeout_add_local(std::time::Duration::from_millis(25), move || {
+        polls += 1;
         match receiver.try_recv() {
             Ok(Some(photos)) => {
+                if crate::diagnostics::trace_enabled() {
+                    let since_spawn = spawn_started
+                        .map(|started| started.elapsed().as_millis())
+                        .unwrap_or_default();
+                    eprintln!(
+                        "PIC_NAV nav_stage=refresh_result t={} since_spawn_ms={since_spawn} polls={polls} photos={}",
+                        crate::diagnostics::t_ms(),
+                        photos.len()
+                    );
+                }
                 if REFRESH_GENERATION.load(std::sync::atomic::Ordering::Relaxed) == generation {
                     let replace_started = std::time::Instant::now();
                     let count = photos.len();

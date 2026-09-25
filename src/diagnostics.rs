@@ -28,3 +28,23 @@ pub fn tile_trace_enabled() -> bool {
     static TILE_TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *TILE_TRACE.get_or_init(|| std::env::var_os("PICASA_TRACE_TILES").is_some())
 }
+
+/// Milliseconds since process start. Navigation tracing stamps every pipeline
+/// stage with this so a single run's log reconstructs the click-to-frame
+/// timeline without cross-referencing wall-clock clocks.
+pub fn t_ms() -> u128 {
+    static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    PROCESS_START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis()
+}
+
+/// True once, for the first user navigation of the process. Startup model
+/// batches and scan refreshes must not consume it: only sidebar/navigation
+/// entry points claim it, which keeps "first click after startup" measurable
+/// separately from every later navigation.
+pub fn claim_first_nav() -> bool {
+    static FIRST_NAV: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    FIRST_NAV.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
