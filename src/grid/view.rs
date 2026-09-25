@@ -848,11 +848,18 @@ impl Gallery {
         }
         self.last_layout_width.set(width);
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        let folder_v2 = folder_mode && std::env::var_os("PIC_GALLERY_V2").is_some();
         if columns == old_columns {
             // Zooming within the same column count only changes tile geometry.
             // Replacing the Folder ListStore here used to invalidate every
             // realized row and cost ~0.8-1.1s for a 4.5k-photo library.
             if folder_mode && tile_size_changed {
+                if folder_v2 {
+                    // Folder V2 already received the exact same tile geometry
+                    // through set_tile_size/update_width above. Do not run the
+                    // legacy Folder anchor/row machinery on a hidden widget.
+                    return;
+                }
                 // Tile size changed within the same columns: the rows keep
                 // their photos but their heights change, so re-anchor the
                 // viewport to the photo that was at the top.
@@ -882,6 +889,11 @@ impl Gallery {
         self.root.set_max_columns(columns);
         self.root.queue_resize();
         if folder_mode {
+            if folder_v2 {
+                // V2 changes only GridView geometry; section/photo membership
+                // remains persistent across zoom.
+                return;
+            }
             // Each model item is one visual photo line. A column change must
             // rebuild those lines to keep the layout gapless.
             let anchor = self.take_reframe_anchor();
