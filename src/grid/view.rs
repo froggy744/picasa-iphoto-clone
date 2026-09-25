@@ -4,6 +4,7 @@ pub struct Gallery {
     // visible-item allocation and virtualization. Do not wrap this GridView
     // in a Box/Viewport to implement grouping.
     pub root: gtk::GridView,
+    pub v2: crate::gallery_v2::GalleryV2,
     pub folder_root: gtk::ListView,
     pub folder_rubberband: gtk::DrawingArea,
     pub group_header: gtk::Box,
@@ -698,8 +699,41 @@ impl Gallery {
 
         Gallery::install_folder_keyboard(&folder_root, &selection, &current_photos, &activate);
 
+        let selection_for_v2 = selection.clone();
+        let store_for_v2 = store.clone();
+        let v2_selection_guard = Rc::new(Cell::new(false));
+        let guard_for_v2 = v2_selection_guard.clone();
+        let v2 = crate::gallery_v2::GalleryV2::new(
+            tile_width.get(),
+            tile_height.get(),
+            selected.clone(),
+            activate.clone(),
+            context_menu.clone(),
+            unavailable.clone(),
+            Rc::new(move |ids| {
+                if guard_for_v2.replace(true) {
+                    return;
+                }
+                selection_for_v2.unselect_all();
+                if !ids.is_empty() {
+                    let wanted = ids.iter().copied().collect::<HashSet<_>>();
+                    for position in 0..store_for_v2.n_items() {
+                        if store_for_v2
+                            .item(position)
+                            .and_downcast::<PhotoObject>()
+                            .is_some_and(|photo| wanted.contains(&photo.id()))
+                        {
+                            selection_for_v2.select_item(position, false);
+                        }
+                    }
+                }
+                guard_for_v2.set(false);
+            }),
+        );
+
         let gallery = Self {
             root,
+            v2,
             folder_root,
             folder_rubberband,
             group_header,
