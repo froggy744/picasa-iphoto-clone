@@ -778,6 +778,10 @@ impl GalleryV2Folder {
         self.groups.n_items() > 0
     }
 
+    pub(crate) fn section_count(&self) -> u32 {
+        self.groups.n_items()
+    }
+
     pub(crate) fn scroll_to_folder(&self, folder_id: i64) -> bool {
         let Some(position) = self.folder_positions.borrow().get(&folder_id).copied() else {
             return false;
