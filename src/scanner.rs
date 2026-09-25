@@ -209,7 +209,7 @@ fn scan_with_control(
                 // A metadata-only repair does not invalidate the thumbnail.
                 if (!fingerprint_matches || missing_heif_thumbnail || missing_raw_thumbnail)
                     && !remote_raw_thumbnail_unsupported(&path) {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
+                    if crate::diagnostics::trace_enabled() {
                         eprintln!("PIC_THUMBNAIL schedule source=scan raw={} uri={path}",is_raw(&path));
                     }
                     thumbnails.push((

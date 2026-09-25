@@ -54,7 +54,7 @@ pub fn normalize_input(input: &str) -> Option<String> {
     Some(uri)
 }
 pub fn trace(area: &str, message: impl std::fmt::Display) {
-    if std::env::var_os("PICASA_TRACE").is_some() {
+    if crate::diagnostics::trace_enabled() {
         eprintln!(
             "PIC_NETWORK tid={:?} {area} {message}",
             std::thread::current().id()

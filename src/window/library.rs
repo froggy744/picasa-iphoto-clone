@@ -31,7 +31,7 @@ fn refresh_grid(
     } else {
         None
     };
-    if std::env::var_os("PICASA_TRACE").is_some()
+    if crate::diagnostics::trace_enabled()
         && prepare_started.elapsed() >= std::time::Duration::from_millis(20)
     {
         eprintln!(
@@ -143,7 +143,7 @@ fn refresh_grid_inner(
                     let replace_started = std::time::Instant::now();
                     let count = photos.len();
                     gallery.replace(&photos);
-                    if std::env::var_os("PICASA_TRACE").is_some()
+                    if crate::diagnostics::trace_enabled()
                         && replace_started.elapsed() >= std::time::Duration::from_millis(20)
                     {
                         eprintln!(

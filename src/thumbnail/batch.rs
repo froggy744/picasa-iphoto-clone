@@ -17,7 +17,7 @@ pub fn create_many(
             .map(|(path, mtime, size)| {
                 let wait_started = std::time::Instant::now();
                 wait_for_priority_requests();
-                if std::env::var_os("PICASA_TRACE").is_some() && wait_started.elapsed().as_micros() > 0 { eprintln!("PIC_THUMBNAIL queue_wait kind=background elapsed_us={} uri={}", wait_started.elapsed().as_micros(), path); }
+                if crate::diagnostics::tile_trace_enabled() && wait_started.elapsed().as_micros() > 0 { eprintln!("PIC_THUMBNAIL queue_wait kind=background elapsed_us={} uri={}", wait_started.elapsed().as_micros(), path); }
                 let result = create(path, *mtime, *size);
                 completed(path);
                 result
@@ -37,7 +37,7 @@ pub fn create_many_cancellable(
     use rayon::prelude::*;
 
     let workers = thumbnail_worker_threads(items);
-    if std::env::var_os("PICASA_TRACE").is_some() {
+    if crate::diagnostics::trace_enabled() {
         eprintln!("PIC_THUMBNAIL bulk_start cancellable=true items={} workers={workers}", items.len());
     }
     let pool = rayon::ThreadPoolBuilder::new()

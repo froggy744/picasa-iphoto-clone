@@ -343,7 +343,7 @@ fn build_text_panel(
             // notification. A single-selection list cannot be user-cleared,
             // so only a real row should update the active text layer.
             let Some(row) = row else {
-                if std::env::var_os("PICASA_TRACE").is_some() {
+                if crate::diagnostics::trace_enabled() {
                     eprintln!(
                         "PIC_TEXT list_selection_cleared_preserved selected={:?}",
                         selected.get()

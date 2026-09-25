@@ -227,7 +227,7 @@ fn sync_chunks(store: &gio::ListStore, chunks: &gio::ListStore) {
             index += 1;
             created += 1;
         }
-        if std::env::var_os("PICASA_TRACE").is_some() {
+        if crate::diagnostics::trace_enabled() {
             eprintln!(
                 "PIC_CHUNK sync action=create chunks={} created={} removed=0",
                 want, created
@@ -236,7 +236,7 @@ fn sync_chunks(store: &gio::ListStore, chunks: &gio::ListStore) {
     } else {
         let removed = have - want;
         chunks.splice(want, removed, &[] as &[gtk::SliceListModel]);
-        if std::env::var_os("PICASA_TRACE").is_some() {
+        if crate::diagnostics::trace_enabled() {
             eprintln!(
                 "PIC_CHUNK sync action=truncate chunks={} created=0 removed={}",
                 want, removed

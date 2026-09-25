@@ -83,7 +83,7 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
         return;
     }
     if !crate::source::cached_file_available(&path) {
-        if std::env::var_os("PICASA_TRACE").is_some() {
+        if crate::diagnostics::trace_enabled() {
             eprintln!("PIC_THUMBNAIL skip reason=unavailable uri={path}");
         }
         return;
@@ -97,7 +97,7 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
         return;
     }
     drop(pending);
-    if std::env::var_os("PICASA_TRACE").is_some() {
+    if crate::diagnostics::trace_enabled() {
         eprintln!(
             "PIC_THUMBNAIL schedule source=visible uri={path} cache={}",
             destination.display()
@@ -127,7 +127,7 @@ pub fn request_priority(path: String, mtime: Option<i64>, size_bytes: Option<i64
                         queue.pop_front().expect("priority queue was checked above")
                     }
                 };
-                if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_THUMBNAIL queue_wait kind=visible elapsed_us={}", queued_at.elapsed().as_micros()); }
+                if crate::diagnostics::tile_trace_enabled() { eprintln!("PIC_THUMBNAIL queue_wait kind=visible elapsed_us={}", queued_at.elapsed().as_micros()); }
                 let started = std::time::Instant::now();
                 let failure_marker = destination.with_extension("failed");
                 let _pending_guard = PendingGuard(destination.clone());

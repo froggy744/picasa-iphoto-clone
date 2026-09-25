@@ -103,7 +103,7 @@ fn update_filename_label(label: &gtk::Label, filename: &str) {
         return;
     }
 
-    let tracing = std::env::var_os("PICASA_TRACE").is_some();
+    let tracing = crate::diagnostics::trace_enabled();
     let started = tracing.then(Instant::now);
     if text_changed {
         label.set_text(filename);
@@ -440,7 +440,7 @@ impl SquareTile {
         photo.set_thumbnail_available(true);
         self.imp().visual_loaded.set(true);
         *self.imp().applied_visual_key.borrow_mut() = Some(expected_key.to_owned());
-        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_THUMBNAIL paintable_assign elapsed_us={}", started.elapsed().as_micros()); }
+        if crate::diagnostics::tile_trace_enabled() { eprintln!("PIC_THUMBNAIL paintable_assign elapsed_us={}", started.elapsed().as_micros()); }
         true
     }
 
@@ -617,7 +617,7 @@ impl SquareTile {
         let started = std::time::Instant::now();
         self.set_photo_deferred(photo);
         self.load_visual();
-        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_THUMBNAIL gtk_bind elapsed_us={} id={}", started.elapsed().as_micros(), photo.id()); }
+        if crate::diagnostics::tile_trace_enabled() { eprintln!("PIC_THUMBNAIL gtk_bind elapsed_us={} id={}", started.elapsed().as_micros(), photo.id()); }
     }
 
     /// Folder ListView bind must stay strictly presentation-only.

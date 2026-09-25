@@ -115,7 +115,7 @@ pub fn existing_cache_path(
 ) -> Result<Option<PathBuf>> {
     let started = std::time::Instant::now();
     existing_cache_path_in(&cache_dir()?, path, mtime, size_bytes).map(|result| {
-        if std::env::var_os("PICASA_TRACE").is_some() {
+        if crate::diagnostics::tile_trace_enabled() {
             eprintln!("PIC_THUMBNAIL cache_lookup result={} elapsed_us={} uri={}", if result.is_some() { "hit" } else { "miss" }, started.elapsed().as_micros(), path);
         }
         result
@@ -143,7 +143,7 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
     let destination = cache_path(path, mtime, size_bytes)?;
     let failure_marker = destination.with_extension("failed");
     if destination.is_file() {
-        if std::env::var_os("PICASA_TRACE").is_some() {
+        if crate::diagnostics::trace_enabled() {
             eprintln!(
                 "PIC_THUMBNAIL cache_hit uri={path} cache={}",
                 destination.display()
@@ -194,7 +194,7 @@ pub fn create(path: &str, mtime: Option<i64>, size_bytes: Option<i64>) -> Result
         // naturally gets a new cache key and can be attempted again.
         let _ = fs::write(&failure_marker, DECODE_FAILURE_MARKER);
     }
-    if std::env::var_os("PICASA_TRACE").is_some() {
+    if crate::diagnostics::trace_enabled() {
         match &result {
             Ok(cache) => eprintln!(
                 "PIC_THUMBNAIL cache_write uri={path} cache={} elapsed_ms={}",

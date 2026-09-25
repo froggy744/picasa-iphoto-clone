@@ -417,7 +417,7 @@ where
     check_viewer_cancelled(&cancelled, "before_final_orientation")?;
     let oriented = apply_orientation(DynamicImage::ImageRgba8(image), orientation).into_rgba8();
     check_viewer_cancelled(&cancelled, "after_final_orientation")?;
-    if std::env::var_os("PICASA_TRACE").is_some() {
+    if crate::diagnostics::trace_enabled() {
         let total_ms = decode_started.elapsed().as_millis();
         eprintln!(
             "PIC_VIEWER decode_stage source_ms={} cpu_ms={} uri={}",

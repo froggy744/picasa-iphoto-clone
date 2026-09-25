@@ -1528,7 +1528,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             });
             if folder_mode {
                 if chunked_experiment {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
+                    if crate::diagnostics::trace_enabled() {
                         eprintln!("PIC_FOLDER_CHUNKED enabled chunk_size=64");
                     }
                     if let Some(chunked) = gallery_for_folder_view.chunked_prototype.as_ref() {
@@ -1546,7 +1546,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     return;
                 }
                 if folder_grid_experiment {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
+                    if crate::diagnostics::trace_enabled() {
                         eprintln!("PIC_FOLDER_GRIDVIEW enabled mode=photo_grid folder_indicator=sticky");
                     }
                     gallery_for_folder_view.root.grab_focus();
@@ -3805,7 +3805,7 @@ fn start_photo_export_single(
                 }
 
                 scanner::ScanEvent::IndexingFinished { imported } => {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
+                    if crate::diagnostics::trace_enabled() {
                         eprintln!(
                             "PIC_SCAN_UI indexing_finished queued_ms={} imported={} filter={:?}",
                             ui_event.queued_at.elapsed().as_millis(),
@@ -3832,7 +3832,7 @@ fn start_photo_export_single(
                     
                 }
                 scanner::ScanEvent::ThumbnailsStarted { total } => {
-                    if std::env::var_os("PICASA_TRACE").is_some() {
+                    if crate::diagnostics::trace_enabled() {
                         eprintln!(
                             "PIC_SCAN_UI thumbnails_started queued_ms={} total={total}",
                             ui_event.queued_at.elapsed().as_millis()
@@ -4038,7 +4038,7 @@ fn start_photo_export_single(
             run_ui_guarded("photo batch append", || {
                 gallery_for_events.append_photos(&batch)
             });
-            if std::env::var_os("PICASA_TRACE").is_some()
+            if crate::diagnostics::trace_enabled()
                 && append_started.elapsed() >= Duration::from_millis(20)
             {
                 eprintln!(
@@ -4064,13 +4064,13 @@ fn start_photo_export_single(
                 paths.push(path);
             }
             run_ui_guarded("targeted thumbnail refresh", || {
-                if std::env::var_os("PICASA_TRACE").is_some(){eprintln!("PIC_THUMBNAIL tile_refresh count={}",paths.len());}
+                if crate::diagnostics::trace_enabled(){eprintln!("PIC_THUMBNAIL tile_refresh count={}",paths.len());}
                 gallery_for_events.refresh_thumbnails_for_paths(&paths)
             });
             
         }
 
-        if std::env::var_os("PICASA_TRACE").is_some()
+        if crate::diagnostics::trace_enabled()
             && (ui_tick_started.elapsed() >= Duration::from_millis(100)
                 || max_event_queue_wait >= Duration::from_millis(500))
         {

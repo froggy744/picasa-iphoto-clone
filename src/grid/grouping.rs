@@ -207,21 +207,21 @@ impl Gallery {
     /// `selection` reads them through `store`, so both must be replaced.
     pub fn can_restore_folder_cache(&self) -> bool {
         let Some(cache) = self.folder_cache.borrow().as_ref().cloned() else {
-            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=no_cached_rows"); }
+            if crate::diagnostics::trace_enabled() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=no_cached_rows"); }
             return false;
         };
         if cache.columns != self.current_columns.get()
             && !crate::grid::folder_gridview_experiment_enabled()
             && !crate::grid::folder_chunked_experiment_enabled()
         {
-            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=current_columns_mismatch cached={} current={}", cache.columns, self.current_columns.get()); }
+            if crate::diagnostics::trace_enabled() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=current_columns_mismatch cached={} current={}", cache.columns, self.current_columns.get()); }
             return false;
         }
         if cache.order != *self.folder_order.borrow() {
-            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=folder_order_mismatch"); }
+            if crate::diagnostics::trace_enabled() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=folder_order_mismatch"); }
             return false;
         }
-        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=hit"); }
+        if crate::diagnostics::trace_enabled() { eprintln!("PIC_NAV folder_cache_restore result=hit"); }
         if std::env::var_os("PICASA_TRACE_BACKTRACE").is_some() {
             eprintln!("PIC_NAV can_restore_backtrace\n{}", std::backtrace::Backtrace::force_capture());
         }
@@ -242,7 +242,7 @@ impl Gallery {
         if self.group_mode.get() != GroupMode::Folder {
             // The visible model is not the Folder stream (library, album,
             // search, history). Scrolling cannot reveal the destination.
-            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=not_folder_mode"); }
+            if crate::diagnostics::trace_enabled() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=not_folder_mode"); }
             return false;
         }
         if !self.can_restore_folder_cache() {
@@ -253,7 +253,7 @@ impl Gallery {
         } else {
             // The cached stream is valid but predates the current model, or
             // the destination folder has no photos in the stream yet.
-            if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=target_folder_missing_from_stream"); }
+            if crate::diagnostics::trace_enabled() { eprintln!("PIC_NAV folder_cache_restore result=reject reason=target_folder_missing_from_stream"); }
             false
         }
     }
@@ -311,7 +311,7 @@ impl Gallery {
     /// ordering metadata only: folders without direct photos must not become
     /// empty gallery sections.
     pub fn set_folder_catalog(&self, folders: &[Folder], folder_order: &[i64]) {
-        if std::env::var_os("PICASA_TRACE").is_some() && *self.folder_order.borrow() != folder_order { eprintln!("PIC_NAV folder_order_changed old_count={} new_count={}", self.folder_order.borrow().len(), folder_order.len()); }
+        if crate::diagnostics::trace_enabled() && *self.folder_order.borrow() != folder_order { eprintln!("PIC_NAV folder_order_changed old_count={} new_count={}", self.folder_order.borrow().len(), folder_order.len()); }
         let catalog = folders
             .iter()
             .map(|folder| FolderCatalogEntry {

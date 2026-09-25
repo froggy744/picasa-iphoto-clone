@@ -429,7 +429,7 @@ where
         let evicted = cache.insert(reference, fingerprint, bytes.clone());
         (evicted, inserted)
     };
-    if std::env::var_os("PICASA_TRACE").is_some() {
+    if crate::diagnostics::trace_enabled() {
         eprintln!(
             "PIC_VIEWER source_cache action={} bytes={} uri={}",
             if inserted { "insert" } else { "skip_oversize" },
@@ -470,7 +470,7 @@ pub fn read_for_viewer(
                 .unwrap()
                 .lookup(reference, fingerprint)
             {
-                if std::env::var_os("PICASA_TRACE").is_some() {
+                if crate::diagnostics::trace_enabled() {
                     eprintln!(
                         "PIC_VIEWER source_cache lane={} action=hit bytes={} uri={}",
                         match context.lane() {
@@ -487,7 +487,7 @@ pub fn read_for_viewer(
                 });
             }
         }
-        if std::env::var_os("PICASA_TRACE").is_some() {
+        if crate::diagnostics::trace_enabled() {
             eprintln!(
                 "PIC_VIEWER source_cache lane={} action={} uri={}",
                 match context.lane() {
@@ -510,7 +510,7 @@ pub fn read_for_viewer(
         let permit = gate
             .acquire(context)
             .ok_or_else(|| anyhow::anyhow!("cancelled while waiting for network read slot"))?;
-        if std::env::var_os("PICASA_TRACE").is_some() {
+        if crate::diagnostics::trace_enabled() {
             eprintln!(
                 "PIC_VIEWER network_slot lane={} wait_ms={} uri={}",
                 match context.lane() {
@@ -529,7 +529,7 @@ pub fn read_for_viewer(
                 .unwrap()
                 .lookup(reference, fingerprint)
             {
-                if std::env::var_os("PICASA_TRACE").is_some() {
+                if crate::diagnostics::trace_enabled() {
                     eprintln!(
                         "PIC_VIEWER source_cache lane={} action=hit_after_wait bytes={} uri={}",
                         match context.lane() {
@@ -557,7 +557,7 @@ pub fn read_for_viewer(
                 cache_hit: false,
             })
         };
-        if std::env::var_os("PICASA_TRACE").is_some() {
+        if crate::diagnostics::trace_enabled() {
             eprintln!(
                 "PIC_VIEWER network_done lane={} read_ms={} bytes={} source={} outcome={} uri={}",
                 match context.lane() {

@@ -222,7 +222,7 @@ fn show_photo(
 }
 
 fn viewer_trace(message: impl std::fmt::Display) {
-    if std::env::var_os("PICASA_TRACE").is_some() {
+    if crate::diagnostics::trace_enabled() {
         static TRACE_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
         let elapsed = TRACE_STARTED.get_or_init(std::time::Instant::now).elapsed();
         eprintln!("PIC_VIEWER t_ms={} tid={:?} {message}", elapsed.as_millis(), std::thread::current().id());

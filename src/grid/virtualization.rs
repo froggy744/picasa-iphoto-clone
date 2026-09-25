@@ -343,7 +343,7 @@ impl Gallery {
     }
 
     fn apply_tile_size(&self, width: i32, persist: bool) {
-        let trace_zoom = std::env::var_os("PICASA_TRACE").is_some();
+        let trace_zoom = crate::diagnostics::trace_enabled();
         let zoom_started = trace_zoom.then(Instant::now);
         let old_width = self.tile_width.get().max(1);
         let old_height = self.tile_height.get().max(1);
@@ -1287,7 +1287,7 @@ impl Gallery {
             .iter()
             .map(|path| path.to_string_lossy().into_owned())
             .collect::<HashSet<_>>();
-        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV thumbnail_refresh_paths count={}", paths.len()); }
+        if crate::diagnostics::trace_enabled() { eprintln!("PIC_NAV thumbnail_refresh_paths count={}", paths.len()); }
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
@@ -1400,7 +1400,7 @@ impl Gallery {
     }
 
     pub fn replace(&self, photos: &[Photo]) {
-        if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV gallery_replace photos={}", photos.len()); }
+        if crate::diagnostics::trace_enabled() { eprintln!("PIC_NAV gallery_replace photos={}", photos.len()); }
         if std::env::var_os("PICASA_TRACE_BACKTRACE").is_some() {
             eprintln!("PIC_NAV replace_backtrace\n{}", std::backtrace::Backtrace::force_capture());
         }
@@ -1524,8 +1524,19 @@ impl Gallery {
             chunked.detach_for_replace();
         }
         let objects: Vec<PhotoObject> = photos.iter().map(PhotoObject::from_photo).collect();
-        self.current_photos.replace(objects.clone());
+        // Swap the model vec first and defer dropping the old PhotoObjects:
+        // with the model vec no longer holding references, the splice's
+        // unrefs are cheap refcount decrements and the expensive GObject
+        // finalizers (textures, paintables) run on the next idle instead of
+        // inside the navigation frame.
+        let old_objects = std::mem::replace(
+            &mut *self.current_photos.borrow_mut(),
+            objects.clone(),
+        );
         self.store.splice(0, self.store.n_items(), &objects);
+        if old_objects.len() > 1_000 {
+            glib::idle_add_local_once(move || drop(old_objects));
+        }
         if let Some(chunked) = chunked_detach {
             // After the reconcile idle the chunk list matches the new store,
             // so re-mounting binds only the new content.

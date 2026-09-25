@@ -771,7 +771,7 @@ impl Gallery {
     }
 
     fn update_layout(&self, width: i32, tile_size_changed: bool) {
-        let trace_started = std::env::var_os("PICASA_TRACE").is_some().then(std::time::Instant::now);
+        let trace_started = crate::diagnostics::trace_enabled().then(std::time::Instant::now);
         // First real allocation with no stored thumbnail preference: adopt
         // the ~4-thumbnails-per-row default for this surface width. Session
         // only - it becomes a preference if the user zooms manually.
@@ -827,7 +827,7 @@ impl Gallery {
         }
 
         let previous_columns = self.current_columns.replace(columns);
-        if std::env::var_os("PICASA_TRACE").is_some() && previous_columns != columns { eprintln!("PIC_NAV current_columns_changed old={} new={}", previous_columns, columns); }
+        if crate::diagnostics::trace_enabled() && previous_columns != columns { eprintln!("PIC_NAV current_columns_changed old={} new={}", previous_columns, columns); }
         self.root.set_min_columns(columns);
         self.root.set_max_columns(columns);
         self.root.queue_resize();
