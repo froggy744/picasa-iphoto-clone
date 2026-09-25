@@ -2816,11 +2816,9 @@ fn start_photo_export_single(
 
         let end = (startup_offset + STARTUP_BATCH_SIZE).min(startup_total);
         let batch = &startup_photos_for_idle[startup_offset..end];
-        if startup_offset == 0 {
-            startup_gallery.replace(batch);
-        } else {
-            startup_gallery.append_photos(batch);
-        }
+        let first_batch = startup_offset == 0;
+        let final_batch = end >= startup_total;
+        startup_gallery.load_startup_batch(batch, first_batch, final_batch);
         startup_offset = end;
 
         if startup_offset >= startup_total {
