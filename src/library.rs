@@ -835,10 +835,18 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     selected_text.append(&selected_folder);
     selected_info.append(&selected_text);
 
+    let taken_label = gtk::Label::new(None);
+    taken_label.add_css_class("metric-val");
+    let camera_label = gtk::Label::new(None);
+    camera_label.add_css_class("metric-val");
+    camera_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    camera_label.set_max_width_chars(24);
     let dimensions_label = gtk::Label::new(None);
     dimensions_label.add_css_class("metric-val");
     let size_label = gtk::Label::new(None);
     size_label.add_css_class("metric-val");
+    selected_info.append(&taken_label);
+    selected_info.append(&camera_label);
     selected_info.append(&dimensions_label);
     selected_info.append(&size_label);
     bottom_bar.append(&selected_info);
@@ -902,6 +910,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let selected_info = selected_info.clone();
         let selected_name = selected_name.clone();
         let selected_folder = selected_folder.clone();
+        let taken_label = taken_label.clone();
+        let camera_label = camera_label.clone();
         let dimensions_label = dimensions_label.clone();
         let size_label = size_label.clone();
         let favorite_action = favorite_action.clone();
@@ -929,6 +939,14 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
 
             if let Some(record) = metadata {
                 selected_folder.set_label(&record.folder_path);
+                taken_label.set_label(
+                    &record
+                        .taken_at
+                        .as_deref()
+                        .map(format_photo_date)
+                        .unwrap_or_else(|| "Unknown date".to_string()),
+                );
+                camera_label.set_label(record.camera.as_deref().unwrap_or("Unknown camera"));
                 let dimensions = match (record.width, record.height) {
                     (Some(width), Some(height)) if width > 0 && height > 0 => {
                         format!("{width} × {height}")
@@ -939,6 +957,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 size_label.set_label(&format_file_size(record.size_bytes.unwrap_or_default()));
             } else {
                 selected_folder.set_label("");
+                taken_label.set_label("");
+                camera_label.set_label("");
                 dimensions_label.set_label("");
                 size_label.set_label("");
             }
@@ -2570,6 +2590,16 @@ fn refresh_library_chrome(
         favorites_button,
         recent_button,
     );
+}
+
+fn format_photo_date(value: &str) -> String {
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
+        return parsed.format("%b %-d, %Y").to_string();
+    }
+    if let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+        return parsed.format("%b %-d, %Y").to_string();
+    }
+    value.to_string()
 }
 
 fn format_file_size(size: i64) -> String {
