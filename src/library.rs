@@ -620,9 +620,47 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     status.append(&count_label);
     bottom_bar.append(&status);
 
+    let selected_info = gtk::Box::new(gtk::Orientation::Horizontal, 18);
+    selected_info.set_valign(gtk::Align::Center);
+    selected_info.set_visible(false);
+
+    let selected_text = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    let selected_name = gtk::Label::new(None);
+    selected_name.set_xalign(0.0);
+    selected_name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    selected_name.add_css_class("info-title");
+    let selected_folder = gtk::Label::new(None);
+    selected_folder.set_xalign(0.0);
+    selected_folder.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    selected_folder.add_css_class("dim-label");
+    selected_text.append(&selected_name);
+    selected_text.append(&selected_folder);
+    selected_info.append(&selected_text);
+
+    let dimensions_label = gtk::Label::new(None);
+    dimensions_label.add_css_class("metric-val");
+    let size_label = gtk::Label::new(None);
+    size_label.add_css_class("metric-val");
+    selected_info.append(&dimensions_label);
+    selected_info.append(&size_label);
+    bottom_bar.append(&selected_info);
+
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     bottom_bar.append(&spacer);
+
+    let favorite_action = gtk::Button::from_icon_name("non-starred-symbolic");
+    favorite_action.add_css_class("photo-action-button");
+    favorite_action.add_css_class("favorite-btn");
+    favorite_action.set_tooltip_text(Some("Add to Favourites"));
+    favorite_action.set_sensitive(false);
+    bottom_bar.append(&favorite_action);
+
+    let export_action = gtk::Button::from_icon_name("document-save-symbolic");
+    export_action.add_css_class("photo-action-button");
+    export_action.set_tooltip_text(Some("Export photo"));
+    export_action.set_sensitive(false);
+    bottom_bar.append(&export_action);
 
     let one_to_one = gtk::ToggleButton::with_label("1:1");
     one_to_one.add_css_class("photo-action-button");
@@ -654,6 +692,65 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     main_split.set_show_sidebar(true);
     main_split.set_enable_show_gesture(true);
     main_split.set_enable_hide_gesture(true);
+
+    {
+        let selected_photo = selected_photo.clone();
+        let selected_info = selected_info.clone();
+        let selected_name = selected_name.clone();
+        let selected_folder = selected_folder.clone();
+        let dimensions_label = dimensions_label.clone();
+        let size_label = size_label.clone();
+        let favorite_action = favorite_action.clone();
+        let export_action = export_action.clone();
+
+        selection_changed.replace(Some(Rc::new(move |photo| {
+            selected_photo.replace(photo.clone());
+            let Some(photo) = photo else {
+                selected_info.set_visible(false);
+                favorite_action.set_sensitive(false);
+                export_action.set_sensitive(false);
+                favorite_action.remove_css_class("active");
+                return;
+            };
+
+            let metadata = crate::catalog::photo_by_id(photo.id()).ok().flatten();
+            let path = photo.path();
+            let name = Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Photo");
+            selected_name.set_label(name);
+
+            if let Some(record) = metadata {
+                selected_folder.set_label(&record.folder_path);
+                let dimensions = match (record.width, record.height) {
+                    (Some(width), Some(height)) if width > 0 && height > 0 => {
+                        format!("{width} × {height}")
+                    }
+                    _ => "Unknown size".to_string(),
+                };
+                dimensions_label.set_label(&dimensions);
+                size_label.set_label(&format_file_size(record.size_bytes.unwrap_or_default()));
+            } else {
+                selected_folder.set_label("");
+                dimensions_label.set_label("");
+                size_label.set_label("");
+            }
+
+            favorite_action.set_sensitive(true);
+            export_action.set_sensitive(true);
+            if photo.favorite() {
+                favorite_action.set_icon_name("starred-symbolic");
+                favorite_action.add_css_class("active");
+                favorite_action.set_tooltip_text(Some("Remove from Favourites"));
+            } else {
+                favorite_action.set_icon_name("non-starred-symbolic");
+                favorite_action.remove_css_class("active");
+                favorite_action.set_tooltip_text(Some("Add to Favourites"));
+            }
+            selected_info.set_visible(true);
+        })));
+    }
 
     {
         let viewer = viewer.clone();
@@ -1869,6 +1966,18 @@ fn refresh_library_chrome(
         favorites_button,
         recent_button,
     );
+}
+
+fn format_file_size(size: i64) -> String {
+    if size >= 1_000_000_000 {
+        format!("{:.1} GB", size as f64 / 1_000_000_000.0)
+    } else if size >= 1_000_000 {
+        format!("{:.1} MB", size as f64 / 1_000_000.0)
+    } else if size >= 1_000 {
+        format!("{:.1} KB", size as f64 / 1_000.0)
+    } else {
+        format!("{size} B")
+    }
 }
 
 fn install_css() {
