@@ -33,7 +33,10 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     {
         let tile_size = tile_size.clone();
         let live_tiles = live_tiles.clone();
-        factory.connect_setup(move |_, list_item| {
+        factory.connect_setup(move |_, object| {
+            let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
             let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
             frame.add_css_class("prototype-photo-tile");
             frame.set_overflow(gtk::Overflow::Hidden);
@@ -52,7 +55,10 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         });
     }
 
-    factory.connect_bind(|_, list_item| {
+    factory.connect_bind(|_, object| {
+        let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
         let Some(photo) = list_item.item().and_downcast::<PhotoObject>() else {
             return;
         };
@@ -67,7 +73,10 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         picture.set_tooltip_text(Some(&photo.path()));
     });
 
-    factory.connect_unbind(|_, list_item| {
+    factory.connect_unbind(|_, object| {
+        let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
         let Some(frame) = list_item.child().and_downcast::<gtk::Box>() else {
             return;
         };
