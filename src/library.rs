@@ -581,6 +581,12 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     search_area.append(&search);
     right_header.set_title_widget(Some(&search_area));
 
+    let theme_button = gtk::MenuButton::new();
+    theme_button.set_icon_name("emblem-system-symbolic");
+    theme_button.set_tooltip_text(Some("Appearance"));
+    theme_button.add_css_class("flat");
+    right_header.pack_end(&theme_button);
+
     let open = gtk::Button::from_icon_name("folder-new-symbolic");
     open.set_tooltip_text(Some("Import Folder"));
     open.add_css_class("flat");
@@ -859,6 +865,64 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     window.set_content(Some(&main_split));
 
     install_css();
+
+    let theme_manager = crate::theme::ThemeManager::new().map(Rc::new);
+    let saved_theme = crate::catalog::setting("appearance-theme")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "standard".to_string());
+    if let Some(manager) = theme_manager.as_ref() {
+        if let Err(error) = manager.apply(&saved_theme) {
+            eprintln!("PIC_REBUILD theme_load_failed theme={saved_theme} error={error:#}");
+            let _ = manager.apply("standard");
+        }
+
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        menu.set_margin_top(6);
+        menu.set_margin_bottom(6);
+        menu.set_margin_start(6);
+        menu.set_margin_end(6);
+
+        let heading = gtk::Label::new(Some("Theme"));
+        heading.set_xalign(0.0);
+        heading.add_css_class("dim-label");
+        menu.append(&heading);
+
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 1);
+        for theme_name in crate::theme::ThemeManager::available_themes() {
+            let button = gtk::Button::with_label(&crate::theme::pretty_name(&theme_name));
+            button.add_css_class("flat");
+            if theme_name == saved_theme {
+                button.add_css_class("suggested-action");
+            }
+            let manager = manager.clone();
+            let popover_button = theme_button.clone();
+            button.connect_clicked(move |_| {
+                if let Err(error) = manager.apply(&theme_name) {
+                    eprintln!("PIC_REBUILD theme_apply_failed theme={theme_name} error={error:#}");
+                    return;
+                }
+                if let Err(error) = crate::catalog::set_setting("appearance-theme", &theme_name) {
+                    eprintln!("PIC_REBUILD theme_save_failed error={error:#}");
+                }
+                if let Some(popover) = popover_button.popover() {
+                    popover.popdown();
+                }
+            });
+            list.append(&button);
+        }
+
+        let scroll = gtk::ScrolledWindow::new();
+        scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+        scroll.set_max_content_height(420);
+        scroll.set_propagate_natural_height(true);
+        scroll.set_child(Some(&list));
+        menu.append(&scroll);
+
+        let popover = gtk::Popover::new();
+        popover.set_child(Some(&menu));
+        theme_button.set_popover(Some(&popover));
+    }
 
     {
         let groups = groups.clone();
