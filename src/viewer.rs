@@ -327,6 +327,7 @@ impl Viewer {
         };
 
         let toggle_one_to_one = {
+            let zoom = zoom.clone();
             let one_to_one = one_to_one.clone();
             let one_to_one_changed = one_to_one_changed.clone();
             let refresh = refresh.clone();
