@@ -198,9 +198,7 @@ impl ChunkedPrototype {
             // natural height and the row would look blank.
             grid.set_vexpand(true);
             grid.set_valign(gtk::Align::Fill);
-            if std::env::var_os("PIC_BISECT_NO_CSS").is_none() {
-                grid.add_css_class("section-grid");
-            }
+            grid.add_css_class("section-grid");
             // The wrapper owns the row height so the outer ListView can size
             // and virtualize rows whose photos have not streamed in yet.
             let wrapper = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -335,9 +333,7 @@ impl ChunkedPrototype {
         root.set_show_separators(false);
         root.set_hexpand(true);
         root.set_vexpand(true);
-        if std::env::var_os("PIC_BISECT_NO_CSS").is_none() {
-            root.add_css_class("folder-stream");
-        }
+        root.add_css_class("folder-stream");
         *bind_trace_root.borrow_mut() = Some(root.clone());
         let pending_self_clone = Self {
             root: root.clone(),
