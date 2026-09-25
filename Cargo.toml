@@ -9,6 +9,7 @@ glib = "0.21"
 gtk4 = { version = "0.10", features = ["v4_12"] }
 libadwaita = { version = "0.8", features = ["v1_5"] }
 walkdir = "2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff", "bmp"] }
 
 [profile.dev]
 opt-level = 1
