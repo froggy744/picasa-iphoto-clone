@@ -1284,10 +1284,27 @@ impl Gallery {
         if std::env::var_os("PIC_GALLERY_V2").is_some()
             && self.group_mode.get() == GroupMode::Folder
         {
-            self.v2_folder.replace(photos);
-        } else {
-            self.v2.replace(photos);
+            let started = std::time::Instant::now();
+            let objects = self.v2.objects_for(photos);
+            self.v2_folder.replace_objects(&objects);
+
+            // Keep the mature RC action/navigation model pointing at the same
+            // persistent PhotoObjects without rebuilding another 22k GObjects.
+            self.current_photos.replace(objects.clone());
+            self.store.splice(0, self.store.n_items(), &objects);
+            self.stream_building.set(false);
+
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "PIC_V2_FOLDER gallery_replace photos={} elapsed_ms={}",
+                    photos.len(),
+                    started.elapsed().as_millis()
+                );
+            }
+            return;
         }
+
+        self.v2.replace(photos);
         if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV gallery_replace photos={}", photos.len()); }
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
