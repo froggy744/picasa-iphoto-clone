@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
-use walkdir::WalkDir;
 
 const MIN_TILE: i32 = 84;
 const MAX_TILE: i32 = 320;
@@ -33,6 +32,8 @@ struct FolderGroupData {
 enum ViewMode {
     Photos,
     Favorites,
+    RecentlyAdded,
+    Album(i64),
 }
 
 struct FolderNavEntry {
@@ -271,8 +272,27 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         make_sidebar_button("image-x-generic-symbolic", "Photos", "0");
     let (favorites_button, favorites_count) =
         make_sidebar_button("emote-love-symbolic", "Favourites", "0");
+    let (recent_button, recent_count) =
+        make_sidebar_button("appointment-soon-symbolic", "Recently Added", "0");
     sidebar.append(&photos_button);
     sidebar.append(&favorites_button);
+    sidebar.append(&recent_button);
+
+    let albums_heading = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    albums_heading.set_margin_top(8);
+    let albums_label = gtk::Label::new(Some("Albums"));
+    albums_label.add_css_class("sidebar-heading");
+    albums_label.set_xalign(0.0);
+    albums_label.set_hexpand(true);
+    let create_album_button = gtk::Button::from_icon_name("list-add-symbolic");
+    create_album_button.add_css_class("flat");
+    create_album_button.set_tooltip_text(Some("Create Album"));
+    albums_heading.append(&albums_label);
+    albums_heading.append(&create_album_button);
+    sidebar.append(&albums_heading);
+
+    let album_box = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    sidebar.append(&album_box);
 
     let sidebar_separator = gtk::Separator::new(gtk::Orientation::Horizontal);
     sidebar_separator.set_margin_top(8);
@@ -643,6 +663,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let content_title = content_title.clone();
         let photos_button = photos_button.clone();
         let favorites_button = favorites_button.clone();
+        let recent_button = recent_button.clone();
         let favorites_count = favorites_count.clone();
         let search_text = search_text.clone();
 
@@ -659,6 +680,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &content_title,
                 &photos_button,
                 &favorites_button,
+                &recent_button,
             );
         });
         favorite_changed.replace(Some(refresh));
@@ -672,6 +694,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let title = content_title.clone();
         let photos_button_for_style = photos_button.clone();
         let favorites_button_for_style = favorites_button.clone();
+        let recent_button_for_style = recent_button.clone();
         let search_text = search_text.clone();
 
         photos_button.connect_clicked(move |_| {
@@ -685,6 +708,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &title,
                 &photos_button_for_style,
                 &favorites_button_for_style,
+                &recent_button_for_style,
             );
         });
     }
@@ -697,6 +721,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let title = content_title.clone();
         let photos_button_for_style = photos_button.clone();
         let favorites_button_for_style = favorites_button.clone();
+        let recent_button_for_style = recent_button.clone();
         let search_text = search_text.clone();
 
         favorites_button.connect_clicked(move |_| {
@@ -710,6 +735,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &title,
                 &photos_button_for_style,
                 &favorites_button_for_style,
+                &recent_button_for_style,
             );
         });
     }
@@ -722,6 +748,34 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let title = content_title.clone();
         let photos_button = photos_button.clone();
         let favorites_button = favorites_button.clone();
+        let recent_button_for_style = recent_button.clone();
+        let search_text = search_text.clone();
+
+        recent_button.connect_clicked(move |_| {
+            mode.set(ViewMode::RecentlyAdded);
+            apply_view(
+                &groups,
+                &master.borrow(),
+                ViewMode::RecentlyAdded,
+                &search_text.borrow(),
+                &count_label,
+                &title,
+                &photos_button,
+                &favorites_button,
+                &recent_button_for_style,
+            );
+        });
+    }
+
+    {
+        let groups = groups.clone();
+        let master = master_groups.clone();
+        let mode = mode.clone();
+        let count_label = count_label.clone();
+        let title = content_title.clone();
+        let photos_button = photos_button.clone();
+        let favorites_button = favorites_button.clone();
+        let recent_button = recent_button.clone();
         let search_text = search_text.clone();
 
         search.connect_search_changed(move |entry| {
@@ -735,6 +789,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &title,
                 &photos_button,
                 &favorites_button,
+                &recent_button,
             );
         });
     }
@@ -749,6 +804,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let search = search.clone();
         let photos_button = photos_button.clone();
         let favorites_button = favorites_button.clone();
+        let recent_button = recent_button.clone();
         let search_text = search_text.clone();
 
         Rc::new(move |index| {
@@ -772,6 +828,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                     &title,
                     &photos_button,
                     &favorites_button,
+                    &recent_button,
                 );
             }
 
@@ -785,6 +842,79 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             });
         })
     };
+
+    let album_activate: Rc<dyn Fn(i64)> = {
+        let groups = groups.clone();
+        let master = master_groups.clone();
+        let mode = mode.clone();
+        let count_label = count_label.clone();
+        let title = content_title.clone();
+        let photos_button = photos_button.clone();
+        let favorites_button = favorites_button.clone();
+        let recent_button = recent_button.clone();
+        let search = search.clone();
+        let search_text = search_text.clone();
+
+        Rc::new(move |album_id| {
+            if !search_text.borrow().is_empty() {
+                search_text.borrow_mut().clear();
+                search.set_text("");
+            }
+            mode.set(ViewMode::Album(album_id));
+            apply_view(
+                &groups,
+                &master.borrow(),
+                ViewMode::Album(album_id),
+                "",
+                &count_label,
+                &title,
+                &photos_button,
+                &favorites_button,
+                &recent_button,
+            );
+        })
+    };
+    rebuild_album_sidebar(&album_box, &album_activate);
+
+    {
+        let parent = window.clone();
+        let album_box = album_box.clone();
+        let album_activate = album_activate.clone();
+        create_album_button.connect_clicked(move |_| {
+            let dialog = gtk::Dialog::builder()
+                .transient_for(&parent)
+                .modal(true)
+                .title("Create Album")
+                .build();
+            dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+            dialog.add_button("Create", gtk::ResponseType::Accept);
+            let entry = gtk::Entry::new();
+            entry.set_placeholder_text(Some("Album name"));
+            entry.set_activates_default(true);
+            entry.set_margin_top(12);
+            entry.set_margin_bottom(12);
+            entry.set_margin_start(12);
+            entry.set_margin_end(12);
+            dialog.content_area().append(&entry);
+            dialog.set_default_response(gtk::ResponseType::Accept);
+
+            let album_box = album_box.clone();
+            let album_activate = album_activate.clone();
+            dialog.connect_response(move |dialog, response| {
+                if response == gtk::ResponseType::Accept {
+                    let name = entry.text();
+                    if let Err(error) = crate::catalog::create_album(name.as_str()) {
+                        eprintln!("PIC_REBUILD album_create_failed error={error:#}");
+                    } else {
+                        rebuild_album_sidebar(&album_box, &album_activate);
+                    }
+                }
+                dialog.close();
+            });
+            dialog.present();
+            entry.grab_focus();
+        });
+    }
 
     {
         let live_tiles = live_tiles.clone();
@@ -891,6 +1021,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let favorites_button = favorites_button.clone();
         let photos_count = photos_count.clone();
         let favorites_count = favorites_count.clone();
+        let recent_count = recent_count.clone();
+        let recent_button = recent_button.clone();
         let folder_box = folder_box.clone();
         let folder_activate = folder_activate.clone();
         let mode = mode.clone();
@@ -914,6 +1046,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             let favorites_button = favorites_button.clone();
             let photos_count = photos_count.clone();
             let favorites_count = favorites_count.clone();
+            let recent_count = recent_count.clone();
+            let recent_button = recent_button.clone();
             let folder_box = folder_box.clone();
             let folder_activate = folder_activate.clone();
             let mode = mode.clone();
@@ -941,6 +1075,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                 let favorites_button = favorites_button.clone();
                 let photos_count = photos_count.clone();
                 let favorites_count = favorites_count.clone();
+                let recent_count = recent_count.clone();
+                let recent_button = recent_button.clone();
                 let folder_box = folder_box.clone();
                 let folder_activate = folder_activate.clone();
                 let mode = mode.clone();
@@ -974,6 +1110,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
                                 &favorites_button,
                                 &photos_count,
                                 &favorites_count,
+                                &recent_count,
+                                &recent_button,
                             );
                             glib::ControlFlow::Break
                         }
@@ -1016,6 +1154,8 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         &favorites_button,
         &photos_count,
         &favorites_count,
+        &recent_count,
+        &recent_button,
     );
 
     if trace_enabled() {
@@ -1155,6 +1295,57 @@ fn make_photo_factory(
                     glib::idle_add_local_once(move || callback());
                 }
             });
+
+            let list_item_for_context = list_item.clone();
+            let overlay_for_context = overlay.clone();
+            let right_click = gtk::GestureClick::new();
+            right_click.set_button(3);
+            right_click.connect_pressed(move |gesture, _, _, _| {
+                let Some(photo) = list_item_for_context
+                    .item()
+                    .and_downcast::<PhotoObject>()
+                else {
+                    return;
+                };
+                let albums = crate::catalog::albums().unwrap_or_default();
+                if albums.is_empty() {
+                    return;
+                }
+
+                let popover = gtk::Popover::new();
+                popover.set_has_arrow(true);
+                popover.set_parent(&overlay_for_context);
+                let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                menu.set_margin_top(6);
+                menu.set_margin_bottom(6);
+                menu.set_margin_start(6);
+                menu.set_margin_end(6);
+
+                let heading = gtk::Label::new(Some("Add to Album"));
+                heading.set_xalign(0.0);
+                heading.add_css_class("dim-label");
+                menu.append(&heading);
+
+                for album in albums {
+                    let button = gtk::Button::with_label(&album.name);
+                    button.add_css_class("flat");
+                    let popover_for_click = popover.clone();
+                    let photo_id = photo.id();
+                    button.connect_clicked(move |_| {
+                        if let Err(error) =
+                            crate::catalog::add_photo_to_album(album.id, photo_id)
+                        {
+                            eprintln!("PIC_REBUILD album_add_failed error={error:#}");
+                        }
+                        popover_for_click.popdown();
+                    });
+                    menu.append(&button);
+                }
+                popover.set_child(Some(&menu));
+                popover.popup();
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+            });
+            overlay.add_controller(right_click);
 
             let widget: gtk::Widget = overlay.clone().upcast();
             live_tiles.borrow_mut().push(widget.downgrade());
@@ -1407,12 +1598,20 @@ fn apply_view(
     content_title: &gtk::Label,
     photos_button: &gtk::Button,
     favorites_button: &gtk::Button,
+    recent_button: &gtk::Button,
 ) {
     let started = Instant::now();
     groups.remove_all();
     let mut photo_count = 0u32;
     let mut folder_count = 0u32;
     let needle = query.trim().to_ascii_lowercase();
+    let membership = match mode {
+        ViewMode::RecentlyAdded => {
+            Some(crate::catalog::recently_added_ids(500).unwrap_or_default())
+        }
+        ViewMode::Album(id) => Some(crate::catalog::album_photo_ids(id).unwrap_or_default()),
+        _ => None,
+    };
 
     for group in master {
         let folder_match = !needle.is_empty()
@@ -1430,6 +1629,12 @@ fn apply_view(
             };
 
             if mode == ViewMode::Favorites && !photo.favorite() {
+                continue;
+            }
+            if membership
+                .as_ref()
+                .is_some_and(|members| !members.contains(&photo.id()))
+            {
                 continue;
             }
 
@@ -1461,11 +1666,14 @@ fn apply_view(
         }));
     }
 
+    photos_button.remove_css_class("sidebar-active");
+    favorites_button.remove_css_class("sidebar-active");
+    recent_button.remove_css_class("sidebar-active");
+
     match mode {
         ViewMode::Photos => {
             content_title.set_label(if needle.is_empty() { "Photos" } else { "Search · Photos" });
             photos_button.add_css_class("sidebar-active");
-            favorites_button.remove_css_class("sidebar-active");
         }
         ViewMode::Favorites => {
             content_title.set_label(if needle.is_empty() {
@@ -1474,7 +1682,25 @@ fn apply_view(
                 "Search · Favourites"
             });
             favorites_button.add_css_class("sidebar-active");
-            photos_button.remove_css_class("sidebar-active");
+        }
+        ViewMode::RecentlyAdded => {
+            content_title.set_label(if needle.is_empty() {
+                "Recently Added"
+            } else {
+                "Search · Recently Added"
+            });
+            recent_button.add_css_class("sidebar-active");
+        }
+        ViewMode::Album(id) => {
+            let name = crate::catalog::album_name(id)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Album".to_string());
+            content_title.set_label(if needle.is_empty() {
+                &name
+            } else {
+                &format!("Search · {name}")
+            });
         }
     }
 
@@ -1484,6 +1710,8 @@ fn apply_view(
         let mode_name = match mode {
             ViewMode::Photos => "photos",
             ViewMode::Favorites => "favourites",
+            ViewMode::RecentlyAdded => "recent",
+            ViewMode::Album(_) => "album",
         };
         eprintln!(
             "PIC_TRACE view_apply mode={} query={:?} photos={} folders={} elapsed_us={}",
@@ -1598,6 +1826,28 @@ fn rebuild_folder_sidebar(
     }
 }
 
+fn rebuild_album_sidebar(album_box: &gtk::Box, activate: &Rc<dyn Fn(i64)>) {
+    while let Some(child) = album_box.first_child() {
+        album_box.remove(&child);
+    }
+
+    for album in crate::catalog::albums().unwrap_or_default() {
+        let (button, _) = make_sidebar_button(
+            "folder-documents-symbolic",
+            &album.name,
+            &album.photo_count.to_string(),
+        );
+        button.set_tooltip_text(Some(&format!(
+            "{} · {} photos",
+            album.name, album.photo_count
+        )));
+        let activate = activate.clone();
+        let album_id = album.id;
+        button.connect_clicked(move |_| activate(album_id));
+        album_box.append(&button);
+    }
+}
+
 fn refresh_library_chrome(
     groups: &gio::ListStore,
     master: &Rc<RefCell<Vec<FolderGroupData>>>,
@@ -1610,10 +1860,18 @@ fn refresh_library_chrome(
     favorites_button: &gtk::Button,
     photos_count: &gtk::Label,
     favorites_count: &gtk::Label,
+    recent_count: &gtk::Label,
+    recent_button: &gtk::Button,
 ) {
     let master_ref = master.borrow();
     photos_count.set_label(&count_photos(&master_ref).to_string());
     favorites_count.set_label(&count_favorites(&master_ref).to_string());
+    recent_count.set_label(
+        &crate::catalog::recently_added_ids(500)
+            .unwrap_or_default()
+            .len()
+            .to_string(),
+    );
 
     rebuild_folder_sidebar(folder_box, &master_ref, roots, folder_activate);
     apply_view(
@@ -1625,6 +1883,7 @@ fn refresh_library_chrome(
         content_title,
         photos_button,
         favorites_button,
+        recent_button,
     );
 }
 

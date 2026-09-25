@@ -296,6 +296,95 @@ fn now_epoch_seconds() -> i64 {
         .unwrap_or_default()
 }
 
+#[derive(Clone, Debug)]
+pub struct AlbumRecord {
+    pub id: i64,
+    pub name: String,
+    pub photo_count: i64,
+}
+
+pub fn albums() -> Result<Vec<AlbumRecord>> {
+    let connection = open_default()?;
+    let mut statement = connection.prepare(
+        "SELECT a.id, a.name, COUNT(p.id)
+         FROM albums a
+         LEFT JOIN album_photos ap ON ap.album_id = a.id
+         LEFT JOIN photos p ON p.id = ap.photo_id AND p.trashed = 0
+         GROUP BY a.id
+         ORDER BY a.name COLLATE NOCASE, a.id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(AlbumRecord {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            photo_count: row.get(2)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn album_name(album_id: i64) -> Result<Option<String>> {
+    let connection = open_default()?;
+    Ok(connection
+        .query_row(
+            "SELECT name FROM albums WHERE id = ?1",
+            [album_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+pub fn create_album(name: &str) -> Result<AlbumRecord> {
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("album name cannot be blank");
+    }
+    let connection = open_default()?;
+    connection.execute(
+        "INSERT INTO albums(name, created_at)
+         VALUES (?1, CAST(strftime('%s', 'now') AS INTEGER))",
+        [name],
+    )?;
+    Ok(AlbumRecord {
+        id: connection.last_insert_rowid(),
+        name: name.to_string(),
+        photo_count: 0,
+    })
+}
+
+pub fn add_photo_to_album(album_id: i64, photo_id: i64) -> Result<bool> {
+    let connection = open_default()?;
+    let changed = connection.execute(
+        "INSERT OR IGNORE INTO album_photos(album_id, photo_id) VALUES (?1, ?2)",
+        params![album_id, photo_id],
+    )?;
+    Ok(changed > 0)
+}
+
+pub fn album_photo_ids(album_id: i64) -> Result<HashSet<i64>> {
+    let connection = open_default()?;
+    let mut statement = connection.prepare(
+        "SELECT p.id
+         FROM album_photos ap
+         JOIN photos p ON p.id = ap.photo_id
+         WHERE ap.album_id = ?1 AND p.trashed = 0",
+    )?;
+    let rows = statement.query_map([album_id], |row| row.get::<_, i64>(0))?;
+    Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
+}
+
+pub fn recently_added_ids(limit: usize) -> Result<HashSet<i64>> {
+    let connection = open_default()?;
+    let mut statement = connection.prepare(
+        "SELECT id FROM photos
+         WHERE trashed = 0
+         ORDER BY added_at DESC, id DESC
+         LIMIT ?1",
+    )?;
+    let rows = statement.query_map([limit as i64], |row| row.get::<_, i64>(0))?;
+    Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
+}
+
 pub fn is_displayable_photo(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
         return false;
