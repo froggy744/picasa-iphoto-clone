@@ -9,6 +9,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: rebuild-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   cargo-check:
     runs-on: ubuntu-latest
