@@ -1,0 +1,19 @@
+name: Prototype check
+
+on:
+  push:
+    branches:
+      - prototype/library-folder-groups
+  workflow_dispatch:
+
+jobs:
+  cargo-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK development packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
+      - name: Cargo check
+        run: cargo check
