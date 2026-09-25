@@ -171,6 +171,9 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     let current_columns = Rc::new(Cell::new(6u32));
     let favorite_changed: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
         Rc::new(RefCell::new(None));
+    let selection_changed: Rc<RefCell<Option<Rc<dyn Fn(Option<PhotoObject>)>>>> =
+        Rc::new(RefCell::new(None));
+    let selected_photo: Rc<RefCell<Option<PhotoObject>>> = Rc::new(RefCell::new(None));
 
     let viewer = Rc::new(crate::viewer::Viewer::new());
 
@@ -412,6 +415,7 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
         let tile_size = tile_size.clone();
         let live_grids = live_grids.clone();
         let current_columns = current_columns.clone();
+        let selection_changed = selection_changed.clone();
 
         folder_factory.connect_bind(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
@@ -454,6 +458,15 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
             let selection = gtk::SingleSelection::new(Some(group.model.clone()));
             selection.set_autoselect(false);
             selection.set_can_unselect(true);
+            {
+                let selection_changed = selection_changed.clone();
+                selection.connect_selection_changed(move |selection, _, _| {
+                    let selected = selection.selected_item().and_downcast::<PhotoObject>();
+                    if let Some(callback) = selection_changed.borrow().as_ref().cloned() {
+                        callback(selected);
+                    }
+                });
+            }
             grid.set_model(Some(&selection));
 
             let rows = (group.model.n_items() + columns - 1) / columns;
