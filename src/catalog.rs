@@ -151,6 +151,34 @@ pub fn photos() -> Result<Vec<PhotoRecord>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+pub fn photo_by_id(id: i64) -> Result<Option<PhotoRecord>> {
+    let connection = open_default()?;
+    Ok(connection
+        .query_row(
+            "SELECT p.id, p.path, COALESCE(f.path, ''), p.favorite, p.rotation,
+                    p.taken_at, p.camera, p.width, p.height, p.size_bytes
+             FROM photos p
+             LEFT JOIN folders f ON f.id = p.folder_id
+             WHERE p.id = ?1 AND p.trashed = 0",
+            [id],
+            |row| {
+                Ok(PhotoRecord {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    folder_path: row.get(2)?,
+                    favorite: row.get(3)?,
+                    rotation: row.get(4)?,
+                    taken_at: row.get(5)?,
+                    camera: row.get(6)?,
+                    width: row.get(7)?,
+                    height: row.get(8)?,
+                    size_bytes: row.get(9)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 pub fn favorite_paths() -> Result<HashSet<String>> {
     let connection = open_default()?;
     let mut statement =
@@ -219,17 +247,22 @@ pub fn import_root(root: &Path) -> Result<ImportSummary> {
             .and_then(|value| value.modified().ok())
             .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
             .map(|value| value.as_secs() as i64);
+        let dimensions = image::image_dimensions(entry.path()).ok();
+        let width = dimensions.map(|(width, _)| i64::from(width));
+        let height = dimensions.map(|(_, height)| i64::from(height));
         let path = entry.path().to_string_lossy().into_owned();
 
         transaction.execute(
-            "INSERT INTO photos(path, folder_id, size_bytes, mtime, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO photos(path, folder_id, width, height, size_bytes, mtime, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(path) DO UPDATE SET
                folder_id = excluded.folder_id,
+               width = COALESCE(photos.width, excluded.width),
+               height = COALESCE(photos.height, excluded.height),
                size_bytes = excluded.size_bytes,
                mtime = excluded.mtime,
                trashed = 0",
-            params![path, folder_id, size_bytes, mtime, added_at],
+            params![path, folder_id, width, height, size_bytes, mtime, added_at],
         )?;
         summary.photos_seen += 1;
     }
