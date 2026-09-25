@@ -23,6 +23,7 @@ fn refresh_grid(
     search: &str,
     sort: PhotoSort,
     gallery: &Rc<grid::Gallery>,
+    caller: &'static str,
 ) {
     let prepare_started = std::time::Instant::now();
     let folder_target = if search.is_empty() {
@@ -45,7 +46,7 @@ fn refresh_grid(
             prepare_started.elapsed().as_millis()
         );
     }
-    refresh_grid_inner(connection, filter, search, sort, gallery, folder_target);
+    refresh_grid_inner(connection, filter, search, sort, gallery, folder_target, caller);
 }
 
 fn refresh_grid_to_folder(
@@ -56,6 +57,7 @@ fn refresh_grid_to_folder(
     gallery: &Rc<grid::Gallery>,
     folder_id: i64,
     folder_path: String,
+    caller: &'static str,
 ) {
     refresh_grid_inner(
         connection,
@@ -64,6 +66,7 @@ fn refresh_grid_to_folder(
         sort,
         gallery,
         Some((folder_id, folder_path)),
+        caller,
     );
 }
 
@@ -74,6 +77,7 @@ fn refresh_grid_inner(
     sort: PhotoSort,
     gallery: &Rc<grid::Gallery>,
     folder_target: Option<(i64, String)>,
+    caller: &'static str,
 ) {
     let _ = connection;
     if filter == sidebar::SidebarFilter::Albums
@@ -88,7 +92,7 @@ fn refresh_grid_inner(
     let spawn_started = nav_trace.then(std::time::Instant::now);
     if nav_trace {
         eprintln!(
-            "PIC_NAV nav_stage=refresh_spawn t={} generation={generation} filter={filter:?} target={folder_target:?}",
+            "PIC_NAV nav_stage=refresh_spawn t={} caller={caller} generation={generation} filter={filter:?} target={folder_target:?} search={search:?}",
             crate::diagnostics::t_ms()
         );
     }

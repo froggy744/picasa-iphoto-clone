@@ -18,6 +18,10 @@ const CHUNK_LINE_SPACING: i32 = 12;
 /// in each scroll direction. Keeps mounted tiles bounded while making
 /// ordinary scrolling and small jumps seamless.
 const REALIZATION_OVERSCAN_CHUNKS: i64 = 4;
+/// Keep an already-mounted edge chunk until the viewport has moved well past
+/// the mount threshold. A model can change GTK's scroll estimate by ~44px;
+/// without hysteresis that small shift repeatedly mounts/unmounts the row.
+const REALIZATION_RETAIN_MARGIN_CHUNKS: f64 = 0.5;
 
 /// Final height of one chunk row holding `items` photos on `CHUNK_COLUMNS`
 /// lines. Wrapped around the inner GridView so GtkListView measures the row's
@@ -66,13 +70,32 @@ fn chunk_in_realization_window(
     columns: u32,
     fill_complete: bool,
 ) -> bool {
+    chunk_in_realization_window_with_margin(
+        position,
+        viewport_center_chunks,
+        slice_n_items,
+        total_items,
+        columns,
+        fill_complete,
+        0.0,
+    )
+}
+
+fn chunk_in_realization_window_with_margin(
+    position: u32,
+    viewport_center_chunks: f64,
+    slice_n_items: u32,
+    total_items: u32,
+    _columns: u32,
+    fill_complete: bool,
+    retain_margin: f64,
+) -> bool {
     let filled = filled_items_for_chunk(total_items, position);
     if !fill_complete || slice_n_items < filled {
         return false;
     }
-    let distance = (position as f64 - viewport_center_chunks).abs()
-        - (filled as f64 / columns.max(1) as f64);
-    distance <= REALIZATION_OVERSCAN_CHUNKS as f64
+    let distance = (position as f64 - viewport_center_chunks).abs();
+    distance <= REALIZATION_OVERSCAN_CHUNKS as f64 + retain_margin
 }
 
 #[derive(Clone)]
@@ -86,6 +109,10 @@ pub(crate) struct ChunkedPrototype {
     metrics: Rc<Cell<(i32, u32)>>,
     /// Chunk-row wrapper boxes, for metric updates on already-realized rows.
     wrappers: Rc<RefCell<Vec<glib::WeakRef<gtk::Box>>>>,
+    /// Factory items can stay bound even when their chunk scrolls away. Keep
+    /// weak references so an idle can move photo models with the viewport.
+    bound_items: Rc<RefCell<Vec<glib::WeakRef<gtk::ListItem>>>>,
+    realization_pending: Rc<Cell<bool>>,
     /// False while a Folder-stream fill is in progress. Rows must not mount
     /// photo models while their slice is only partly filled: GtkListBase
     /// caches the (tiny) measured row height at first materialization and
@@ -146,6 +173,9 @@ impl ChunkedPrototype {
         let metrics = Rc::new(Cell::new((0_i32, CHUNK_COLUMNS)));
         let wrappers: Rc<RefCell<Vec<glib::WeakRef<gtk::Box>>>> =
             Rc::new(RefCell::new(Vec::new()));
+        let bound_items: Rc<RefCell<Vec<glib::WeakRef<gtk::ListItem>>>> =
+            Rc::new(RefCell::new(Vec::new()));
+        let realization_pending = Rc::new(Cell::new(false));
         let fill_complete = Rc::new(Cell::new(false));
         let remount_pending: Rc<RefCell<Option<glib::SourceId>>> =
             Rc::new(RefCell::new(None));
@@ -182,6 +212,7 @@ impl ChunkedPrototype {
         let metrics_for_bind = metrics.clone();
         let fill_complete_for_bind = fill_complete.clone();
         let wrappers_for_setup = wrappers.clone();
+        let items_for_setup = bound_items.clone();
         factory.connect_setup(move |_, object| {
             let Some(item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
@@ -210,6 +241,7 @@ impl ChunkedPrototype {
             wrapper.append(&grid);
             item.set_child(Some(&wrapper));
             wrappers_for_setup.borrow_mut().push(wrapper.downgrade());
+            items_for_setup.borrow_mut().push(item.downgrade());
             grids_for_setup.borrow_mut().push(grid.downgrade());
             if crate::diagnostics::trace_enabled() {
                 static SETUP_COUNT: std::sync::atomic::AtomicU32 =
@@ -288,9 +320,9 @@ impl ChunkedPrototype {
                 fill_complete_for_bind.get(),
             );
             if mount {
-                grid.set_model(None::<&gtk::NoSelection>);
-            } else {
                 grid.set_model(Some(&gtk::NoSelection::new(Some(slice))));
+            } else {
+                grid.set_model(None::<&gtk::NoSelection>);
             }
             if crate::diagnostics::trace_enabled() {
                 static BIND_COUNT: std::sync::atomic::AtomicU32 =
@@ -314,8 +346,10 @@ impl ChunkedPrototype {
         });
         factory.connect_unbind(|_, object| {
             if let Some(item) = object.downcast_ref::<gtk::ListItem>() {
-                if let Some(grid) = item.child().and_downcast::<gtk::GridView>() {
-                    grid.set_model(None::<&gtk::NoSelection>);
+                if let Some(wrapper) = item.child().and_downcast::<gtk::Box>() {
+                    if let Some(grid) = wrapper.first_child().and_downcast::<gtk::GridView>() {
+                        grid.set_model(None::<&gtk::NoSelection>);
+                    }
                 }
             }
             if crate::diagnostics::trace_enabled() {
@@ -343,6 +377,8 @@ impl ChunkedPrototype {
             reconcile_pending: reconcile_pending_for_struct.clone(),
             metrics: metrics.clone(),
             wrappers: wrappers.clone(),
+            bound_items: bound_items.clone(),
+            realization_pending: realization_pending.clone(),
             fill_complete: fill_complete.clone(),
             remount_pending: remount_pending.clone(),
         };
@@ -360,6 +396,7 @@ impl ChunkedPrototype {
             let recovery_for_timer = recovery_attempts.clone();
             let prototype_for_status = pending_self_clone.clone();
             let wrappers_status = wrappers.clone();
+            let grids_status = grids.clone();
             glib::timeout_add_local(std::time::Duration::from_millis(2000), move || {
                 let Some(root) = status_root.upgrade() else {
                     return glib::ControlFlow::Break;
@@ -390,6 +427,12 @@ impl ChunkedPrototype {
                     .iter()
                     .filter(|weak| weak.upgrade().is_some())
                     .count();
+                let realized_grids = grids_status
+                    .borrow()
+                    .iter()
+                    .filter_map(|weak| weak.upgrade())
+                    .filter(|grid| grid.model().is_some())
+                    .count();
                 let parent_desc = root
                     .parent()
                     .map(|parent| {
@@ -402,7 +445,7 @@ impl ChunkedPrototype {
                     })
                     .unwrap_or_default();
                 eprintln!(
-                    "PIC_NAV chunk_realization logical_chunks={logical} realized_wrappers={mounted} value={value:.0} upper={upper:.0} page={page:.0} expected={expected_upper:.0} self_visible={} self_mapped={}{} t={}",
+                    "PIC_NAV chunk_realization logical_chunks={logical} realized_wrappers={mounted} realized_grids={realized_grids} value={value:.0} upper={upper:.0} page={page:.0} expected={expected_upper:.0} self_visible={} self_mapped={}{} t={}",
                     root.is_visible(),
                     root.is_mapped(),
                     parent_desc,
@@ -419,6 +462,8 @@ impl ChunkedPrototype {
             reconcile_pending: reconcile_pending_for_struct,
             metrics,
             wrappers,
+            bound_items,
+            realization_pending,
             fill_complete: fill_complete.clone(),
             remount_pending: remount_pending.clone(),
         }
@@ -432,6 +477,78 @@ impl ChunkedPrototype {
             return;
         }
         reconcile_chunks(&self.store, &self.chunks, &self.grids);
+    }
+
+    /// Adjustment signals can fire during GTK layout. Coalesce them into one
+    /// idle and move photo models on already-bound rows after GTK unwinds.
+    pub(crate) fn request_realization_update(&self) {
+        if self.realization_pending.replace(true) {
+            return;
+        }
+        let this = self.clone();
+        glib::idle_add_local_once(move || {
+            this.realization_pending.set(false);
+            this.refresh_realization_window();
+        });
+    }
+
+    fn refresh_realization_window(&self) {
+        if !self.fill_complete.get() {
+            return;
+        }
+        let Some(adjustment) = self.root.vadjustment() else {
+            return;
+        };
+        let (tile_height, columns) = self.metrics.get();
+        let row_height = chunk_row_height_px(PHOTOS_PER_CHUNK, tile_height, columns) as f64;
+        if row_height <= 0.0 {
+            return;
+        }
+        let center = (adjustment.value() + adjustment.page_size() / 2.0) / row_height;
+        let total = self.store.n_items();
+        let items = {
+            let mut items = self.bound_items.borrow_mut();
+            items.retain(|weak| weak.upgrade().is_some());
+            items.iter().filter_map(|weak| weak.upgrade()).collect::<Vec<_>>()
+        };
+        let mut realized = 0;
+        let mut changed = 0;
+        for item in items {
+            let Some(slice) = item.item().and_downcast::<gtk::SliceListModel>() else {
+                continue;
+            };
+            let Some(wrapper) = item.child().and_downcast::<gtk::Box>() else {
+                continue;
+            };
+            let Some(grid) = wrapper.first_child().and_downcast::<gtk::GridView>() else {
+                continue;
+            };
+            let mount = chunk_in_realization_window_with_margin(
+                item.position(), center, slice.n_items(), total, columns, true,
+                if grid.model().is_some() {
+                    REALIZATION_RETAIN_MARGIN_CHUNKS
+                } else {
+                    0.0
+                },
+            );
+            if mount {
+                realized += 1;
+                if grid.model().is_none() {
+                    grid.set_model(Some(&gtk::NoSelection::new(Some(slice))));
+                    changed += 1;
+                }
+            } else if grid.model().is_some() {
+                grid.set_model(None::<&gtk::NoSelection>);
+                changed += 1;
+            }
+        }
+        if crate::diagnostics::trace_enabled() && changed > 0 {
+            eprintln!(
+                "PIC_NAV chunk_realization update center={center:.1} realized_grids={realized} changed={changed} value={:.0} upper={:.0} page={:.0} t={}",
+                adjustment.value(), adjustment.upper(), adjustment.page_size(),
+                crate::diagnostics::t_ms()
+            );
+        }
     }
 
     /// Called by the Gallery when a Folder-stream fill starts (`true`) and
@@ -892,18 +1009,16 @@ mod tests {
                 "chunk {pos} inside realization window must mount"
             );
         }
-        // ...and so does every chunk the looser bound admits (the applied
-        // rule shrinks the gap by the chunk's own line-span).
+        // The applied window uses chunk units throughout; the old code
+        // subtracted 64/5 photo lines from a chunk-index distance and mounted
+        // 34 GridViews instead of the intended 9.
         let mut mounted = 0u32;
         for pos in 0..total_chunks {
             if chunk_in_realization_window(pos, 50.0, PHOTOS_PER_CHUNK, total_items, 5, true) {
                 mounted += 1;
             }
         }
-        assert!(
-            mounted <= 2 * (REALIZATION_OVERSCAN_CHUNKS as u32) + 29,
-            "mounted {mounted} must stay bounded"
-        );
+        assert_eq!(mounted, 2 * REALIZATION_OVERSCAN_CHUNKS as u32 + 1);
     }
 
     #[test]
@@ -932,9 +1047,38 @@ mod tests {
         assert!(!chunk_in_realization_window(
             0, 200.0, PHOTOS_PER_CHUNK, total_items, 5, true
         ));
-        // Just past the applied bound: |67-50| - 64/5 = 4.2 > overscan 4.
+        // One chunk outside the applied bound must remain unmounted.
         assert!(!chunk_in_realization_window(
-            67, 50.0, PHOTOS_PER_CHUNK, total_items, 5, true
+            55, 50.0, PHOTOS_PER_CHUNK, total_items, 5, true
+        ));
+    }
+
+    #[test]
+    fn mounted_edge_survives_scroll_estimate_jitter() {
+        let total_items = 354 * PHOTOS_PER_CHUNK;
+        let edge = 35;
+        for center in [30.80, 30.77] {
+            assert!(!chunk_in_realization_window(
+                edge, center, PHOTOS_PER_CHUNK, total_items, 5, true
+            ));
+            assert!(chunk_in_realization_window_with_margin(
+                edge,
+                center,
+                PHOTOS_PER_CHUNK,
+                total_items,
+                5,
+                true,
+                REALIZATION_RETAIN_MARGIN_CHUNKS,
+            ));
+        }
+        assert!(!chunk_in_realization_window_with_margin(
+            edge,
+            30.4,
+            PHOTOS_PER_CHUNK,
+            total_items,
+            5,
+            true,
+            REALIZATION_RETAIN_MARGIN_CHUNKS,
         ));
     }
 }

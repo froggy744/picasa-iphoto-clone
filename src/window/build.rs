@@ -645,6 +645,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     &search.borrow(),
                     sort.get(),
                     &gallery,
+                    "build.settings_clear_thumbnails",
                 );
                 availability_refresh();
             })
@@ -666,6 +667,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     &search.borrow(),
                     sort.get(),
                     &gallery,
+                    "build.settings_clear_database",
                 );
                 availability_refresh();
             })
@@ -690,6 +692,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     &search.borrow(),
                     sort.get(),
                     &gallery,
+                    "build.settings_clear_all",
                 );
                 availability_refresh();
             })
@@ -742,6 +745,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     &search.borrow(),
                     sort.get(),
                     &gallery,
+                    "build.settings_saved",
                 );
                 if let Some(sidebar) = sidebar.borrow().as_ref().cloned() {
                     if let Ok(folders) = db::folders(&connection.borrow()) {
@@ -987,6 +991,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                                 &gallery_for_collection_nav,
                                 folder.id,
                                 folder.path.clone(),
+                                "build.collection_navigation.open_in_folder",
                             );
                         }
                         let objects = photos
@@ -1308,6 +1313,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                                 &gallery_for_collection_nav,
                                 folder.id,
                                 folder.path.clone(),
+                                "build.collection_navigation.lightbox_folder",
                             );
                         }
                         let objects = photos
@@ -1396,6 +1402,9 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         scroll
             .vadjustment()
             .connect_value_changed(move |adjustment| {
+                if let Some(chunked) = gallery_for_chunked_settle.chunked_prototype.as_ref() {
+                    chunked.request_realization_update();
+                }
                 let generation = generation_for_event.get().wrapping_add(1);
                 generation_for_event.set(generation);
                 let gallery = gallery_for_chunked_settle.clone();
@@ -2305,6 +2314,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     &search_for_history.borrow(),
                     sort_for_history.get(),
                     &gallery,
+                    "build.history_stack_visible",
                 );
             }
             if visible.as_deref() != Some("collage")
@@ -3565,6 +3575,7 @@ fn start_photo_export_single(
                 &search_for_events.borrow(),
                 sort_for_events.get(),
                 &gallery_for_events,
+                "build.indexing_finished_debounce",
             );
         }
         // Drain event-triggered recovery requests once the current scan ends.
@@ -3923,6 +3934,7 @@ fn start_photo_export_single(
                             &search_for_events.borrow(),
                             sort_for_events.get(),
                             &gallery_for_events,
+                            "build.scan_finished_refresh",
                         );
                     }
 

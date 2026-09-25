@@ -136,7 +136,14 @@
             {
                 eprintln!("Could not save photo sort field: {error}");
             }
-            refresh_grid(&connection, filter.get(), &search.borrow(), value, &gallery);
+            refresh_grid(
+                &connection,
+                filter.get(),
+                &search.borrow(),
+                value,
+                &gallery,
+                "toolbar.sort_field",
+            );
         });
     };
     connect_sort_field(&date_taken_sort, SortField::DateTaken);
@@ -172,7 +179,14 @@
             ) {
                 eprintln!("Could not save photo sort direction: {error}");
             }
-            refresh_grid(&connection, filter.get(), &search.borrow(), value, &gallery);
+            refresh_grid(
+                &connection,
+                filter.get(),
+                &search.borrow(),
+                value,
+                &gallery,
+                "toolbar.sort_direction",
+            );
         });
     };
     connect_sort_direction(&ascending_sort, SortDirection::Ascending);

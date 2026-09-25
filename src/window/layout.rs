@@ -163,6 +163,7 @@
                         sort.get(),
                         &gallery,
                         None,
+                        "layout.destination_click.refresh_without_folder_scroll",
                     );
                 }
                 FolderDestinationPlan::Normal => {
@@ -178,9 +179,17 @@
                             &gallery,
                             folder_id,
                             folder_path,
+                            "layout.destination_click.folder_navigation",
                         );
                     } else {
-                        refresh_grid(&connection, new_filter, "", sort.get(), &gallery);
+                        refresh_grid(
+                            &connection,
+                            new_filter,
+                            "",
+                            sort.get(),
+                            &gallery,
+                            "layout.destination_click",
+                        );
                     }
                 }
             }
@@ -1191,7 +1200,14 @@
                     grid::GroupMode::None,
                     true,
                 );
-                refresh_grid(&connection, sidebar::SidebarFilter::All, "", sort.get(), &gallery);
+                refresh_grid(
+                    &connection,
+                    sidebar::SidebarFilter::All,
+                    "",
+                    sort.get(),
+                    &gallery,
+                    "layout.collage_add_return_to_photos",
+                );
             }
             main_stack.set_visible_child_name("photos");
             button.set_visible(true);
@@ -1586,6 +1602,7 @@
                     "",
                     sort_for_search.get(),
                     &gallery_for_search,
+                    "layout.search_changed_clear",
                 );
             } else {
                 let connection = connection_for_search.clone();
@@ -1611,6 +1628,7 @@
                             &query_for_refresh,
                             sort.get(),
                             &gallery,
+                            "layout.search_changed_debounced",
                         );
                         
                         glib::ControlFlow::Break
@@ -1673,6 +1691,7 @@
             &query,
             sort_for_activate.get(),
             &gallery_for_activate,
+            "layout.search_activate",
         );
     });
 

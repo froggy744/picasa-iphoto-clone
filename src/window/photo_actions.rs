@@ -1373,6 +1373,7 @@ fn refresh_photo_actions_grid(context: &PhotoActionContext) {
         &search,
         context.sort.get(),
         &gallery,
+        "photo_actions.favorite_refresh",
     );
 }
 
