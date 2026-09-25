@@ -148,8 +148,8 @@ fn chunk_in_realization_window_with_margin(
     fill_complete: bool,
     retain_margin: f64,
 ) -> bool {
-    let filled = filled_items_for_chunk(total_items, position);
-    if !fill_complete || slice_n_items < filled {
+    let _ = (total_items, columns);
+    if !fill_complete || slice_n_items == 0 {
         return false;
     }
     let distance = (position as f64 - viewport_center_chunks).abs();
@@ -259,6 +259,7 @@ impl ChunkedPrototype {
         let reconcile_pending_for_sync = reconcile_pending.clone();
         let reconcile_pending_for_struct = reconcile_pending.clone();
         let metrics = Rc::new(Cell::new((0_i32, CHUNK_COLUMNS)));
+        let metrics_for_updates = metrics.clone();
         let wrappers: Rc<RefCell<Vec<glib::WeakRef<gtk::Box>>>> =
             Rc::new(RefCell::new(Vec::new()));
         let bound_items: Rc<RefCell<Vec<glib::WeakRef<gtk::ListItem>>>> =
@@ -291,13 +292,14 @@ impl ChunkedPrototype {
                     &grids,
                     &section_ranges_for_updates.borrow(),
                     &chunk_meta_for_updates,
-                    metrics.get().1,
+                    metrics_for_updates.get().1,
                 );
             });
         });
-        sync_chunks(
+        reconcile_chunks(
             store,
             &chunks,
+            &grids,
             &section_ranges.borrow(),
             &chunk_meta,
             CHUNK_COLUMNS,
@@ -564,9 +566,32 @@ impl ChunkedPrototype {
                     .unwrap_or_default();
                 let logical = root.model().map(|m| m.n_items()).unwrap_or_default();
                 let (tile_height, columns) = metrics_status.get();
-                let expected_upper =
-                    chunk_row_height_px(PHOTOS_PER_CHUNK, tile_height, columns) as f64
-                        * logical.max(1) as f64;
+                let expected_upper = {
+                    let meta = prototype_for_status.chunk_meta.borrow();
+                    if meta.is_empty() {
+                        chunk_row_height_px(PHOTOS_PER_CHUNK, tile_height, columns) as f64
+                            * logical.max(1) as f64
+                    } else {
+                        meta.iter()
+                            .map(|entry| {
+                                let (start, end) = aligned_chunk_bounds(entry, columns);
+                                let header = if entry.logical_index == 0 {
+                                    CHUNK_HEADER_HEIGHT
+                                } else {
+                                    0
+                                };
+                                f64::from(
+                                    header
+                                        + chunk_row_height_px(
+                                            end.saturating_sub(start).max(1),
+                                            tile_height,
+                                            columns,
+                                        ),
+                                )
+                            })
+                            .sum::<f64>()
+                    }
+                };
                 let degenerate = fill_status.get()
                     && logical > 0
                     && upper + 1.0 < expected_upper * 0.5;
@@ -689,14 +714,35 @@ impl ChunkedPrototype {
             let Some(grid) = wrapper.last_child().and_downcast::<gtk::GridView>() else {
                 continue;
             };
-            let mount = chunk_in_realization_window_with_margin(
-                item.position(), center, slice.n_items(), total, columns, true,
-                if grid.model().is_some() {
-                    REALIZATION_RETAIN_MARGIN_CHUNKS
-                } else {
-                    0.0
-                },
-            );
+            let overscan_px = adjustment.page_size().max(row_height);
+            let mount = wrapper
+                .compute_bounds(&self.root)
+                .map(|bounds| {
+                    let retain = if grid.model().is_some() {
+                        overscan_px * 0.5
+                    } else {
+                        0.0
+                    };
+                    let top = bounds.y() as f64;
+                    let bottom = top + bounds.height() as f64;
+                    bottom >= -overscan_px - retain
+                        && top <= adjustment.page_size() + overscan_px + retain
+                })
+                .unwrap_or_else(|| {
+                    chunk_in_realization_window_with_margin(
+                        item.position(),
+                        center,
+                        slice.n_items(),
+                        total,
+                        columns,
+                        true,
+                        if grid.model().is_some() {
+                            REALIZATION_RETAIN_MARGIN_CHUNKS
+                        } else {
+                            0.0
+                        },
+                    )
+                });
             if mount {
                 realized += 1;
                 if grid.model().is_none() {
@@ -863,9 +909,10 @@ impl ChunkedPrototype {
             return;
         }
         self.section_ranges.replace(ranges.to_vec());
-        sync_chunks(
+        reconcile_chunks(
             &self.store,
             &self.chunks,
+            &self.grids,
             &self.section_ranges.borrow(),
             &self.chunk_meta,
             self.metrics.get().1,
@@ -888,7 +935,18 @@ impl ChunkedPrototype {
     /// intra-chunk offset.
     pub(crate) fn scroll_to_photo(&self, position: usize) {
         self.flush_reconcile();
-        let chunk_index = position as u32 / PHOTOS_PER_CHUNK;
+        let columns = self.metrics.get().1;
+        let position = position as u32;
+        let chunk_index = self
+            .chunk_meta
+            .borrow()
+            .iter()
+            .enumerate()
+            .find_map(|(index, meta)| {
+                let (start, end) = aligned_chunk_bounds(meta, columns);
+                (position >= start && position < end).then_some(index as u32)
+            })
+            .unwrap_or_else(|| position / PHOTOS_PER_CHUNK);
         self.root
             .scroll_to(chunk_index, gtk::ListScrollFlags::FOCUS, None);
         self.root.grab_focus();
