@@ -1,6 +1,7 @@
 mod library;
 mod photo;
 
+use libadwaita as adw;
 use adw::prelude::*;
 use gtk4 as gtk;
 
