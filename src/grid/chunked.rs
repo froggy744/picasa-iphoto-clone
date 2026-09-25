@@ -689,7 +689,6 @@ impl ChunkedPrototype {
             wrappers,
             bound_items,
             realization_pending,
-            realization_retry_pending,
             fill_complete: fill_complete.clone(),
             remount_pending: remount_pending.clone(),
         }
@@ -732,6 +731,19 @@ impl ChunkedPrototype {
         let Some(adjustment) = self.root.vadjustment() else {
             return;
         };
+        let (tile_height, columns) = self.metrics.get();
+        let meta = self.chunk_meta.borrow();
+        if meta.is_empty() {
+            return;
+        }
+        let center = chunk_index_for_scroll_y(
+            &meta,
+            columns,
+            tile_height,
+            adjustment.value() + adjustment.page_size() / 2.0,
+        );
+        let (mount_start, mount_end) = realization_window(center as i64, meta.len() as u32);
+        drop(meta);
 
         let items = {
             let mut items = self.bound_items.borrow_mut();
@@ -739,35 +751,17 @@ impl ChunkedPrototype {
             items.iter().filter_map(|weak| weak.upgrade()).collect::<Vec<_>>()
         };
 
-        let page = adjustment.page_size().max(1.0);
-        // Trust GTK's actual allocated row positions instead of converting the
-        // adjustment value back through our estimated section heights. The
-        // latter can differ from GtkListView's running estimate by many rows
-        // after a long jump, which was mounting the wrong chunks and leaving
-        // visible thumbnails blank.
-        let mount_top = -page;
-        let mount_bottom = page * 2.0;
-        let retain_top = -page * 1.5;
-        let retain_bottom = page * 2.5;
+        // First determine whether GTK has actually bound any rows at the new
+        // viewport. During a large Folder jump, the adjustment can move before
+        // GtkListView has recycled its outer rows. If we unmount the old inner
+        // grids in that gap, the viewport briefly has zero photo models and
+        // some thumbnails never get remounted until another scroll.
+        let target_bound = items.iter().filter(|item| {
+            let position = item.position();
+            position >= mount_start && position <= mount_end
+        }).count();
 
-        let mut target_indices = Vec::new();
-        for (idx, item) in items.iter().enumerate() {
-            let Some(wrapper) = item.child().and_downcast::<gtk::Box>() else {
-                continue;
-            };
-            let Some(bounds) = wrapper.compute_bounds(&self.root) else {
-                continue;
-            };
-            let top = f64::from(bounds.y());
-            let bottom = top + f64::from(bounds.height());
-            if bottom >= mount_top && top <= mount_bottom {
-                target_indices.push(idx);
-            }
-        }
-
-        if target_indices.is_empty() {
-            // GtkListView has not yet recycled rows for the destination. Keep
-            // the previous photo models alive and retry on the next frame.
+        if target_bound == 0 {
             if !self.realization_retry_pending.replace(true) {
                 let this = self.clone();
                 glib::timeout_add_local_once(std::time::Duration::from_millis(16), move || {
@@ -777,11 +771,10 @@ impl ChunkedPrototype {
             }
             if crate::diagnostics::trace_enabled() {
                 eprintln!(
-                    "PIC_NAV chunk_realization wait reason=no_allocated_target value={:.0} upper={:.0} page={:.0} bound_items={} t={}",
+                    "PIC_NAV chunk_realization wait center={center} target_bound=0 value={:.0} upper={:.0} page={:.0} t={}",
                     adjustment.value(),
                     adjustment.upper(),
                     adjustment.page_size(),
-                    items.len(),
                     crate::diagnostics::t_ms()
                 );
             }
@@ -789,11 +782,16 @@ impl ChunkedPrototype {
         }
         self.realization_retry_pending.set(false);
 
-        // Mount destination rows first.
+        // Mount the destination window first. Only after at least one target
+        // row exists do we retire old off-screen models. This keeps the
+        // adjustment geometry stable and avoids a zero-thumbnail transition.
         let mut realized = 0;
         let mut changed = 0;
-        for idx in target_indices {
-            let item = &items[idx];
+        for item in &items {
+            let position = item.position();
+            if position < mount_start || position > mount_end {
+                continue;
+            }
             let Some(slice) = item.item().and_downcast::<gtk::SliceListModel>() else {
                 continue;
             };
@@ -810,25 +808,20 @@ impl ChunkedPrototype {
             }
         }
 
-        // Retire only rows well outside the viewport. Rows whose allocation is
-        // temporarily unknown are retained; unmounting them was another way a
-        // jump could lose thumbnails until the next scroll event.
         for item in &items {
+            let position = item.position();
+            let retain_start = mount_start.saturating_sub(1);
+            let retain_end = mount_end.saturating_add(1);
+            if position >= retain_start && position <= retain_end {
+                continue;
+            }
             let Some(wrapper) = item.child().and_downcast::<gtk::Box>() else {
                 continue;
             };
             let Some(grid) = wrapper.last_child().and_downcast::<gtk::GridView>() else {
                 continue;
             };
-            if grid.model().is_none() {
-                continue;
-            }
-            let Some(bounds) = wrapper.compute_bounds(&self.root) else {
-                continue;
-            };
-            let top = f64::from(bounds.y());
-            let bottom = top + f64::from(bounds.height());
-            if bottom < retain_top || top > retain_bottom {
+            if grid.model().is_some() {
                 grid.set_model(None::<&gtk::NoSelection>);
                 changed += 1;
             }
@@ -836,11 +829,8 @@ impl ChunkedPrototype {
 
         if crate::diagnostics::trace_enabled() && changed > 0 {
             eprintln!(
-                "PIC_NAV chunk_realization update source=gtk_bounds realized_grids={realized} changed={changed} value={:.0} upper={:.0} page={:.0} bound_items={} t={}",
-                adjustment.value(),
-                adjustment.upper(),
-                adjustment.page_size(),
-                items.len(),
+                "PIC_NAV chunk_realization update center={center} target_bound={target_bound} realized_grids={realized} changed={changed} value={:.0} upper={:.0} page={:.0} t={}",
+                adjustment.value(), adjustment.upper(), adjustment.page_size(),
                 crate::diagnostics::t_ms()
             );
         }
