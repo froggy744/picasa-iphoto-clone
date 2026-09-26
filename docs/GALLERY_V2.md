@@ -843,3 +843,17 @@ Behavior and architecture:
 - the count text is now compact (`395 photos`) instead of the former bullet-prefixed form
 
 Validation target: enter Folder mode and scroll through multiple folders. The sticky heading should update to the current folder, remain visually themed, and never affect zoom/resize smoothness or photo virtualization.
+
+### Sticky Folder heading experiment reverted
+
+The Picasa-style sticky Folder heading experiment was reverted after runtime review because it changed Folder-view presentation into a permanent sticky-header mode. That was not the intended UX change.
+
+Revert commits:
+
+- `b0d125e` — restore the previous generic group-header structure
+- `3f05ec0` — remove Folder-specific sticky heading presentation logic
+- the window layout comment was restored to the prior behavior in the follow-up revert commit
+
+The validated Gallery v2 performance work remains intact: direct GridView, animated manual zoom, 300 ms resize FLIP, sidebar transition handling, and Lightbox open transition are unchanged.
+
+Next Folder-view work must preserve the existing view behavior and should not convert it into a sticky-header-only presentation without explicit approval.
