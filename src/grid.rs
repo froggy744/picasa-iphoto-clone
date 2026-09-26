@@ -104,6 +104,7 @@ thread_local! {
     static FOLDER_THUMBNAIL_CACHE: RefCell<VecDeque<(String, gtk::gdk::Paintable)>> =
         const { RefCell::new(VecDeque::new()) };
     static GRID_SCRUB_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static GRID_ZOOM_ANIMATION_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
 // The grid stays one Rust module for private-state compatibility, while its
