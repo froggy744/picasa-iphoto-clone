@@ -31,6 +31,9 @@ struct SectionedFolderView {
     activate: Rc<dyn Fn(Vec<PhotoObject>, usize, Option<(gtk::Widget, gtk::gdk::Paintable)>)>,
     context_menu: Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>,
     unavailable: Rc<dyn Fn(PhotoObject, gtk::Widget)>,
+    collage_mode: Rc<Cell<bool>>,
+    collage_ids: Rc<RefCell<HashSet<i64>>>,
+    rubberband: gtk::DrawingArea,
     scroll: RefCell<Option<gtk::ScrolledWindow>>,
     geometry: RefCell<Vec<SectionedFolderGeometry>>,
     geometry_width: Cell<i32>,
@@ -55,6 +58,8 @@ impl SectionedFolderView {
         activate: Rc<dyn Fn(Vec<PhotoObject>, usize, Option<(gtk::Widget, gtk::gdk::Paintable)>)>,
         context_menu: Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>,
         unavailable: Rc<dyn Fn(PhotoObject, gtk::Widget)>,
+        collage_mode: Rc<Cell<bool>>,
+        collage_ids: Rc<RefCell<HashSet<i64>>>,
     ) -> Rc<Self> {
         let root = gtk::Fixed::new();
         root.set_hexpand(true);
@@ -65,6 +70,19 @@ impl SectionedFolderView {
         let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
         spacer.set_can_target(false);
         root.put(&spacer, 0.0, 0.0);
+
+        let rubberband = gtk::DrawingArea::new();
+        rubberband.set_can_target(false);
+        rubberband.set_visible(false);
+        rubberband.set_draw_func(|_, context, width, height| {
+            context.set_source_rgba(0.30, 0.62, 0.86, 0.18);
+            context.rectangle(0.0, 0.0, width as f64, height as f64);
+            let _ = context.fill_preserve();
+            context.set_source_rgba(0.47, 0.73, 0.91, 0.95);
+            context.set_line_width(1.0);
+            let _ = context.stroke();
+        });
+        root.put(&rubberband, 0.0, 0.0);
 
         let view = Rc::new(Self {
             root,
@@ -80,6 +98,9 @@ impl SectionedFolderView {
             activate,
             context_menu,
             unavailable,
+            collage_mode,
+            collage_ids,
+            rubberband,
             scroll: RefCell::new(None),
             geometry: RefCell::new(Vec::new()),
             geometry_width: Cell::new(0),
@@ -154,6 +175,106 @@ impl SectionedFolderView {
             glib::Propagation::Stop
         });
         view.root.add_controller(keyboard);
+
+        let drag = gtk::GestureDrag::new();
+        drag.set_button(1);
+        drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let drag_start = Rc::new(Cell::new(None::<(f64, f64)>));
+        let drag_base = Rc::new(RefCell::new(HashSet::<u32>::new()));
+
+        {
+            let weak = Rc::downgrade(&view);
+            let drag_start = drag_start.clone();
+            let drag_base = drag_base.clone();
+            drag.connect_drag_begin(move |gesture, x, y| {
+                let Some(view) = weak.upgrade() else {
+                    return;
+                };
+                if view.collage_mode.get() {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                }
+                drag_start.set(Some((x, y)));
+                let control = gesture
+                    .current_event_state()
+                    .contains(gtk::gdk::ModifierType::CONTROL_MASK);
+                let mut base = drag_base.borrow_mut();
+                base.clear();
+                if control {
+                    base.extend(selected_positions(&view.selection));
+                }
+                view.rubberband.set_visible(false);
+                view.root.set_cursor_from_name(Some("crosshair"));
+            });
+        }
+
+        {
+            let weak = Rc::downgrade(&view);
+            let drag_start = drag_start.clone();
+            let drag_base = drag_base.clone();
+            drag.connect_drag_update(move |gesture, dx, dy| {
+                if dx.hypot(dy) < DRAG_CLAIM_THRESHOLD {
+                    return;
+                }
+                let Some(view) = weak.upgrade() else {
+                    return;
+                };
+                let Some((sx, sy)) = drag_start.get() else {
+                    return;
+                };
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                let ex = sx + dx;
+                let ey = sy + dy;
+                let left = sx.min(ex);
+                let top = sy.min(ey);
+                let right = sx.max(ex);
+                let bottom = sy.max(ey);
+
+                view.rubberband
+                    .set_size_request((right - left).ceil() as i32, (bottom - top).ceil() as i32);
+                view.root.move_(&view.rubberband, left, top);
+                view.rubberband.set_visible(true);
+                view.rubberband.queue_draw();
+
+                let mut selected = drag_base.borrow().clone();
+                for (index, entry) in view.live_tiles.borrow().iter() {
+                    let Some(bounds) = entry.tile.compute_bounds(&view.root) else {
+                        continue;
+                    };
+                    let tile_left = f64::from(bounds.x());
+                    let tile_top = f64::from(bounds.y());
+                    let tile_right = tile_left + f64::from(bounds.width());
+                    let tile_bottom = tile_top + f64::from(bounds.height());
+                    if tile_right >= left
+                        && tile_left <= right
+                        && tile_bottom >= top
+                        && tile_top <= bottom
+                    {
+                        selected.insert(*index);
+                    }
+                }
+
+                view.selection.unselect_all();
+                let mut selected = selected.into_iter().collect::<Vec<_>>();
+                selected.sort_unstable();
+                for position in selected {
+                    view.selection.select_item(position, false);
+                }
+            });
+        }
+
+        {
+            let weak = Rc::downgrade(&view);
+            let drag_start = drag_start.clone();
+            drag.connect_drag_end(move |_, _, _| {
+                drag_start.set(None);
+                if let Some(view) = weak.upgrade() {
+                    view.rubberband.set_visible(false);
+                    view.root.set_cursor(None::<&gtk::gdk::Cursor>);
+                }
+            });
+        }
+        view.root.add_controller(drag);
         view
     }
 
@@ -245,10 +366,26 @@ impl SectionedFolderView {
         let photos = self.current_photos.clone();
         let activate = self.activate.clone();
         let tile_for_click = tile.clone();
+        let self_for_click_collage_mode = self.collage_mode.clone();
+        let self_for_click_collage_ids = self.collage_ids.clone();
         click.connect_pressed(move |gesture, presses, _, _| {
             let Some(position) = index_for_click.get() else {
                 return;
             };
+            if self_for_click_collage_mode.get() {
+                let Some(photo) = photos.borrow().get(position as usize).cloned() else {
+                    return;
+                };
+                let mut ids = self_for_click_collage_ids.borrow_mut();
+                if ids.remove(&photo.id()) {
+                    selection.unselect_item(position);
+                } else {
+                    ids.insert(photo.id());
+                    selection.select_item(position, false);
+                }
+                selection_anchor.set(Some(position));
+                return;
+            }
             let state = gesture.current_event_state();
             let control = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
