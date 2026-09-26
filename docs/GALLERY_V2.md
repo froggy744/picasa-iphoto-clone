@@ -373,3 +373,34 @@ Superseding fix:
   - PIC's existing collapsed-notify handler now owns the visibility transition and calls the normal animated `set_show_sidebar(false/true)` path
 
 Validation target: resize slowly across 1050 px with the sidebar open. Expected behavior is now slide-out on entering compact mode and slide-in when widening back out, matching the manual sidebar hide/reveal animation.
+
+### Responsive sidebar breakpoint: staged transition implementation
+
+User testing confirmed that both earlier breakpoint approaches still produced a hard cut at roughly the 3-column/2-column width. The reason is structural: changing `AdwOverlaySplitView::collapsed` immediately changes the split from side-by-side to overlay. Once that happens, a later `show-sidebar` animation cannot recreate the visual slide-out from the original layout.
+
+The responsive behavior was therefore rewritten as an explicit staged state machine instead of an `AdwBreakpoint` setter.
+
+Commits:
+
+- `d7b2929` — `Gallery v2: separate collapse state from sidebar animation`
+- `3f77a9a` — `Gallery v2: stage sidebar collapse after slide animation`
+- `be15005` — `Gallery v2: fix staged sidebar callback ownership`
+
+New sequence:
+
+```text
+narrowing past 1050 px
+    -> set_show_sidebar(false)
+    -> allow normal drawer slide-out (~280 ms)
+    -> set_collapsed(true)
+
+widening past 1080 px
+    -> keep sidebar hidden
+    -> set_collapsed(false)
+    -> next main-loop turn set_show_sidebar(true) if logically pinned
+    -> normal drawer slide-in
+```
+
+A 30 px hysteresis band (1050 enter / 1080 exit) prevents repeated collapse/expand chatter while dragging near the threshold. The sidebar's logical pin state remains unchanged, and compact hover reveal remains available after collapse.
+
+Validation target: resize slowly and quickly through the 1050–1080 px region with the sidebar visible. The sidebar should visibly complete its slide-out before the content switches to compact overlay mode, and slide back in after returning to expanded mode. Confirm that the previously fixed gallery resize responsiveness remains intact.
