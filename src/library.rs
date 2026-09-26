@@ -408,9 +408,17 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     sidebar_separator.set_margin_bottom(6);
     sidebar.append(&sidebar_separator);
 
-    let folders_heading = gtk::Label::new(Some("Folders"));
-    folders_heading.add_css_class("sidebar-heading");
-    folders_heading.set_xalign(0.0);
+    let folders_heading = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    folders_heading.set_margin_top(8);
+    let folders_label = gtk::Label::new(Some("Folders"));
+    folders_label.add_css_class("sidebar-heading");
+    folders_label.set_xalign(0.0);
+    folders_label.set_hexpand(true);
+    let add_folder_button = gtk::Button::from_icon_name("list-add-symbolic");
+    add_folder_button.add_css_class("flat");
+    add_folder_button.set_tooltip_text(Some("Add Folder"));
+    folders_heading.append(&folders_label);
+    folders_heading.append(&add_folder_button);
     sidebar.append(&folders_heading);
 
     let folder_box = gtk::Box::new(gtk::Orientation::Vertical, 1);
@@ -784,6 +792,11 @@ pub fn build_window(app: &adw::Application) -> adw::ApplicationWindow {
     open.set_tooltip_text(Some("Import Folder"));
     open.add_css_class("flat");
     right_header.pack_end(&open);
+
+    {
+        let open = open.clone();
+        add_folder_button.connect_clicked(move |_| open.emit_clicked());
+    }
 
     let zoom = gtk::Scale::with_range(
         gtk::Orientation::Horizontal,
