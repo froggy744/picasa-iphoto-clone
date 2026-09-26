@@ -845,3 +845,15 @@ Commit:
 - `3b7c606` — `Gallery v2: fix pointer zoom bounds target type`
 
 No zoom behavior changed; this is a compile-only fix.
+
+### Pointer zoom focus correction
+
+Runtime feedback showed that the first pointer-anchor implementation still let the focused photo shift badly when zoom crossed several column counts. The cause was that the anchor restoration searched for the realized tile widget each frame; GtkGridView may recycle that widget exactly during a column reflow.
+
+Commit:
+
+- `f979777` — `Gallery v2: keep zoom focus by photo index across reflow`
+
+The anchor now stores the photo index rather than relying on the tile widget surviving. Each animation frame derives the photo's destination row from the current authoritative column count and tile height, then sets the vertical adjustment so the same relative point of that photo stays at the same viewport Y position. This remains presentation-only and does not change photo membership, model ordering, DB state, or thumbnail decode behavior.
+
+Validation target: Ctrl+wheel over a thumbnail across multiple column-count changes. The focused photo should remain in the same vertical screen band instead of jumping several rows when GridView recycles cells.
