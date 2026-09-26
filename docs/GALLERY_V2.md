@@ -316,3 +316,26 @@ Important distinction from the follow-up log:
 Current conclusion: the old width-settle behavior was materially contributing to the resize stutter. Letting the direct GridView respond to column-boundary changes live, while avoiding unnecessary same-column `queue_resize()` calls, fixed the observed responsiveness issue.
 
 Next priority should move back to Gallery v2 interaction parity and large-library behavior rather than further resize optimization, unless the remaining warning indicates a separate UI sizing bug.
+
+### Resize warning attribution: sidebar collapse / auto-hide
+
+Follow-up user observation: when the application is resized below the compact breakpoint, the sidebar automatically collapses/auto-hides. This matches the remaining Adwaita warning timing.
+
+The window uses `AdwOverlaySplitView`. On narrow widths it enters collapsed mode, where the sidebar becomes an overlay rather than permanently consuming content width. The code also changes the collapsed sidebar maximum width and supports hover reveal/auto-hide while collapsed.
+
+Current interpretation of the remaining warning:
+
+```text
+GtkOverlay exceeds AdwApplicationWindow width
+```
+
+is that it occurs during the responsive sidebar transition while the overlay/split-view hierarchy briefly retains a wider requested size than the shrinking window allocation. Since the user-confirmed resize pause is fixed, this warning is no longer treated as evidence of Gallery v2 performance work.
+
+Status:
+
+- live resize responsiveness: fixed
+- Gallery v2 column reflow: responsive
+- sidebar compact auto-hide: expected responsive behavior
+- remaining Adwaita width warning: likely transition/layout diagnostic associated with sidebar collapse; cleanup only unless it produces a visible UI defect
+
+Do not optimize Gallery v2 around this warning unless a visible regression accompanies it.
