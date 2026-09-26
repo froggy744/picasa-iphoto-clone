@@ -338,13 +338,96 @@ impl Gallery {
     /// Zoom is driven by width. Height scales by the same factor, preserving
     /// the custom width/height shape configured above. `persist` is false for
     /// the startup default so adopting it does not turn it into a preference.
-    fn apply_zoom(&self, width: i32) {
-        self.apply_tile_size(width, true);
+    fn apply_zoom(self: &Rc<Self>, width: i32) {
+        const ZOOM_ANIMATION_MS: f64 = 180.0;
+
+        let target_width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+        let start_width = self.tile_width.get().max(1);
+        if target_width == start_width {
+            return;
+        }
+
+        // The legacy Folder ListView still has model rows whose membership is
+        // tied to the column count. Keep that fallback on the old immediate
+        // path; Gallery v2's direct photo GridView is the animation target.
+        if self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled()
+        {
+            self.apply_tile_size(target_width, true);
+            return;
+        }
+
+        let start_height = self.tile_height.get().max(1);
+        let target_height = ((start_height as f64)
+            * target_width as f64
+            / start_width as f64)
+            .round()
+            .max(1.0) as i32;
+
+        let generation = self.zoom_animation_generation.get().wrapping_add(1);
+        self.zoom_animation_generation.set(generation);
+        let started = Instant::now();
+        let this = self.clone();
+
+        // Drive presentation geometry from GTK's frame clock. GridView keeps
+        // the same PhotoObject model while realized tiles grow/shrink and GTK
+        // continuously repositions them toward the destination layout.
+        self.root.add_tick_callback(move |_, _| {
+            if this.zoom_animation_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+
+            let linear = (started.elapsed().as_secs_f64() * 1000.0 / ZOOM_ANIMATION_MS)
+                .clamp(0.0, 1.0);
+            // Cubic ease-out: quick response to input, gentle arrival.
+            let eased = 1.0 - (1.0 - linear).powi(3);
+            let frame_width = (start_width as f64
+                + (target_width - start_width) as f64 * eased)
+                .round() as i32;
+            let frame_height = (start_height as f64
+                + (target_height - start_height) as f64 * eased)
+                .round() as i32;
+
+            this.apply_tile_geometry(frame_width, frame_height, false);
+
+            if linear >= 1.0 {
+                // Land exactly on the canonical zoom level and persist only
+                // once. Intermediate animation frames never touch settings.
+                this.apply_tile_geometry(target_width, target_height, true);
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
 
     fn apply_tile_size(&self, width: i32, persist: bool) {
-        let trace_zoom = std::env::var_os("PICASA_TRACE").is_some();
+        let old_width = self.tile_width.get().max(1);
+        let old_height = self.tile_height.get().max(1);
+        let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+        if width == old_width {
+            return;
+        }
+        let scale = width as f64 / old_width as f64;
+        let height = ((old_height as f64) * scale).round().max(1.0) as i32;
+        self.apply_tile_geometry(width, height, persist);
+    }
+
+    fn apply_tile_geometry(&self, width: i32, height: i32, persist: bool) {
+        // Trace only completed/persisted zooms. Animation frames run at display
+        // cadence and must not flood stderr or distort the animation timing.
+        let trace_zoom = persist && std::env::var_os("PICASA_TRACE").is_some();
         let zoom_started = trace_zoom.then(Instant::now);
+        let old_width = self.tile_width.get().max(1);
+        let old_height = self.tile_height.get().max(1);
+        let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+        let height = height.max(1);
+        if width == old_width && height == old_height {
+            if persist {
+                (self.on_zoom_changed)(width);
+            }
+            return;
+        }
         let old_width = self.tile_width.get().max(1);
         let old_height = self.tile_height.get().max(1);
         let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
@@ -365,10 +448,6 @@ impl Gallery {
             self.zoom_anchor.set(None);
         }
         let anchor_us = anchor_started.map_or(0, |started| started.elapsed().as_micros());
-
-        let scale = width as f64 / old_width as f64;
-        let height = ((old_height as f64) * scale).round().max(1.0) as i32;
-
 
         self.tile_width.set(width);
         self.tile_height.set(height);
