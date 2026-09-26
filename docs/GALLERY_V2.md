@@ -908,3 +908,25 @@ Commits:
 - `2c429d2` — make weak-layer upgrade explicit for compile clarity
 
 Status: **IMPLEMENTED — runtime validation pending**. No rollback or undo was performed. The zoom ladder remains unchanged.
+
+### Cursor anchor recycled-widget ownership correction
+
+The floating-thumbnail approach exposed one more GridView virtualization invariant: hiding the widget that was under the cursor at capture time is not enough. When a column-count change recycles that widget, the same anchor photo can be rebound into a different realized `SquareTile`. The normal bind path previously reset every recycled tile to opacity 1.0, allowing the real anchor photo to reappear underneath the floating copy and break the single visual focal identity.
+
+Correction:
+
+- track the active floating anchor by **photo id**, not by the original widget instance
+- while a floating copy owns that photo id, any GridView tile rebound to the same photo remains transparent
+- reassert that ownership while restoring the anchor after each layout frame
+- clear the ownership only when the floating copy is removed or completes its handoff to the final real tile
+- generation cancellation only clears ownership if the cancelled release still owns that same photo id, so a newer anchor cannot be accidentally unhidden
+- photo membership, zoom ladder, 180 ms manual zoom animation, 300 ms resize FLIP, and Lightbox transitions are unchanged
+
+Fix commits:
+
+- `2b2a6e6` — track floating zoom anchor photo identity
+- `311be08` — keep recycled GridView bindings for the anchor photo hidden
+- `8bef6b5` — preserve/clear that ownership across floating-anchor restore and handoff
+
+Status remains **IMPLEMENTED — runtime validation pending** until the Ctrl+wheel behavior is tested in the real application.
+
