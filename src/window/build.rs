@@ -1984,7 +1984,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     // GridView's previous min-column request active while the
                     // window is dragged smaller, causing repeated
                     // GtkOverlay/Adwaita minimum-width negotiation.
-                    gallery_for_resize.update_width_animated(width);
+                    gallery_for_resize.update_width(width);
                 } else if sidebar_layout_settle_for_tick
                     .borrow_mut()
                     .observe(width)
