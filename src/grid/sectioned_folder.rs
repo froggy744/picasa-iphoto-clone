@@ -45,6 +45,7 @@ struct SectionedFolderView {
     live_headers: RefCell<HashMap<usize, gtk::Label>>,
     header_pool: RefCell<VecDeque<gtk::Label>>,
     selection_anchor: Rc<Cell<Option<u32>>>,
+    scroll_animation_generation: Cell<u64>,
 }
 
 impl SectionedFolderView {
@@ -114,6 +115,7 @@ impl SectionedFolderView {
             live_headers: RefCell::new(HashMap::new()),
             header_pool: RefCell::new(VecDeque::new()),
             selection_anchor: Rc::new(Cell::new(None)),
+            scroll_animation_generation: Cell::new(0),
         });
 
         let keyboard = gtk::EventControllerKey::new();
@@ -787,6 +789,85 @@ impl SectionedFolderView {
         true
     }
 
+    fn scroll_to_index_smooth(self: &Rc<Self>, index: u32, header: bool) -> bool {
+        self.refresh();
+        let ranges = self.group_ranges.borrow();
+        let geometry = self.geometry.borrow();
+        let target = ranges
+            .iter()
+            .zip(geometry.iter())
+            .find_map(|(range, geom)| {
+                (index >= range.start as u32 && index < range.end as u32).then(|| {
+                    if header {
+                        geom.header_y
+                    } else {
+                        let local = index - range.start as u32;
+                        let row = local / self.current_columns.get().max(1);
+                        geom.first_photo_y
+                            + f64::from(row) * f64::from(folder_line_height(self.tile_height.get()))
+                    }
+                })
+            });
+        drop(geometry);
+        drop(ranges);
+        let Some(target) = target else {
+            return false;
+        };
+        let Some(scrolled) = self.scroll.borrow().as_ref().cloned() else {
+            return false;
+        };
+
+        let adjustment = scrolled.vadjustment();
+        let lower = adjustment.lower();
+        let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
+        let target = target.clamp(lower, upper);
+        let start = adjustment.value().clamp(lower, upper);
+        if (target - start).abs() < 1.0 {
+            adjustment.set_value(target);
+            self.refresh();
+            return true;
+        }
+
+        let generation = self.scroll_animation_generation.get().wrapping_add(1);
+        self.scroll_animation_generation.set(generation);
+        let started = Instant::now();
+        let duration_s = 0.18_f64;
+        let weak = Rc::downgrade(self);
+        let photo_id = self
+            .current_photos
+            .borrow()
+            .get(index as usize)
+            .map(PhotoObject::id);
+
+        self.root.add_tick_callback(move |_, _| {
+            let Some(view) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if view.scroll_animation_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+            let Some(scrolled) = view.scroll.borrow().as_ref().cloned() else {
+                return glib::ControlFlow::Break;
+            };
+            let adjustment = scrolled.vadjustment();
+            let t = (started.elapsed().as_secs_f64() / duration_s).clamp(0.0, 1.0);
+            let eased = 1.0 - (1.0 - t).powi(3);
+            adjustment.set_value(start + (target - start) * eased);
+
+            if t >= 1.0 {
+                adjustment.set_value(target);
+                view.refresh();
+                if let Some(photo_id) = photo_id {
+                    view.focus_photo(photo_id);
+                }
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+        true
+    }
+
     fn scroll_position(&self) -> f64 {
         self.scroll
             .borrow()
@@ -829,6 +910,8 @@ impl SectionedFolderView {
 
 
     fn set_scroll_y(self: &Rc<Self>, scroll_y: f64) {
+        self.scroll_animation_generation
+            .set(self.scroll_animation_generation.get().wrapping_add(1));
         let Some(scrolled) = self.scroll.borrow().as_ref().cloned() else {
             return;
         };
