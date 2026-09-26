@@ -662,3 +662,19 @@ Changes:
 - manual zoom animation remains unchanged at ~180 ms
 
 Expected result: window resizing should still animate column changes, but with a subtle nudge/slide rather than a pronounced wobble.
+
+### Resize animation experiment rejected and reverted
+
+A window-resize animation experiment attempted to reuse the manual zoom scale+slide effect while crossing grid column boundaries. Runtime validation with `resize-bad.log` showed the approach was structurally wrong: temporary bridge tile sizes changed the grid's column math while the physical viewport width was also changing, producing fake intermediate column counts and visible wobble. The trace showed transitions such as 3 -> 5 and 5 -> 6 -> 5, plus repeated adjacent-column changes during ordinary resize. It also coincided with renewed Adwaita minimum-width warnings while shrinking the application window.
+
+The experiment has therefore been fully reverted from production code. Manual animated zoom remains intact and unchanged.
+
+Revert commits:
+
+- `51e1ea3` — restore `src/grid/view.rs` to the last known-good post-zoom state
+- `ee31d8b` — restore `src/grid/virtualization.rs` to the last known-good post-zoom state
+- `6865639` — restore `src/window/build.rs` live resize behavior
+
+Current resize policy: keep the previously validated fast live resize path with immediate column changes. Do not animate resize by temporarily modifying tile geometry or by feeding synthetic widths into GridView column calculation.
+
+If resize transitions are revisited, use a presentation-only FLIP/snapshot/transform layer that animates already-realized tile positions after GTK computes old/new layouts, without changing tile size, viewport width, or column-count inputs during the resize calculation.
