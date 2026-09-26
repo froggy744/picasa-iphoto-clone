@@ -37,6 +37,8 @@ struct SectionedFolderView {
     scroll: RefCell<Option<gtk::ScrolledWindow>>,
     geometry: RefCell<Vec<SectionedFolderGeometry>>,
     geometry_width: Cell<i32>,
+    geometry_columns: Cell<u32>,
+    geometry_tile_height: Cell<i32>,
     total_height: Cell<f64>,
     live_tiles: RefCell<HashMap<u32, SectionedFolderTile>>,
     tile_pool: RefCell<VecDeque<SectionedFolderTile>>,
@@ -104,6 +106,8 @@ impl SectionedFolderView {
             scroll: RefCell::new(None),
             geometry: RefCell::new(Vec::new()),
             geometry_width: Cell::new(0),
+            geometry_columns: Cell::new(0),
+            geometry_tile_height: Cell::new(0),
             total_height: Cell::new(1.0),
             live_tiles: RefCell::new(HashMap::new()),
             tile_pool: RefCell::new(VecDeque::new()),
@@ -301,7 +305,9 @@ impl SectionedFolderView {
             let width = scrolled_for_tick.width();
             if width > 0 && width != last_width_for_tick.get() {
                 last_width_for_tick.set(width);
-                this.invalidate_geometry();
+                // Width-only motion with the same column count does not change
+                // vertical section geometry. Refresh only to stretch headers;
+                // update_layout invalidates geometry when columns actually change.
                 this.refresh();
             }
             glib::ControlFlow::Continue
@@ -312,17 +318,28 @@ impl SectionedFolderView {
 
     fn invalidate_geometry(&self) {
         self.geometry_width.set(0);
+        self.geometry_columns.set(0);
+        self.geometry_tile_height.set(0);
     }
 
     fn geometry_for_current_layout(&self, width: i32) {
         let columns = self.current_columns.get().max(1);
-        if self.geometry_width.get() == width
-            && self.geometry.borrow().len() == self.group_ranges.borrow().len()
+        let tile_height = self.tile_height.get();
+        let range_count = self.group_ranges.borrow().len();
+
+        // Width by itself does not affect section Y positions. Only the number
+        // of columns, tile height, or section membership changes vertical
+        // geometry. Remember the latest width for diagnostics/header sizing,
+        // but avoid rebuilding every frame while the sidebar/window animates.
+        if self.geometry_columns.get() == columns
+            && self.geometry_tile_height.get() == tile_height
+            && self.geometry.borrow().len() == range_count
         {
+            self.geometry_width.set(width);
             return;
         }
 
-        let row_height = f64::from(folder_line_height(self.tile_height.get()));
+        let row_height = f64::from(folder_line_height(tile_height));
         let ranges = self.group_ranges.borrow();
         let mut y = 0.0;
         let mut geometry = Vec::with_capacity(ranges.len());
@@ -343,6 +360,8 @@ impl SectionedFolderView {
 
         self.geometry.replace(geometry);
         self.geometry_width.set(width);
+        self.geometry_columns.set(columns);
+        self.geometry_tile_height.set(tile_height);
         self.total_height.set(y.max(1.0));
     }
 
