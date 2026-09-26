@@ -377,6 +377,7 @@ impl Gallery {
         let current_photos_for_activate = current_photos.clone();
         let selection_for_activate = selection.clone();
         let activate_for_grid = activate.clone();
+        let root_for_activate = root.clone();
         root.connect_activate(move |_, position| {
             let Some(activated) = selection_for_activate
                 .model()
@@ -392,7 +393,7 @@ impl Gallery {
                 .unwrap_or(position as usize);
             let source = {
                 let mut tiles = Vec::new();
-                collect_tiles(root.upcast_ref(), &mut tiles);
+                collect_tiles(root_for_activate.upcast_ref(), &mut tiles);
                 tiles
                     .into_iter()
                     .find(|tile| {
