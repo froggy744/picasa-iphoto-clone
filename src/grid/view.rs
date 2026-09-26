@@ -838,6 +838,18 @@ impl Gallery {
 
         let previous_columns = self.current_columns.replace(columns);
         if std::env::var_os("PICASA_TRACE").is_some() && previous_columns != columns { eprintln!("PIC_NAV current_columns_changed old={} new={}", previous_columns, columns); }
+        if zoom_trace_enabled() && previous_columns != columns {
+            let mut tiles = Vec::new();
+            collect_tiles(self.root.upcast_ref(), &mut tiles);
+            eprintln!(
+                "PIC_ZOOM_TRACE columns old={} new={} tile_width={} layout_width={} realized={}",
+                previous_columns,
+                columns,
+                self.tile_width.get(),
+                width,
+                tiles.len()
+            );
+        }
         self.root.set_min_columns(columns);
         self.root.set_max_columns(columns);
         self.root.queue_resize();
