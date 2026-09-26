@@ -1,0 +1,593 @@
+const SECTIONED_HEADER_HEIGHT: f64 = 70.0;
+const SECTIONED_SIDE_MARGIN: f64 = 20.0;
+const SECTIONED_OVERSCAN_PX: f64 = 320.0;
+const SECTIONED_TILE_POOL_CAP: usize = 180;
+const SECTIONED_HEADER_POOL_CAP: usize = 12;
+
+#[derive(Clone, Copy, Debug)]
+struct SectionedFolderGeometry {
+    header_y: f64,
+    first_photo_y: f64,
+    end_y: f64,
+}
+
+#[derive(Clone)]
+struct SectionedFolderTile {
+    tile: SquareTile,
+    index: Rc<Cell<Option<u32>>>,
+}
+
+struct SectionedFolderView {
+    root: gtk::Fixed,
+    spacer: gtk::Box,
+    current_photos: Rc<RefCell<Vec<PhotoObject>>>,
+    group_ranges: Rc<RefCell<Vec<GroupRange>>>,
+    selection: gtk::MultiSelection,
+    current_columns: Rc<Cell<u32>>,
+    tile_width: Rc<Cell<i32>>,
+    tile_height: Rc<Cell<i32>>,
+    fit_whole_photo: Rc<Cell<bool>>,
+    show_file_names: Rc<Cell<bool>>,
+    activate: Rc<dyn Fn(Vec<PhotoObject>, usize, Option<(gtk::Widget, gtk::gdk::Paintable)>)>,
+    context_menu: Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>,
+    unavailable: Rc<dyn Fn(PhotoObject, gtk::Widget)>,
+    scroll: RefCell<Option<gtk::ScrolledWindow>>,
+    geometry: RefCell<Vec<SectionedFolderGeometry>>,
+    geometry_width: Cell<i32>,
+    total_height: Cell<f64>,
+    live_tiles: RefCell<HashMap<u32, SectionedFolderTile>>,
+    tile_pool: RefCell<VecDeque<SectionedFolderTile>>,
+    live_headers: RefCell<HashMap<usize, gtk::Label>>,
+    header_pool: RefCell<VecDeque<gtk::Label>>,
+    selection_anchor: Cell<Option<u32>>,
+}
+
+impl SectionedFolderView {
+    fn new(
+        current_photos: Rc<RefCell<Vec<PhotoObject>>>,
+        group_ranges: Rc<RefCell<Vec<GroupRange>>>,
+        selection: gtk::MultiSelection,
+        current_columns: Rc<Cell<u32>>,
+        tile_width: Rc<Cell<i32>>,
+        tile_height: Rc<Cell<i32>>,
+        fit_whole_photo: Rc<Cell<bool>>,
+        show_file_names: Rc<Cell<bool>>,
+        activate: Rc<dyn Fn(Vec<PhotoObject>, usize, Option<(gtk::Widget, gtk::gdk::Paintable)>)>,
+        context_menu: Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>,
+        unavailable: Rc<dyn Fn(PhotoObject, gtk::Widget)>,
+    ) -> Rc<Self> {
+        let root = gtk::Fixed::new();
+        root.set_hexpand(true);
+        root.set_vexpand(false);
+        root.set_focusable(true);
+        root.add_css_class("sectioned-folder-view");
+
+        let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        spacer.set_can_target(false);
+        root.put(&spacer, 0.0, 0.0);
+
+        Rc::new(Self {
+            root,
+            spacer,
+            current_photos,
+            group_ranges,
+            selection,
+            current_columns,
+            tile_width,
+            tile_height,
+            fit_whole_photo,
+            show_file_names,
+            activate,
+            context_menu,
+            unavailable,
+            scroll: RefCell::new(None),
+            geometry: RefCell::new(Vec::new()),
+            geometry_width: Cell::new(0),
+            total_height: Cell::new(1.0),
+            live_tiles: RefCell::new(HashMap::new()),
+            tile_pool: RefCell::new(VecDeque::new()),
+            live_headers: RefCell::new(HashMap::new()),
+            header_pool: RefCell::new(VecDeque::new()),
+            selection_anchor: Cell::new(None),
+        })
+    }
+
+    fn root(&self) -> &gtk::Fixed {
+        &self.root
+    }
+
+    fn attach_scroll(self: &Rc<Self>, scrolled: &gtk::ScrolledWindow) {
+        self.scroll.replace(Some(scrolled.clone()));
+
+        let this = self.clone();
+        scrolled
+            .vadjustment()
+            .connect_value_changed(move |_| this.refresh());
+
+        let this = self.clone();
+        let scrolled_for_tick = scrolled.clone();
+        let last_width = Rc::new(Cell::new(0_i32));
+        let last_width_for_tick = last_width.clone();
+        scrolled.add_tick_callback(move |_, _| {
+            let width = scrolled_for_tick.width();
+            if width > 0 && width != last_width_for_tick.get() {
+                last_width_for_tick.set(width);
+                this.invalidate_geometry();
+                this.refresh();
+            }
+            glib::ControlFlow::Continue
+        });
+
+        self.refresh();
+    }
+
+    fn invalidate_geometry(&self) {
+        self.geometry_width.set(0);
+    }
+
+    fn geometry_for_current_layout(&self, width: i32) {
+        let columns = self.current_columns.get().max(1);
+        if self.geometry_width.get() == width
+            && self.geometry.borrow().len() == self.group_ranges.borrow().len()
+        {
+            return;
+        }
+
+        let row_height = f64::from(folder_line_height(self.tile_height.get()));
+        let ranges = self.group_ranges.borrow();
+        let mut y = 0.0;
+        let mut geometry = Vec::with_capacity(ranges.len());
+
+        for range in ranges.iter() {
+            let count = range.end.saturating_sub(range.start);
+            let rows = count.div_ceil(columns as usize);
+            let header_y = y;
+            let first_photo_y = header_y + SECTIONED_HEADER_HEIGHT;
+            let end_y = first_photo_y + rows as f64 * row_height;
+            geometry.push(SectionedFolderGeometry {
+                header_y,
+                first_photo_y,
+                end_y,
+            });
+            y = end_y;
+        }
+
+        self.geometry.replace(geometry);
+        self.geometry_width.set(width);
+        self.total_height.set(y.max(1.0));
+    }
+
+    fn make_tile(self: &Rc<Self>) -> SectionedFolderTile {
+        let tile = make_folder_tile(
+            self.tile_width.get(),
+            self.tile_height.get(),
+            &self.unavailable,
+        );
+        tile.set_filename_visible(self.show_file_names.get());
+        tile.set_content_fit(if self.fit_whole_photo.get() {
+            gtk::ContentFit::Contain
+        } else {
+            gtk::ContentFit::Cover
+        });
+
+        let index = Rc::new(Cell::new(None::<u32>));
+
+        let click = gtk::GestureClick::new();
+        click.set_button(1);
+        let index_for_click = index.clone();
+        let selection = self.selection.clone();
+        let selection_anchor = self.selection_anchor.clone();
+        let photos = self.current_photos.clone();
+        let activate = self.activate.clone();
+        let tile_for_click = tile.clone();
+        click.connect_pressed(move |gesture, presses, _, _| {
+            let Some(position) = index_for_click.get() else {
+                return;
+            };
+            let state = gesture.current_event_state();
+            let control = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+
+            if shift {
+                let selected = selected_positions(&selection);
+                let next = folder_selection_after_click(
+                    selection.n_items(),
+                    &selected,
+                    selection_anchor.get(),
+                    position,
+                    false,
+                    true,
+                );
+                selection.unselect_all();
+                for item in next {
+                    selection.select_item(item, false);
+                }
+            } else if control {
+                if selection.is_selected(position) {
+                    selection.unselect_item(position);
+                } else {
+                    selection.select_item(position, false);
+                }
+                selection_anchor.set(Some(position));
+            } else {
+                selection.select_item(position, true);
+                selection_anchor.set(Some(position));
+            }
+
+            if presses == 2 {
+                let photos = photos.borrow().clone();
+                let index = position as usize;
+                let source = tile_for_click
+                    .transition_paintable()
+                    .map(|paintable| (tile_for_click.clone().upcast::<gtk::Widget>(), paintable));
+                activate(photos, index, source);
+            }
+        });
+        tile.add_controller(click);
+
+        let right_click = gtk::GestureClick::new();
+        right_click.set_button(3);
+        right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let index_for_context = index.clone();
+        let selection_for_context = self.selection.clone();
+        let photos_for_context = self.current_photos.clone();
+        let context_menu = self.context_menu.clone();
+        let tile_for_context = tile.clone();
+        right_click.connect_pressed(move |gesture, _, x, y| {
+            let Some(position) = index_for_context.get() else {
+                return;
+            };
+            let Some(photo) = photos_for_context.borrow().get(position as usize).cloned() else {
+                return;
+            };
+            if !selection_for_context.is_selected(position) {
+                selection_for_context.select_item(position, true);
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            context_menu(
+                photo,
+                tile_for_context.clone().upcast::<gtk::Widget>(),
+                x,
+                y,
+            );
+        });
+        tile.add_controller(right_click);
+
+        SectionedFolderTile { tile, index }
+    }
+
+    fn refresh(self: &Rc<Self>) {
+        let Some(scrolled) = self.scroll.borrow().as_ref().cloned() else {
+            return;
+        };
+        let width = scrolled.width().max(1);
+        self.geometry_for_current_layout(width);
+        self.spacer
+            .set_size_request(width, self.total_height.get().ceil() as i32);
+
+        let adjustment = scrolled.vadjustment();
+        let top = (adjustment.value() - SECTIONED_OVERSCAN_PX).max(0.0);
+        let bottom = adjustment.value() + adjustment.page_size() + SECTIONED_OVERSCAN_PX;
+        let columns = self.current_columns.get().max(1);
+        let row_height = f64::from(folder_line_height(self.tile_height.get()));
+        let ranges = self.group_ranges.borrow().clone();
+        let geometry = self.geometry.borrow().clone();
+
+        let mut wanted_headers = Vec::<usize>::new();
+        let mut wanted_tiles = Vec::<(u32, usize, u32, u32)>::new();
+
+        for (section_index, (range, geom)) in ranges.iter().zip(geometry.iter()).enumerate() {
+            if geom.end_y < top || geom.header_y > bottom {
+                continue;
+            }
+            wanted_headers.push(section_index);
+            let count = range.end.saturating_sub(range.start) as u32;
+            if count == 0 {
+                continue;
+            }
+            let start_row = if top <= geom.first_photo_y {
+                0
+            } else {
+                ((top - geom.first_photo_y) / row_height).floor().max(0.0) as u32
+            };
+            let end_row = (((bottom - geom.first_photo_y) / row_height)
+                .ceil()
+                .max(0.0) as u32)
+                .min(count.div_ceil(columns));
+
+            for row in start_row..end_row {
+                let row_start = range.start as u32 + row * columns;
+                for col in 0..columns {
+                    let index = row_start + col;
+                    if index >= range.end as u32 {
+                        break;
+                    }
+                    wanted_tiles.push((index, section_index, row, col));
+                }
+            }
+        }
+
+        let wanted_ids = wanted_tiles
+            .iter()
+            .map(|item| item.0)
+            .collect::<HashSet<_>>();
+        let stale = self
+            .live_tiles
+            .borrow()
+            .keys()
+            .copied()
+            .filter(|index| !wanted_ids.contains(index))
+            .collect::<Vec<_>>();
+        for index in stale {
+            if let Some(tile) = self.live_tiles.borrow_mut().remove(&index) {
+                self.root.remove(&tile.tile);
+                tile.index.set(None);
+                let mut pool = self.tile_pool.borrow_mut();
+                if pool.len() < SECTIONED_TILE_POOL_CAP {
+                    pool.push_back(tile);
+                }
+            }
+        }
+
+        let photos = self.current_photos.borrow();
+        for (index, section_index, row, col) in wanted_tiles {
+            let existing = {
+                let live = self.live_tiles.borrow();
+                live.get(&index).cloned()
+            };
+            let tile = if let Some(tile) = existing {
+                tile
+            } else {
+                let tile = self
+                    .tile_pool
+                    .borrow_mut()
+                    .pop_front()
+                    .unwrap_or_else(|| self.make_tile());
+                let Some(photo) = photos.get(index as usize) else {
+                    continue;
+                };
+                tile.index.set(Some(index));
+                tile.tile
+                    .set_tile_size(self.tile_width.get(), self.tile_height.get());
+                tile.tile.set_filename_visible(self.show_file_names.get());
+                tile.tile.set_content_fit(if self.fit_whole_photo.get() {
+                    gtk::ContentFit::Contain
+                } else {
+                    gtk::ContentFit::Cover
+                });
+                tile.tile.bind_photo_folder_fast(photo, index as usize);
+                tile.tile.set_manual_selected(self.selection.is_selected(index));
+                self.root.put(&tile.tile, 0.0, 0.0);
+                self.live_tiles.borrow_mut().insert(index, tile.clone());
+                tile
+            };
+
+            tile.tile
+                .set_tile_size(self.tile_width.get(), self.tile_height.get());
+            tile.tile.set_manual_selected(self.selection.is_selected(index));
+
+            let x = SECTIONED_SIDE_MARGIN
+                + f64::from(col) * (f64::from(self.tile_width.get()) + 30.0);
+            let y = geometry[section_index].first_photo_y + f64::from(row) * row_height;
+            self.root.move_(&tile.tile, x, y);
+        }
+        drop(photos);
+
+        let wanted_header_ids = wanted_headers.iter().copied().collect::<HashSet<_>>();
+        let stale_headers = self
+            .live_headers
+            .borrow()
+            .keys()
+            .copied()
+            .filter(|index| !wanted_header_ids.contains(index))
+            .collect::<Vec<_>>();
+        for index in stale_headers {
+            if let Some(label) = self.live_headers.borrow_mut().remove(&index) {
+                self.root.remove(&label);
+                let mut pool = self.header_pool.borrow_mut();
+                if pool.len() < SECTIONED_HEADER_POOL_CAP {
+                    pool.push_back(label);
+                }
+            }
+        }
+
+        for section_index in wanted_headers {
+            let label = if let Some(label) = self.live_headers.borrow().get(&section_index).cloned() {
+                label
+            } else {
+                let label = self
+                    .header_pool
+                    .borrow_mut()
+                    .pop_front()
+                    .unwrap_or_else(|| {
+                        let label = gtk::Label::new(None);
+                        label.set_xalign(0.0);
+                        label.set_yalign(0.5);
+                        label.add_css_class("section-heading");
+                        label.add_css_class("folder-section-heading");
+                        label
+                    });
+                let range = &ranges[section_index];
+                label.set_text(&format!(
+                    "{}   ·   {} photos",
+                    range.label,
+                    range.end.saturating_sub(range.start)
+                ));
+                self.root.put(&label, SECTIONED_SIDE_MARGIN, 0.0);
+                self.live_headers
+                    .borrow_mut()
+                    .insert(section_index, label.clone());
+                label
+            };
+            label.set_size_request(
+                (width - (SECTIONED_SIDE_MARGIN * 2.0) as i32).max(1),
+                SECTIONED_HEADER_HEIGHT as i32,
+            );
+            self.root
+                .move_(&label, SECTIONED_SIDE_MARGIN, geometry[section_index].header_y);
+        }
+    }
+
+    fn sync_selection(&self) {
+        for (index, tile) in self.live_tiles.borrow().iter() {
+            tile.tile.set_manual_selected(self.selection.is_selected(*index));
+        }
+    }
+
+    fn refresh_model(self: &Rc<Self>) {
+        self.invalidate_geometry();
+        self.refresh();
+    }
+
+    fn capture_center_anchor(&self) -> Option<(i64, f64)> {
+        let scrolled = self.scroll.borrow().as_ref()?.clone();
+        let adjustment = scrolled.vadjustment();
+        let target = adjustment.value() + adjustment.page_size() * 0.5;
+        let columns = self.current_columns.get().max(1);
+        let row_height = f64::from(folder_line_height(self.tile_height.get()));
+        let ranges = self.group_ranges.borrow();
+        let geometry = self.geometry.borrow();
+
+        for (range, geom) in ranges.iter().zip(geometry.iter()) {
+            if target >= geom.end_y || range.start == range.end {
+                continue;
+            }
+            let row = if target <= geom.first_photo_y {
+                0
+            } else {
+                ((target - geom.first_photo_y) / row_height)
+                    .floor()
+                    .max(0.0) as u32
+            };
+            let local = (row * columns).min(range.end.saturating_sub(range.start) as u32 - 1);
+            let index = range.start as u32 + local;
+            let photo = self.current_photos.borrow().get(index as usize)?.clone();
+            let y = geom.first_photo_y + f64::from(row) * row_height;
+            return Some((photo.id(), y - adjustment.value()));
+        }
+        None
+    }
+
+    fn restore_anchor(self: &Rc<Self>, photo_id: i64, offset: f64) -> bool {
+        let Some(index) = self
+            .current_photos
+            .borrow()
+            .iter()
+            .position(|photo| photo.id() == photo_id)
+        else {
+            return false;
+        };
+        self.refresh();
+        let Some(y) = self.y_for_index(index as u32) else {
+            return false;
+        };
+        let Some(scrolled) = self.scroll.borrow().as_ref().cloned() else {
+            return false;
+        };
+        let adjustment = scrolled.vadjustment();
+        let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+        adjustment.set_value((y - offset).clamp(adjustment.lower(), upper));
+        self.refresh();
+        true
+    }
+
+    fn y_for_index(&self, index: u32) -> Option<f64> {
+        let columns = self.current_columns.get().max(1);
+        let row_height = f64::from(folder_line_height(self.tile_height.get()));
+        let ranges = self.group_ranges.borrow();
+        let geometry = self.geometry.borrow();
+        for (range, geom) in ranges.iter().zip(geometry.iter()) {
+            if index >= range.start as u32 && index < range.end as u32 {
+                let local = index - range.start as u32;
+                return Some(geom.first_photo_y + f64::from(local / columns) * row_height);
+            }
+        }
+        None
+    }
+
+    fn scroll_to_index(self: &Rc<Self>, index: u32, header: bool) -> bool {
+        self.refresh();
+        let ranges = self.group_ranges.borrow();
+        let geometry = self.geometry.borrow();
+        let target = ranges
+            .iter()
+            .zip(geometry.iter())
+            .find_map(|(range, geom)| {
+                (index >= range.start as u32 && index < range.end as u32).then(|| {
+                    if header {
+                        geom.header_y
+                    } else {
+                        let local = index - range.start as u32;
+                        let row = local / self.current_columns.get().max(1);
+                        geom.first_photo_y
+                            + f64::from(row) * f64::from(folder_line_height(self.tile_height.get()))
+                    }
+                })
+            });
+        drop(geometry);
+        drop(ranges);
+        let Some(target) = target else {
+            return false;
+        };
+        let Some(scrolled) = self.scroll.borrow().as_ref().cloned() else {
+            return false;
+        };
+        let adjustment = scrolled.vadjustment();
+        let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+        adjustment.set_value(target.clamp(adjustment.lower(), upper));
+        self.refresh();
+        true
+    }
+
+    fn scroll_position(&self) -> f64 {
+        self.scroll
+            .borrow()
+            .as_ref()
+            .map(|scroll| scroll.vadjustment().value())
+            .unwrap_or(0.0)
+    }
+
+    fn photo_for_scroll_position(&self, scroll_y: f64) -> Option<PhotoObject> {
+        let columns = self.current_columns.get().max(1);
+        let row_height = f64::from(folder_line_height(self.tile_height.get()));
+        let ranges = self.group_ranges.borrow();
+        let geometry = self.geometry.borrow();
+        for (range, geom) in ranges.iter().zip(geometry.iter()) {
+            if scroll_y >= geom.end_y || range.start == range.end {
+                continue;
+            }
+            let row = if scroll_y <= geom.first_photo_y {
+                0
+            } else {
+                ((scroll_y - geom.first_photo_y) / row_height)
+                    .floor()
+                    .max(0.0) as u32
+            };
+            let local = (row * columns).min(range.end.saturating_sub(range.start) as u32 - 1);
+            return self
+                .current_photos
+                .borrow()
+                .get(range.start + local as usize)
+                .cloned();
+        }
+        None
+    }
+
+    fn viewport_center_photo(&self) -> Option<PhotoObject> {
+        let scrolled = self.scroll.borrow().as_ref()?.clone();
+        let adjustment = scrolled.vadjustment();
+        self.photo_for_scroll_position(adjustment.value() + adjustment.page_size() * 0.5)
+    }
+
+    fn focus_photo(&self, photo_id: i64) {
+        if let Some(tile) = self.live_tiles.borrow().values().find(|entry| {
+            entry
+                .tile
+                .photo()
+                .as_ref()
+                .is_some_and(|photo| photo.id() == photo_id)
+        }) {
+            tile.tile.grab_focus();
+        }
+    }
+}
