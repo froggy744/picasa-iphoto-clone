@@ -60,6 +60,10 @@ impl Gallery {
                 // the Folder rows once; reapplying Folder grouping must not
                 // build the same store a second time.
                 self.folder_store.remove_all();
+                if crate::grid::sectioned_folder_view_enabled() {
+                    self.group_ranges.replace(Vec::new());
+                    self.sectioned_folder.refresh_model();
+                }
             }
         } else {
             let visible = mode != GroupMode::None && !self.group_ranges.borrow().is_empty();
