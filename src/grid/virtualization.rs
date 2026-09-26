@@ -1351,21 +1351,26 @@ impl Gallery {
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
-        let adjustment = if folder_mode {
-            self.folder_root.vadjustment()
+        if folder_mode && crate::grid::sectioned_folder_view_enabled() {
+            self.sectioned_folder.set_scroll_y(scroll_y);
+            self.folder_sectioned_root.grab_focus();
         } else {
-            self.root.vadjustment()
-        };
-        schedule_scroll_restore(
-            adjustment,
-            scroll_y,
-            self.replace_generation.clone(),
-            generation,
-        );
-        if folder_mode {
-            self.folder_root.grab_focus();
-        } else {
-            self.root.grab_focus();
+            let adjustment = if folder_mode {
+                self.folder_root.vadjustment()
+            } else {
+                self.root.vadjustment()
+            };
+            schedule_scroll_restore(
+                adjustment,
+                scroll_y,
+                self.replace_generation.clone(),
+                generation,
+            );
+            if folder_mode {
+                self.folder_root.grab_focus();
+            } else {
+                self.root.grab_focus();
+            }
         }
     }
 
@@ -1457,6 +1462,7 @@ impl Gallery {
         let is_current = Rc::new(is_current);
         let root = self.root.downgrade();
         let folder_root = self.folder_root.downgrade();
+        let folder_sectioned_root = self.folder_sectioned_root.downgrade();
         let mut offset = 0;
         glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
             // Navigation/replacement must not paint an obsolete gallery.
@@ -1482,6 +1488,9 @@ impl Gallery {
                 collect_tiles(root.upcast_ref(), &mut tiles);
             }
             if let Some(root) = folder_root.upgrade() {
+                collect_tiles(root.upcast_ref(), &mut tiles);
+            }
+            if let Some(root) = folder_sectioned_root.upgrade() {
                 collect_tiles(root.upcast_ref(), &mut tiles);
             }
             for tile in tiles {
