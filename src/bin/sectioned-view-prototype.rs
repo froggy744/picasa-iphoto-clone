@@ -210,6 +210,7 @@ fn main() {
             let status = status.clone();
             let spacer = spacer.clone();
             let last_anchor_ok = last_anchor_ok.clone();
+            let zoom = zoom.clone();
 
             Rc::new(move || {
                 let width = scrolled.width().max(1);
