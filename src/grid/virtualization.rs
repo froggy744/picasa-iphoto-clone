@@ -215,9 +215,17 @@ struct ZoomPointerAnchor {
     viewport_y: f32,
     relative_x: f32,
     relative_y: f32,
+    layer: Option<gtk::Fixed>,
+    ghost: Option<gtk::Picture>,
+    layer_cursor_x: f64,
+    layer_cursor_y: f64,
 }
 
 impl Gallery {
+    pub fn set_zoom_anchor_layer(&self, layer: &gtk::Fixed) {
+        self.zoom_anchor_layer.replace(Some(layer.downgrade()));
+    }
+
     fn capture_zoom_pointer_anchor(
         &self,
         scrolled: &gtk::ScrolledWindow,
@@ -236,31 +244,85 @@ impl Gallery {
             let photo_id = tile.imp().photo.borrow().as_ref()?.id();
             let position = tile.imp().photo_index.get()? as u32;
             let bounds = tile.compute_bounds(scrolled)?;
-            let (offset_x, offset_y) = tile.presentation_offset();
-            let visual_x = bounds.x() + offset_x;
-            let visual_y = bounds.y() + offset_y;
-            let inside = x >= visual_x
-                && x <= visual_x + bounds.width()
-                && y >= visual_y
-                && y <= visual_y + bounds.height();
+            let inside = x >= bounds.x()
+                && x <= bounds.x() + bounds.width()
+                && y >= bounds.y()
+                && y <= bounds.y() + bounds.height();
             if !inside
                 || bounds.width() <= f32::EPSILON
                 || bounds.height() <= f32::EPSILON
             {
                 return None;
             }
+
+            let relative_x = ((x - bounds.x()) / bounds.width()).clamp(0.0, 1.0);
+            let relative_y = ((y - bounds.y()) / bounds.height()).clamp(0.0, 1.0);
+
+            let mut layer = None;
+            let mut ghost = None;
+            let mut layer_cursor_x = f64::from(x);
+            let mut layer_cursor_y = f64::from(y);
+
+            if let Some(anchor_layer) = self
+                .zoom_anchor_layer
+                .borrow()
+                .as_ref()
+                .and_then(glib::WeakRef::upgrade)
+            {
+                if let (Some(point), Some(paintable)) = (
+                    scrolled.compute_point(
+                        &anchor_layer,
+                        &gtk::graphene::Point::new(x, y),
+                    ),
+                    tile.transition_paintable(),
+                ) {
+                    let picture = gtk::Picture::for_paintable(&paintable);
+                    picture.set_content_fit(if self.fit_whole_photo.get() {
+                        gtk::ContentFit::Contain
+                    } else {
+                        gtk::ContentFit::Cover
+                    });
+                    picture.set_can_shrink(true);
+                    picture.set_can_target(false);
+                    picture.set_size_request(
+                        bounds.width().round().max(1.0) as i32,
+                        bounds.height().round().max(1.0) as i32,
+                    );
+                    picture.add_css_class("thumbnail");
+
+                    layer_cursor_x = f64::from(point.x());
+                    layer_cursor_y = f64::from(point.y());
+                    let ghost_x =
+                        layer_cursor_x - f64::from(relative_x * bounds.width());
+                    let ghost_y =
+                        layer_cursor_y - f64::from(relative_y * bounds.height());
+                    anchor_layer.put(&picture, ghost_x, ghost_y);
+
+                    // The real GridView cell may move to a completely different
+                    // column. Hide it while the floating copy carries the visual
+                    // identity under the pointer.
+                    tile.set_opacity(0.0);
+                    layer = Some(anchor_layer);
+                    ghost = Some(picture);
+                }
+            }
+
             let anchor = ZoomPointerAnchor {
                 scrolled: scrolled.downgrade(),
                 photo_id,
                 position,
                 viewport_x: x,
                 viewport_y: y,
-                relative_x: ((x - visual_x) / bounds.width()).clamp(0.0, 1.0),
-                relative_y: ((y - visual_y) / bounds.height()).clamp(0.0, 1.0),
+                relative_x,
+                relative_y,
+                layer,
+                ghost,
+                layer_cursor_x,
+                layer_cursor_y,
             };
             if std::env::var_os("PICASA_TRACE").is_some() {
                 eprintln!(
-                    "PIC_ZOOM_ANCHOR capture id={} pos={} cursor=({:.1},{:.1}) rel=({:.3},{:.3}) bounds=({:.1},{:.1},{:.1},{:.1})",
+                    "PIC_ZOOM_ANCHOR capture id={} pos={} cursor=({:.1},{:.1}) rel=({:.3},{:.3}) bounds=({:.1},{:.1},{:.1},{:.1}) floating={}",
                     anchor.photo_id,
                     anchor.position,
                     anchor.viewport_x,
@@ -270,7 +332,8 @@ impl Gallery {
                     bounds.x(),
                     bounds.y(),
                     bounds.width(),
-                    bounds.height()
+                    bounds.height(),
+                    anchor.ghost.is_some()
                 );
             }
             Some(anchor)
@@ -283,6 +346,12 @@ impl Gallery {
             return;
         };
 
+        if let (Some(layer), Some(ghost)) = (anchor.layer.as_ref(), anchor.ghost.as_ref()) {
+            if ghost.parent().is_some() {
+                layer.remove(ghost);
+            }
+        }
+
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         if let Some(tile) = tiles.into_iter().find(|tile| {
@@ -293,6 +362,7 @@ impl Gallery {
                 .is_some_and(|photo| photo.id() == anchor.photo_id)
         }) {
             tile.set_presentation_offset(0.0, 0.0);
+            tile.set_opacity(1.0);
         }
     }
 
@@ -325,8 +395,8 @@ impl Gallery {
             return false;
         };
 
-        // Vertical movement can be compensated with the real scroller. This
-        // preserves the same relative point of the same photo at the cursor Y.
+        // Keep the real grid vertically aligned with the cursor so the final
+        // handoff does not jump when the floating copy is removed.
         let anchored_y = bounds.y() + bounds.height() * anchor.relative_y;
         let delta_y = f64::from(anchored_y - anchor.viewport_y);
         if delta_y.abs() > 0.25 {
@@ -336,16 +406,24 @@ impl Gallery {
             adjustment.set_value((adjustment.value() + delta_y).clamp(lower, upper));
         }
 
-        // GridView has no horizontal scrolling here. When a column-count
-        // change moves the same photo sideways, keep its snapshot visually
-        // under the original cursor X for the active zoom burst. The offset is
-        // presentation-only and is released after the burst settles.
-        let anchored_x = bounds.x() + bounds.width() * anchor.relative_x;
-        let delta_x = anchor.viewport_x - anchored_x;
-        tile.set_presentation_offset(delta_x, 0.0);
+        tile.set_presentation_offset(0.0, 0.0);
+        if let (Some(layer), Some(ghost)) = (anchor.layer.as_ref(), anchor.ghost.as_ref()) {
+            tile.set_opacity(0.0);
+            let width = bounds.width().max(1.0);
+            let height = bounds.height().max(1.0);
+            ghost.set_size_request(width.round() as i32, height.round() as i32);
+            let ghost_x = anchor.layer_cursor_x - f64::from(anchor.relative_x * width);
+            let ghost_y = anchor.layer_cursor_y - f64::from(anchor.relative_y * height);
+            layer.move_(ghost, ghost_x, ghost_y);
+        } else {
+            tile.set_opacity(1.0);
+        }
+
         if std::env::var_os("PICASA_TRACE").is_some() {
+            let anchored_x = bounds.x() + bounds.width() * anchor.relative_x;
+            let delta_x = anchor.viewport_x - anchored_x;
             eprintln!(
-                "PIC_ZOOM_ANCHOR restore id={} pos={} delta_x={:.1} delta_y={:.1} bounds=({:.1},{:.1},{:.1},{:.1})",
+                "PIC_ZOOM_ANCHOR restore id={} pos={} delta_x={:.1} delta_y={:.1} bounds=({:.1},{:.1},{:.1},{:.1}) floating={}",
                 anchor.photo_id,
                 anchor.position,
                 delta_x,
@@ -353,18 +431,21 @@ impl Gallery {
                 bounds.x(),
                 bounds.y(),
                 bounds.width(),
-                bounds.height()
+                bounds.height(),
+                anchor.ghost.is_some()
             );
         }
         true
     }
 
     fn release_zoom_pointer_anchor(self: &Rc<Self>, anchor: ZoomPointerAnchor, generation: u64) {
-        const RELEASE_MS: f64 = 120.0;
+        const RELEASE_MS: f64 = 140.0;
+
+        self.pending_zoom_pointer_anchor.replace(None);
 
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
-        let Some(tile) = tiles.into_iter().find(|tile| {
+        let tile = tiles.into_iter().find(|tile| {
             tile.is_mapped()
                 && tile
                     .imp()
@@ -372,29 +453,50 @@ impl Gallery {
                     .borrow()
                     .as_ref()
                     .is_some_and(|photo| photo.id() == anchor.photo_id)
-        }) else {
-            self.pending_zoom_pointer_anchor.replace(None);
+        });
+
+        let (Some(layer), Some(ghost), Some(tile)) =
+            (anchor.layer.clone(), anchor.ghost.clone(), tile)
+        else {
+            if let (Some(layer), Some(ghost)) = (anchor.layer.as_ref(), anchor.ghost.as_ref()) {
+                if ghost.parent().is_some() {
+                    layer.remove(ghost);
+                }
+            }
             return;
         };
 
-        let (start_x, start_y) = tile.presentation_offset();
-        self.pending_zoom_pointer_anchor.replace(None);
-        if start_x.abs() < 0.5 && start_y.abs() < 0.5 {
-            tile.set_presentation_offset(0.0, 0.0);
+        let Some(target) = tile.compute_bounds(&layer) else {
+            if ghost.parent().is_some() {
+                layer.remove(&ghost);
+            }
+            tile.set_opacity(1.0);
             return;
-        }
+        };
+
+        let start_width = ghost.width().max(1) as f64;
+        let start_height = ghost.height().max(1) as f64;
+        let start_x = anchor.layer_cursor_x - f64::from(anchor.relative_x) * start_width;
+        let start_y = anchor.layer_cursor_y - f64::from(anchor.relative_y) * start_height;
+        let target_x = f64::from(target.x());
+        let target_y = f64::from(target.y());
+        let target_width = f64::from(target.width().max(1.0));
+        let target_height = f64::from(target.height().max(1.0));
 
         let this = self.clone();
         let started = Instant::now();
-        tile.add_tick_callback(move |tile, _| {
+        ghost.add_tick_callback(move |ghost, _| {
             if this.zoom_animation_generation.get() != generation {
                 let same_photo_still_owned = this
                     .pending_zoom_pointer_anchor
                     .borrow()
                     .as_ref()
                     .is_some_and(|current| current.photo_id == anchor.photo_id);
+                if ghost.parent().is_some() {
+                    layer.remove(ghost);
+                }
                 if !same_photo_still_owned {
-                    tile.set_presentation_offset(0.0, 0.0);
+                    tile.set_opacity(1.0);
                 }
                 return glib::ControlFlow::Break;
             }
@@ -402,11 +504,21 @@ impl Gallery {
             let linear = (started.elapsed().as_secs_f64() * 1000.0 / RELEASE_MS)
                 .clamp(0.0, 1.0);
             let eased = 1.0 - (1.0 - linear).powi(3);
-            let remaining = (1.0 - eased) as f32;
-            tile.set_presentation_offset(start_x * remaining, start_y * remaining);
+            let x = start_x + (target_x - start_x) * eased;
+            let y = start_y + (target_y - start_y) * eased;
+            let width = start_width + (target_width - start_width) * eased;
+            let height = start_height + (target_height - start_height) * eased;
+            ghost.set_size_request(
+                width.round().max(1.0) as i32,
+                height.round().max(1.0) as i32,
+            );
+            layer.move_(ghost, x, y);
 
             if linear >= 1.0 {
-                tile.set_presentation_offset(0.0, 0.0);
+                if ghost.parent().is_some() {
+                    layer.remove(ghost);
+                }
+                tile.set_opacity(1.0);
                 glib::ControlFlow::Break
             } else {
                 glib::ControlFlow::Continue
@@ -444,10 +556,9 @@ impl Gallery {
             // crossing a column boundary. Give normal realization two frames
             // first. Only then ask it to realize the exact model position.
             if attempt >= 3 && !realization_requested.replace(true) {
-                // Realize the exact anchor item without letting GtkGridView
-                // change either scroll axis. The old ScrollInfo=None path
-                // allowed scroll_to() to reposition the viewport, which is the
-                // opposite of cursor-anchored zoom.
+                // Realize the anchor without permitting scroll_to() to change
+                // either axis. The floating copy stays under the pointer while
+                // the real cell is being re-created.
                 let scroll = gtk::ScrollInfo::new();
                 scroll.set_enable_horizontal(false);
                 scroll.set_enable_vertical(false);
@@ -470,7 +581,7 @@ impl Gallery {
                 if this.zoom_reflow_source.borrow().is_none()
                     && this.pending_zoom_width.get().is_none()
                 {
-                    this.pending_zoom_pointer_anchor.replace(None);
+                    this.clear_zoom_pointer_anchor();
                 }
                 glib::ControlFlow::Break
             } else {
