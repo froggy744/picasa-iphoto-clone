@@ -760,3 +760,18 @@ Important invariants:
 - legacy Folder ListView and non-live/deferred width paths remain unchanged
 
 Validation target: drag the application width repeatedly across 4/5, 5/6 and 7/8 column boundaries. The expected effect is a restrained positional slide into the new rows with essentially no scale/wobble. Verify that repeated fast dragging does not leave a tile displaced, does not create column ping-pong, and does not bring back GtkOverlay/Adwaita minimum-width warnings.
+
+### FLIP regression: sidebar reveal could leave thumbnails invisible
+
+Runtime validation with `resize4.log` found that sidebar reveal/hide can rapidly change the gallery allocation through several column counts while a live window-resize FLIP is still active. Because FLIP stores presentation-only snapshot offsets on realized `SquareTile` widgets, a structural `OverlaySplitView` transition could invalidate the animation callback while recycled tiles still carried those offsets, making thumbnails appear to disappear after the sidebar was revealed.
+
+Evidence from the trace includes rapid column changes around the sidebar transition plus repeated Adwaita width warnings while the split view reallocated the gallery.
+
+Fix commits:
+
+- `a66bd33` — add `Gallery::cancel_resize_flip()`, which invalidates the current FLIP generation, zeros every realized tile presentation offset, and clears the shared motion flag
+- `92ed69b` — call that cleanup from the central `show_sidebar` notify handler so every sidebar reveal/hide path (hover, pin, breakpoint restore, compact selection/search close) cancels FLIP before structural reallocation begins
+
+Policy update: resize FLIP is strictly for user window-width changes. Sidebar visibility changes are structural layout transitions and must never retain or continue tile FLIP offsets across them.
+
+Validation target: reveal/hide the sidebar repeatedly at narrow and wide widths, including immediately after resizing across a column boundary. Thumbnails must remain visible and correctly positioned after every transition.
