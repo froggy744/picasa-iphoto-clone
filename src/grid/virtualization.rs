@@ -366,6 +366,8 @@ impl Gallery {
 
         let generation = self.zoom_animation_generation.get().wrapping_add(1);
         self.zoom_animation_generation.set(generation);
+        let stable_layout_width = self.root.width().max(1);
+        self.zoom_animation_layout_width.set(Some(stable_layout_width));
         set_grid_zoom_animation_active(true);
         if zoom_trace_enabled() {
             eprintln!(
@@ -410,6 +412,7 @@ impl Gallery {
                 // Land exactly on the canonical zoom level and persist only
                 // once. Intermediate animation frames never touch settings.
                 this.apply_tile_geometry(target_width, target_height, true);
+                this.zoom_animation_layout_width.set(None);
                 set_grid_zoom_animation_active(false);
                 if zoom_trace_enabled() {
                     let mut tiles = Vec::new();
@@ -496,7 +499,9 @@ impl Gallery {
         let root_width = if folder_list_mode {
             self.folder_root.width()
         } else {
-            self.root.width()
+            self.zoom_animation_layout_width
+                .get()
+                .unwrap_or_else(|| self.root.width())
         };
         let layout_started = trace_zoom.then(Instant::now);
         if root_width > 100 {
