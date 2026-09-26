@@ -492,3 +492,37 @@ zoom input
 Important constraint: this must remain a presentation-only animation. It must not reintroduce photo-model replacement, Folder-row rebuilding, database queries, thumbnail decoding, or work proportional to the full library during each animation frame.
 
 The implementation should primarily operate on the realized/visible tile pool and preserve the existing fast Gallery v2 zoom path.
+
+### Animated thumbnail zoom implemented
+
+Gallery v2 now has a first implementation of Picasa-style animated thumbnail zoom instead of snapping directly between tile sizes.
+
+Commits:
+
+- `8442e59` — add zoom animation generation/state
+- `b22e0e0` — animate thumbnail geometry on GTK's frame clock
+- `1f191c9` — fix animated zoom frame updates
+
+Implementation:
+
+- canonical zoom targets remain unchanged (`100, 117, 137, 160, 187, 219, 256, 300` px)
+- zoom animation duration is ~180 ms
+- easing is cubic ease-out
+- each frame interpolates realized tile width/height between the current visual size and target size
+- the direct `GtkGridView` keeps the same photo model and naturally repositions tiles as their geometry changes, producing a combined scale + slide/reflow effect
+- settings are persisted only once when the animation reaches the final canonical zoom level
+- a generation counter cancels an older animation when a newer zoom target starts, allowing rapid wheel input to retarget from the current visual size instead of queueing animations
+- the legacy Folder ListView fallback remains on immediate zoom because its row membership is still column-dependent
+- trace output is suppressed for intermediate animation frames to avoid distorting frame timing
+
+Performance invariant remains unchanged: no DB query, photo-model replacement, Folder-row rebuild, or full-library operation should be introduced per animation frame. Only the realized GridView tile pool and GTK layout should participate.
+
+Validation target:
+
+1. Build and run normal Gallery v2.
+2. Test one-step + / - zoom and Ctrl-wheel zoom.
+3. Confirm thumbnails visibly grow/shrink and slide into their new grid positions instead of cutting to the destination layout.
+4. Test rapid repeated wheel input; it should retarget smoothly without queueing long animations.
+5. Verify the viewport does not jump unexpectedly when a column boundary is crossed.
+6. Verify 3,000+ photo performance remains responsive.
+7. Compare animation feel against Picasa; tune duration/easing only after behavior is stable.
