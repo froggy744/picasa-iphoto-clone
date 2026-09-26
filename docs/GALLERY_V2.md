@@ -356,3 +356,20 @@ Behavior:
 - hover reveal behavior in compact mode remains unchanged
 
 Validation target: resize slowly across the compact breakpoint in both directions and confirm the sidebar slides out/in with the same feel as the existing manual hide/reveal action, without reintroducing gallery resize stutter.
+
+### Sidebar breakpoint animation: first attempt superseded
+
+The first implementation (`ffb012e`) reacted to `collapsed-notify` by calling `set_show_sidebar(false/true)`. User testing showed no visible improvement: the sidebar still cut out/in at the breakpoint.
+
+Root cause: the 1050 px `AdwBreakpoint` was setting both `collapsed=true` and `show-sidebar=false` in the same breakpoint update. In addition, `AdwOverlaySplitView` automatically changes sidebar visibility when collapsing unless `pin-sidebar` is enabled. Therefore the sidebar had already been hidden before the notify callback could request the normal slide animation.
+
+Superseding fix:
+
+- `d79c286` — `Gallery v2: decouple sidebar hide from compact breakpoint`
+  - breakpoint now changes only `collapsed`
+  - removes the simultaneous `show-sidebar=false` setter
+- `8b14ac0` — `Gallery v2: preserve sidebar through collapse transition`
+  - enables `AdwOverlaySplitView::pin-sidebar` so libadwaita does not auto-hide/show the sidebar when `collapsed` changes
+  - PIC's existing collapsed-notify handler now owns the visibility transition and calls the normal animated `set_show_sidebar(false/true)` path
+
+Validation target: resize slowly across 1050 px with the sidebar open. Expected behavior is now slide-out on entering compact mode and slide-in when widening back out, matching the manual sidebar hide/reveal animation.
