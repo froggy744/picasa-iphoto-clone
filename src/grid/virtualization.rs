@@ -888,31 +888,35 @@ impl Gallery {
     /// occupies its smaller quota, so a scrollbar jump cannot be blocked by
     /// thumbnails for rows the user has already passed.
     pub fn queue_visible_folder_cached_tiles_async(&self, budget: usize) -> usize {
-        if budget == 0
-            || self.group_mode.get() != GroupMode::Folder
-            || self.folder_root.height() <= 0
-        {
+        if budget == 0 || self.group_mode.get() != GroupMode::Folder {
             return 0;
         }
 
-        let viewport = self.folder_root.height() as f32;
+        let root: gtk::Widget = if crate::grid::sectioned_folder_view_enabled() {
+            self.folder_sectioned_root.clone().upcast()
+        } else {
+            self.folder_root.clone().upcast()
+        };
+        if root.height() <= 0 {
+            return 0;
+        }
+
+        let viewport = root.height() as f32;
         let mut tiles = Vec::new();
-        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(&root, &mut tiles);
         let mut candidates: Vec<(f32, SquareTile)> = Vec::new();
 
         for tile in tiles {
             if tile.height() <= 0 || tile.imp().visual_loaded.get() {
                 continue;
             }
-            let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
+            let Some(bounds) = tile.compute_bounds(&root) else {
                 continue;
             };
             let center = bounds.y() + bounds.height() * 0.5;
             if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
                 continue;
             }
-            // Start near the viewport centre, then fan out. This makes a large
-            // scrollbar jump paint the part the user is looking at first.
             candidates.push(((center - viewport * 0.5).abs(), tile));
         }
 
@@ -930,19 +934,28 @@ impl Gallery {
     /// thumbnails onto currently visible rows during a direct scrub without
     /// replacing the model-derived decode target.
     pub fn apply_visible_folder_cached_paintables(&self) -> usize {
-        if self.group_mode.get() != GroupMode::Folder || self.folder_root.height() <= 0 {
+        if self.group_mode.get() != GroupMode::Folder {
             return 0;
         }
 
-        let viewport = self.folder_root.height() as f32;
+        let root: gtk::Widget = if crate::grid::sectioned_folder_view_enabled() {
+            self.folder_sectioned_root.clone().upcast()
+        } else {
+            self.folder_root.clone().upcast()
+        };
+        if root.height() <= 0 {
+            return 0;
+        }
+
+        let viewport = root.height() as f32;
         let mut tiles = Vec::new();
-        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(&root, &mut tiles);
         let mut applied = 0usize;
         for tile in tiles {
             if tile.height() <= 0 || tile.imp().visual_loaded.get() {
                 continue;
             }
-            let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
+            let Some(bounds) = tile.compute_bounds(&root) else {
                 continue;
             };
             if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
