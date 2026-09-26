@@ -725,3 +725,38 @@ Final behavior:
 - window resize remains on the validated non-animated live resize path
 
 The Lightbox shared-photo open transition is therefore considered finished unless a future regression is reported.
+
+## Presentation-only FLIP resize transition
+
+Status: **IMPLEMENTED — runtime validation pending**
+
+After rejecting the earlier resize animation that manipulated temporary tile sizes and synthetic layout widths, Gallery v2 now uses a true FLIP-style presentation layer for live window resizing.
+
+Commits:
+
+- `08ff855` — add presentation-only X/Y snapshot offsets to `SquareTile`
+- `d1092f4` — add Gallery resize FLIP capture/invert/play logic
+- `5897648` — route only the live direct-GridView window-resize observer through FLIP
+- `a594f11` — make rapid boundary changes retarget from the current visual position and clear stale offsets
+
+Architecture:
+
+1. Before a resize crosses a column boundary, capture the screen-relative positions of currently realized photo tiles.
+2. Let GTK immediately apply the real target GridView width/column layout.
+3. On the first frame with destination allocations, match realized tiles by photo id.
+4. Set a presentation-only snapshot translation equal to old_position - new_position.
+5. Ease that translation back to zero over ~135 ms using cubic ease-out.
+
+Important invariants:
+
+- no temporary tile-size changes
+- no synthetic or frozen resize width is introduced for FLIP
+- no changes to GridView's column calculation
+- no photo-model replacement or membership change
+- no thumbnail decode is triggered by the animation
+- only realized tiles that exist in both the old and new viewport participate
+- rapid resize retargets from each tile's current visual offset instead of queueing stale transitions
+- manual thumbnail zoom keeps its separate validated animation path
+- legacy Folder ListView and non-live/deferred width paths remain unchanged
+
+Validation target: drag the application width repeatedly across 4/5, 5/6 and 7/8 column boundaries. The expected effect is a restrained positional slide into the new rows with essentially no scale/wobble. Verify that repeated fast dragging does not leave a tile displaced, does not create column ping-pong, and does not bring back GtkOverlay/Adwaita minimum-width warnings.
