@@ -231,7 +231,7 @@ impl Gallery {
                 return None;
             }
             let photo_id = tile.imp().photo.borrow().as_ref()?.id();
-            let bounds = tile.compute_bounds(&scrolled)?;
+            let bounds = tile.compute_bounds(scrolled)?;
             let inside = x >= bounds.x()
                 && x <= bounds.x() + bounds.width()
                 && y >= bounds.y()
