@@ -1000,21 +1000,43 @@ impl Gallery {
         }
         self.last_layout_width.set(width);
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
-        let folder_list_mode = folder_mode && !crate::grid::folder_gridview_experiment_enabled();
+        let sectioned_folder_mode =
+            folder_mode && crate::grid::sectioned_folder_view_enabled();
+        let folder_list_mode =
+            folder_mode && !sectioned_folder_mode && !crate::grid::folder_gridview_experiment_enabled();
+        let sectioned_resize_anchor = if sectioned_folder_mode && !tile_size_changed {
+            self.sectioned_folder.capture_center_anchor()
+        } else {
+            None
+        };
         if columns == old_columns {
             // A width-only window resize does not need an explicit GridView
             // relayout when the column count is unchanged. GTK is already
             // allocating the widget for the new parent width. Calling
             // queue_resize() on every drag frame creates unnecessary layout
             // churn and can amplify the window's minimum-width negotiation.
-            if !tile_size_changed && !folder_list_mode {
+            if !tile_size_changed && !folder_list_mode && !sectioned_folder_mode {
                 return;
             }
 
             // Zooming within the same column count only changes tile geometry.
             // Replacing the Folder ListStore here used to invalidate every
             // realized row and cost ~0.8-1.1s for a 4.5k-photo library.
-            if folder_list_mode && tile_size_changed {
+            if sectioned_folder_mode {
+                self.sectioned_folder.invalidate_geometry();
+                self.sectioned_folder.refresh();
+                if let Some((photo_id, offset)) = sectioned_resize_anchor {
+                    self.sectioned_folder.restore_anchor(photo_id, offset);
+                }
+                if let Some(started) = trace_started {
+                    eprintln!(
+                        "PIC_ZOOM layout mode=folder_sectioned action=geometry columns={} width={} elapsed_us={}",
+                        columns,
+                        width,
+                        started.elapsed().as_micros()
+                    );
+                }
+            } else if folder_list_mode && tile_size_changed {
                 // Tile size changed within the same columns: the rows keep
                 // their photos but their heights change, so re-anchor the
                 // viewport to the photo that was at the top.
@@ -1049,7 +1071,22 @@ impl Gallery {
         self.root.set_min_columns(columns);
         self.root.set_max_columns(columns);
         self.root.queue_resize();
-        if folder_list_mode {
+        if sectioned_folder_mode {
+            self.sectioned_folder.invalidate_geometry();
+            self.sectioned_folder.refresh();
+            if let Some((photo_id, offset)) = sectioned_resize_anchor {
+                self.sectioned_folder.restore_anchor(photo_id, offset);
+            }
+            if let Some(started) = trace_started {
+                eprintln!(
+                    "PIC_ZOOM layout mode=folder_sectioned action=columns_changed old_columns={} columns={} width={} elapsed_us={}",
+                    old_columns,
+                    columns,
+                    width,
+                    started.elapsed().as_micros()
+                );
+            }
+        } else if folder_list_mode {
             // Each model item is one visual photo line. A column change must
             // rebuild those lines to keep the layout gapless.
             let anchor = self.take_reframe_anchor();
