@@ -366,7 +366,14 @@ impl Gallery {
 
         let generation = self.zoom_animation_generation.get().wrapping_add(1);
         self.zoom_animation_generation.set(generation);
-        let stable_layout_width = self.root.width().max(1);
+        // Use the last width supplied by the outer gallery surface, not
+        // GridView::width(). The GridView's own width changes as its column
+        // requisition changes and was the source of the 40px feedback loop.
+        let stable_layout_width = if self.last_layout_width.get() > 100 {
+            self.last_layout_width.get()
+        } else {
+            self.root.width().max(1)
+        };
         self.zoom_animation_layout_width.set(Some(stable_layout_width));
         set_grid_zoom_animation_active(true);
         if zoom_trace_enabled() {
