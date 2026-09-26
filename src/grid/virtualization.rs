@@ -341,7 +341,23 @@ impl Gallery {
         })
     }
 
+    fn set_zoom_anchor_real_opacity(&self, photo_id: i64, opacity: f64) {
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        for tile in tiles.into_iter().filter(|tile| {
+            tile.imp()
+                .photo
+                .borrow()
+                .as_ref()
+                .is_some_and(|photo| photo.id() == photo_id)
+        }) {
+            tile.set_presentation_offset(0.0, 0.0);
+            tile.set_opacity(opacity);
+        }
+    }
+
     fn clear_zoom_pointer_anchor(&self) {
+        self.zoom_pointer_release_pending.set(false);
         let anchor = self.pending_zoom_pointer_anchor.borrow_mut().take();
         let Some(anchor) = anchor else {
             return;
@@ -354,18 +370,7 @@ impl Gallery {
         }
 
         clear_grid_zoom_anchor_photo_id(anchor.photo_id);
-        let mut tiles = Vec::new();
-        collect_tiles(self.root.upcast_ref(), &mut tiles);
-        for tile in tiles.into_iter().filter(|tile| {
-            tile.imp()
-                .photo
-                .borrow()
-                .as_ref()
-                .is_some_and(|photo| photo.id() == anchor.photo_id)
-        }) {
-            tile.set_presentation_offset(0.0, 0.0);
-            tile.set_opacity(1.0);
-        }
+        self.set_zoom_anchor_real_opacity(anchor.photo_id, 1.0);
     }
 
     fn restore_zoom_pointer_anchor(&self, anchor: &ZoomPointerAnchor) -> bool {
@@ -444,52 +449,31 @@ impl Gallery {
     }
 
     fn release_zoom_pointer_anchor(self: &Rc<Self>, anchor: ZoomPointerAnchor, generation: u64) {
-        const RELEASE_MS: f64 = 140.0;
+        const RELEASE_MS: f64 = 110.0;
 
         self.pending_zoom_pointer_anchor.replace(None);
+        self.zoom_pointer_release_pending.set(false);
 
-        let mut tiles = Vec::new();
-        collect_tiles(self.root.upcast_ref(), &mut tiles);
-        let tile = tiles.into_iter().find(|tile| {
-            tile.is_mapped()
-                && tile
-                    .imp()
-                    .photo
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|photo| photo.id() == anchor.photo_id)
-        });
-
-        let (Some(layer), Some(ghost), Some(tile)) =
-            (anchor.layer.clone(), anchor.ghost.clone(), tile)
-        else {
-            if let (Some(layer), Some(ghost)) = (anchor.layer.as_ref(), anchor.ghost.as_ref()) {
-                if ghost.parent().is_some() {
-                    layer.remove(ghost);
-                }
-            }
+        let (Some(layer), Some(ghost)) = (anchor.layer.clone(), anchor.ghost.clone()) else {
             clear_grid_zoom_anchor_photo_id(anchor.photo_id);
+            self.set_zoom_anchor_real_opacity(anchor.photo_id, 1.0);
             return;
         };
 
-        let Some(target) = tile.compute_bounds(&layer) else {
-            if ghost.parent().is_some() {
-                layer.remove(&ghost);
-            }
-            clear_grid_zoom_anchor_photo_id(anchor.photo_id);
-            tile.set_opacity(1.0);
-            return;
-        };
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "PIC_ZOOM_ANCHOR release id={} generation={} mode=crossfade",
+                anchor.photo_id,
+                generation
+            );
+        }
 
-        let start_width = ghost.width().max(1) as f64;
-        let start_height = ghost.height().max(1) as f64;
-        let start_x = anchor.layer_cursor_x - f64::from(anchor.relative_x) * start_width;
-        let start_y = anchor.layer_cursor_y - f64::from(anchor.relative_y) * start_height;
-        let target_x = f64::from(target.x());
-        let target_y = f64::from(target.y());
-        let target_width = f64::from(target.width().max(1.0));
-        let target_height = f64::from(target.height().max(1.0));
-
+        // A row-major GridView is allowed to move the real item to a very
+        // different X coordinate when its column count changes. Flying the
+        // ghost hundreds of pixels to that structural cell makes the cursor
+        // anchor look broken. End the Ctrl+wheel transaction with a short
+        // crossfade instead: the focal copy stays at the pointer while the
+        // real, identity-matched tile fades back in wherever GTK placed it.
         let this = self.clone();
         let started = Instant::now();
         ghost.add_tick_callback(move |ghost, _| {
@@ -503,10 +487,8 @@ impl Gallery {
                     layer.remove(ghost);
                 }
                 if !same_photo_still_owned {
-                    // Only clear if this release still owns the global id. A
-                    // newer anchor for another photo may already have replaced it.
                     clear_grid_zoom_anchor_photo_id(anchor.photo_id);
-                    tile.set_opacity(1.0);
+                    this.set_zoom_anchor_real_opacity(anchor.photo_id, 1.0);
                 }
                 return glib::ControlFlow::Break;
             }
@@ -514,22 +496,15 @@ impl Gallery {
             let linear = (started.elapsed().as_secs_f64() * 1000.0 / RELEASE_MS)
                 .clamp(0.0, 1.0);
             let eased = 1.0 - (1.0 - linear).powi(3);
-            let x = start_x + (target_x - start_x) * eased;
-            let y = start_y + (target_y - start_y) * eased;
-            let width = start_width + (target_width - start_width) * eased;
-            let height = start_height + (target_height - start_height) * eased;
-            ghost.set_size_request(
-                width.round().max(1.0) as i32,
-                height.round().max(1.0) as i32,
-            );
-            layer.move_(ghost, x, y);
+            this.set_zoom_anchor_real_opacity(anchor.photo_id, eased);
+            ghost.set_opacity(1.0 - eased);
 
             if linear >= 1.0 {
                 if ghost.parent().is_some() {
                     layer.remove(ghost);
                 }
                 clear_grid_zoom_anchor_photo_id(anchor.photo_id);
-                tile.set_opacity(1.0);
+                this.set_zoom_anchor_real_opacity(anchor.photo_id, 1.0);
                 glib::ControlFlow::Break
             } else {
                 glib::ControlFlow::Continue
@@ -555,10 +530,24 @@ impl Gallery {
             attempts.set(attempt);
 
             if this.restore_zoom_pointer_anchor(&anchor) {
-                if this.zoom_reflow_source.borrow().is_none()
+                // Do not hand off merely because the 150 ms wheel debounce
+                // expired. One Ctrl+wheel gesture owns one photo for its whole
+                // lifetime, including pauses between wheel detents.
+                if this.zoom_pointer_release_pending.get()
+                    && this.zoom_reflow_source.borrow().is_none()
                     && this.pending_zoom_width.get().is_none()
                 {
                     this.release_zoom_pointer_anchor(anchor.clone(), generation);
+                } else if std::env::var_os("PICASA_TRACE").is_some()
+                    && this.zoom_reflow_source.borrow().is_none()
+                    && this.pending_zoom_width.get().is_none()
+                {
+                    eprintln!(
+                        "PIC_ZOOM_ANCHOR hold id={} pos={} generation={}",
+                        anchor.photo_id,
+                        anchor.position,
+                        generation
+                    );
                 }
                 return glib::ControlFlow::Break;
             }
@@ -567,9 +556,6 @@ impl Gallery {
             // crossing a column boundary. Give normal realization two frames
             // first. Only then ask it to realize the exact model position.
             if attempt >= 3 && !realization_requested.replace(true) {
-                // Realize the anchor without permitting scroll_to() to change
-                // either axis. The floating copy stays under the pointer while
-                // the real cell is being re-created.
                 let scroll = gtk::ScrollInfo::new();
                 scroll.set_enable_horizontal(false);
                 scroll.set_enable_vertical(false);
@@ -589,7 +575,12 @@ impl Gallery {
             }
 
             if attempt >= 8 {
-                if this.zoom_reflow_source.borrow().is_none()
+                // If the interaction has ended and GTK still cannot realize the
+                // item, clean up deterministically. Otherwise keep the ghost
+                // ownership alive; the next zoom frame gets another chance to
+                // realize the same photo without silently switching identity.
+                if this.zoom_pointer_release_pending.get()
+                    && this.zoom_reflow_source.borrow().is_none()
                     && this.pending_zoom_width.get().is_none()
                 {
                     this.clear_zoom_pointer_anchor();
@@ -601,16 +592,44 @@ impl Gallery {
         });
     }
 
+    pub fn finish_pointer_zoom(self: &Rc<Self>) {
+        let Some(anchor) = self.pending_zoom_pointer_anchor.borrow().clone() else {
+            self.zoom_pointer_release_pending.set(false);
+            return;
+        };
+
+        self.zoom_pointer_release_pending.set(true);
+        let busy = self.pending_zoom_width.get().is_some()
+            || self.zoom_animation_layout_width.get().is_some()
+            || self.zoom_reflow_source.borrow().is_some();
+
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "PIC_ZOOM_ANCHOR finish_requested id={} pos={} busy={}",
+                anchor.photo_id,
+                anchor.position,
+                busy
+            );
+        }
+
+        if busy {
+            return;
+        }
+
+        let generation = self.zoom_animation_generation.get();
+        self.release_zoom_pointer_anchor(anchor, generation);
+    }
+
     pub fn zoom_in_at(self: &Rc<Self>, scrolled: &gtk::ScrolledWindow, x: f64, y: f64) {
+        // Fresh Ctrl+wheel input continues the same pointer transaction even
+        // if a release was requested while the previous animation was settling.
+        self.zoom_pointer_release_pending.set(false);
         let base = self
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
         let target = next_zoom_level(base);
         if target == base {
-            if self.zoom_reflow_source.borrow().is_none() {
-                self.clear_zoom_pointer_anchor();
-            }
             return;
         }
         if self.pending_zoom_pointer_anchor.borrow().is_none() {
@@ -621,15 +640,13 @@ impl Gallery {
     }
 
     pub fn zoom_out_at(self: &Rc<Self>, scrolled: &gtk::ScrolledWindow, x: f64, y: f64) {
+        self.zoom_pointer_release_pending.set(false);
         let base = self
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
         let target = prev_zoom_level(base);
         if target == base {
-            if self.zoom_reflow_source.borrow().is_none() {
-                self.clear_zoom_pointer_anchor();
-            }
             return;
         }
         if self.pending_zoom_pointer_anchor.borrow().is_none() {
@@ -764,7 +781,9 @@ impl Gallery {
             this.zoom_reflow_source.borrow_mut().take();
             if let Some(width) = this.pending_zoom_width.take() {
                 this.apply_zoom(width);
-            } else if this.zoom_animation_layout_width.get().is_none() {
+            } else if this.zoom_pointer_release_pending.get()
+                && this.zoom_animation_layout_width.get().is_none()
+            {
                 if let Some(anchor) = this.pending_zoom_pointer_anchor.borrow().clone() {
                     let generation = this.zoom_animation_generation.get();
                     this.release_zoom_pointer_anchor(anchor, generation);
