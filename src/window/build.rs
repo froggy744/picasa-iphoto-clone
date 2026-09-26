@@ -1976,12 +1976,23 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             sidebar_hover_layout_freeze_for_tick.get(),
         ) {
             let width = surface.width();
-            if width > 100
-                && sidebar_layout_settle_for_tick
+            if width > 100 {
+                if crate::grid::folder_gridview_experiment_enabled() {
+                    // Gallery v2 has no column-sized Folder row model to
+                    // rebuild, so react immediately when the window crosses a
+                    // column boundary. Delaying until the width settles leaves
+                    // GridView's previous min-column request active while the
+                    // window is dragged smaller, causing repeated
+                    // GtkOverlay/Adwaita minimum-width negotiation.
+                    gallery_for_resize.update_width(width);
+                } else if sidebar_layout_settle_for_tick
                     .borrow_mut()
                     .observe(width)
-            {
-                gallery_for_resize.update_width(width);
+                {
+                    // Legacy Folder ListView still benefits from coalescing
+                    // because a column change rebuilds its row model.
+                    gallery_for_resize.update_width(width);
+                }
             }
         }
         glib::ControlFlow::Continue
