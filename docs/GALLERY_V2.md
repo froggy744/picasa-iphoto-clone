@@ -620,3 +620,28 @@ Final animated zoom behavior:
 - no DB query, model replacement, Folder-row rebuild, or full-library work is introduced per frame
 
 The temporary `PICASA_ZOOM_TRACE` diagnostic instrumentation has been removed after validation.
+
+## Animated grid reflow during window resize
+
+Gallery v2 now applies the same scale + slide visual language used by manual thumbnail zoom when the application window crosses a grid column boundary.
+
+Commits:
+
+- `5899cc4` — add resize reflow animation state
+- `bed5a3e` — animate column reflow during window resize
+- `3196b26` — route live Gallery v2 window resize through the animated path
+- `6f5523e` — coordinate resize and manual zoom animations
+
+Behavior:
+
+- ordinary width changes that remain within the same column count stay live and cheap
+- when a resize would change the column count, the gallery runs a short ~180 ms two-phase transition instead of snapping directly
+- phase 1 freezes the previous outer gallery width and temporarily scales tiles toward a bridge size that makes GridView cross into the target column count during motion
+- phase 2 switches the layout freeze to the latest real viewport width and eases tile geometry back to the user's canonical zoom size
+- the saved thumbnail zoom level is never changed by resize animation
+- realized paintables remain protected by the same motion flag used by manual animated zoom
+- rapid window dragging updates the pending physical width; if another column boundary has been crossed by the time the animation completes, the next transition begins from the latest width
+- manual zoom cancels an in-flight resize animation before taking ownership of tile geometry, preventing competing frame callbacks
+- legacy Folder ListView remains on the existing immediate/coalesced path because its row model still encodes column membership
+
+Target visual result: resizing the application across 4/5, 7/8, etc. should make thumbnails grow/shrink and slide into their new row/column positions instead of showing a hard cut, while retaining the previously fixed responsive window resize behavior.
