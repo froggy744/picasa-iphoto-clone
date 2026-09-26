@@ -602,8 +602,9 @@ impl SectionedFolderView {
                 .set_tile_size(self.tile_width.get(), self.tile_height.get());
             tile.tile.set_manual_selected(self.selection.is_selected(index));
 
-            let x = SECTIONED_SIDE_MARGIN
-                + f64::from(col) * (f64::from(self.tile_width.get()) + 30.0);
+            let (start_x, gap) = self.horizontal_grid_metrics(self.geometry_width.get());
+            let x = start_x
+                + f64::from(col) * (f64::from(self.tile_width.get()) + gap);
             let y = geometry[section_index].first_photo_y + f64::from(row) * row_height;
             self.root.move_(&tile.tile, x, y);
         }
@@ -722,6 +723,26 @@ impl SectionedFolderView {
         }
     }
 
+    fn horizontal_grid_metrics(&self, width: i32) -> (f64, f64) {
+        let columns = self.current_columns.get().max(1);
+        let tile_width = f64::from(self.tile_width.get().max(1));
+        let width = f64::from(width.max(1));
+        let available = (width - SECTIONED_SIDE_MARGIN * 2.0).max(tile_width);
+        if columns <= 1 {
+            return (((width - tile_width) * 0.5).max(SECTIONED_SIDE_MARGIN), 0.0);
+        }
+
+        // Keep the grid visually balanced as the sidebar/window changes width.
+        // The old fixed 30px stride left all spare width on the right.
+        let raw_gap = (available - tile_width * f64::from(columns))
+            / f64::from(columns - 1);
+        let gap = raw_gap.clamp(18.0, 54.0);
+        let used = tile_width * f64::from(columns)
+            + gap * f64::from(columns - 1);
+        let start_x = ((width - used) * 0.5).max(SECTIONED_SIDE_MARGIN);
+        (start_x, gap)
+    }
+
     fn placement_for_index(&self, index: u32) -> Option<(f64, f64)> {
         let columns = self.current_columns.get().max(1);
         let row_height = f64::from(folder_line_height(self.tile_height.get()));
@@ -735,8 +756,9 @@ impl SectionedFolderView {
             let local = index - range.start as u32;
             let row = local / columns;
             let col = local % columns;
-            let x = SECTIONED_SIDE_MARGIN
-                + f64::from(col) * (f64::from(self.tile_width.get()) + 30.0);
+            let (start_x, gap) = self.horizontal_grid_metrics(width);
+            let x = start_x
+                + f64::from(col) * (f64::from(self.tile_width.get()) + gap);
             let y = geometry[section_index].first_photo_y + f64::from(row) * row_height;
             return Some((x, y));
         }
@@ -808,7 +830,9 @@ impl SectionedFolderView {
             }
 
             let t = (started.elapsed().as_secs_f64() / duration_s).clamp(0.0, 1.0);
-            let eased = 1.0 - (1.0 - t).powi(3);
+            // Smoothstep avoids the old ease-out "kick" where most movement
+            // happened in the first few frames and tiles appeared to jump.
+            let eased = t * t * (3.0 - 2.0 * t);
             let frame_width = (f64::from(snapshot.tile_width)
                 + f64::from(target_tile_width - snapshot.tile_width) * eased)
                 .round() as i32;
