@@ -859,6 +859,10 @@ impl Gallery {
         if width <= 100 {
             return;
         }
+        if self.using_sectioned_folder_view() {
+            self.update_width(width);
+            return;
+        }
 
         // Manual thumbnail zoom owns the stable-width layout path while it is
         // animating. Do not layer a resize FLIP over that animation.
