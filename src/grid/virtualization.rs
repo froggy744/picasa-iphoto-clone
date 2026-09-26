@@ -249,7 +249,7 @@ impl Gallery {
             {
                 return None;
             }
-            Some(ZoomPointerAnchor {
+            let anchor = ZoomPointerAnchor {
                 scrolled: scrolled.downgrade(),
                 photo_id,
                 position,
@@ -257,7 +257,23 @@ impl Gallery {
                 viewport_y: y,
                 relative_x: ((x - visual_x) / bounds.width()).clamp(0.0, 1.0),
                 relative_y: ((y - visual_y) / bounds.height()).clamp(0.0, 1.0),
-            })
+            };
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "PIC_ZOOM_ANCHOR capture id={} pos={} cursor=({:.1},{:.1}) rel=({:.3},{:.3}) bounds=({:.1},{:.1},{:.1},{:.1})",
+                    anchor.photo_id,
+                    anchor.position,
+                    anchor.viewport_x,
+                    anchor.viewport_y,
+                    anchor.relative_x,
+                    anchor.relative_y,
+                    bounds.x(),
+                    bounds.y(),
+                    bounds.width(),
+                    bounds.height()
+                );
+            }
+            Some(anchor)
         })
     }
 
@@ -296,6 +312,13 @@ impl Gallery {
                     .as_ref()
                     .is_some_and(|photo| photo.id() == anchor.photo_id)
         }) else {
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "PIC_ZOOM_ANCHOR missing id={} pos={}",
+                    anchor.photo_id,
+                    anchor.position
+                );
+            }
             return false;
         };
         let Some(bounds) = tile.compute_bounds(&scrolled) else {
@@ -320,6 +343,19 @@ impl Gallery {
         let anchored_x = bounds.x() + bounds.width() * anchor.relative_x;
         let delta_x = anchor.viewport_x - anchored_x;
         tile.set_presentation_offset(delta_x, 0.0);
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "PIC_ZOOM_ANCHOR restore id={} pos={} delta_x={:.1} delta_y={:.1} bounds=({:.1},{:.1},{:.1},{:.1})",
+                anchor.photo_id,
+                anchor.position,
+                delta_x,
+                delta_y,
+                bounds.x(),
+                bounds.y(),
+                bounds.width(),
+                bounds.height()
+            );
+        }
         true
     }
 
@@ -415,6 +451,14 @@ impl Gallery {
                 let scroll = gtk::ScrollInfo::new();
                 scroll.set_enable_horizontal(false);
                 scroll.set_enable_vertical(false);
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "PIC_ZOOM_ANCHOR realize_without_scroll id={} pos={} attempt={}",
+                        anchor.photo_id,
+                        anchor.position,
+                        attempt
+                    );
+                }
                 this.root.scroll_to(
                     anchor.position,
                     gtk::ListScrollFlags::empty(),
