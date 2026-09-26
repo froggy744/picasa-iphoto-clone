@@ -633,8 +633,17 @@ impl Gallery {
             return;
         }
         if self.pending_zoom_pointer_anchor.borrow().is_none() {
-            self.pending_zoom_pointer_anchor
-                .replace(self.capture_zoom_pointer_anchor(scrolled, x, y));
+            let anchor = self.capture_zoom_pointer_anchor(scrolled, x, y);
+            if anchor.is_none() && std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "PIC_ZOOM_ANCHOR capture_miss cursor=({:.1},{:.1}) viewport={}x{} direction=in",
+                    x,
+                    y,
+                    scrolled.width(),
+                    scrolled.height()
+                );
+            }
+            self.pending_zoom_pointer_anchor.replace(anchor);
         }
         self.request_zoom_internal(target);
     }
@@ -650,8 +659,17 @@ impl Gallery {
             return;
         }
         if self.pending_zoom_pointer_anchor.borrow().is_none() {
-            self.pending_zoom_pointer_anchor
-                .replace(self.capture_zoom_pointer_anchor(scrolled, x, y));
+            let anchor = self.capture_zoom_pointer_anchor(scrolled, x, y);
+            if anchor.is_none() && std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "PIC_ZOOM_ANCHOR capture_miss cursor=({:.1},{:.1}) viewport={}x{} direction=out",
+                    x,
+                    y,
+                    scrolled.width(),
+                    scrolled.height()
+                );
+            }
+            self.pending_zoom_pointer_anchor.replace(anchor);
         }
         self.request_zoom_internal(target);
     }
