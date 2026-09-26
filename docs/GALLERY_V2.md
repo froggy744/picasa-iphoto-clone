@@ -595,3 +595,28 @@ Corrected fix commits:
 Expected result: a zoom step may cross each column boundary once as tile geometry changes, but the same animation must no longer alternate between two widths/column counts such as 1088/1128 and 4/5 repeatedly.
 
 Keep `PICASA_ZOOM_TRACE=1` enabled for the next validation run. If the trace shows one-way boundary crossings and the visible jitter is gone, remove the temporary trace instrumentation and mark animated zoom stable.
+
+### Animated zoom validation complete
+
+Status: **STABLE / COMPLETE for Gallery v2**
+
+Validation with `galv2.v10.log` confirmed that the corrected outer-viewport width freeze removed the repeated adjacent-column oscillation. The tail shows monotonic one-way transitions during each animation (for example 12 -> 11 -> 10 -> 9 -> 8 -> 7 as zoom progresses), with one stable `layout_width` per animation rather than alternating competing widths.
+
+Final cleanup commits:
+
+- `dfb9460` — remove temporary zoom trace switch
+- `6ea08cc` — remove temporary zoom lifecycle trace
+- `530cfd4` — remove temporary zoom column trace
+- `b47e531` — remove temporary zoom tile trace
+
+Final animated zoom behavior:
+
+- ~180 ms cubic ease-out scale/reflow animation
+- stable photo model throughout
+- realized thumbnails grow/shrink and slide into new GridView positions
+- paintables are preserved during motion to avoid blank-frame flicker
+- outer gallery viewport width is frozen for the animation so column calculations cannot chase GridView requisition feedback
+- rapid input retargets using animation generations rather than queueing stale animations
+- no DB query, model replacement, Folder-row rebuild, or full-library work is introduced per frame
+
+The temporary `PICASA_ZOOM_TRACE` diagnostic instrumentation has been removed after validation.
