@@ -849,6 +849,10 @@ impl Gallery {
             };
             let (offset_x, offset_y) = tile.presentation_offset();
             old_positions.insert(photo.id(), (bounds.x() + offset_x, bounds.y() + offset_y));
+            // Retarget from the current visual position, then clear the old
+            // presentation transform so no invalidated animation can leave a
+            // recycled tile permanently displaced.
+            tile.set_presentation_offset(0.0, 0.0);
         }
 
         let generation = self.resize_flip_generation.get().wrapping_add(1);
