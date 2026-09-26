@@ -68,7 +68,10 @@ impl Gallery {
             }
         }
 
-        if mode == GroupMode::Folder && crate::grid::folder_gridview_experiment_enabled() {
+        if mode == GroupMode::Folder
+            && crate::grid::folder_gridview_experiment_enabled()
+            && !crate::grid::sectioned_folder_view_enabled()
+        {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
 
@@ -86,7 +89,10 @@ impl Gallery {
     pub fn update_group_header_for_scroll(&self, scroll_y: f64) {
         self.last_scroll_y.set(scroll_y.max(0.0));
         let mode = self.group_mode.get();
-        if mode == GroupMode::Folder && !crate::grid::folder_gridview_experiment_enabled() {
+        if mode == GroupMode::Folder
+            && (crate::grid::sectioned_folder_view_enabled()
+                || !crate::grid::folder_gridview_experiment_enabled())
+        {
             return;
         }
         if mode == GroupMode::None {
@@ -161,15 +167,22 @@ impl Gallery {
             }
         }
         self.group_ranges.replace(ranges);
-        if mode == GroupMode::Folder && crate::grid::folder_gridview_experiment_enabled() {
-            self.update_group_header_for_scroll(self.last_scroll_y.get());
+        if mode == GroupMode::Folder {
+            if crate::grid::sectioned_folder_view_enabled() {
+                self.sectioned_folder.refresh_model();
+            } else if crate::grid::folder_gridview_experiment_enabled() {
+                self.update_group_header_for_scroll(self.last_scroll_y.get());
+            }
         }
     }
 
     fn rebuild_folder_rows(&self) {
         if crate::grid::folder_gridview_experiment_enabled() {
-            // The experimental Folder view binds the already ordered photo
-            // model directly to GtkGridView; virtual row GObjects are unused.
+            // Flat-model Folder renderers (the sectioned surface and the old
+            // GridView experiment) never rebuild row membership on zoom.
+            if crate::grid::sectioned_folder_view_enabled() {
+                self.sectioned_folder.refresh_model();
+            }
             self.save_folder_cache();
             return;
         }
