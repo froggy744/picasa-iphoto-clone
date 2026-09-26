@@ -394,11 +394,20 @@ fn main() {
 
                 let adj = scrolled.vadjustment();
                 let before_scroll = adj.value();
-                let before = if let Some(anchor) = *zoom_anchor.borrow() {
+                let existing_zoom_anchor = {
+                    let anchor = zoom_anchor.borrow();
+                    *anchor
+                };
+                let before = if let Some(anchor) = existing_zoom_anchor {
                     Some(anchor)
                 } else {
-                    let picked = { let g = geometry.borrow(); anchor_photo(before_scroll, &sections, &g) };
-                    if let Some(anchor) = picked { *zoom_anchor.borrow_mut() = Some(anchor); }
+                    let picked = {
+                        let g = geometry.borrow();
+                        anchor_photo(before_scroll, &sections, &g)
+                    };
+                    if let Some(anchor) = picked {
+                        *zoom_anchor.borrow_mut() = Some(anchor);
+                    }
                     picked
                 };
 
