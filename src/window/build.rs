@@ -1415,7 +1415,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     folder_scroll_overlay.set_hexpand(true);
     folder_scroll_overlay.set_vexpand(true);
     folder_scroll_overlay.set_child(Some(&folder_scroll));
-    folder_scroll_overlay.add_overlay(&gallery.folder_rubberband);
+    if !crate::grid::sectioned_folder_view_enabled() {
+        // Legacy Folder ListView owns the external rubber-band overlay.
+        // SectionedFolderView draws and positions its own band inside GtkFixed.
+        folder_scroll_overlay.add_overlay(&gallery.folder_rubberband);
+    }
 
     // A temporary date bubble makes a long chronological All Photos scrollbar
     // usable like a timeline. It is deliberately attached only to the GridView
