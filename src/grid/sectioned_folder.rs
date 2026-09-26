@@ -760,6 +760,17 @@ impl SectionedFolderView {
 
         let target_tile_width = self.tile_width.get();
         let target_tile_height = self.tile_height.get();
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "PIC_SECTIONED_ANIM reflow_begin live_tiles={} old_tile={}x{} new_tile={}x{} anchor={:?}",
+                self.live_tiles.borrow().len(),
+                snapshot.tile_width,
+                snapshot.tile_height,
+                target_tile_width,
+                target_tile_height,
+                anchor.map(|(id, _)| id),
+            );
+        }
 
         // Put surviving realized widgets back at their previous visual
         // positions. New widgets simply appear at their destination.
@@ -838,6 +849,12 @@ impl SectionedFolderView {
 
             if t >= 1.0 {
                 view.refresh();
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "PIC_SECTIONED_ANIM reflow_end elapsed_ms={}",
+                        started.elapsed().as_millis()
+                    );
+                }
                 glib::ControlFlow::Break
             } else {
                 glib::ControlFlow::Continue
@@ -987,6 +1004,14 @@ impl SectionedFolderView {
         let generation = self.scroll_animation_generation.get().wrapping_add(1);
         self.scroll_animation_generation.set(generation);
         let started = Instant::now();
+        if std::env::var_os("PICASA_TRACE").is_some() {
+            eprintln!(
+                "PIC_SECTIONED_ANIM folder_jump_begin index={} start_y={:.1} target_y={:.1}",
+                index,
+                start,
+                target
+            );
+        }
         let duration_s = 0.18_f64;
         let weak = Rc::downgrade(self);
         let photo_id = self
@@ -1015,6 +1040,13 @@ impl SectionedFolderView {
                 view.refresh();
                 if let Some(photo_id) = photo_id {
                     view.focus_photo(photo_id);
+                }
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "PIC_SECTIONED_ANIM folder_jump_end index={} elapsed_ms={}",
+                        index,
+                        started.elapsed().as_millis()
+                    );
                 }
                 glib::ControlFlow::Break
             } else {
