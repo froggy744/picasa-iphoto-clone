@@ -60,6 +60,10 @@ pub struct Gallery {
     // one Folder row rebuild instead of one per notch.
     pending_zoom_width: Rc<Cell<Option<i32>>>,
     zoom_reflow_source: Rc<RefCell<Option<glib::SourceId>>>,
+    // Invalidates an in-flight frame-clock zoom animation when a newer zoom
+    // target arrives. The next animation starts from the current visual size,
+    // so rapid wheel input retargets instead of queueing animations.
+    zoom_animation_generation: Rc<Cell<u64>>,
     // Set when no user-chosen thumbnail size exists: the first real layout
     // adopts the ~4-thumbnails-per-row default instead of a fixed pixel size.
     auto_default_zoom: Cell<bool>,
@@ -742,6 +746,7 @@ impl Gallery {
             folder_reframe_photo: Rc::new(Cell::new(None)),
             pending_zoom_width: Rc::new(Cell::new(None)),
             zoom_reflow_source: Rc::new(RefCell::new(None)),
+            zoom_animation_generation: Rc::new(Cell::new(0)),
             auto_default_zoom: Cell::new(false),
             fit_whole_photo,
             show_file_names,
