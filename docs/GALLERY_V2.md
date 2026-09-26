@@ -957,3 +957,26 @@ Fix commits:
 - `c2f9fa4` — clear pointer-zoom state before model mutation
 
 Status: **IMPLEMENTED — runtime validation pending**. The next trace should show one `PIC_ZOOM_ANCHOR capture` for a Ctrl-held zoom sequence, repeated `hold` entries for that same photo id across column changes, then one `finish_requested` / `release ... mode=crossfade` when the interaction ends.
+
+
+### Ctrl+wheel pointer-source correction
+
+Runtime trace `gridzoom5.log` proved the interaction-lifetime code was not being entered at all: the grid crossed multiple column boundaries, but the entire run contained no `PIC_ZOOM_ANCHOR capture`, `hold`, `finish_requested`, or `release` lines. The Ctrl+wheel handler was therefore reaching its ordinary non-pointer zoom fallback because the cached `EventControllerMotion` position was `None`.
+
+Root cause: pointer anchoring depended on a prior motion/enter event being observed by a motion controller attached to the `GtkScrolledWindow`. That is not a valid requirement for a wheel event: the pointer can be stationary, and descendant event handling can prevent a bubble-phase motion controller from updating first.
+
+Correction:
+
+- derive the authoritative pointer coordinate from the `GdkEvent` currently being handled by `GtkEventControllerScroll`
+- convert the event's surface-relative coordinate through `GtkNative::surface_transform()` and `Widget::compute_point()` into the exact `GtkScrolledWindow` coordinate system expected by the anchor code
+- keep the old motion cache only as a fallback
+- move the motion controller to capture phase so the fallback also sees descendant pointer traffic reliably
+- add `PIC_ZOOM_INPUT source=event|motion|none` tracing for every Ctrl+wheel detent
+- add `PIC_ZOOM_ANCHOR capture_miss` tracing if a valid pointer coordinate does not intersect a realized thumbnail
+
+Fix commits:
+
+- `273aafb` — anchor Ctrl+wheel from the actual scroll event position and harden the motion fallback
+- `09e5dad` — trace anchor capture misses with cursor and viewport geometry
+
+Status: **IMPLEMENTED — runtime validation pending**. A correct run should begin each Ctrl-held zoom interaction with `PIC_ZOOM_INPUT source=event ...` followed by one `PIC_ZOOM_ANCHOR capture ...`, keep that same photo id for the interaction, and end with one `finish_requested` / `release ... mode=crossfade`.
