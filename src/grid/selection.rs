@@ -514,6 +514,10 @@ impl Gallery {
 
     pub fn grab_focus(&self) {
         if self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled()
+        {
+            self.folder_sectioned_root.grab_focus();
+        } else if self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled()
         {
             self.folder_root.grab_focus();
@@ -527,6 +531,10 @@ impl Gallery {
     /// hardcode the GridView.
     pub fn visible_root(&self) -> gtk::Widget {
         if self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled()
+        {
+            self.folder_sectioned_root.clone().upcast()
+        } else if self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled()
         {
             self.folder_root.clone().upcast()
