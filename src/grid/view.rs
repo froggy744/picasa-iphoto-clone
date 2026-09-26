@@ -1015,6 +1015,11 @@ impl Gallery {
         } else {
             None
         };
+        let sectioned_reflow_snapshot = if sectioned_folder_mode && !tile_size_changed {
+            Some(self.sectioned_folder.capture_reflow_snapshot())
+        } else {
+            None
+        };
         if columns == old_columns {
             // A width-only window resize does not need an explicit GridView
             // relayout when the column count is unchanged. GTK is already
@@ -1082,15 +1087,16 @@ impl Gallery {
         self.root.queue_resize();
         if sectioned_folder_mode {
             if !tile_size_changed {
-                self.sectioned_folder.invalidate_geometry();
-                self.sectioned_folder.refresh();
-                if let Some((photo_id, offset)) = sectioned_resize_anchor {
-                    self.sectioned_folder.restore_anchor(photo_id, offset);
+                if let Some(snapshot) = sectioned_reflow_snapshot {
+                    self.sectioned_folder
+                        .animate_reflow(snapshot, sectioned_resize_anchor);
+                } else {
+                    self.sectioned_folder.invalidate_geometry();
+                    self.sectioned_folder.refresh();
                 }
             }
-            // During Ctrl+wheel, apply_tile_geometry() owns the anchor and
-            // refresh. Here we only publish the new column count so that work
-            // happens once rather than twice.
+            // During Ctrl+wheel, apply_tile_geometry() owns the tile-size
+            // animation. Here we publish the new column count only once.
             if let Some(started) = trace_started {
                 eprintln!(
                     "PIC_ZOOM layout mode=folder_sectioned action=columns_changed old_columns={} columns={} width={} tile_size_changed={} elapsed_us={}",
