@@ -209,7 +209,7 @@ fn make_folder_tile(
 #[derive(Clone)]
 struct ZoomPointerAnchor {
     scrolled: glib::WeakRef<gtk::ScrolledWindow>,
-    photo_id: i64,
+    photo_index: usize,
     viewport_y: f32,
     relative_y: f32,
 }
@@ -230,7 +230,7 @@ impl Gallery {
             if !tile.is_mapped() || !tile.is_visible() {
                 return None;
             }
-            let photo_id = tile.imp().photo.borrow().as_ref()?.id();
+            let photo_index = tile.imp().photo_index.get()?;
             let bounds = tile.compute_bounds(scrolled)?;
             let inside = x >= bounds.x()
                 && x <= bounds.x() + bounds.width()
@@ -241,7 +241,7 @@ impl Gallery {
             }
             Some(ZoomPointerAnchor {
                 scrolled: scrolled.downgrade(),
-                photo_id,
+                photo_index,
                 viewport_y: y,
                 relative_y: ((y - bounds.y()) / bounds.height()).clamp(0.0, 1.0),
             })
@@ -249,35 +249,33 @@ impl Gallery {
     }
 
     fn restore_zoom_pointer_anchor(&self, anchor: &ZoomPointerAnchor) {
+        const ITEM_PADDING: f64 = 6.0;
+        const GRID_TOP_MARGIN: f64 = 20.0;
+
         let Some(scrolled) = anchor.scrolled.upgrade() else {
             return;
         };
 
-        let mut tiles = Vec::new();
-        collect_tiles(self.root.upcast_ref(), &mut tiles);
-        let Some(tile) = tiles.into_iter().find(|tile| {
-            tile.imp()
-                .photo
-                .borrow()
-                .as_ref()
-                .is_some_and(|photo| photo.id() == anchor.photo_id)
-        }) else {
-            return;
-        };
-        let Some(bounds) = tile.compute_bounds(&scrolled) else {
-            return;
-        };
+        // Do not depend on the anchor tile still being realized. GtkGridView
+        // can recycle it exactly when a zoom crosses a column boundary, which
+        // made the old pointer anchor lose the focused photo. The photo index
+        // plus the authoritative current column count gives us the destination
+        // row deterministically for every animation frame.
+        let columns = self.current_columns.get().max(1) as usize;
+        let row = anchor.photo_index / columns;
+        let tile_height = self.tile_height.get().max(1) as f64;
+        let row_pitch = tile_height + ITEM_PADDING * 2.0;
 
-        let anchored_y = bounds.y() + bounds.height() * anchor.relative_y;
-        let delta = f64::from(anchored_y - anchor.viewport_y);
-        if delta.abs() <= 0.25 {
-            return;
-        }
+        let anchored_content_y = GRID_TOP_MARGIN
+            + row as f64 * row_pitch
+            + ITEM_PADDING
+            + f64::from(anchor.relative_y) * tile_height;
+        let target = anchored_content_y - f64::from(anchor.viewport_y);
 
         let adjustment = scrolled.vadjustment();
         let lower = adjustment.lower();
         let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
-        adjustment.set_value((adjustment.value() + delta).clamp(lower, upper));
+        adjustment.set_value(target.clamp(lower, upper));
     }
 
     pub fn zoom_in_at(self: &Rc<Self>, scrolled: &gtk::ScrolledWindow, x: f64, y: f64) {
