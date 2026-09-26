@@ -440,3 +440,55 @@ Commit:
 The responsive shrink path still switches to collapsed/overlay mode first to free gallery width, but now waits for one actual rendered frame with the sidebar still visible in overlay mode before calling `set_show_sidebar(false)`. This prevents the collapse and hide from visually merging into a faster cut and ensures the drawer motion uses the same libadwaita animation path/speed as the existing pin and hover auto-hide behavior.
 
 Validation target: compare manual pin hide, hover auto-hide, and resize-triggered hide side-by-side. Their drawer motion should now feel the same; only the responsive path has the extra one-frame setup needed to establish overlay mode before the animation starts.
+
+## Completed: responsive sidebar transition
+
+Status: **COMPLETE**
+
+The compact-window sidebar behavior is now considered complete for Gallery v2.
+
+Final behavior:
+
+- wide layout: sidebar is part of the normal split view
+- shrinking through the compact threshold: sidebar moves into overlay mode and uses the normal libadwaita drawer animation to hide
+- widening back out: layout expands while the sidebar is hidden, then a logically pinned sidebar uses the same drawer animation to slide back in
+- manual pin hide/show and hover auto-hide/reveal continue to use the same `AdwOverlaySplitView::set_show_sidebar()` animation path
+- Gallery v2 resize responsiveness remains fixed
+
+Final relevant commits:
+
+- `79d907b` — slide sidebar out from overlay mode
+- `ca2366a` — match responsive sidebar drawer timing
+- `26175b6` — document matched timing
+
+Earlier breakpoint-animation attempts are retained in the history above for context but are superseded by the final overlay-first implementation.
+
+## Next target: animated thumbnail zoom transitions
+
+User identified the remaining visual difference from Picasa: Picasa does not simply cut from one thumbnail size/layout to the next when zooming. Its thumbnails visibly transition between geometries, which makes zoom feel continuous even when the column count changes.
+
+PIC currently has the correct Gallery v2 architecture for fast zoom — photo membership stays stable and the direct GridView avoids Folder-row rebuilds — but the presentation still snaps directly to the new tile width/height and column count.
+
+Current behavior:
+
+```text
+zoom input
+-> apply new tile width/height
+-> change GridView column count when needed
+-> GTK relayout
+-> visible cut/snap to new geometry
+```
+
+Target behavior:
+
+```text
+zoom input
+-> keep stable photo model
+-> interpolate realized thumbnail geometry from old size/position to new size/position
+-> animate over a short frame-based transition
+-> settle at the new GridView geometry
+```
+
+Important constraint: this must remain a presentation-only animation. It must not reintroduce photo-model replacement, Folder-row rebuilding, database queries, thumbnail decoding, or work proportional to the full library during each animation frame.
+
+The implementation should primarily operate on the realized/visible tile pool and preserve the existing fast Gallery v2 zoom path.
