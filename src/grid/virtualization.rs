@@ -353,8 +353,11 @@ impl Gallery {
         // tied to the column count. Keep that fallback on the old immediate
         // path; Gallery v2's direct photo GridView is the animation target.
         if self.group_mode.get() == GroupMode::Folder
-            && !crate::grid::folder_gridview_experiment_enabled()
+            && (crate::grid::sectioned_folder_view_enabled()
+                || !crate::grid::folder_gridview_experiment_enabled())
         {
+            // Folder sections own their geometry and preserve a centre photo
+            // anchor directly. Do not run the hidden GridView FLIP animation.
             self.apply_tile_size(target_width, true);
             return;
         }
@@ -445,9 +448,15 @@ impl Gallery {
         }
         // Capture the visible photo before the tile resize disturbs the layout.
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
-        let folder_list_mode = folder_mode && !crate::grid::folder_gridview_experiment_enabled();
+        let sectioned_folder_mode =
+            folder_mode && crate::grid::sectioned_folder_view_enabled();
+        let folder_list_mode =
+            folder_mode && !sectioned_folder_mode && !crate::grid::folder_gridview_experiment_enabled();
+        let sectioned_anchor = sectioned_folder_mode
+            .then(|| self.sectioned_folder.capture_center_anchor())
+            .flatten();
         let anchor_started = trace_zoom.then(Instant::now);
-        if folder_mode {
+        if folder_mode && !sectioned_folder_mode {
             self.zoom_anchor.set(
                 self.photo_for_scroll_position(self.last_scroll_y.get())
                     .map(|photo| photo.id()),
@@ -465,7 +474,9 @@ impl Gallery {
 
 
         let mut tiles = Vec::new();
-        if folder_list_mode {
+        if sectioned_folder_mode {
+            collect_tiles(self.folder_sectioned_root.upcast_ref(), &mut tiles);
+        } else if folder_list_mode {
             collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
         } else {
             collect_tiles(self.root.upcast_ref(), &mut tiles);
@@ -479,7 +490,9 @@ impl Gallery {
         let resize_us = resize_started.map_or(0, |started| started.elapsed().as_micros());
 
 
-        let root_width = if folder_list_mode {
+        let root_width = if sectioned_folder_mode {
+            self.folder_sectioned_root.width()
+        } else if folder_list_mode {
             self.folder_root.width()
         } else {
             self.zoom_animation_layout_width
@@ -492,6 +505,13 @@ impl Gallery {
         } else {
             self.update_group_header_for_scroll(self.last_scroll_y.get());
         }
+        if sectioned_folder_mode {
+            self.sectioned_folder.invalidate_geometry();
+            self.sectioned_folder.refresh();
+            if let Some((photo_id, offset)) = sectioned_anchor {
+                self.sectioned_folder.restore_anchor(photo_id, offset);
+            }
+        }
         let layout_us = layout_started.map_or(0, |started| started.elapsed().as_micros());
         self.zoom_anchor.set(None);
 
@@ -502,7 +522,9 @@ impl Gallery {
                 width,
                 height,
                 if folder_mode { "folder" } else { "grid" },
-                if folder_list_mode {
+                if sectioned_folder_mode {
+                    "folder_sectioned"
+                } else if folder_list_mode {
                     "folder_list"
                 } else {
                     "photo_grid"
