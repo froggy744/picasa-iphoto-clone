@@ -354,15 +354,47 @@ impl Gallery {
             return;
         }
 
+        let folder_mode = self.group_mode.get() == GroupMode::Folder;
+        if folder_mode && crate::grid::sectioned_folder_view_enabled() {
+            let start_height = self.tile_height.get().max(1);
+            let target_height = ((start_height as f64)
+                * target_width as f64
+                / start_width as f64)
+                .round()
+                .max(1.0) as i32;
+            let snapshot = self.sectioned_folder.capture_reflow_snapshot();
+            let anchor = self.sectioned_folder.capture_center_anchor();
+
+            // Publish only the destination geometry. update_layout changes the
+            // sectioned column count but deliberately does not move widgets for
+            // tile-size changes; animate_reflow owns the visual transition.
+            self.tile_width.set(target_width);
+            self.tile_height.set(target_height);
+            (self.on_zoom_changed)(target_width);
+
+            let root_width = self.folder_sectioned_root.width().max(1);
+            if root_width > 100 {
+                self.update_layout(root_width, true);
+            }
+            self.sectioned_folder.animate_reflow(snapshot, anchor);
+
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "PIC_ZOOM sectioned_animated old_width={} width={} old_height={} height={} columns={}",
+                    start_width,
+                    target_width,
+                    start_height,
+                    target_height,
+                    self.current_columns.get(),
+                );
+            }
+            return;
+        }
+
         // The legacy Folder ListView still has model rows whose membership is
-        // tied to the column count. Keep that fallback on the old immediate
-        // path; Gallery v2's direct photo GridView is the animation target.
-        if self.group_mode.get() == GroupMode::Folder
-            && (crate::grid::sectioned_folder_view_enabled()
-                || !crate::grid::folder_gridview_experiment_enabled())
-        {
-            // Folder sections own their geometry and preserve a centre photo
-            // anchor directly. Do not run the hidden GridView FLIP animation.
+        // tied to the column count. Keep that fallback on its old immediate
+        // path.
+        if folder_mode && !crate::grid::folder_gridview_experiment_enabled() {
             self.apply_tile_size(target_width, true);
             return;
         }
