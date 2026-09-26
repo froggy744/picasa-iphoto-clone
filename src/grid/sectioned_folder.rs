@@ -39,7 +39,7 @@ struct SectionedFolderView {
     tile_pool: RefCell<VecDeque<SectionedFolderTile>>,
     live_headers: RefCell<HashMap<usize, gtk::Label>>,
     header_pool: RefCell<VecDeque<gtk::Label>>,
-    selection_anchor: Cell<Option<u32>>,
+    selection_anchor: Rc<Cell<Option<u32>>>,
 }
 
 impl SectionedFolderView {
@@ -88,7 +88,7 @@ impl SectionedFolderView {
             tile_pool: RefCell::new(VecDeque::new()),
             live_headers: RefCell::new(HashMap::new()),
             header_pool: RefCell::new(VecDeque::new()),
-            selection_anchor: Cell::new(None),
+            selection_anchor: Rc::new(Cell::new(None)),
         })
     }
 
@@ -392,7 +392,11 @@ impl SectionedFolderView {
         }
 
         for section_index in wanted_headers {
-            let label = if let Some(label) = self.live_headers.borrow().get(&section_index).cloned() {
+            let existing = {
+                let live = self.live_headers.borrow();
+                live.get(&section_index).cloned()
+            };
+            let label = if let Some(label) = existing {
                 label
             } else {
                 let label = self
