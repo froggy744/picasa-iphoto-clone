@@ -835,3 +835,13 @@ Behavior:
 - manual zoom duration remains 180 ms for this first validation; timing should only be changed after the anchored feel is tested
 
 Validation target: place the pointer over a thumbnail away from the top-left corner and Ctrl+wheel in/out across column boundaries. The same photo/vertical point should remain visually anchored instead of the grid appearing to zoom from its origin.
+
+### Pointer zoom compile fix
+
+The first pointer-anchored zoom build failed on gtk4-rs 0.10.3 because `ScrolledWindow::upcast_ref()` was ambiguous when passed to `WidgetExt::compute_bounds`. Since `ScrolledWindow` already implements `IsA<Widget>`, both calls now pass `scrolled` directly.
+
+Commit:
+
+- `3b7c606` — `Gallery v2: fix pointer zoom bounds target type`
+
+No zoom behavior changed; this is a compile-only fix.
