@@ -107,6 +107,11 @@ impl Gallery {
     /// modes keep the existing GridView geometry.
     pub fn photo_for_scroll_position(&self, scroll_y: f64) -> Option<PhotoObject> {
         if self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled()
+        {
+            return self.sectioned_folder.photo_for_scroll_position(scroll_y);
+        }
+        if self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled()
         {
             return self.photo_for_visible_folder_row();
@@ -320,6 +325,12 @@ impl Gallery {
     pub fn visible_folder_id(&self) -> Option<i64> {
         if self.group_mode.get() != GroupMode::Folder {
             return None;
+        }
+        if crate::grid::sectioned_folder_view_enabled() {
+            return self
+                .sectioned_folder
+                .photo_for_scroll_position(self.sectioned_folder.scroll_position())
+                .map(|photo| photo.folder_id());
         }
         let width = self.folder_root.width().max(1) as f64;
         for y in [4.0_f64, 20.0, 40.0, 64.0] {
