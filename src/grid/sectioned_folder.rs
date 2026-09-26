@@ -66,7 +66,7 @@ impl SectionedFolderView {
         spacer.set_can_target(false);
         root.put(&spacer, 0.0, 0.0);
 
-        Rc::new(Self {
+        let view = Rc::new(Self {
             root,
             spacer,
             current_photos,
@@ -89,7 +89,72 @@ impl SectionedFolderView {
             live_headers: RefCell::new(HashMap::new()),
             header_pool: RefCell::new(VecDeque::new()),
             selection_anchor: Rc::new(Cell::new(None)),
-        })
+        });
+
+        let keyboard = gtk::EventControllerKey::new();
+        keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(&view);
+        keyboard.connect_key_pressed(move |_, key, _, modifiers| {
+            let Some(view) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let control = modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            if control && matches!(key, gtk::gdk::Key::a | gtk::gdk::Key::A) {
+                view.selection.select_all();
+                return glib::Propagation::Stop;
+            }
+            if control || modifiers.contains(gtk::gdk::ModifierType::ALT_MASK) {
+                return glib::Propagation::Proceed;
+            }
+
+            let selected = selected_positions(&view.selection);
+            let current = selected.first().copied().unwrap_or(0);
+            if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter) {
+                let photos = view.current_photos.borrow().clone();
+                if (current as usize) < photos.len() {
+                    (view.activate)(photos, current as usize, None);
+                    return glib::Propagation::Stop;
+                }
+                return glib::Propagation::Proceed;
+            }
+
+            let count = view.selection.n_items();
+            if count == 0 {
+                return glib::Propagation::Proceed;
+            }
+            let columns = view.current_columns.get().max(1);
+            let next = match key {
+                gtk::gdk::Key::Left => current.checked_sub(1),
+                gtk::gdk::Key::Right => {
+                    let candidate = current.saturating_add(1);
+                    (candidate < count).then_some(candidate)
+                }
+                gtk::gdk::Key::Up => current.checked_sub(columns),
+                gtk::gdk::Key::Down => {
+                    let candidate = current.saturating_add(columns);
+                    if candidate < count {
+                        Some(candidate)
+                    } else if current + 1 < count {
+                        Some(count - 1)
+                    } else {
+                        None
+                    }
+                }
+                _ => return glib::Propagation::Proceed,
+            };
+            let Some(next) = next else {
+                return glib::Propagation::Stop;
+            };
+            view.selection.select_item(next, true);
+            view.selection_anchor.set(Some(next));
+            view.scroll_to_index(next, false);
+            if let Some(photo) = view.current_photos.borrow().get(next as usize) {
+                view.focus_photo(photo.id());
+            }
+            glib::Propagation::Stop
+        });
+        view.root.add_controller(keyboard);
+        view
     }
 
     fn root(&self) -> &gtk::Fixed {
