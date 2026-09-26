@@ -211,7 +211,9 @@ struct ZoomPointerAnchor {
     scrolled: glib::WeakRef<gtk::ScrolledWindow>,
     photo_id: i64,
     position: u32,
+    viewport_x: f32,
     viewport_y: f32,
+    relative_x: f32,
     relative_y: f32,
 }
 
@@ -234,19 +236,27 @@ impl Gallery {
             let photo_id = tile.imp().photo.borrow().as_ref()?.id();
             let position = tile.imp().photo_index.get()? as u32;
             let bounds = tile.compute_bounds(scrolled)?;
-            let inside = x >= bounds.x()
-                && x <= bounds.x() + bounds.width()
-                && y >= bounds.y()
-                && y <= bounds.y() + bounds.height();
-            if !inside || bounds.height() <= f32::EPSILON {
+            let (offset_x, offset_y) = tile.presentation_offset();
+            let visual_x = bounds.x() + offset_x;
+            let visual_y = bounds.y() + offset_y;
+            let inside = x >= visual_x
+                && x <= visual_x + bounds.width()
+                && y >= visual_y
+                && y <= visual_y + bounds.height();
+            if !inside
+                || bounds.width() <= f32::EPSILON
+                || bounds.height() <= f32::EPSILON
+            {
                 return None;
             }
             Some(ZoomPointerAnchor {
                 scrolled: scrolled.downgrade(),
                 photo_id,
                 position,
+                viewport_x: x,
                 viewport_y: y,
-                relative_y: ((y - bounds.y()) / bounds.height()).clamp(0.0, 1.0),
+                relative_x: ((x - visual_x) / bounds.width()).clamp(0.0, 1.0),
+                relative_y: ((y - visual_y) / bounds.height()).clamp(0.0, 1.0),
             })
         })
     }
@@ -273,15 +283,80 @@ impl Gallery {
             return false;
         };
 
+        // Vertical movement can be compensated with the real scroller. This
+        // preserves the same relative point of the same photo at the cursor Y.
         let anchored_y = bounds.y() + bounds.height() * anchor.relative_y;
-        let delta = f64::from(anchored_y - anchor.viewport_y);
-        if delta.abs() > 0.25 {
+        let delta_y = f64::from(anchored_y - anchor.viewport_y);
+        if delta_y.abs() > 0.25 {
             let adjustment = scrolled.vadjustment();
             let lower = adjustment.lower();
             let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
-            adjustment.set_value((adjustment.value() + delta).clamp(lower, upper));
+            adjustment.set_value((adjustment.value() + delta_y).clamp(lower, upper));
         }
+
+        // GridView has no horizontal scrolling here. When a column-count
+        // change moves the same photo sideways, keep its snapshot visually
+        // under the original cursor X for the active zoom burst. The offset is
+        // presentation-only and is released after the burst settles.
+        let anchored_x = bounds.x() + bounds.width() * anchor.relative_x;
+        let delta_x = anchor.viewport_x - anchored_x;
+        tile.set_presentation_offset(delta_x, 0.0);
         true
+    }
+
+    fn release_zoom_pointer_anchor(self: &Rc<Self>, anchor: ZoomPointerAnchor, generation: u64) {
+        const RELEASE_MS: f64 = 120.0;
+
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        let Some(tile) = tiles.into_iter().find(|tile| {
+            tile.is_mapped()
+                && tile
+                    .imp()
+                    .photo
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|photo| photo.id() == anchor.photo_id)
+        }) else {
+            self.pending_zoom_pointer_anchor.replace(None);
+            return;
+        };
+
+        let (start_x, start_y) = tile.presentation_offset();
+        self.pending_zoom_pointer_anchor.replace(None);
+        if start_x.abs() < 0.5 && start_y.abs() < 0.5 {
+            tile.set_presentation_offset(0.0, 0.0);
+            return;
+        }
+
+        let this = self.clone();
+        let started = Instant::now();
+        tile.add_tick_callback(move |tile, _| {
+            if this.zoom_animation_generation.get() != generation {
+                let same_photo_still_owned = this
+                    .pending_zoom_pointer_anchor
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|current| current.photo_id == anchor.photo_id);
+                if !same_photo_still_owned {
+                    tile.set_presentation_offset(0.0, 0.0);
+                }
+                return glib::ControlFlow::Break;
+            }
+
+            let linear = (started.elapsed().as_secs_f64() * 1000.0 / RELEASE_MS)
+                .clamp(0.0, 1.0);
+            let eased = 1.0 - (1.0 - linear).powi(3);
+            let remaining = (1.0 - eased) as f32;
+            tile.set_presentation_offset(start_x * remaining, start_y * remaining);
+
+            if linear >= 1.0 {
+                tile.set_presentation_offset(0.0, 0.0);
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
 
     fn settle_zoom_pointer_anchor(
@@ -305,21 +380,20 @@ impl Gallery {
                 if this.zoom_reflow_source.borrow().is_none()
                     && this.pending_zoom_width.get().is_none()
                 {
-                    this.pending_zoom_pointer_anchor.replace(None);
+                    this.release_zoom_pointer_anchor(anchor.clone(), generation);
                 }
                 return glib::ControlFlow::Break;
             }
 
-            // A column change can recycle the anchor tile for a frame. Ask the
-            // GridView to realize the exact model position once, then measure
-            // the real allocated tile on a later frame instead of estimating
-            // row geometry.
-            if !realization_requested.replace(true) {
+            // GtkGridView may recycle the anchor tile for a frame or two while
+            // crossing a column boundary. Give normal realization two frames
+            // first. Only then ask it to realize the exact model position.
+            if attempt >= 3 && !realization_requested.replace(true) {
                 this.root
                     .scroll_to(anchor.position, gtk::ListScrollFlags::empty(), None);
             }
 
-            if attempt >= 6 {
+            if attempt >= 8 {
                 if this.zoom_reflow_source.borrow().is_none()
                     && this.pending_zoom_width.get().is_none()
                 {
