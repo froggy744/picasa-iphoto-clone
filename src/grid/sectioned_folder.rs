@@ -583,6 +583,17 @@ impl SectionedFolderView {
         self.photo_for_scroll_position(adjustment.value() + adjustment.page_size() * 0.5)
     }
 
+
+    fn set_scroll_y(self: &Rc<Self>, scroll_y: f64) {
+        let Some(scrolled) = self.scroll.borrow().as_ref().cloned() else {
+            return;
+        };
+        self.refresh();
+        let adjustment = scrolled.vadjustment();
+        let upper = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+        adjustment.set_value(scroll_y.clamp(adjustment.lower(), upper));
+        self.refresh();
+    }
     fn focus_photo(&self, photo_id: i64) {
         if let Some(tile) = self.live_tiles.borrow().values().find(|entry| {
             entry
