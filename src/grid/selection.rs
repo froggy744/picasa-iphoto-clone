@@ -704,13 +704,9 @@ impl Gallery {
         if self.group_mode.get() == GroupMode::Folder
             && crate::grid::sectioned_folder_view_enabled()
         {
-            let revealed = self.sectioned_folder.scroll_to_index(photo_position as u32, true);
-            if revealed {
-                if let Some(photo) = self.current_photos.borrow().get(photo_position) {
-                    self.sectioned_folder.focus_photo(photo.id());
-                }
-            }
-            return revealed;
+            return self
+                .sectioned_folder
+                .scroll_to_index_smooth(photo_position as u32, true);
         }
         if self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled()
