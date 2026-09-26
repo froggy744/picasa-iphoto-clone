@@ -2013,6 +2013,20 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     grid_overlay.set_child(Some(&grid_surface));
     grid_overlay.add_overlay(&scrub_date_label);
 
+    // Dedicated presentation-only layer for Ctrl+wheel zoom anchoring. It
+    // floats above the GridView, so the focal thumbnail can remain visually
+    // under the pointer even when GridView moves the real cell to another
+    // column during reflow.
+    let zoom_anchor_layer = gtk::Fixed::new();
+    zoom_anchor_layer.set_hexpand(true);
+    zoom_anchor_layer.set_vexpand(true);
+    zoom_anchor_layer.set_halign(gtk::Align::Fill);
+    zoom_anchor_layer.set_valign(gtk::Align::Fill);
+    zoom_anchor_layer.set_can_target(false);
+    zoom_anchor_layer.set_overflow(gtk::Overflow::Visible);
+    grid_overlay.add_overlay(&zoom_anchor_layer);
+    gallery.set_zoom_anchor_layer(&zoom_anchor_layer);
+
     // The context menu is a normal GtkOverlay child, so give it the
     // autohide behaviour GtkPopover used to provide. Any pointer press
     // outside the active menu dismisses it. Presses on menu buttons are
