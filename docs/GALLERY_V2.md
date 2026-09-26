@@ -728,7 +728,7 @@ The Lightbox shared-photo open transition is therefore considered finished unles
 
 ## Presentation-only FLIP resize transition
 
-Status: **COMPLETE / VALIDATED**
+Status: **IMPLEMENTED — runtime validation pending**
 
 After rejecting the earlier resize animation that manipulated temporary tile sizes and synthetic layout widths, Gallery v2 now uses a true FLIP-style presentation layer for live window resizing.
 
@@ -811,65 +811,3 @@ Final behavior:
 - manual thumbnail zoom and Lightbox open transition remain independent and unchanged
 
 The resize FLIP is considered finished unless a future regression is reported.
-
-## Pointer-anchored Ctrl+wheel zoom
-
-Status: **IMPLEMENTED — runtime validation pending**
-
-Ctrl+wheel zoom now preserves the thumbnail point under the mouse instead of letting GridView reflow from its normal layout origin.
-
-Commits:
-
-- `134134c` — add presentation-only pointer zoom anchor state
-- `bdabdac` — capture the realized thumbnail under the pointer and restore its vertical focal point during each zoom animation frame
-- `73a69af` — track the gallery pointer and route Ctrl+wheel through the anchored zoom path
-
-Behavior:
-
-- only Ctrl+wheel uses the pointer anchor
-- toolbar +/- and Reset keep their previous behavior
-- if the pointer is not over a realized thumbnail, Ctrl+wheel falls back to ordinary zoom
-- the anchor stores photo identity plus the relative vertical point within the tile
-- each animation frame compensates the ScrolledWindow vertical adjustment so that point stays under the pointer while columns reflow
-- no photo model replacement, DB access, thumbnail decode, or Folder membership rebuild is added
-- manual zoom duration remains 180 ms for this first validation; timing should only be changed after the anchored feel is tested
-
-Validation target: place the pointer over a thumbnail away from the top-left corner and Ctrl+wheel in/out across column boundaries. The same photo/vertical point should remain visually anchored instead of the grid appearing to zoom from its origin.
-
-### Pointer zoom compile fix
-
-The first pointer-anchored zoom build failed on gtk4-rs 0.10.3 because `ScrolledWindow::upcast_ref()` was ambiguous when passed to `WidgetExt::compute_bounds`. Since `ScrolledWindow` already implements `IsA<Widget>`, both calls now pass `scrolled` directly.
-
-Commit:
-
-- `3b7c606` — `Gallery v2: fix pointer zoom bounds target type`
-
-No zoom behavior changed; this is a compile-only fix.
-
-### Pointer zoom focus correction
-
-Runtime feedback showed that the first pointer-anchor implementation still let the focused photo shift badly when zoom crossed several column counts. The cause was that the anchor restoration searched for the realized tile widget each frame; GtkGridView may recycle that widget exactly during a column reflow.
-
-Commit:
-
-- `f979777` — `Gallery v2: keep zoom focus by photo index across reflow`
-
-The anchor now stores the photo index rather than relying on the tile widget surviving. Each animation frame derives the photo's destination row from the current authoritative column count and tile height, then sets the vertical adjustment so the same relative point of that photo stays at the same viewport Y position. This remains presentation-only and does not change photo membership, model ordering, DB state, or thumbnail decode behavior.
-
-Validation target: Ctrl+wheel over a thumbnail across multiple column-count changes. The focused photo should remain in the same vertical screen band instead of jumping several rows when GridView recycles cells.
-
-### Pointer-anchored zoom completion
-
-User validation confirmed the focus-preserving Ctrl+wheel zoom is acceptable after the photo-index anchor correction. The focused photo now remains substantially more stable through GridView column reflow.
-
-Final pointer-focus commits:
-
-- `134134c` — add pointer zoom anchor state
-- `bdabdac` — initial pointer-photo anchor
-- `73a69af` — route Ctrl+wheel through the pointer-aware path
-- `3b7c606`, `96bb24c`, `f5fe753` — gtk4-rs bounds-target compile corrections
-- `f979777` — replace realized-widget dependency with deterministic photo-index anchoring
-
-Status: **COMPLETE**.
-
-Remaining zoom work is intentionally separate: the canonical column/thumbnail zoom steps need tuning. Do not mix that ladder/timing work into the completed pointer-focus implementation.
