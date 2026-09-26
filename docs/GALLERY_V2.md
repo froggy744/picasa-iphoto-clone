@@ -74,3 +74,7 @@ This branch deliberately preserves the RC application around the gallery:
 ## Do not merge yet
 
 Keep this branch separate from `rc-bugfixes` and `main` until runtime behavior is verified with the real library.
+
+## Known issue: window resize pause
+
+On application/window resize there is still a visible pause while the gallery recalculates layout/columns. Treat this separately from Ctrl-wheel zoom smoothness. The target is for resize to update presentation geometry without rebuilding photo membership or triggering expensive synchronous work proportional to the library size.
