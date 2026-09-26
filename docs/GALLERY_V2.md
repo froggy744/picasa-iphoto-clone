@@ -339,3 +339,20 @@ Status:
 - remaining Adwaita width warning: likely transition/layout diagnostic associated with sidebar collapse; cleanup only unless it produces a visible UI defect
 
 Do not optimize Gallery v2 around this warning unless a visible regression accompanies it.
+
+### Responsive sidebar breakpoint now uses the existing slide animation
+
+User clarified that the sidebar already slides smoothly when manually hidden/revealed, and requested the same visual effect when the application is resized below/above the compact breakpoint.
+
+Implemented in commit:
+
+- `ffb012e` — `Gallery v2: animate sidebar at responsive breakpoint`
+
+Behavior:
+
+- entering collapsed/compact mode explicitly calls the existing animated `set_show_sidebar(false)` path instead of relying on the breakpoint state change alone
+- the sidebar's logical pinned state is preserved
+- leaving collapsed mode restores a pinned sidebar through `set_show_sidebar(true)`, so it slides back in rather than abruptly reappearing
+- hover reveal behavior in compact mode remains unchanged
+
+Validation target: resize slowly across the compact breakpoint in both directions and confirm the sidebar slides out/in with the same feel as the existing manual hide/reveal action, without reintroducing gallery resize stutter.
