@@ -428,13 +428,6 @@ impl Gallery {
             }
             return;
         }
-        let old_width = self.tile_width.get().max(1);
-        let old_height = self.tile_height.get().max(1);
-        let width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
-        if width == old_width {
-            return;
-        }
-
         // Capture the visible photo before the tile resize disturbs the layout.
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
         let folder_list_mode = folder_mode && !crate::grid::folder_gridview_experiment_enabled();
