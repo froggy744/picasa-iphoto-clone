@@ -822,9 +822,15 @@
     let sidebar_drag_split_width_begin = sidebar_drag_split_width.clone();
     let sidebar_resize_active_for_begin = sidebar_resize_active.clone();
     let sidebar_layout_settle_for_drag_begin = sidebar_layout_settle.clone();
+    let gallery_for_drag_begin = gallery.clone();
     sidebar_drag.connect_drag_begin(move |_, _, _| {
         sidebar_layout_settle_for_drag_begin.borrow_mut().cancel();
         sidebar_resize_active_for_begin.set(true);
+        if gallery_for_drag_begin.using_sectioned_folder_view()
+            && std::env::var_os("PICASA_TRACE").is_some()
+        {
+            eprintln!("PIC_SECTIONED_ANIM sidebar_drag_begin");
+        }
         sidebar_drag_start_width_begin
             .set(sidebar_shell_for_drag_begin.width().max(1) as f64);
         sidebar_drag_split_width_begin
@@ -902,6 +908,14 @@
                 .set_sidebar_width_fraction(pending_sidebar_fraction_end.get());
         }
         sidebar_resize_active_for_end.set(false);
+        if gallery_for_sidebar_drag_end.using_sectioned_folder_view()
+            && std::env::var_os("PICASA_TRACE").is_some()
+        {
+            eprintln!(
+                "PIC_SECTIONED_ANIM sidebar_drag_end gallery_width={}",
+                gallery_surface_for_sidebar_drag_end.width()
+            );
+        }
 
         // Wait until the split view has received its single final allocation,
         // then perform exactly one responsive grid update.
