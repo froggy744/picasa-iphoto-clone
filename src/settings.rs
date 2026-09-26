@@ -1139,8 +1139,8 @@ fn interface_page(
 ) -> gtk::ScrolledWindow {
     let content = page_content("Interface", "Customize albums and thumbnail appearance.");
 
-    // Thumbnail appearance toggles. Both apply live through thumbnail_changed
-    // and are re-read at startup.
+    // Thumbnail appearance toggles apply live through thumbnail_changed and
+    // are re-read at startup.
     let thumbnail_heading = gtk::Label::new(Some("Thumbnails"));
     thumbnail_heading.set_halign(gtk::Align::Start);
     thumbnail_heading.set_hexpand(true);
@@ -1209,6 +1209,39 @@ fn interface_page(
         "Show entire photo in thumbnails",
         Some("Letterbox landscape and portrait photos instead of cropping them to the tile."),
         Some(fit_whole_photo.upcast_ref()),
+    );
+
+    let show_file_names = gtk::Switch::new();
+    show_file_names.set_valign(gtk::Align::Center);
+    show_file_names.set_active(
+        saved_bool(
+            &connection.borrow(),
+            crate::db::THUMBNAIL_FILE_NAMES_SETTING_KEY,
+        )
+        .unwrap_or(false),
+    );
+    {
+        let connection = connection.clone();
+        let thumbnail_changed = thumbnail_changed.clone();
+        show_file_names.connect_active_notify(move |toggle| {
+            let state = toggle.is_active();
+            crate::window::debug_log(&format!("SETTINGS: thumbnail filenames switch -> {state}"));
+            if let Err(error) = crate::db::set_setting(
+                &connection.borrow(),
+                crate::db::THUMBNAIL_FILE_NAMES_SETTING_KEY,
+                &state.to_string(),
+            ) {
+                eprintln!("Could not save thumbnail filename setting: {error}");
+                return;
+            }
+            thumbnail_changed();
+        });
+    }
+    append_row(
+        &thumbnail_list,
+        "Show filenames below thumbnails",
+        Some("Display each photo's filename in a single clipped line."),
+        Some(show_file_names.upcast_ref()),
     );
     content.append(&thumbnail_list);
 
@@ -1858,7 +1891,7 @@ mod tests {
                 "Reset All Theme Settings",
             ],
         );
-        // Switch order: the two thumbnail toggles, then bookshelf and album
+        // Switch order: the thumbnail toggles, then bookshelf and album
         // covers at the end.
         let album_switches = &switches[switches.len() - 2..];
         assert_eq!(album_switches.len(), 2);
