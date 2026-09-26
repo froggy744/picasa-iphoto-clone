@@ -263,7 +263,14 @@ fn main() {
                 }
 
                 for (index, section_index, row, col) in wanted_tiles {
-                    let tile = if let Some(existing) = live_tiles.borrow().get(&index).cloned() {
+                    // Keep the immutable RefCell borrow in its own scope.
+                    // Otherwise the temporary from if-let can live through the
+                    // else branch and collide with borrow_mut() below.
+                    let existing = {
+                        let live = live_tiles.borrow();
+                        live.get(&index).cloned()
+                    };
+                    let tile = if let Some(existing) = existing {
                         existing
                     } else {
                         let tile = tile_pool.borrow_mut().pop_front().unwrap_or_else(|| {
@@ -300,7 +307,11 @@ fn main() {
                 }
 
                 for section_index in wanted_headers {
-                    let label = if let Some(existing) = live_headers.borrow().get(&section_index).cloned() {
+                    let existing = {
+                        let live = live_headers.borrow();
+                        live.get(&section_index).cloned()
+                    };
+                    let label = if let Some(existing) = existing {
                         existing
                     } else {
                         let label = header_pool.borrow_mut().pop_front().unwrap_or_else(|| {
