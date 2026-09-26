@@ -41,6 +41,10 @@ pub(crate) const ZOOM_LEVELS: [i32; 8] = [100, 117, 137, 160, 187, 219, 256, 300
 /// zoom changes presentation geometry instead of rebuilding Folder row objects.
 /// The legacy GtkListView path is retained as an emergency comparison/fallback
 /// and can be enabled with PICASA_LEGACY_FOLDER_LIST=1.
+pub(crate) fn sectioned_folder_view_enabled() -> bool {
+    !std::env::var("PICASA_LEGACY_FOLDER_LIST").is_ok_and(|value| value == "1")
+}
+
 pub(crate) fn folder_gridview_experiment_enabled() -> bool {
     !std::env::var("PICASA_LEGACY_FOLDER_LIST").is_ok_and(|value| value == "1")
 }
@@ -111,6 +115,7 @@ thread_local! {
 // implementation is split into focused source files for maintenance.
 include!("grid/tile.rs");
 include!("grid/grouping.rs");
+include!("grid/sectioned_folder.rs");
 include!("grid/virtualization.rs");
 include!("grid/view.rs");
 include!("grid/navigation.rs");
