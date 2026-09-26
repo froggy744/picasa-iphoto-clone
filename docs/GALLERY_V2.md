@@ -980,3 +980,27 @@ Fix commits:
 - `09e5dad` — trace anchor capture misses with cursor and viewport geometry
 
 Status: **IMPLEMENTED — runtime validation pending**. A correct run should begin each Ctrl-held zoom interaction with `PIC_ZOOM_INPUT source=event ...` followed by one `PIC_ZOOM_ANCHOR capture ...`, keep that same photo id for the interaction, and end with one `finish_requested` / `release ... mode=crossfade`.
+
+
+### Ctrl+wheel retarget and boundary cleanup
+
+Runtime trace `gridzoom6.log` exposed two remaining ownership problems in the floating focal-photo layer:
+
+- one anchor (photo id `641`) remained owned across a large pointer move while Ctrl stayed held, so later wheel input continued manipulating the old floating photo instead of the photo under the new cursor location
+- a no-op wheel detent at the minimum/maximum zoom level could leave the floating anchor alive even though no further zoom could occur
+
+Corrections:
+
+- treat pointer movement of 32 px or more between settled Ctrl+wheel detents as a deliberate retarget: remove the old floating anchor and capture a fresh focal photo at the new cursor position
+- ignore small pointer jitter so the same photo remains stable through an ordinary wheel burst
+- when the zoom ladder is already at its minimum or maximum, finish/release the current pointer anchor immediately instead of returning with the ghost still owned
+- use the capture-phase motion tracker as the validated pointer source; the raw-event conversion path returned no usable coordinate throughout the runtime trace
+- if pointer tracking is ever unavailable, consume the Ctrl+wheel event instead of falling back to unanchored zoom
+
+Fix commits:
+
+- `7eaa593` — retarget moved pointer zoom anchors and release on zoom boundaries
+- `c034b13` — use the validated capture-phase pointer source and remove the unanchored fallback
+- `6612728` — clarify the runtime-validated pointer path
+
+Status: **IMPLEMENTED — runtime validation pending**.
