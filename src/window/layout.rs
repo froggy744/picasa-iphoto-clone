@@ -765,7 +765,13 @@
     let sidebar_hover_layout_freeze_for_state = sidebar_hover_layout_freeze.clone();
     let sidebar_hover_freeze_generation_for_state = sidebar_hover_freeze_generation.clone();
     let pin_button_for_state = update_pin_button.clone();
+    let gallery_for_sidebar_visibility = gallery.clone();
     main_split.connect_show_sidebar_notify(move |split| {
+        // Sidebar reveal/hide is a structural OverlaySplitView transition, not
+        // a user window resize. Abort any live-resize FLIP and clear all tile
+        // snapshot offsets before the split starts reallocating the gallery.
+        gallery_for_sidebar_visibility.cancel_resize_flip();
+
         let sidebar_visible = split.shows_sidebar();
         sidebar_hover_reveal_for_state.set_visible(!sidebar_visible);
         // Every reveal path (hover, pin button, breakpoint restore) funnels
