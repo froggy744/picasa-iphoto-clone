@@ -845,3 +845,31 @@ Commit:
 - `3b7c606` — `Gallery v2: fix pointer zoom bounds target type`
 
 No zoom behavior changed; this is a compile-only fix.
+
+## Cursor-photo zoom anchoring v2
+
+Status: **IMPLEMENTED — runtime validation pending**
+
+Goal: Ctrl+wheel zoom must keep the thumbnail that was under the cursor as the focal photo for the whole zoom burst, even when GtkGridView changes column count and recycles cells.
+
+Implementation:
+
+- capture one anchor photo at the start of the zoom burst; rapid wheel detents reuse that same photo instead of re-picking a neighbor after each reflow
+- store the anchor photo id, model position, cursor X/Y, and the relative point inside the thumbnail
+- compensate vertical movement using the real ScrolledWindow adjustment and the anchor tile's actual post-layout bounds
+- hold the anchor photo horizontally under the original cursor X with a presentation-only tile offset while GridView moves it to a new column
+- after the burst settles, ease that horizontal offset back to the real GridView column over 120 ms
+- if GridView temporarily recycles the anchor cell, wait two frames first; only then request realization of the exact model position and resume correction from real allocated bounds
+- direct tile rebinding clears stale presentation offsets so a recycled widget can never carry the old photo's anchor/FLIP translation
+- min/max zoom no-ops and toolbar +/-/Reset clear the pointer anchor cleanly
+
+Commits:
+
+- `f45657c` — retain one real-tile anchor through zoom bursts and settle after allocation
+- `7485f21` — hold the cursor photo in X/Y through column reflow and release horizontally after the burst
+- `56d4ede` — clear presentation offsets when GridView recycles a tile
+- `6548f2d` — harden anchor lifecycle at zoom limits and on non-pointer zoom paths
+
+The canonical zoom ladder and 180 ms manual zoom timing are unchanged. Folder architecture is untouched.
+
+Validation target: place the cursor over an identifiable thumbnail away from the viewport edges, Ctrl+wheel rapidly across several column-count changes, and verify that the same photo remains the visual focal point throughout the burst. After the gesture stops it may slide horizontally into its final GridView column, but it should not jump several rows or switch to a neighboring photo.
