@@ -12,6 +12,8 @@ const SIDE_MARGIN: f64 = 20.0;
 const HEADER_H: f64 = 42.0;
 const SECTION_GAP: f64 = 10.0;
 const OVERSCAN_PX: f64 = 320.0;
+const MAX_TILE_POOL: usize = 140;
+const MAX_HEADER_POOL: usize = 8;
 
 #[derive(Clone, Debug)]
 struct FolderSection {
@@ -259,7 +261,10 @@ fn main() {
                 for id in stale_tiles {
                     if let Some(tile) = live_tiles.borrow_mut().remove(&id) {
                         fixed.remove(&tile.frame);
-                        tile_pool.borrow_mut().push_back(tile);
+                        let mut pool = tile_pool.borrow_mut();
+                        if pool.len() < MAX_TILE_POOL {
+                            pool.push_back(tile);
+                        }
                     }
                 }
 
@@ -303,7 +308,10 @@ fn main() {
                 for id in stale_headers {
                     if let Some(label) = live_headers.borrow_mut().remove(&id) {
                         fixed.remove(&label);
-                        header_pool.borrow_mut().push_back(label);
+                        let mut pool = header_pool.borrow_mut();
+                        if pool.len() < MAX_HEADER_POOL {
+                            pool.push_back(label);
+                        }
                     }
                 }
 
@@ -332,10 +340,13 @@ fn main() {
                 }
 
                 status.set_text(&format!(
-                    "photos=5000  live_tiles={}  pool={}  live_headers={}  created_tiles={}  created_headers={}  cols={}  geometry_us={}  geometry_rebuilds={}  anchor_ok={}",
+                    "photos=5000  live_tiles={}  pool={}/{}  live_headers={}  header_pool={}/{}  created_tiles={}  created_headers={}  cols={}  geometry_us={}  geometry_rebuilds={}  anchor_ok={}",
                     live_tiles.borrow().len(),
                     tile_pool.borrow().len(),
+                    MAX_TILE_POOL,
                     live_headers.borrow().len(),
+                    header_pool.borrow().len(),
+                    MAX_HEADER_POOL,
                     total_tiles_created.get(),
                     total_headers_created.get(),
                     g.columns,
@@ -475,10 +486,13 @@ fn main() {
             log_stats.connect_clicked(move |_| {
                 let g = geometry.borrow();
                 eprintln!(
-                    "SECTIONED_STATS photos=5000 live_tiles={} pool_tiles={} live_headers={} total_tiles_created={} geometry_us={} geometry_rebuilds={}",
+                    "SECTIONED_STATS photos=5000 live_tiles={} pool_tiles={} pool_cap={} live_headers={} header_pool={} header_pool_cap={} total_tiles_created={} geometry_us={} geometry_rebuilds={}",
                     live_tiles.borrow().len(),
                     tile_pool.borrow().len(),
+                    MAX_TILE_POOL,
                     live_headers.borrow().len(),
+                    header_pool.borrow().len(),
+                    MAX_HEADER_POOL,
                     total_tiles_created.get(),
                     g.last_rebuild_us,
                     g.rebuilds,
