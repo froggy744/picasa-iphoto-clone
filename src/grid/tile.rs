@@ -672,6 +672,7 @@ impl SquareTile {
         // GridView may recycle this widget during a zoom/resize reflow; never
         // let an anchor/FLIP translation leak onto the newly bound photo.
         self.set_presentation_offset(0.0, 0.0);
+        self.set_opacity(1.0);
         self.set_photo_deferred(photo);
         self.load_visual();
         if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_THUMBNAIL gtk_bind elapsed_us={} id={}", started.elapsed().as_micros(), photo.id()); }
