@@ -46,10 +46,12 @@ fn install_smooth_gallery_scroll(
         let active = active.clone();
         let last_error_abs = last_error_abs.clone();
         let stall_frames = stall_frames.clone();
+        let gallery_for_click = gallery.clone();
         let click = gtk::GestureClick::new();
         click.set_button(0);
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
         click.connect_pressed(move |_, _, _, _| {
+            gallery_for_click.finish_pointer_zoom();
             active.set(false);
             velocity.set(0.0);
             target.set(adjustment.value());
@@ -271,17 +273,45 @@ fn install_smooth_gallery_scroll(
         let pointer_for_enter = zoom_pointer.clone();
         let pointer_for_motion = zoom_pointer.clone();
         let pointer_for_leave = zoom_pointer.clone();
+        let gallery_for_motion = gallery.clone();
+        let gallery_for_leave = gallery.clone();
         let motion = gtk::EventControllerMotion::new();
         motion.connect_enter(move |_, x, y| {
             pointer_for_enter.set(Some((x, y)));
         });
-        motion.connect_motion(move |_, x, y| {
+        motion.connect_motion(move |controller, x, y| {
             pointer_for_motion.set(Some((x, y)));
+            // Fallback for compositor/key paths where modifier release is not
+            // delivered to this scroller. Once Ctrl is no longer down, any
+            // real pointer movement ends the anchored zoom transaction.
+            if !controller
+                .current_event_state()
+                .contains(gtk::gdk::ModifierType::CONTROL_MASK)
+            {
+                gallery_for_motion.finish_pointer_zoom();
+            }
         });
         motion.connect_leave(move |_| {
             pointer_for_leave.set(None);
+            gallery_for_leave.finish_pointer_zoom();
         });
         scrolled.add_controller(motion);
+    }
+
+    if ctrl_zoom {
+        // The focal thumbnail belongs to the Ctrl+wheel *gesture*, not to the
+        // wheel debounce timer. Capture modifier changes on the scroller's
+        // ancestor path so releasing Ctrl explicitly ends that gesture.
+        let gallery_for_modifiers = gallery.clone();
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_modifiers(move |_, state| {
+            if !state.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+                gallery_for_modifiers.finish_pointer_zoom();
+            }
+            glib::Propagation::Proceed
+        });
+        scrolled.add_controller(keys);
     }
 
     let controller = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
@@ -325,6 +355,11 @@ fn install_smooth_gallery_scroll(
             // Ctrl+wheel behavior instead of zooming the hidden photo grid.
             return glib::Propagation::Proceed;
         }
+
+        // Any ordinary scroll means Ctrl+wheel interaction is over. This is a
+        // fallback as well as the natural boundary when the user starts
+        // scrolling the gallery again without the modifier.
+        gallery.finish_pointer_zoom();
 
         if dy == 0.0 {
             return glib::Propagation::Proceed;
