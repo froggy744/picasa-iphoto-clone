@@ -188,6 +188,7 @@ fn main() {
         let total_tiles_created = Rc::new(Cell::new(0u64));
         let total_headers_created = Rc::new(Cell::new(0u64));
         let last_anchor_ok = Rc::new(Cell::new(true));
+        let zoom_anchor: Rc<RefCell<Option<(u32, f64)>>> = Rc::new(RefCell::new(None));
 
         let status = gtk::Label::new(None);
         status.set_xalign(0.0);
@@ -379,8 +380,10 @@ fn main() {
             let scrolled = scrolled.clone();
             let refresh = refresh.clone();
             let last_anchor_ok = last_anchor_ok.clone();
+            let zoom_anchor = zoom_anchor.clone();
             zoom_controller.connect_scroll(move |controller, _, dy| {
                 if !controller.current_event_state().contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+                    zoom_anchor.borrow_mut().take();
                     return glib::Propagation::Proceed;
                 }
                 if dy == 0.0 { return glib::Propagation::Stop; }
@@ -391,9 +394,12 @@ fn main() {
 
                 let adj = scrolled.vadjustment();
                 let before_scroll = adj.value();
-                let before = {
-                    let g = geometry.borrow();
-                    anchor_photo(before_scroll, &sections, &g)
+                let before = if let Some(anchor) = *zoom_anchor.borrow() {
+                    Some(anchor)
+                } else {
+                    let picked = { let g = geometry.borrow(); anchor_photo(before_scroll, &sections, &g) };
+                    if let Some(anchor) = picked { *zoom_anchor.borrow_mut() = Some(anchor); }
+                    picked
                 };
 
                 zoom.set(new_zoom);
@@ -409,13 +415,14 @@ fn main() {
                         // photo has a different index even when the anchor is perfect.
                         let actual_offset = new_y - adj.value();
                         let anchor_error_px = (actual_offset - offset).abs();
-                        let anchor_visible = actual_offset >= 0.0
-                            && actual_offset <= adj.page_size()
-                                + f64::from(geometry.borrow().tile_height);
+                        let tile_h = f64::from(geometry.borrow().tile_height);
+                        let anchor_visible = actual_offset + tile_h >= 0.0
+                            && actual_offset <= adj.page_size();
                         let clamped = (adj.value() - adj.lower()).abs() < 0.5
                             || (adj.value() - upper).abs() < 0.5;
                         let anchor_ok = anchor_error_px <= 0.75 || clamped;
                         last_anchor_ok.set(anchor_ok);
+                        *zoom_anchor.borrow_mut() = Some((photo_id, actual_offset));
                         eprintln!(
                             "SECTIONED_ZOOM old={} new={} anchor={} anchor_error_px={:.3} anchor_visible={} clamped={} geometry_us={} live_target_scroll={:.1}",
                             old_zoom,
