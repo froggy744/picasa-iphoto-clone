@@ -262,6 +262,28 @@ fn install_smooth_gallery_scroll(
         });
     }
 
+    // Track the pointer in ScrolledWindow coordinates so Ctrl+wheel can
+    // preserve the thumbnail point the user is actually looking at. Keeping
+    // this in the input layer avoids coupling ordinary toolbar zoom to a mouse
+    // position.
+    let zoom_pointer = Rc::new(Cell::new(None::<(f64, f64)>));
+    {
+        let pointer_for_enter = zoom_pointer.clone();
+        let pointer_for_motion = zoom_pointer.clone();
+        let pointer_for_leave = zoom_pointer.clone();
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_enter(move |_, x, y| {
+            pointer_for_enter.set(Some((x, y)));
+        });
+        motion.connect_motion(move |_, x, y| {
+            pointer_for_motion.set(Some((x, y)));
+        });
+        motion.connect_leave(move |_| {
+            pointer_for_leave.set(None);
+        });
+        scrolled.add_controller(motion);
+    }
+
     let controller = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     controller.set_propagation_phase(gtk::PropagationPhase::Capture);
 
@@ -270,6 +292,8 @@ fn install_smooth_gallery_scroll(
     let velocity_for_scroll = velocity.clone();
     let active_for_scroll = active.clone();
     let last_error_abs_for_scroll = last_error_abs.clone();
+    let zoom_pointer_for_scroll = zoom_pointer.clone();
+    let scrolled_for_zoom = scrolled.clone();
     controller.connect_scroll(move |controller, _, dy| {
         if controller
             .current_event_state()
@@ -280,10 +304,19 @@ fn install_smooth_gallery_scroll(
             target_for_scroll.set(adjustment_for_scroll.value());
 
             if ctrl_zoom {
+                let pointer = zoom_pointer_for_scroll.get();
                 if dy < 0.0 {
-                    gallery.zoom_in();
+                    if let Some((x, y)) = pointer {
+                        gallery.zoom_in_at(&scrolled_for_zoom, x, y);
+                    } else {
+                        gallery.zoom_in();
+                    }
                 } else if dy > 0.0 {
-                    gallery.zoom_out();
+                    if let Some((x, y)) = pointer {
+                        gallery.zoom_out_at(&scrolled_for_zoom, x, y);
+                    } else {
+                        gallery.zoom_out();
+                    }
                 }
                 return glib::Propagation::Stop;
             }
