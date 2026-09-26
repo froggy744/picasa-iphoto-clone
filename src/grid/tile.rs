@@ -291,6 +291,12 @@ impl SquareTile {
         self.imp().photo.borrow().as_ref().cloned()
     }
 
+    pub(crate) fn transition_paintable(&self) -> Option<gtk::gdk::Paintable> {
+        let frame = self.first_child().and_downcast::<gtk::Overlay>()?;
+        let picture = frame.child().and_downcast::<gtk::Picture>()?;
+        picture.paintable()
+    }
+
     fn set_tile_size(&self, width: i32, height: i32) {
         let width = width.max(1);
         let height = height.max(1);
