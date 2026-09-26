@@ -68,6 +68,9 @@ pub struct Gallery {
     // report two competing allocations while GridView reflows; using one
     // width for the whole animation prevents column-count ping-pong.
     zoom_animation_layout_width: Rc<Cell<Option<i32>>>,
+    // Invalidates/retargets presentation-only FLIP animations when live
+    // window resizing crosses another column boundary mid-transition.
+    resize_flip_generation: Rc<Cell<u64>>,
     // Set when no user-chosen thumbnail size exists: the first real layout
     // adopts the ~4-thumbnails-per-row default instead of a fixed pixel size.
     auto_default_zoom: Cell<bool>,
@@ -769,6 +772,7 @@ impl Gallery {
             zoom_reflow_source: Rc::new(RefCell::new(None)),
             zoom_animation_generation: Rc::new(Cell::new(0)),
             zoom_animation_layout_width: Rc::new(Cell::new(None)),
+            resize_flip_generation: Rc::new(Cell::new(0)),
             auto_default_zoom: Cell::new(false),
             fit_whole_photo,
             show_file_names,
@@ -799,6 +803,134 @@ impl Gallery {
             return;
         }
         self.update_layout(width, false);
+    }
+
+    /// Presentation-only FLIP reflow for live application resizing.
+    ///
+    /// GTK computes and owns the real destination layout immediately. We only
+    /// translate snapshots of realized tiles from their previous visual
+    /// positions back to their new allocations. No synthetic width, tile size,
+    /// model membership or GridView column input is introduced.
+    pub fn update_width_with_flip(self: &Rc<Self>, width: i32) {
+        const RESIZE_FLIP_MS: f64 = 135.0;
+
+        if width <= 100 {
+            return;
+        }
+
+        // Manual thumbnail zoom owns the stable-width layout path while it is
+        // animating. Do not layer a resize FLIP over that animation.
+        if self.zoom_animation_layout_width.get().is_some() {
+            self.update_width(width);
+            return;
+        }
+
+        let folder_list_mode = self.group_mode.get() == GroupMode::Folder
+            && !crate::grid::folder_gridview_experiment_enabled();
+        let target_columns = self.columns_for_width(width);
+        if folder_list_mode || target_columns == self.current_columns.get() {
+            self.update_layout(width, false);
+            return;
+        }
+
+        let root_widget: gtk::Widget = self.root.clone().upcast();
+        let mut old_tiles = Vec::new();
+        collect_tiles(&root_widget, &mut old_tiles);
+        let mut old_positions = std::collections::HashMap::<i64, (f32, f32)>::new();
+        for tile in old_tiles {
+            if !tile.is_mapped() || !tile.is_visible() {
+                continue;
+            }
+            let Some(photo) = tile.photo() else {
+                continue;
+            };
+            let Some(bounds) = tile.compute_bounds(&root_widget) else {
+                continue;
+            };
+            let (offset_x, offset_y) = tile.presentation_offset();
+            old_positions.insert(photo.id(), (bounds.x() + offset_x, bounds.y() + offset_y));
+        }
+
+        let generation = self.resize_flip_generation.get().wrapping_add(1);
+        self.resize_flip_generation.set(generation);
+
+        // Apply GTK's real destination layout immediately.
+        self.update_layout(width, false);
+
+        let this = self.clone();
+        let root_for_tick = self.root.clone();
+        let started = Rc::new(RefCell::new(None::<Instant>));
+        let motion = Rc::new(RefCell::new(Vec::<(SquareTile, f32, f32)>::new()));
+        let started_for_tick = started.clone();
+        let motion_for_tick = motion.clone();
+
+        set_grid_zoom_animation_active(true);
+        self.root.add_tick_callback(move |_, _| {
+            if this.resize_flip_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+
+            if started_for_tick.borrow().is_none() {
+                let root_widget: gtk::Widget = root_for_tick.clone().upcast();
+                let mut new_tiles = Vec::new();
+                collect_tiles(&root_widget, &mut new_tiles);
+                let mut transitions = Vec::new();
+
+                for tile in new_tiles {
+                    if !tile.is_mapped() || !tile.is_visible() {
+                        continue;
+                    }
+                    let Some(photo) = tile.photo() else {
+                        continue;
+                    };
+                    let Some((old_x, old_y)) = old_positions.get(&photo.id()).copied() else {
+                        continue;
+                    };
+                    let Some(bounds) = tile.compute_bounds(&root_widget) else {
+                        continue;
+                    };
+                    let dx = old_x - bounds.x();
+                    let dy = old_y - bounds.y();
+                    if dx.abs() < 0.5 && dy.abs() < 0.5 {
+                        continue;
+                    }
+                    tile.set_presentation_offset(dx, dy);
+                    transitions.push((tile, dx, dy));
+                }
+
+                if transitions.is_empty() {
+                    set_grid_zoom_animation_active(false);
+                    return glib::ControlFlow::Break;
+                }
+
+                *motion_for_tick.borrow_mut() = transitions;
+                *started_for_tick.borrow_mut() = Some(Instant::now());
+                return glib::ControlFlow::Continue;
+            }
+
+            let elapsed = started_for_tick
+                .borrow()
+                .as_ref()
+                .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+                .unwrap_or(RESIZE_FLIP_MS);
+            let linear = (elapsed / RESIZE_FLIP_MS).clamp(0.0, 1.0);
+            let eased = 1.0 - (1.0 - linear).powi(3);
+            let remaining = (1.0 - eased) as f32;
+
+            for (tile, dx, dy) in motion_for_tick.borrow().iter() {
+                tile.set_presentation_offset(*dx * remaining, *dy * remaining);
+            }
+
+            if linear >= 1.0 {
+                for (tile, _, _) in motion_for_tick.borrow().iter() {
+                    tile.set_presentation_offset(0.0, 0.0);
+                }
+                set_grid_zoom_animation_active(false);
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
 
     fn update_layout(&self, width: i32, tile_size_changed: bool) {
