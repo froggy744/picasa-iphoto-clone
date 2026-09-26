@@ -84,3 +84,16 @@ On application/window resize there is still a visible pause while the gallery re
 The resize warning pattern showed the GridView retaining its previous minimum column geometry while the window was being dragged narrower (for example, a ~747 px requested width while the available width fell below it). The old three-frame width settle gate was designed to protect the legacy Folder ListView from repeated row-model rebuilds, but Gallery v2 no longer has that cost.
 
 Gallery v2 now updates column count live during window resize and skips explicit GridView `queue_resize()` calls for width-only changes that do not cross a column boundary. The legacy Folder ListView fallback keeps the settle gate.
+
+## Working-document rule
+
+Keep this file updated continuously while Gallery v2 work proceeds. After every meaningful architecture change or confirmed test result, record:
+
+- what changed
+- why it changed
+- relevant commit(s)
+- measured or observed result
+- known regressions / remaining issues
+- next concrete validation target
+
+This document is the handover/source-of-truth for the Gallery v2 migration so work can continue across chats/tools without reconstructing the investigation from memory.
