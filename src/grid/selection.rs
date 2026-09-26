@@ -242,6 +242,14 @@ impl Gallery {
         else {
             return;
         };
+        if self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled()
+        {
+            self.selection.select_item(position as u32, true);
+            self.sectioned_folder.set_scroll_y(scroll_y);
+            self.sectioned_folder.focus_photo(photo_id);
+            return;
+        }
         let folder_list_mode = self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled();
         let folder_row = folder_list_mode
@@ -291,6 +299,12 @@ impl Gallery {
         else {
             return;
         };
+        if self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled()
+        {
+            self.sectioned_folder.set_scroll_y(scroll_y);
+            return;
+        }
         let folder_list_mode = self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled();
         let folder_row = folder_list_mode
