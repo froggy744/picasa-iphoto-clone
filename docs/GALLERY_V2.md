@@ -775,3 +775,13 @@ Fix commits:
 Policy update: resize FLIP is strictly for user window-width changes. Sidebar visibility changes are structural layout transitions and must never retain or continue tile FLIP offsets across them.
 
 Validation target: reveal/hide the sidebar repeatedly at narrow and wide widths, including immediately after resizing across a column boundary. Thumbnails must remain visible and correctly positioned after every transition.
+
+### Resize FLIP timing tuning
+
+User feedback found the 135 ms resize FLIP too fast to read visually. The live window-resize FLIP duration is now **220 ms**. Manual thumbnail zoom and the Lightbox shared-photo open transition are unchanged.
+
+Commit:
+
+- `742140c` — `Gallery v2: slow resize FLIP animation`
+
+Validation target: confirm the positional slide is now visible and smooth without feeling sluggish during repeated width changes.
