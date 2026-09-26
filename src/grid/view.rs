@@ -811,6 +811,19 @@ impl Gallery {
     /// translate snapshots of realized tiles from their previous visual
     /// positions back to their new allocations. No synthetic width, tile size,
     /// model membership or GridView column input is introduced.
+    pub fn cancel_resize_flip(&self) {
+        self.resize_flip_generation
+            .set(self.resize_flip_generation.get().wrapping_add(1));
+
+        let root_widget: gtk::Widget = self.root.clone().upcast();
+        let mut tiles = Vec::new();
+        collect_tiles(&root_widget, &mut tiles);
+        for tile in tiles {
+            tile.set_presentation_offset(0.0, 0.0);
+        }
+        set_grid_zoom_animation_active(false);
+    }
+
     pub fn update_width_with_flip(self: &Rc<Self>, width: i32) {
         const RESIZE_FLIP_MS: f64 = 135.0;
 
