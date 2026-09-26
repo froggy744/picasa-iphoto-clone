@@ -344,11 +344,12 @@ fn main() {
             let geometry = geometry.clone();
             let sections = sections.clone();
             let scrolled = scrolled.clone();
+            let scrolled_for_tick = scrolled.clone();
             let zoom = zoom.clone();
             let last_width = Rc::new(Cell::new(0i32));
             let last_width_tick = last_width.clone();
             scrolled.add_tick_callback(move |_, _| {
-                let width = scrolled.width();
+                let width = scrolled_for_tick.width();
                 if width > 0 && width != last_width_tick.get() {
                     last_width_tick.set(width);
                     rebuild_geometry(&mut geometry.borrow_mut(), &sections, width, zoom.get());
