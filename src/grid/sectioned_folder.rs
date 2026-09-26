@@ -504,6 +504,26 @@ impl SectionedFolderView {
     }
 
     fn refresh_model(self: &Rc<Self>) {
+        // A replacement can keep the same numeric positions while changing
+        // PhotoObject metadata. Recycle the bounded realized set so every
+        // visible tile is rebound exactly once to the current model.
+        let live = std::mem::take(&mut *self.live_tiles.borrow_mut());
+        for (_, tile) in live {
+            self.root.remove(&tile.tile);
+            tile.index.set(None);
+            let mut pool = self.tile_pool.borrow_mut();
+            if pool.len() < SECTIONED_TILE_POOL_CAP {
+                pool.push_back(tile);
+            }
+        }
+        let headers = std::mem::take(&mut *self.live_headers.borrow_mut());
+        for (_, label) in headers {
+            self.root.remove(&label);
+            let mut pool = self.header_pool.borrow_mut();
+            if pool.len() < SECTIONED_HEADER_POOL_CAP {
+                pool.push_back(label);
+            }
+        }
         self.invalidate_geometry();
         self.refresh();
     }
