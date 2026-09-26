@@ -526,3 +526,25 @@ Validation target:
 5. Verify the viewport does not jump unexpectedly when a column boundary is crossed.
 6. Verify 3,000+ photo performance remains responsive.
 7. Compare animation feel against Picasa; tune duration/easing only after behavior is stable.
+
+### Zoom animation follow-up: thumbnail flicker suppression
+
+User validation: the new scale + slide zoom effect looks good, but a slight thumbnail flicker remains during some reflow frames.
+
+Likely cause: `GtkGridView` may recycle/rebind a small number of realized tiles while animated geometry crosses a column boundary. The normal GridView bind path clears the old paintable before loading/applying the correct presentation paintable. That blank frame is visible as flicker during animation.
+
+Fix commits:
+
+- `e9bb449` — `Gallery v2: track zoom visual motion`
+- `97763b3` — `Gallery v2: preserve thumbnails during zoom motion`
+- `8da6a25` — `Gallery v2: suppress thumbnail blanking during zoom`
+
+Behavior during active zoom animation now mirrors the existing fast-scroll visual backstop:
+
+- do not blank an already painted tile merely because GridView recycled/rebound it during motion
+- if the correct target paintable is already in RAM, replace atomically
+- if it is not yet available, keep the previous paintable temporarily rather than flashing the empty placeholder
+- async completion still validates the presentation key before applying, so a stale completion cannot permanently land on the wrong recycled tile
+- the preservation flag is enabled only for the active zoom animation and is cleared when the current animation completes
+
+Validation target: repeat single-step and rapid Ctrl-wheel zoom across column boundaries and confirm the previous slight blank/flash is reduced or eliminated without persistent wrong-thumbnail artifacts.
