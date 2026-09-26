@@ -548,3 +548,24 @@ Behavior during active zoom animation now mirrors the existing fast-scroll visua
 - the preservation flag is enabled only for the active zoom animation and is cleared when the current animation completes
 
 Validation target: repeat single-step and rapid Ctrl-wheel zoom across column boundaries and confirm the previous slight blank/flash is reduced or eliminated without persistent wrong-thumbnail artifacts.
+
+### Zoom jitter root cause identified and fixed
+
+User supplied a focused `PICASA_ZOOM_TRACE` capture for the visibly jittery end of the zoom sequence.
+
+Finding: thumbnail decoding/rebinding was not the bottleneck. Recycled tiles were rebinding from RAM in roughly 27–37 us. The visible jitter came from column-count oscillation during one animation: the GridView repeatedly alternated between two content widths (for example ~1088 and ~1128 px), causing repeated 5 -> 4 -> 5 -> 4 column transitions. Each column flip recycled another block of realized tiles, producing the visible twitch despite paintable preservation.
+
+Fix commits:
+
+- `7b26262` — `Gallery v2: freeze layout width during zoom`
+- `c77fb57` — `Gallery v2: stop column ping-pong during zoom`
+
+Implementation:
+
+- capture one stable GridView content width at zoom-animation start
+- use that frozen width for every per-frame column calculation during the animation
+- clear the frozen width when the animation finishes
+- tile width/height still animate frame-by-frame, so column count may legitimately cross a boundary once as geometry changes
+- GTK's transient competing allocations can no longer make the same animation bounce repeatedly between adjacent column counts
+
+Validation target: repeat the previously jittery boundary several times. The trace should show at most the intended one-way column transition for that zoom step, not repeated alternating old/new column pairs.
