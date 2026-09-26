@@ -195,6 +195,9 @@ impl SectionedFolderView {
                     return;
                 }
                 drag_start.set(Some((x, y)));
+                // Reinsert the band so it snapshots above recycled tiles/headers.
+                view.root.remove(&view.rubberband);
+                view.root.put(&view.rubberband, x, y);
                 let control = gesture
                     .current_event_state()
                     .contains(gtk::gdk::ModifierType::CONTROL_MASK);
