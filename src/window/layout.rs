@@ -842,23 +842,37 @@
     let sidebar_drag_start_width_update = sidebar_drag_start_width.clone();
     let sidebar_drag_split_width_update = sidebar_drag_split_width.clone();
     let sidebar_resize_preview_update = sidebar_resize_preview.clone();
+    let gallery_for_drag_update = gallery.clone();
     sidebar_drag.connect_drag_update(move |_, offset_x, _| {
         let split_width = sidebar_drag_split_width_update.get().max(1.0);
         let target_width = (sidebar_drag_start_width_update.get() + offset_x)
             .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
             .min(split_width * 0.70);
         if main_split_for_drag_update.is_collapsed() {
-            // The collapsed allocator reads max-sidebar-width only; writing
-            // the fraction here would have no effect on the overlay width.
+            // Compact overlay keeps its cheap preview; changing max-sidebar
+            // width every pointer frame would animate the overlay itself.
             pending_collapsed_width_update.set(target_width);
+            sidebar_resize_preview_update.set_margin_start(target_width.round() as i32 - 1);
+            sidebar_resize_preview_update.set_visible(true);
         } else {
-            let fraction =
-                (target_width / split_width).clamp(0.10, 0.70);
+            let fraction = (target_width / split_width).clamp(0.10, 0.70);
             pending_sidebar_fraction_update.set(fraction);
-        }
 
-        sidebar_resize_preview_update.set_margin_start(target_width.round() as i32 - 1);
-        sidebar_resize_preview_update.set_visible(true);
+            if gallery_for_drag_update.using_sectioned_folder_view() {
+                // The new Folder renderer has bounded realized widgets and
+                // section geometry independent of model membership, so let the
+                // real split resize live. The gallery frame-clock observer
+                // animates column reflows as thresholds are crossed.
+                main_split_for_drag_update.set_sidebar_width_fraction(fraction);
+                sidebar_resize_preview_update.set_visible(false);
+            } else {
+                // Legacy GridView/ListView keeps the preview-only path because
+                // live allocation can churn row/grid layout.
+                sidebar_resize_preview_update
+                    .set_margin_start(target_width.round() as i32 - 1);
+                sidebar_resize_preview_update.set_visible(true);
+            }
+        }
     });
 
     let main_split_for_drag_end = main_split.clone();
