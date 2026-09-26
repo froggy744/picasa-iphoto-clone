@@ -7,10 +7,8 @@ pub struct Gallery {
     pub folder_root: gtk::ListView,
     pub folder_rubberband: gtk::DrawingArea,
     pub group_header: gtk::Box,
-    group_icon: gtk::Image,
     group_title: gtk::Label,
     group_count: gtk::Label,
-    group_separator: gtk::Separator,
     folder_store: gio::ListStore,
     // Reusable Folder stream. Populated whenever the Folder rows are rebuilt
     // and restored when re-entering Folder mode so Open in Folder is instant.
@@ -118,11 +116,7 @@ impl Gallery {
         // Grouping is presented as a sticky heading outside the scrolled
         // GridView. This deliberately avoids nesting multiple GtkGridViews in
         // a GtkViewport, which broke row allocation and virtualization.
-        //
-        // Folder mode reuses the visual language of the former in-flow Folder
-        // header (icon/title/count/separator), but remains presentation-only:
-        // the photo model is still the direct, flat GtkGridView model.
-        let group_header = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let group_header = gtk::Box::new(gtk::Orientation::Horizontal, 7);
         group_header.set_hexpand(true);
         group_header.set_visible(false);
         group_header.set_margin_start(20);
@@ -131,37 +125,16 @@ impl Gallery {
         group_header.set_margin_bottom(4);
         group_header.add_css_class("group-heading-bar");
 
-        let group_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        group_line.set_hexpand(true);
-
-        let group_icon = gtk::Image::from_icon_name("folder-symbolic");
-        group_icon.set_pixel_size(16);
-        group_icon.set_visible(false);
-        group_icon.add_css_class("folder-section-icon");
-        group_line.append(&group_icon);
-
         let group_title = gtk::Label::new(None);
         group_title.set_xalign(0.0);
-        group_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         group_title.add_css_class("section-heading");
-        group_line.append(&group_title);
+        group_header.append(&group_title);
 
         let group_count = gtk::Label::new(None);
         group_count.set_xalign(0.0);
         group_count.add_css_class("dim-label");
         group_count.add_css_class("section-count");
-        group_line.append(&group_count);
-
-        let group_spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        group_spacer.set_hexpand(true);
-        group_line.append(&group_spacer);
-
-        group_header.append(&group_line);
-
-        let group_separator = gtk::Separator::new(gtk::Orientation::Horizontal);
-        group_separator.set_visible(false);
-        group_separator.add_css_class("folder-section-separator");
-        group_header.append(&group_separator);
+        group_header.append(&group_count);
 
         let current_photos = Rc::new(RefCell::new(Vec::<PhotoObject>::new()));
 
@@ -766,10 +739,8 @@ impl Gallery {
             folder_root,
             folder_rubberband,
             group_header,
-            group_icon,
             group_title,
             group_count,
-            group_separator,
             folder_store,
             folder_cache: Rc::new(RefCell::new(None)),
             folder_order: Rc::new(RefCell::new(Vec::new())),
