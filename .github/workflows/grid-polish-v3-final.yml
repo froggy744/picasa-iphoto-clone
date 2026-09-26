@@ -1,0 +1,19 @@
+name: Grid Polish V3 Final
+
+on:
+  push:
+    branches:
+      - ci-grid-polish-v3-final
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GTK dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake nasm libgtk-4-dev libadwaita-1-dev
+      - name: Cargo check all targets
+        run: cargo check --all-targets
