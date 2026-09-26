@@ -183,15 +183,33 @@ fn history_grid_reuses_items_without_leaking_captions_into_other_views() {
     let tile = SquareTile::new(180, 120, &frame);
     let plain = PhotoObject::from_photo(&ordinary[0]);
     tile.bind_photo(&plain);
+    let size_before_caption = tile.measure(gtk::Orientation::Vertical, -1);
+    tile.set_filename_visible(true);
+    assert_eq!(
+        tile.measure(gtk::Orientation::Vertical, -1),
+        size_before_caption,
+        "filename caption must not change fixed tile height"
+    );
+    let filename = tile
+        .last_child()
+        .and_downcast::<gtk::Label>()
+        .expect("filename caption label");
+    assert_eq!(filename.text().as_str(), plain.filename());
     tile.imp()
         .applied_visual_key
         .replace(photo_presentation_key(&plain));
     tile.imp().visual_loaded.set(true);
     tile.bind_photo(&gallery.current_photos.borrow()[0]);
+    assert_eq!(
+        filename.text().as_str(),
+        gallery.current_photos.borrow()[0].filename()
+    );
     let caption = find_overlay_child(&frame, "history-caption").unwrap();
     assert!(caption.is_visible());
     tile.bind_photo(&plain);
     assert!(!caption.is_visible());
+    tile.set_filename_visible(false);
+    assert!(!filename.is_visible());
     plain.set_rotation(90);
     tile.bind_photo(&plain);
     assert!(!tile.imp().visual_loaded.get());
