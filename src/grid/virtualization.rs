@@ -404,10 +404,8 @@ impl Gallery {
         // If clamping means there is no useful bridge, fall back to the normal
         // resize path rather than running an animation that cannot cross the
         // intended boundary.
-        let original_tile_width = self.tile_width.get();
-        self.tile_width.set(bridge_width);
-        let bridge_columns = self.columns_for_width(old_layout_width);
-        self.tile_width.set(original_tile_width);
+        let bridge_columns = ((available / (bridge_width as f64 + 30.0)).floor())
+            .clamp(1.0, 12.0) as u32;
         if bridge_columns != target_columns || bridge_width == canonical_width {
             self.update_width(width);
             return;
@@ -486,6 +484,12 @@ impl Gallery {
     /// the startup default so adopting it does not turn it into a preference.
     fn apply_zoom(self: &Rc<Self>, width: i32) {
         const ZOOM_ANIMATION_MS: f64 = 180.0;
+
+        if self.resize_animation_active.replace(false) {
+            self.resize_animation_generation
+                .set(self.resize_animation_generation.get().wrapping_add(1));
+            self.zoom_animation_layout_width.set(None);
+        }
 
         let target_width = width.clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
         let start_width = self.tile_width.get().max(1);
