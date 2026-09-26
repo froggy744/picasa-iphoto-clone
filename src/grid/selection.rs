@@ -508,7 +508,7 @@ impl Gallery {
         folder_root: &gtk::ListView,
         selection: &gtk::MultiSelection,
         current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
-        activate: &Rc<dyn Fn(Vec<PhotoObject>, usize)>,
+        activate: &Rc<dyn Fn(Vec<PhotoObject>, usize, Option<(gtk::Widget, gtk::gdk::Paintable)>)>,
     ) {
         let keyboard = gtk::EventControllerKey::new();
         keyboard.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -557,7 +557,7 @@ impl Gallery {
                 else {
                     return glib::Propagation::Proceed;
                 };
-                (activate_for_key)(photos, index);
+                (activate_for_key)(photos, index, None);
                 return glib::Propagation::Stop;
             }
             let (dx, dy) = match key {
@@ -903,7 +903,7 @@ fn install_folder_root_input(
     folder_root: &gtk::ListView,
     selection: &gtk::MultiSelection,
     current_photos: &Rc<RefCell<Vec<PhotoObject>>>,
-    activate: &Rc<dyn Fn(Vec<PhotoObject>, usize)>,
+    activate: &Rc<dyn Fn(Vec<PhotoObject>, usize, Option<(gtk::Widget, gtk::gdk::Paintable)>)>,
     context_menu: &Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)>,
     collage_mode: &Rc<Cell<bool>>,
     collage_ids: &Rc<RefCell<HashSet<i64>>>,
@@ -976,7 +976,7 @@ fn install_folder_root_input(
             selection_for_left.select_item(position, true);
             let photos = current_photos_for_left.borrow().clone();
             if let Some(index) = photos.iter().position(|item| item.id() == photo.id()) {
-                (activate_for_left)(photos, index);
+                (activate_for_left)(photos, index, None);
             }
             anchor_for_left.set(Some(position));
             return;
