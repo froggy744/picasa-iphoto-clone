@@ -261,6 +261,25 @@ impl Gallery {
         })
     }
 
+    fn clear_zoom_pointer_anchor(&self) {
+        let anchor = self.pending_zoom_pointer_anchor.borrow_mut().take();
+        let Some(anchor) = anchor else {
+            return;
+        };
+
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        if let Some(tile) = tiles.into_iter().find(|tile| {
+            tile.imp()
+                .photo
+                .borrow()
+                .as_ref()
+                .is_some_and(|photo| photo.id() == anchor.photo_id)
+        }) {
+            tile.set_presentation_offset(0.0, 0.0);
+        }
+    }
+
     fn restore_zoom_pointer_anchor(&self, anchor: &ZoomPointerAnchor) -> bool {
         let Some(scrolled) = anchor.scrolled.upgrade() else {
             return false;
@@ -411,11 +430,18 @@ impl Gallery {
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
+        let target = next_zoom_level(base);
+        if target == base {
+            if self.zoom_reflow_source.borrow().is_none() {
+                self.clear_zoom_pointer_anchor();
+            }
+            return;
+        }
         if self.pending_zoom_pointer_anchor.borrow().is_none() {
             self.pending_zoom_pointer_anchor
                 .replace(self.capture_zoom_pointer_anchor(scrolled, x, y));
         }
-        self.request_zoom_internal(next_zoom_level(base));
+        self.request_zoom_internal(target);
     }
 
     pub fn zoom_out_at(self: &Rc<Self>, scrolled: &gtk::ScrolledWindow, x: f64, y: f64) {
@@ -423,11 +449,18 @@ impl Gallery {
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
+        let target = prev_zoom_level(base);
+        if target == base {
+            if self.zoom_reflow_source.borrow().is_none() {
+                self.clear_zoom_pointer_anchor();
+            }
+            return;
+        }
         if self.pending_zoom_pointer_anchor.borrow().is_none() {
             self.pending_zoom_pointer_anchor
                 .replace(self.capture_zoom_pointer_anchor(scrolled, x, y));
         }
-        self.request_zoom_internal(prev_zoom_level(base));
+        self.request_zoom_internal(target);
     }
 
     pub fn zoom_in(self: &Rc<Self>) {
@@ -435,7 +468,7 @@ impl Gallery {
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
-        self.pending_zoom_pointer_anchor.replace(None);
+        self.clear_zoom_pointer_anchor();
         self.request_zoom_internal(next_zoom_level(base));
     }
 
@@ -444,7 +477,7 @@ impl Gallery {
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
-        self.pending_zoom_pointer_anchor.replace(None);
+        self.clear_zoom_pointer_anchor();
         self.request_zoom_internal(prev_zoom_level(base));
     }
 
@@ -465,7 +498,7 @@ impl Gallery {
         } else {
             nearest_zoom_level(DEFAULT_TILE_WIDTH)
         };
-        self.pending_zoom_pointer_anchor.replace(None);
+        self.clear_zoom_pointer_anchor();
         self.request_zoom_internal(target);
     }
 
@@ -555,6 +588,11 @@ impl Gallery {
             this.zoom_reflow_source.borrow_mut().take();
             if let Some(width) = this.pending_zoom_width.take() {
                 this.apply_zoom(width);
+            } else if this.zoom_animation_layout_width.get().is_none() {
+                if let Some(anchor) = this.pending_zoom_pointer_anchor.borrow().clone() {
+                    let generation = this.zoom_animation_generation.get();
+                    this.release_zoom_pointer_anchor(anchor, generation);
+                }
             }
             glib::ControlFlow::Break
         });
