@@ -169,6 +169,8 @@ impl Gallery {
             activate.clone(),
             context_menu.clone(),
             unavailable.clone(),
+            collage_selection_mode.clone(),
+            collage_selected_ids.clone(),
         );
         let folder_sectioned_root = sectioned_folder.root().clone();
         factory.connect_setup(move |_, object| {
