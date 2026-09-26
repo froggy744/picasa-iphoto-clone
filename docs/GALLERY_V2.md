@@ -85,6 +85,206 @@ The resize warning pattern showed the GridView retaining its previous minimum co
 
 Gallery v2 now updates column count live during window resize and skips explicit GridView `queue_resize()` calls for width-only changes that do not cross a column boundary. The legacy Folder ListView fallback keeps the settle gate.
 
+## Work completed since branch creation
+
+The branch was created directly from `rc-bugfixes` so the deployment-ready RC line remained untouched.
+
+### 1. Created the Gallery v2 branch
+
+- Branch: `architecture/gallery-v2`
+- Base: `rc-bugfixes`
+- Purpose: keep the complete RC application and replace only the gallery architecture responsible for expensive Folder zoom/reflow.
+
+No changes were made to `rc-bugfixes` or `main`.
+
+### 2. Transplanted the proven direct-photo Folder GridView path
+
+The earlier `experiment/folder-gridview` branch had already demonstrated that Folder mode could use the same direct `GtkGridView` / `PhotoObject` model as the normal photo grid.
+
+The measured prototype result on the same 395-photo folder was:
+
+- legacy Folder ListView: ~219.9 ms median zoom apply, ~255.3 ms maximum
+- direct-photo GridView: ~4.9 ms median zoom apply, ~51.7 ms maximum
+- direct path: zero Folder-row rebuilds during zoom
+
+Only the direct GridView work was brought across. The later chunked/nested-GridView prototype was deliberately not imported because its model churn caused excessive rebinds/flicker.
+
+Initial transplant commits:
+
+- `71a3883` — Grid architecture switch/helper
+- `4588153` — Folder grouping behavior for direct GridView
+- `532fce8` — selection/navigation adaptation
+- `c2543a7` — direct GridView view-path changes
+- `eb89dfb` — virtualization/zoom-path changes
+- `80c59ee` — window routing to the GridView Folder path
+
+### 3. Made Gallery v2 the default Folder architecture
+
+Commit:
+
+- `0c5d997` — `Gallery v2: make direct Folder GridView default`
+
+Folder mode now uses the photo-per-item GridView by default. The old Folder ListView remains in the codebase as a comparison/emergency fallback:
+
+```sh
+PICASA_LEGACY_FOLDER_LIST=1 cargo run
+```
+
+The architectural rule is that changing zoom/column count must not change photo membership.
+
+### 4. Added the Gallery v2 handover document
+
+Commit:
+
+- `a2044a1` — `Docs: record Gallery v2 architecture`
+
+This established this file as the architecture/status document.
+
+### 5. Recorded the window-resize pause
+
+The first real-world observation after switching to Gallery v2 was:
+
+- Ctrl-wheel / gallery interaction felt substantially faster without trace logging.
+- Window resizing still showed a visible pause, especially with a larger library.
+
+Commit:
+
+- `c638fd9` — `Docs: note Gallery v2 resize pause`
+
+Resize was therefore separated from zoom as its own performance problem.
+
+### 6. Fixed missing dependencies from the GridView transplant
+
+The first release build exposed an incomplete dependency transplant:
+
+- `SquareTile::set_filename_visible()` was missing.
+- `THUMBNAIL_FILE_NAMES_SETTING_KEY` was missing.
+
+The direct GridView experiment had been developed after an earlier thumbnail-filename feature, so the transplanted files expected that support to already exist.
+
+Supporting pieces restored:
+
+- filename caption CSS
+- thumbnail filename DB setting
+- `SquareTile` filename-caption implementation
+- Settings UI support
+- filename tile tests
+
+Commits:
+
+- `c0e9ffd` — restore thumbnail filename CSS
+- `828662a` — restore thumbnail filename DB setting
+- `0abbc4b` — restore `SquareTile` filename support
+- `92dfd68` — restore Settings support
+- `54277d8` — `Gallery v2: restore filename tile tests`
+
+This fixed the reported build errors caused by `set_filename_visible` and `THUMBNAIL_FILE_NAMES_SETTING_KEY`.
+
+### 7. Real-library observation after the dependency fix
+
+A normal run without heavy tracing felt fast to the user.
+
+A captured run with 3,086 photos showed:
+
+- cold start: 10 ms
+- displayed photos: 3,086
+- folders: 5
+- albums: 0
+- scan disabled
+- RSS: ~62 MB
+- no panic/crash in the supplied log
+
+This supports the conclusion that the basic direct GridView path is healthy and that heavy trace logging itself can affect perceived responsiveness.
+
+### 8. Resize log exposed a minimum-width/layout negotiation loop
+
+A second run captured repeated Adwaita warnings while resizing:
+
+```text
+GtkOverlay ... requested 747 px, 745 px available
+GtkOverlay ... requested 747 px, 740 px available
+...
+GtkOverlay ... requested 747 px, 505 px available
+```
+
+and the same sequence occurred while growing the window again.
+
+The key observation was that the requested ~747 px closely matched the previous GridView column geometry. The old width-settle gate intentionally delayed column-count updates for several frames. That made sense for the legacy Folder ListView because changing columns rebuilt Folder rows, but Gallery v2 no longer has that structural cost.
+
+With Gallery v2, the delay meant the GridView could continue advertising the old multi-column minimum while the parent window was already much narrower, forcing GTK/Adwaita into repeated layout negotiation.
+
+The user also reported that the app is fast with only a few photos, while resize pauses become more noticeable with a larger library. That remains an important scale-related validation point even after the minimum-width fix.
+
+### 9. Changed Gallery v2 resize behavior
+
+Two focused code changes were made.
+
+Commit:
+
+- `914fa58` — `Gallery v2: avoid same-column resize churn`
+
+Behavior:
+
+- width-only changes that keep the same column count no longer explicitly call `GridView::queue_resize()`
+- GTK is already allocating the GridView for the new parent width, so forcing another resize on every drag frame was unnecessary
+
+Commit:
+
+- `e3dbbb7` — `Gallery v2: update columns live during window resize`
+
+Behavior:
+
+- Gallery v2 now updates the GridView column count immediately when live window resize crosses a column boundary
+- the old three-frame width-settle behavior remains for the legacy Folder ListView fallback, where a column change can still rebuild its row model
+
+Documentation commit:
+
+- `645ca7d` — `Docs: record Gallery v2 resize fix`
+
+The next runtime test must verify whether this reduces/removes the repeated ~747 px Adwaita warnings and improves resize smoothness with the 3,000+ photo library.
+
+### 10. Made this a living handover
+
+Commit:
+
+- `c558b8b` — `Docs: make Gallery v2 status a living handover`
+
+From this point onward, every meaningful Gallery v2 architecture change or confirmed test result should be recorded here with:
+
+- what changed
+- why it changed
+- relevant commits
+- observed/measured result
+- regressions or remaining issues
+- next concrete validation target
+
+## Current state
+
+Gallery v2 currently means:
+
+```text
+rc-bugfixes application
+        +
+existing mature features
+        +
+direct photo-per-item GtkGridView for Folder mode
+        +
+zoom/columns independent from photo membership
+        +
+legacy Folder ListView retained as fallback
+```
+
+Known/active validation items:
+
+1. Re-test live window resize with 3,000+ photos after `914fa58` + `e3dbbb7`.
+2. Check whether the repeated ~747 px GtkOverlay warnings disappear or reduce substantially.
+3. Verify repeated Ctrl-wheel zoom remains smooth.
+4. Verify scrolling, selection, context menus, viewer opening and folder navigation.
+5. Verify behavior with a much larger library, not only the current ~3,086-photo test.
+6. Investigate any remaining work whose cost grows with total photo count rather than realized/visible tiles.
+7. Restore true in-flow Folder section headings/actions without reintroducing a column-sized photo-row model.
+8. Do not merge into `rc-bugfixes` or `main` until these runtime checks pass.
+
 ## Working-document rule
 
 Keep this file updated continuously while Gallery v2 work proceeds. After every meaningful architecture change or confirmed test result, record:
