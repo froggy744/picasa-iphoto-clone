@@ -645,3 +645,20 @@ Behavior:
 - legacy Folder ListView remains on the existing immediate/coalesced path because its row model still encodes column membership
 
 Target visual result: resizing the application across 4/5, 7/8, etc. should make thumbnails grow/shrink and slide into their new row/column positions instead of showing a hard cut, while retaining the previously fixed responsive window resize behavior.
+
+### Resize reflow tuning: reduce wobble
+
+User validation found the first resize animation visually too rubbery: the bridge tile size moved too far toward the middle of the target column range, so thumbnails visibly grew/shrank and then returned to their canonical size.
+
+Commit:
+
+- `db5fd54` — `Gallery v2: tame resize thumbnail reflow`
+
+Changes:
+
+- resize reflow duration reduced from ~180 ms to ~120 ms
+- bridge tile width is now the nearest valid width just inside the target column-count range instead of the midpoint of that range
+- this keeps the row/column slide transition while minimizing temporary thumbnail scale excursion
+- manual zoom animation remains unchanged at ~180 ms
+
+Expected result: window resizing should still animate column changes, but with a subtle nudge/slide rather than a pronounced wobble.
