@@ -1,3 +1,28 @@
+fn scroll_event_position_in_scrolled(
+    controller: &gtk::EventControllerScroll,
+    scrolled: &gtk::ScrolledWindow,
+) -> Option<(f64, f64)> {
+    // GtkEventControllerScroll does not put pointer coordinates in the scroll
+    // signal arguments, but the GdkEvent currently being handled does. Raw
+    // GdkEvent positions are surface-relative; GtkNative::surface_transform()
+    // converts them into the native widget's coordinates, after which
+    // compute_point() can translate exactly into this ScrolledWindow.
+    //
+    // This is the authoritative Ctrl+wheel pointer source. The motion cache
+    // below is only a fallback for unusual backend/event paths.
+    let event = controller.current_event()?;
+    let (surface_x, surface_y) = event.position()?;
+    let surface = event.surface()?;
+    let native = gtk::Native::for_surface(&surface)?;
+    let (surface_to_native_x, surface_to_native_y) = native.surface_transform();
+    let native_point = gtk::graphene::Point::new(
+        (surface_x + surface_to_native_x) as f32,
+        (surface_y + surface_to_native_y) as f32,
+    );
+    let point = native.compute_point(scrolled, &native_point)?;
+    Some((f64::from(point.x()), f64::from(point.y())))
+}
+
 fn install_smooth_gallery_scroll(
     scrolled: &gtk::ScrolledWindow,
     gallery: Rc<grid::Gallery>,
@@ -276,6 +301,10 @@ fn install_smooth_gallery_scroll(
         let gallery_for_motion = gallery.clone();
         let gallery_for_leave = gallery.clone();
         let motion = gtk::EventControllerMotion::new();
+        // GridView descendants can consume pointer traffic before a bubble
+        // controller on ScrolledWindow sees it. Capture guarantees this cache
+        // remains a valid fallback even while the pointer is over a tile.
+        motion.set_propagation_phase(gtk::PropagationPhase::Capture);
         motion.connect_enter(move |_, x, y| {
             pointer_for_enter.set(Some((x, y)));
         });
@@ -334,7 +363,29 @@ fn install_smooth_gallery_scroll(
             target_for_scroll.set(adjustment_for_scroll.value());
 
             if ctrl_zoom {
-                let pointer = zoom_pointer_for_scroll.get();
+                let event_pointer =
+                    scroll_event_position_in_scrolled(controller, &scrolled_for_zoom);
+                let cached_pointer = zoom_pointer_for_scroll.get();
+                let pointer = event_pointer.or(cached_pointer);
+
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    let source = if event_pointer.is_some() {
+                        "event"
+                    } else if cached_pointer.is_some() {
+                        "motion"
+                    } else {
+                        "none"
+                    };
+                    if let Some((x, y)) = pointer {
+                        eprintln!(
+                            "PIC_ZOOM_INPUT source={} cursor=({:.1},{:.1}) dy={:.3}",
+                            source, x, y, dy
+                        );
+                    } else {
+                        eprintln!("PIC_ZOOM_INPUT source=none dy={:.3}", dy);
+                    }
+                }
+
                 if dy < 0.0 {
                     if let Some((x, y)) = pointer {
                         gallery.zoom_in_at(&scrolled_for_zoom, x, y);
