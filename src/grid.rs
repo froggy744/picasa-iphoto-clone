@@ -35,11 +35,14 @@ const MAX_TILE_WIDTH: i32 = 300;
 // sizes instead of drifting with the starting width.
 pub(crate) const ZOOM_LEVELS: [i32; 8] = [100, 117, 137, 160, 187, 219, 256, 300];
 
-/// Opt-in prototype: render Folder mode through the shared photo GtkGridView.
-/// The existing Folder GtkListView remains the default until this experiment
-/// proves section headers and interaction parity.
+/// Gallery-v2 default: render Folder mode through the shared photo GtkGridView.
+///
+/// This keeps photo membership independent from the current column count, so
+/// zoom changes presentation geometry instead of rebuilding Folder row objects.
+/// The legacy GtkListView path is retained as an emergency comparison/fallback
+/// and can be enabled with PICASA_LEGACY_FOLDER_LIST=1.
 pub(crate) fn folder_gridview_experiment_enabled() -> bool {
-    std::env::var("PICASA_FOLDER_GRIDVIEW").is_ok_and(|value| value == "1")
+    !std::env::var("PICASA_LEGACY_FOLDER_LIST").is_ok_and(|value| value == "1")
 }
 
 pub(crate) fn nearest_zoom_level(width: i32) -> i32 {
