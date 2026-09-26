@@ -728,7 +728,7 @@ The Lightbox shared-photo open transition is therefore considered finished unles
 
 ## Presentation-only FLIP resize transition
 
-Status: **IMPLEMENTED — runtime validation pending**
+Status: **COMPLETE / VALIDATED**
 
 After rejecting the earlier resize animation that manipulated temporary tile sizes and synthetic layout widths, Gallery v2 now uses a true FLIP-style presentation layer for live window resizing.
 
@@ -857,3 +857,19 @@ Commit:
 The anchor now stores the photo index rather than relying on the tile widget surviving. Each animation frame derives the photo's destination row from the current authoritative column count and tile height, then sets the vertical adjustment so the same relative point of that photo stays at the same viewport Y position. This remains presentation-only and does not change photo membership, model ordering, DB state, or thumbnail decode behavior.
 
 Validation target: Ctrl+wheel over a thumbnail across multiple column-count changes. The focused photo should remain in the same vertical screen band instead of jumping several rows when GridView recycles cells.
+
+### Pointer-anchored zoom completion
+
+User validation confirmed the focus-preserving Ctrl+wheel zoom is acceptable after the photo-index anchor correction. The focused photo now remains substantially more stable through GridView column reflow.
+
+Final pointer-focus commits:
+
+- `134134c` — add pointer zoom anchor state
+- `bdabdac` — initial pointer-photo anchor
+- `73a69af` — route Ctrl+wheel through the pointer-aware path
+- `3b7c606`, `96bb24c`, `f5fe753` — gtk4-rs bounds-target compile corrections
+- `f979777` — replace realized-widget dependency with deterministic photo-index anchoring
+
+Status: **COMPLETE**.
+
+Remaining zoom work is intentionally separate: the canonical column/thumbnail zoom steps need tuning. Do not mix that ladder/timing work into the completed pointer-focus implementation.
