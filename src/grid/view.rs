@@ -394,11 +394,13 @@ impl Gallery {
         root.add_controller(collage_click);
 
         let selected_for_signal = selected.clone();
+        let sectioned_for_selection = sectioned_folder.clone();
         selection.connect_selection_changed(move |selection, _, _| {
             let selected = selection.selection();
             let photo = gtk::BitsetIter::init_first(&selected)
                 .and_then(|(_, position)| selection.item(position))
                 .and_downcast::<PhotoObject>();
+            sectioned_for_selection.sync_selection();
             (selected_for_signal)(photo);
         });
 
