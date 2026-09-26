@@ -344,7 +344,7 @@ impl Gallery {
     /// column count is already valid) and eases tiles back to the canonical
     /// user-selected size. This avoids an instantaneous row-wrap cut.
     pub fn update_width_animated(self: &Rc<Self>, width: i32) {
-        const RESIZE_REFLOW_MS: f64 = 180.0;
+        const RESIZE_REFLOW_MS: f64 = 120.0;
 
         if width <= 100 {
             return;
@@ -388,11 +388,18 @@ impl Gallery {
             width
         };
 
-        // Pick a temporary tile width near the middle of the target column
-        // count's valid range at the old viewport width. Animating toward this
-        // bridge makes GridView cross the row-wrap boundary during motion.
+        // Pick the *nearest* width inside the target column count's valid
+        // range. The first version aimed at the middle of that range, which
+        // made thumbnails visibly swell/shrink and then return ("wobble").
+        // Crossing by only ~1 px beyond the threshold keeps the reflow motion
+        // but makes resize feel restrained.
         let available = (old_layout_width - 48).max(200) as f64;
-        let bridge_width = (available / (target_columns as f64 + 0.5) - 30.0)
+        let target_min = (available / (target_columns as f64 + 1.0) - 30.0 + 1.0)
+            .ceil();
+        let target_max = (available / target_columns as f64 - 30.0)
+            .floor();
+        let bridge_width = (canonical_width as f64)
+            .clamp(target_min, target_max)
             .round()
             .clamp(MIN_TILE_WIDTH as f64, MAX_TILE_WIDTH as f64) as i32;
         let bridge_height = ((canonical_height as f64)
