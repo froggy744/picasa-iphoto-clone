@@ -33,6 +33,11 @@ impl Gallery {
     }
 
     pub fn scroll_position(&self) -> f64 {
+        if self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled()
+        {
+            return self.sectioned_folder.scroll_position();
+        }
         let folder_list_mode = self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled();
         let adjustment = if folder_list_mode {
@@ -50,6 +55,11 @@ impl Gallery {
     /// value restores the exact view, while this id restores keyboard focus to
     /// the middle of what the user was looking at.
     pub fn viewport_center_photo(&self) -> Option<PhotoObject> {
+        if self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled()
+        {
+            return self.sectioned_folder.viewport_center_photo();
+        }
         let folder_list_mode = self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled();
         let root: gtk::Widget = if folder_list_mode {
@@ -98,6 +108,16 @@ impl Gallery {
         else {
             return false;
         };
+        if self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled()
+        {
+            self.selection.select_item(position as u32, true);
+            let revealed = self.sectioned_folder.scroll_to_index(position as u32, false);
+            if revealed {
+                self.sectioned_folder.focus_photo(photo_id);
+            }
+            return revealed;
+        }
         let folder_list_mode = self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled();
         let folder_row = folder_list_mode
@@ -601,6 +621,16 @@ impl Gallery {
                 continue;
             }
             if self.group_mode.get() == GroupMode::Folder
+                && crate::grid::sectioned_folder_view_enabled()
+            {
+                self.selection.select_item(position, true);
+                let revealed = self.sectioned_folder.scroll_to_index(position, false);
+                if revealed {
+                    self.sectioned_folder.focus_photo(photo_id);
+                }
+                return revealed;
+            }
+            if self.group_mode.get() == GroupMode::Folder
                 && !crate::grid::folder_gridview_experiment_enabled()
             {
                 // The backing store is filled progressively, but the Folder
@@ -650,6 +680,17 @@ impl Gallery {
 
         self.selection.select_item(photo_position as u32, true);
         if self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled()
+        {
+            let revealed = self.sectioned_folder.scroll_to_index(photo_position as u32, true);
+            if revealed {
+                if let Some(photo) = self.current_photos.borrow().get(photo_position) {
+                    self.sectioned_folder.focus_photo(photo.id());
+                }
+            }
+            return revealed;
+        }
+        if self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled()
         {
             let Some(row) = self.folder_header_row_for_target(folder_id) else {
@@ -676,6 +717,13 @@ impl Gallery {
         let position = count - 1;
         self.selection.select_item(position, true);
         if self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled()
+        {
+            self.sectioned_folder.scroll_to_index(position, false);
+            if let Some(photo) = self.store.item(position).and_downcast::<PhotoObject>() {
+                self.sectioned_folder.focus_photo(photo.id());
+            }
+        } else if self.group_mode.get() == GroupMode::Folder
             && !crate::grid::folder_gridview_experiment_enabled()
         {
             if let Some(row) = self.folder_row_index_for_photo(
