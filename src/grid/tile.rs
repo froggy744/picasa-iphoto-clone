@@ -2,8 +2,20 @@ pub(crate) fn set_grid_scrub_active(active: bool) {
     GRID_SCRUB_ACTIVE.with(|flag| flag.set(active));
 }
 
+pub(crate) fn set_grid_zoom_animation_active(active: bool) {
+    GRID_ZOOM_ANIMATION_ACTIVE.with(|flag| flag.set(active));
+}
+
 fn grid_scrub_active() -> bool {
     GRID_SCRUB_ACTIVE.with(Cell::get)
+}
+
+fn grid_zoom_animation_active() -> bool {
+    GRID_ZOOM_ANIMATION_ACTIVE.with(Cell::get)
+}
+
+fn preserve_grid_paintable_during_motion() -> bool {
+    grid_scrub_active() || grid_zoom_animation_active()
 }
 
 fn folder_thumbnail_cache_get(path: &str) -> Option<gtk::gdk::Paintable> {
@@ -559,7 +571,7 @@ impl SquareTile {
         // atomically when the worker completion arrives. Once scrubbing
         // settles, refresh_visible_grid_tiles() clears any unresolved stale
         // image and restores the normal placeholder behavior.
-        if !grid_scrub_active() {
+        if !preserve_grid_paintable_during_motion() {
             if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
                 if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
                     picture.set_paintable(gtk::gdk::Paintable::NONE);
@@ -604,7 +616,7 @@ impl SquareTile {
     fn unload_visual(&self) {
         self.imp().visual_loaded.set(false);
         self.imp().applied_visual_key.borrow_mut().take();
-        if !grid_scrub_active() {
+        if !preserve_grid_paintable_during_motion() {
             if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
                 if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
                     picture.set_paintable(gtk::gdk::Paintable::NONE);
@@ -851,7 +863,7 @@ impl SquareTile {
                 // any unresolved stale image once scrubbing stops; the
                 // completion drain validates presentation keys before
                 // applying, so no wrong image can persist on screen.
-                if !grid_scrub_active() {
+                if !preserve_grid_paintable_during_motion() {
                     picture.set_paintable(gtk::gdk::Paintable::NONE);
                 }
                 picture.set_tooltip_text(None);
