@@ -408,8 +408,18 @@ impl Gallery {
             // crossing a column boundary. Give normal realization two frames
             // first. Only then ask it to realize the exact model position.
             if attempt >= 3 && !realization_requested.replace(true) {
-                this.root
-                    .scroll_to(anchor.position, gtk::ListScrollFlags::empty(), None);
+                // Realize the exact anchor item without letting GtkGridView
+                // change either scroll axis. The old ScrollInfo=None path
+                // allowed scroll_to() to reposition the viewport, which is the
+                // opposite of cursor-anchored zoom.
+                let scroll = gtk::ScrollInfo::new();
+                scroll.set_enable_horizontal(false);
+                scroll.set_enable_vertical(false);
+                this.root.scroll_to(
+                    anchor.position,
+                    gtk::ListScrollFlags::empty(),
+                    Some(scroll),
+                );
             }
 
             if attempt >= 8 {
