@@ -12,6 +12,14 @@ struct SectionedFolderGeometry {
 }
 
 #[derive(Clone)]
+struct SectionedReflowSnapshot {
+    tile_positions: HashMap<u32, (f64, f64)>,
+    header_positions: HashMap<usize, f64>,
+    tile_width: i32,
+    tile_height: i32,
+}
+
+#[derive(Clone)]
 struct SectionedFolderTile {
     tile: SquareTile,
     index: Rc<Cell<Option<u32>>>,
@@ -46,6 +54,7 @@ struct SectionedFolderView {
     header_pool: RefCell<VecDeque<gtk::Label>>,
     selection_anchor: Rc<Cell<Option<u32>>>,
     scroll_animation_generation: Cell<u64>,
+    reflow_animation_generation: Cell<u64>,
 }
 
 impl SectionedFolderView {
@@ -116,6 +125,7 @@ impl SectionedFolderView {
             header_pool: RefCell::new(VecDeque::new()),
             selection_anchor: Rc::new(Cell::new(None)),
             scroll_animation_generation: Cell::new(0),
+            reflow_animation_generation: Cell::new(0),
         });
 
         let keyboard = gtk::EventControllerKey::new();
@@ -687,6 +697,152 @@ impl SectionedFolderView {
         }
         self.invalidate_geometry();
         self.refresh();
+    }
+
+    fn capture_reflow_snapshot(&self) -> SectionedReflowSnapshot {
+        let mut tile_positions = HashMap::new();
+        for (index, entry) in self.live_tiles.borrow().iter() {
+            if let Some(bounds) = entry.tile.compute_bounds(&self.root) {
+                tile_positions.insert(*index, (f64::from(bounds.x()), f64::from(bounds.y())));
+            }
+        }
+
+        let mut header_positions = HashMap::new();
+        for (index, label) in self.live_headers.borrow().iter() {
+            if let Some(bounds) = label.compute_bounds(&self.root) {
+                header_positions.insert(*index, f64::from(bounds.y()));
+            }
+        }
+
+        SectionedReflowSnapshot {
+            tile_positions,
+            header_positions,
+            tile_width: self.tile_width.get(),
+            tile_height: self.tile_height.get(),
+        }
+    }
+
+    fn placement_for_index(&self, index: u32) -> Option<(f64, f64)> {
+        let columns = self.current_columns.get().max(1);
+        let row_height = f64::from(folder_line_height(self.tile_height.get()));
+        let ranges = self.group_ranges.borrow();
+        let geometry = self.geometry.borrow();
+
+        for (section_index, (range, geom)) in ranges.iter().zip(geometry.iter()).enumerate() {
+            if index < range.start as u32 || index >= range.end as u32 {
+                continue;
+            }
+            let local = index - range.start as u32;
+            let row = local / columns;
+            let col = local % columns;
+            let x = SECTIONED_SIDE_MARGIN
+                + f64::from(col) * (f64::from(self.tile_width.get()) + 30.0);
+            let y = geometry[section_index].first_photo_y + f64::from(row) * row_height;
+            return Some((x, y));
+        }
+        None
+    }
+
+    fn animate_reflow(
+        self: &Rc<Self>,
+        snapshot: SectionedReflowSnapshot,
+        anchor: Option<(i64, f64)>,
+    ) {
+        self.reflow_animation_generation
+            .set(self.reflow_animation_generation.get().wrapping_add(1));
+        let generation = self.reflow_animation_generation.get();
+
+        self.invalidate_geometry();
+        self.refresh();
+        if let Some((photo_id, offset)) = anchor {
+            self.restore_anchor(photo_id, offset);
+        }
+
+        let target_tile_width = self.tile_width.get();
+        let target_tile_height = self.tile_height.get();
+
+        // Put surviving realized widgets back at their previous visual
+        // positions. New widgets simply appear at their destination.
+        {
+            let live = self.live_tiles.borrow();
+            for (index, (old_x, old_y)) in snapshot.tile_positions.iter() {
+                let Some(entry) = live.get(index) else {
+                    continue;
+                };
+                self.root.move_(&entry.tile, *old_x, *old_y);
+                entry
+                    .tile
+                    .set_tile_size(snapshot.tile_width, snapshot.tile_height);
+            }
+        }
+        {
+            let headers = self.live_headers.borrow();
+            for (index, old_y) in snapshot.header_positions.iter() {
+                let Some(label) = headers.get(index) else {
+                    continue;
+                };
+                self.root.move_(label, SECTIONED_SIDE_MARGIN, *old_y);
+            }
+        }
+
+        let started = Instant::now();
+        let duration_s = 0.18_f64;
+        let weak = Rc::downgrade(self);
+        self.root.add_tick_callback(move |_, _| {
+            let Some(view) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if view.reflow_animation_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+
+            let t = (started.elapsed().as_secs_f64() / duration_s).clamp(0.0, 1.0);
+            let eased = 1.0 - (1.0 - t).powi(3);
+            let frame_width = (f64::from(snapshot.tile_width)
+                + f64::from(target_tile_width - snapshot.tile_width) * eased)
+                .round() as i32;
+            let frame_height = (f64::from(snapshot.tile_height)
+                + f64::from(target_tile_height - snapshot.tile_height) * eased)
+                .round() as i32;
+
+            {
+                let live = view.live_tiles.borrow();
+                for (index, (old_x, old_y)) in snapshot.tile_positions.iter() {
+                    let Some(entry) = live.get(index) else {
+                        continue;
+                    };
+                    let Some((target_x, target_y)) = view.placement_for_index(*index) else {
+                        continue;
+                    };
+                    let x = old_x + (target_x - old_x) * eased;
+                    let y = old_y + (target_y - old_y) * eased;
+                    view.root.move_(&entry.tile, x, y);
+                    entry.tile.set_tile_size(frame_width, frame_height);
+                }
+            }
+
+            {
+                let headers = view.live_headers.borrow();
+                let geometry = view.geometry.borrow();
+                for (index, old_y) in snapshot.header_positions.iter() {
+                    let Some(label) = headers.get(index) else {
+                        continue;
+                    };
+                    let Some(target) = geometry.get(*index) else {
+                        continue;
+                    };
+                    let y = old_y + (target.header_y - old_y) * eased;
+                    view.root.move_(label, SECTIONED_SIDE_MARGIN, y);
+                }
+            }
+
+            if t >= 1.0 {
+                view.refresh();
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
 
     fn capture_center_anchor(&self) -> Option<(i64, f64)> {
