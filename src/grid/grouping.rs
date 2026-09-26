@@ -364,31 +364,14 @@ impl Gallery {
             .or_else(|| ranges.last())
         else {
             self.group_header.set_visible(false);
-            self.group_icon.set_visible(false);
-            self.group_separator.set_visible(false);
-            self.group_title.remove_css_class("folder-section-title");
-            self.group_count.remove_css_class("folder-section-count");
             return;
         };
 
         self.group_header.set_visible(true);
-
-        let folder_mode = self.group_mode.get() == GroupMode::Folder;
-        self.group_icon.set_visible(folder_mode);
-        self.group_separator.set_visible(folder_mode);
-
-        if folder_mode {
-            self.group_title.add_css_class("folder-section-title");
-            self.group_count.add_css_class("folder-section-count");
-        } else {
-            self.group_title.remove_css_class("folder-section-title");
-            self.group_count.remove_css_class("folder-section-count");
-        }
-
         self.group_title.set_text(&range.label);
         let count = range.end.saturating_sub(range.start);
         self.group_count.set_text(&format!(
-            "{} {}",
+            "•  {} {}",
             format_count(count),
             if count == 1 { "photo" } else { "photos" }
         ));
