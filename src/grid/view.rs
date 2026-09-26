@@ -1029,19 +1029,22 @@ impl Gallery {
             // Replacing the Folder ListStore here used to invalidate every
             // realized row and cost ~0.8-1.1s for a 4.5k-photo library.
             if sectioned_folder_mode {
-                self.sectioned_folder.invalidate_geometry();
-                self.sectioned_folder.refresh();
-                if let Some((photo_id, offset)) = sectioned_resize_anchor {
-                    self.sectioned_folder.restore_anchor(photo_id, offset);
+                if !tile_size_changed {
+                    // Same columns + width-only resize: no vertical geometry
+                    // changes. The sectioned surface refreshes header width from
+                    // its own allocation tick, so do not re-anchor/rebuild here.
+                    if let Some(started) = trace_started {
+                        eprintln!(
+                            "PIC_ZOOM layout mode=folder_sectioned action=width_only columns={} width={} elapsed_us={}",
+                            columns,
+                            width,
+                            started.elapsed().as_micros()
+                        );
+                    }
                 }
-                if let Some(started) = trace_started {
-                    eprintln!(
-                        "PIC_ZOOM layout mode=folder_sectioned action=geometry columns={} width={} elapsed_us={}",
-                        columns,
-                        width,
-                        started.elapsed().as_micros()
-                    );
-                }
+                // Tile-size zoom is completed by apply_tile_geometry(), which
+                // already owns the centre anchor and performs exactly one
+                // section refresh after this layout bookkeeping.
             } else if folder_list_mode && tile_size_changed {
                 // Tile size changed within the same columns: the rows keep
                 // their photos but their heights change, so re-anchor the
@@ -1078,17 +1081,23 @@ impl Gallery {
         self.root.set_max_columns(columns);
         self.root.queue_resize();
         if sectioned_folder_mode {
-            self.sectioned_folder.invalidate_geometry();
-            self.sectioned_folder.refresh();
-            if let Some((photo_id, offset)) = sectioned_resize_anchor {
-                self.sectioned_folder.restore_anchor(photo_id, offset);
+            if !tile_size_changed {
+                self.sectioned_folder.invalidate_geometry();
+                self.sectioned_folder.refresh();
+                if let Some((photo_id, offset)) = sectioned_resize_anchor {
+                    self.sectioned_folder.restore_anchor(photo_id, offset);
+                }
             }
+            // During Ctrl+wheel, apply_tile_geometry() owns the anchor and
+            // refresh. Here we only publish the new column count so that work
+            // happens once rather than twice.
             if let Some(started) = trace_started {
                 eprintln!(
-                    "PIC_ZOOM layout mode=folder_sectioned action=columns_changed old_columns={} columns={} width={} elapsed_us={}",
+                    "PIC_ZOOM layout mode=folder_sectioned action=columns_changed old_columns={} columns={} width={} tile_size_changed={} elapsed_us={}",
                     old_columns,
                     columns,
                     width,
+                    tile_size_changed,
                     started.elapsed().as_micros()
                 );
             }
