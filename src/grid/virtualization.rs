@@ -620,57 +620,106 @@ impl Gallery {
         self.release_zoom_pointer_anchor(anchor, generation);
     }
 
+    fn ensure_pointer_zoom_anchor(
+        &self,
+        scrolled: &gtk::ScrolledWindow,
+        x: f64,
+        y: f64,
+        direction: &'static str,
+    ) {
+        // A Ctrl-held session can contain multiple distinct wheel bursts while
+        // the user moves to another photo. Do not let the first floating photo
+        // stay glued to its old screen position forever. Small hand jitter keeps
+        // the same focal identity; a deliberate move starts a fresh anchor once
+        // the previous reflow is settled.
+        const RETARGET_DISTANCE_PX: f64 = 32.0;
+
+        let busy = self.pending_zoom_width.get().is_some()
+            || self.zoom_animation_layout_width.get().is_some()
+            || self.zoom_reflow_source.borrow().is_some();
+
+        let retarget = self
+            .pending_zoom_pointer_anchor
+            .borrow()
+            .as_ref()
+            .and_then(|anchor| {
+                let dx = x - f64::from(anchor.viewport_x);
+                let dy = y - f64::from(anchor.viewport_y);
+                let distance = dx.hypot(dy);
+                (distance >= RETARGET_DISTANCE_PX).then_some((
+                    anchor.photo_id,
+                    anchor.position,
+                    f64::from(anchor.viewport_x),
+                    f64::from(anchor.viewport_y),
+                    distance,
+                ))
+            });
+
+        if let Some((photo_id, position, old_x, old_y, distance)) = retarget {
+            if !busy {
+                if std::env::var_os("PICASA_TRACE").is_some() {
+                    eprintln!(
+                        "PIC_ZOOM_ANCHOR retarget old_id={} pos={} from=({:.1},{:.1}) to=({:.1},{:.1}) distance={:.1}",
+                        photo_id, position, old_x, old_y, x, y, distance
+                    );
+                }
+                self.clear_zoom_pointer_anchor();
+            }
+        }
+
+        if self.pending_zoom_pointer_anchor.borrow().is_none() {
+            let anchor = self.capture_zoom_pointer_anchor(scrolled, x, y);
+            if anchor.is_none() && std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!(
+                    "PIC_ZOOM_ANCHOR capture_miss cursor=({:.1},{:.1}) viewport={}x{} direction={}",
+                    x,
+                    y,
+                    scrolled.width(),
+                    scrolled.height(),
+                    direction
+                );
+            }
+            self.pending_zoom_pointer_anchor.replace(anchor);
+        }
+    }
+
     pub fn zoom_in_at(self: &Rc<Self>, scrolled: &gtk::ScrolledWindow, x: f64, y: f64) {
-        // Fresh Ctrl+wheel input continues the same pointer transaction even
-        // if a release was requested while the previous animation was settling.
-        self.zoom_pointer_release_pending.set(false);
         let base = self
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
         let target = next_zoom_level(base);
         if target == base {
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("PIC_ZOOM_ANCHOR boundary direction=in width={}", base);
+            }
+            self.finish_pointer_zoom();
             return;
         }
-        if self.pending_zoom_pointer_anchor.borrow().is_none() {
-            let anchor = self.capture_zoom_pointer_anchor(scrolled, x, y);
-            if anchor.is_none() && std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "PIC_ZOOM_ANCHOR capture_miss cursor=({:.1},{:.1}) viewport={}x{} direction=in",
-                    x,
-                    y,
-                    scrolled.width(),
-                    scrolled.height()
-                );
-            }
-            self.pending_zoom_pointer_anchor.replace(anchor);
-        }
+
+        // Fresh Ctrl+wheel input continues the same pointer transaction even
+        // if a release was requested while the previous animation was settling.
+        self.zoom_pointer_release_pending.set(false);
+        self.ensure_pointer_zoom_anchor(scrolled, x, y, "in");
         self.request_zoom_internal(target);
     }
 
     pub fn zoom_out_at(self: &Rc<Self>, scrolled: &gtk::ScrolledWindow, x: f64, y: f64) {
-        self.zoom_pointer_release_pending.set(false);
         let base = self
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
         let target = prev_zoom_level(base);
         if target == base {
+            if std::env::var_os("PICASA_TRACE").is_some() {
+                eprintln!("PIC_ZOOM_ANCHOR boundary direction=out width={}", base);
+            }
+            self.finish_pointer_zoom();
             return;
         }
-        if self.pending_zoom_pointer_anchor.borrow().is_none() {
-            let anchor = self.capture_zoom_pointer_anchor(scrolled, x, y);
-            if anchor.is_none() && std::env::var_os("PICASA_TRACE").is_some() {
-                eprintln!(
-                    "PIC_ZOOM_ANCHOR capture_miss cursor=({:.1},{:.1}) viewport={}x{} direction=out",
-                    x,
-                    y,
-                    scrolled.width(),
-                    scrolled.height()
-                );
-            }
-            self.pending_zoom_pointer_anchor.replace(anchor);
-        }
+
+        self.zoom_pointer_release_pending.set(false);
+        self.ensure_pointer_zoom_anchor(scrolled, x, y, "out");
         self.request_zoom_internal(target);
     }
 
