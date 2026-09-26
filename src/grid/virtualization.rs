@@ -210,7 +210,10 @@ fn make_folder_tile(
 struct ZoomPointerAnchor {
     scrolled: glib::WeakRef<gtk::ScrolledWindow>,
     photo_id: i64,
+    position: u32,
+    viewport_x: f32,
     viewport_y: f32,
+    relative_x: f32,
     relative_y: f32,
 }
 
@@ -231,53 +234,195 @@ impl Gallery {
                 return None;
             }
             let photo_id = tile.imp().photo.borrow().as_ref()?.id();
+            let position = tile.imp().photo_index.get()? as u32;
             let bounds = tile.compute_bounds(scrolled)?;
-            let inside = x >= bounds.x()
-                && x <= bounds.x() + bounds.width()
-                && y >= bounds.y()
-                && y <= bounds.y() + bounds.height();
-            if !inside || bounds.height() <= f32::EPSILON {
+            let (offset_x, offset_y) = tile.presentation_offset();
+            let visual_x = bounds.x() + offset_x;
+            let visual_y = bounds.y() + offset_y;
+            let inside = x >= visual_x
+                && x <= visual_x + bounds.width()
+                && y >= visual_y
+                && y <= visual_y + bounds.height();
+            if !inside
+                || bounds.width() <= f32::EPSILON
+                || bounds.height() <= f32::EPSILON
+            {
                 return None;
             }
             Some(ZoomPointerAnchor {
                 scrolled: scrolled.downgrade(),
                 photo_id,
+                position,
+                viewport_x: x,
                 viewport_y: y,
-                relative_y: ((y - bounds.y()) / bounds.height()).clamp(0.0, 1.0),
+                relative_x: ((x - visual_x) / bounds.width()).clamp(0.0, 1.0),
+                relative_y: ((y - visual_y) / bounds.height()).clamp(0.0, 1.0),
             })
         })
     }
 
-    fn restore_zoom_pointer_anchor(&self, anchor: &ZoomPointerAnchor) {
-        let Some(scrolled) = anchor.scrolled.upgrade() else {
+    fn clear_zoom_pointer_anchor(&self) {
+        let anchor = self.pending_zoom_pointer_anchor.borrow_mut().take();
+        let Some(anchor) = anchor else {
             return;
         };
 
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
-        let Some(tile) = tiles.into_iter().find(|tile| {
+        if let Some(tile) = tiles.into_iter().find(|tile| {
             tile.imp()
                 .photo
                 .borrow()
                 .as_ref()
                 .is_some_and(|photo| photo.id() == anchor.photo_id)
+        }) {
+            tile.set_presentation_offset(0.0, 0.0);
+        }
+    }
+
+    fn restore_zoom_pointer_anchor(&self, anchor: &ZoomPointerAnchor) -> bool {
+        let Some(scrolled) = anchor.scrolled.upgrade() else {
+            return false;
+        };
+
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        let Some(tile) = tiles.into_iter().find(|tile| {
+            tile.is_mapped()
+                && tile
+                    .imp()
+                    .photo
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|photo| photo.id() == anchor.photo_id)
         }) else {
-            return;
+            return false;
         };
         let Some(bounds) = tile.compute_bounds(&scrolled) else {
+            return false;
+        };
+
+        // Vertical movement can be compensated with the real scroller. This
+        // preserves the same relative point of the same photo at the cursor Y.
+        let anchored_y = bounds.y() + bounds.height() * anchor.relative_y;
+        let delta_y = f64::from(anchored_y - anchor.viewport_y);
+        if delta_y.abs() > 0.25 {
+            let adjustment = scrolled.vadjustment();
+            let lower = adjustment.lower();
+            let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
+            adjustment.set_value((adjustment.value() + delta_y).clamp(lower, upper));
+        }
+
+        // GridView has no horizontal scrolling here. When a column-count
+        // change moves the same photo sideways, keep its snapshot visually
+        // under the original cursor X for the active zoom burst. The offset is
+        // presentation-only and is released after the burst settles.
+        let anchored_x = bounds.x() + bounds.width() * anchor.relative_x;
+        let delta_x = anchor.viewport_x - anchored_x;
+        tile.set_presentation_offset(delta_x, 0.0);
+        true
+    }
+
+    fn release_zoom_pointer_anchor(self: &Rc<Self>, anchor: ZoomPointerAnchor, generation: u64) {
+        const RELEASE_MS: f64 = 120.0;
+
+        let mut tiles = Vec::new();
+        collect_tiles(self.root.upcast_ref(), &mut tiles);
+        let Some(tile) = tiles.into_iter().find(|tile| {
+            tile.is_mapped()
+                && tile
+                    .imp()
+                    .photo
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|photo| photo.id() == anchor.photo_id)
+        }) else {
+            self.pending_zoom_pointer_anchor.replace(None);
             return;
         };
 
-        let anchored_y = bounds.y() + bounds.height() * anchor.relative_y;
-        let delta = f64::from(anchored_y - anchor.viewport_y);
-        if delta.abs() <= 0.25 {
+        let (start_x, start_y) = tile.presentation_offset();
+        self.pending_zoom_pointer_anchor.replace(None);
+        if start_x.abs() < 0.5 && start_y.abs() < 0.5 {
+            tile.set_presentation_offset(0.0, 0.0);
             return;
         }
 
-        let adjustment = scrolled.vadjustment();
-        let lower = adjustment.lower();
-        let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
-        adjustment.set_value((adjustment.value() + delta).clamp(lower, upper));
+        let this = self.clone();
+        let started = Instant::now();
+        tile.add_tick_callback(move |tile, _| {
+            if this.zoom_animation_generation.get() != generation {
+                let same_photo_still_owned = this
+                    .pending_zoom_pointer_anchor
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|current| current.photo_id == anchor.photo_id);
+                if !same_photo_still_owned {
+                    tile.set_presentation_offset(0.0, 0.0);
+                }
+                return glib::ControlFlow::Break;
+            }
+
+            let linear = (started.elapsed().as_secs_f64() * 1000.0 / RELEASE_MS)
+                .clamp(0.0, 1.0);
+            let eased = 1.0 - (1.0 - linear).powi(3);
+            let remaining = (1.0 - eased) as f32;
+            tile.set_presentation_offset(start_x * remaining, start_y * remaining);
+
+            if linear >= 1.0 {
+                tile.set_presentation_offset(0.0, 0.0);
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
+    fn settle_zoom_pointer_anchor(
+        self: &Rc<Self>,
+        anchor: ZoomPointerAnchor,
+        generation: u64,
+    ) {
+        let attempts = Rc::new(Cell::new(0_u8));
+        let realization_requested = Rc::new(Cell::new(false));
+        let this = self.clone();
+
+        self.root.add_tick_callback(move |_, _| {
+            if this.zoom_animation_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+
+            let attempt = attempts.get().saturating_add(1);
+            attempts.set(attempt);
+
+            if this.restore_zoom_pointer_anchor(&anchor) {
+                if this.zoom_reflow_source.borrow().is_none()
+                    && this.pending_zoom_width.get().is_none()
+                {
+                    this.release_zoom_pointer_anchor(anchor.clone(), generation);
+                }
+                return glib::ControlFlow::Break;
+            }
+
+            // GtkGridView may recycle the anchor tile for a frame or two while
+            // crossing a column boundary. Give normal realization two frames
+            // first. Only then ask it to realize the exact model position.
+            if attempt >= 3 && !realization_requested.replace(true) {
+                this.root
+                    .scroll_to(anchor.position, gtk::ListScrollFlags::empty(), None);
+            }
+
+            if attempt >= 8 {
+                if this.zoom_reflow_source.borrow().is_none()
+                    && this.pending_zoom_width.get().is_none()
+                {
+                    this.pending_zoom_pointer_anchor.replace(None);
+                }
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
 
     pub fn zoom_in_at(self: &Rc<Self>, scrolled: &gtk::ScrolledWindow, x: f64, y: f64) {
@@ -285,9 +430,18 @@ impl Gallery {
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
-        self.pending_zoom_pointer_anchor
-            .replace(self.capture_zoom_pointer_anchor(scrolled, x, y));
-        self.request_zoom_internal(next_zoom_level(base));
+        let target = next_zoom_level(base);
+        if target == base {
+            if self.zoom_reflow_source.borrow().is_none() {
+                self.clear_zoom_pointer_anchor();
+            }
+            return;
+        }
+        if self.pending_zoom_pointer_anchor.borrow().is_none() {
+            self.pending_zoom_pointer_anchor
+                .replace(self.capture_zoom_pointer_anchor(scrolled, x, y));
+        }
+        self.request_zoom_internal(target);
     }
 
     pub fn zoom_out_at(self: &Rc<Self>, scrolled: &gtk::ScrolledWindow, x: f64, y: f64) {
@@ -295,9 +449,18 @@ impl Gallery {
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
-        self.pending_zoom_pointer_anchor
-            .replace(self.capture_zoom_pointer_anchor(scrolled, x, y));
-        self.request_zoom_internal(prev_zoom_level(base));
+        let target = prev_zoom_level(base);
+        if target == base {
+            if self.zoom_reflow_source.borrow().is_none() {
+                self.clear_zoom_pointer_anchor();
+            }
+            return;
+        }
+        if self.pending_zoom_pointer_anchor.borrow().is_none() {
+            self.pending_zoom_pointer_anchor
+                .replace(self.capture_zoom_pointer_anchor(scrolled, x, y));
+        }
+        self.request_zoom_internal(target);
     }
 
     pub fn zoom_in(self: &Rc<Self>) {
@@ -305,7 +468,7 @@ impl Gallery {
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
-        self.pending_zoom_pointer_anchor.replace(None);
+        self.clear_zoom_pointer_anchor();
         self.request_zoom_internal(next_zoom_level(base));
     }
 
@@ -314,7 +477,7 @@ impl Gallery {
             .pending_zoom_width
             .get()
             .unwrap_or_else(|| self.tile_width.get());
-        self.pending_zoom_pointer_anchor.replace(None);
+        self.clear_zoom_pointer_anchor();
         self.request_zoom_internal(prev_zoom_level(base));
     }
 
@@ -335,7 +498,7 @@ impl Gallery {
         } else {
             nearest_zoom_level(DEFAULT_TILE_WIDTH)
         };
-        self.pending_zoom_pointer_anchor.replace(None);
+        self.clear_zoom_pointer_anchor();
         self.request_zoom_internal(target);
     }
 
@@ -425,6 +588,11 @@ impl Gallery {
             this.zoom_reflow_source.borrow_mut().take();
             if let Some(width) = this.pending_zoom_width.take() {
                 this.apply_zoom(width);
+            } else if this.zoom_animation_layout_width.get().is_none() {
+                if let Some(anchor) = this.pending_zoom_pointer_anchor.borrow().clone() {
+                    let generation = this.zoom_animation_generation.get();
+                    this.release_zoom_pointer_anchor(anchor, generation);
+                }
             }
             glib::ControlFlow::Break
         });
@@ -496,20 +664,23 @@ impl Gallery {
                 + (target_height - start_height) as f64 * eased)
                 .round() as i32;
 
-            this.apply_tile_geometry(frame_width, frame_height, false);
+            // Measure the allocation produced by the previous frame before
+            // changing geometry again. Measuring immediately after queue_resize()
+            // reads stale bounds and was the main reason the focal photo drifted.
             if let Some(anchor) = pointer_anchor.as_ref() {
                 this.restore_zoom_pointer_anchor(anchor);
             }
+            this.apply_tile_geometry(frame_width, frame_height, false);
 
             if linear >= 1.0 {
                 // Land exactly on the canonical zoom level and persist only
                 // once. Intermediate animation frames never touch settings.
                 this.apply_tile_geometry(target_width, target_height, true);
-                if let Some(anchor) = pointer_anchor.as_ref() {
-                    this.restore_zoom_pointer_anchor(anchor);
-                }
                 this.zoom_animation_layout_width.set(None);
                 set_grid_zoom_animation_active(false);
+                if let Some(anchor) = pointer_anchor.clone() {
+                    this.settle_zoom_pointer_anchor(anchor, generation);
+                }
                 glib::ControlFlow::Break
             } else {
                 glib::ControlFlow::Continue
