@@ -678,32 +678,11 @@
         main_split.connect_collapsed_notify(move |split| {
             if split.is_collapsed() {
                 split.set_max_sidebar_width(collapsed_sidebar_width_for_notify.get());
-
-                // Enter compact mode through the same animated show/hide path
-                // used by the sidebar toggle and hover behavior. Otherwise the
-                // responsive breakpoint can look like the sidebar is simply
-                // cut out when OverlaySplitView switches to collapsed mode.
-                //
-                // Keep the logical pinned state unchanged: a pinned sidebar
-                // may disappear in compact mode but should return when the
-                // window becomes wide enough again.
-                if split.shows_sidebar() {
-                    split.set_show_sidebar(false);
-                }
             } else {
                 split.set_max_sidebar_width(SIDEBAR_MAX_WIDTH);
                 // A collapsed hover peek that was still open when the window
-                // widened must not leave stale auto-hide state behind: the
-                // expanded sidebar is persistent again (pin gate resumes).
+                // widened must not leave stale auto-hide state behind.
                 sidebar::clear_hover_open(&sidebar_for_collapse_notify);
-
-                // Restore a logically pinned sidebar through the same animated
-                // path when leaving compact mode.
-                if sidebar::is_pinned(&sidebar_for_collapse_notify)
-                    && !split.shows_sidebar()
-                {
-                    split.set_show_sidebar(true);
-                }
             }
         });
         if main_split.is_collapsed() {
