@@ -134,15 +134,21 @@ fn photo_y(photo_index: u32, sections: &[FolderSection], g: &GeometryState) -> O
     None
 }
 
-fn anchor_photo(scroll_y: f64, sections: &[FolderSection], g: &GeometryState) -> Option<(u32, f64)> {
+fn anchor_photo_at_view_offset(
+    scroll_y: f64,
+    view_offset: f64,
+    sections: &[FolderSection],
+    g: &GeometryState,
+) -> Option<(u32, f64)> {
+    let target_y = scroll_y + view_offset;
     let row_h = f64::from(g.tile_height) + GAP;
     for (section, geom) in sections.iter().zip(g.sections.iter()) {
-        if scroll_y >= geom.end_y { continue; }
+        if target_y >= geom.end_y { continue; }
         if section.count == 0 { continue; }
-        let row = if scroll_y <= geom.first_photo_y {
+        let row = if target_y <= geom.first_photo_y {
             0
         } else {
-            ((scroll_y - geom.first_photo_y) / row_h).floor().max(0.0) as u32
+            ((target_y - geom.first_photo_y) / row_h).floor().max(0.0) as u32
         };
         let local = (row * g.columns.max(1)).min(section.count - 1);
         let index = section.start + local;
@@ -150,6 +156,14 @@ fn anchor_photo(scroll_y: f64, sections: &[FolderSection], g: &GeometryState) ->
         return Some((index, y - scroll_y));
     }
     None
+}
+
+fn current_rss_kb() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|line| {
+        let value = line.strip_prefix("VmRSS:")?;
+        value.split_whitespace().next()?.parse::<u64>().ok()
+    })
 }
 
 fn photo_label(index: u32, sections: &[FolderSection]) -> String {
@@ -340,7 +354,7 @@ fn main() {
                 }
 
                 status.set_text(&format!(
-                    "photos=5000  live_tiles={}  pool={}/{}  live_headers={}  header_pool={}/{}  created_tiles={}  created_headers={}  cols={}  geometry_us={}  geometry_rebuilds={}  anchor_ok={}",
+                    "photos=5000  live_tiles={}  pool={}/{}  live_headers={}  header_pool={}/{}  created_tiles={}  created_headers={}  rss_mb={:.1}  cols={}  geometry_us={}  geometry_rebuilds={}  anchor_ok={}",
                     live_tiles.borrow().len(),
                     tile_pool.borrow().len(),
                     MAX_TILE_POOL,
@@ -349,6 +363,7 @@ fn main() {
                     MAX_HEADER_POOL,
                     total_tiles_created.get(),
                     total_headers_created.get(),
+                    current_rss_kb().unwrap_or(0) as f64 / 1024.0,
                     g.columns,
                     g.last_rebuild_us,
                     g.rebuilds,
@@ -414,7 +429,12 @@ fn main() {
                 } else {
                     let picked = {
                         let g = geometry.borrow();
-                        anchor_photo(before_scroll, &sections, &g)
+                        anchor_photo_at_view_offset(
+                            before_scroll,
+                            adj.page_size() * 0.5,
+                            &sections,
+                            &g,
+                        )
                     };
                     if let Some(anchor) = picked {
                         *zoom_anchor.borrow_mut() = Some(anchor);
@@ -486,7 +506,7 @@ fn main() {
             log_stats.connect_clicked(move |_| {
                 let g = geometry.borrow();
                 eprintln!(
-                    "SECTIONED_STATS photos=5000 live_tiles={} pool_tiles={} pool_cap={} live_headers={} header_pool={} header_pool_cap={} total_tiles_created={} geometry_us={} geometry_rebuilds={}",
+                    "SECTIONED_STATS photos=5000 live_tiles={} pool_tiles={} pool_cap={} live_headers={} header_pool={} header_pool_cap={} total_tiles_created={} rss_kb={} geometry_us={} geometry_rebuilds={}",
                     live_tiles.borrow().len(),
                     tile_pool.borrow().len(),
                     MAX_TILE_POOL,
@@ -494,6 +514,7 @@ fn main() {
                     header_pool.borrow().len(),
                     MAX_HEADER_POOL,
                     total_tiles_created.get(),
+                    current_rss_kb().unwrap_or(0),
                     g.last_rebuild_us,
                     g.rebuilds,
                 );
