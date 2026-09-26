@@ -3092,19 +3092,93 @@ fn start_photo_export_single(
         }
     });
 
-    // Below this width the sidebar becomes an overlay instead of permanently
-    // consuming grid space. The breakpoint restores the expanded split view
-    // automatically when the window grows again.
-    let compact = adw::Breakpoint::new(
-        adw::BreakpointCondition::parse("max-width: 1050px")
-            .expect("valid compact sidebar breakpoint"),
-    );
-    // Only change the presentation mode at the breakpoint. Sidebar
-    // visibility is animated by the collapsed-notify handler in layout.rs.
-    // Setting collapsed + show-sidebar=false atomically makes the sidebar
-    // disappear before the normal drawer animation has a chance to run.
-    compact.add_setter(&main_split, "collapsed", Some(&true.to_value()));
-    window.add_breakpoint(compact);
+    // Responsive sidebar transition.
+    //
+    // Do not use an AdwBreakpoint to flip `collapsed` directly: changing
+    // collapsed is a structural side-by-side -> overlay switch and therefore
+    // looks like the sidebar is cut out before its drawer animation can run.
+    //
+    // Instead stage the transition:
+    //   narrow: slide sidebar out -> then collapse
+    //   wide:   expand while hidden -> then slide sidebar in
+    //
+    // Small hysteresis avoids chattering when the user drags around 1050 px.
+    const SIDEBAR_COMPACT_ENTER_WIDTH: i32 = 1050;
+    const SIDEBAR_COMPACT_EXIT_WIDTH: i32 = 1080;
+    const SIDEBAR_SLIDE_MS: u64 = 280;
+
+    let sidebar_breakpoint_transition = Rc::new(Cell::new(false));
+    let sidebar_breakpoint_generation = Rc::new(Cell::new(0u64));
+    {
+        let window_for_breakpoint = window.clone();
+        let main_split_for_breakpoint = main_split.clone();
+        let sidebar_for_breakpoint = sidebar.clone();
+        let transition = sidebar_breakpoint_transition.clone();
+        let generation = sidebar_breakpoint_generation.clone();
+
+        window.add_tick_callback(move |window, _| {
+            let width = window.width();
+
+            if !main_split_for_breakpoint.is_collapsed()
+                && width <= SIDEBAR_COMPACT_ENTER_WIDTH
+                && !transition.get()
+            {
+                let next_generation = generation.get().wrapping_add(1);
+                generation.set(next_generation);
+                transition.set(true);
+
+                if main_split_for_breakpoint.shows_sidebar() {
+                    main_split_for_breakpoint.set_show_sidebar(false);
+
+                    let window = window_for_breakpoint.clone();
+                    let split = main_split_for_breakpoint.clone();
+                    let transition = transition.clone();
+                    let generation = generation.clone();
+                    glib::timeout_add_local_once(
+                        Duration::from_millis(SIDEBAR_SLIDE_MS),
+                        move || {
+                            if generation.get() != next_generation {
+                                return;
+                            }
+                            if window.width() <= SIDEBAR_COMPACT_ENTER_WIDTH {
+                                split.set_collapsed(true);
+                            } else if sidebar::is_pinned(&sidebar_for_breakpoint) {
+                                split.set_show_sidebar(true);
+                            }
+                            transition.set(false);
+                        },
+                    );
+                } else {
+                    main_split_for_breakpoint.set_collapsed(true);
+                    transition.set(false);
+                }
+            } else if main_split_for_breakpoint.is_collapsed()
+                && width >= SIDEBAR_COMPACT_EXIT_WIDTH
+                && !transition.get()
+            {
+                generation.set(generation.get().wrapping_add(1));
+                transition.set(true);
+
+                // Expand while the sidebar is still hidden so the structural
+                // layout switch is not visible, then reveal through the normal
+                // drawer animation on the next main-loop turn.
+                main_split_for_breakpoint.set_show_sidebar(false);
+                main_split_for_breakpoint.set_collapsed(false);
+
+                let split = main_split_for_breakpoint.clone();
+                let sidebar = sidebar_for_breakpoint.clone();
+                let transition = transition.clone();
+                glib::idle_add_local_once(move || {
+                    if sidebar::is_pinned(&sidebar) {
+                        split.set_show_sidebar(true);
+                    }
+                    transition.set(false);
+                });
+            }
+
+            glib::ControlFlow::Continue
+        });
+    }
 
     crate::css::install_foundation(&display);
     // Apply the persisted theme (and the base layer) before the window's
