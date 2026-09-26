@@ -21,6 +21,7 @@ mod photo_object;
 mod photo_texture;
 mod platform;
 mod scanner;
+mod sectioned_real;
 mod settings;
 mod sidebar;
 mod smooth_scroll;
@@ -70,7 +71,13 @@ fn main() {
         // Startup loads indexed rows and recovers missing cached previews.
         // Folder discovery runs only through explicit import/refresh actions.
         match db::open_default() {
-            Ok(connection) => window::build(application, connection).present(),
+            Ok(connection) => {
+                if std::env::var_os("PICASA_SECTIONED_REAL").is_some() {
+                    sectioned_real::build(application, connection).present();
+                } else {
+                    window::build(application, connection).present();
+                }
+            },
             Err(error) => {
                 eprintln!("Could not open photo library: {error:#}");
                 let dialog = gtk::MessageDialog::builder()
