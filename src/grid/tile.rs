@@ -163,6 +163,11 @@ mod square_tile {
     pub struct SquareTile {
         pub width: Cell<i32>,
         pub height: Cell<i32>,
+        // Presentation-only FLIP offset. GTK allocation remains at the real
+        // destination; snapshotting is temporarily translated from the old
+        // visual position while a resize reflow animates.
+        pub presentation_offset_x: Cell<f32>,
+        pub presentation_offset_y: Cell<f32>,
         pub filename_visible: Cell<bool>,
         pub filename_label: RefCell<Option<gtk::Label>>,
         pub favorite_indicators_visible: Cell<bool>,
@@ -241,6 +246,14 @@ mod square_tile {
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let dx = self.presentation_offset_x.get();
+            let dy = self.presentation_offset_y.get();
+            let translated = dx.abs() > 0.01 || dy.abs() > 0.01;
+            if translated {
+                snapshot.save();
+                snapshot.translate(&gtk::graphene::Point::new(dx, dy));
+            }
+
             let mut child = self.obj().first_child();
             while let Some(widget) = child {
                 let next = widget.next_sibling();
@@ -248,6 +261,10 @@ mod square_tile {
                     self.obj().snapshot_child(&widget, snapshot);
                 }
                 child = next;
+            }
+
+            if translated {
+                snapshot.restore();
             }
         }
     }
@@ -295,6 +312,24 @@ impl SquareTile {
         let frame = self.first_child().and_downcast::<gtk::Overlay>()?;
         let picture = frame.child().and_downcast::<gtk::Picture>()?;
         picture.paintable()
+    }
+
+    pub(crate) fn presentation_offset(&self) -> (f32, f32) {
+        (
+            self.imp().presentation_offset_x.get(),
+            self.imp().presentation_offset_y.get(),
+        )
+    }
+
+    pub(crate) fn set_presentation_offset(&self, x: f32, y: f32) {
+        if (self.imp().presentation_offset_x.get() - x).abs() < 0.01
+            && (self.imp().presentation_offset_y.get() - y).abs() < 0.01
+        {
+            return;
+        }
+        self.imp().presentation_offset_x.set(x);
+        self.imp().presentation_offset_y.set(y);
+        self.queue_draw();
     }
 
     fn set_tile_size(&self, width: i32, height: i32) {
