@@ -825,7 +825,7 @@ impl Gallery {
     }
 
     pub fn update_width_with_flip(self: &Rc<Self>, width: i32) {
-        const RESIZE_FLIP_MS: f64 = 220.0;
+        const RESIZE_FLIP_MS: f64 = 300.0;
 
         if width <= 100 {
             return;
