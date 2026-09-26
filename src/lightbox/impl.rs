@@ -816,6 +816,24 @@ impl Lightbox {
     }
 
     pub fn open(&self, photos: Vec<PhotoObject>, selected: usize) {
+        self.open_internal(photos, selected, None);
+    }
+
+    pub fn open_from_source(
+        &self,
+        photos: Vec<PhotoObject>,
+        selected: usize,
+        source: Option<(gtk::Widget, gtk::gdk::Paintable)>,
+    ) {
+        self.open_internal(photos, selected, source);
+    }
+
+    fn open_internal(
+        &self,
+        photos: Vec<PhotoObject>,
+        selected: usize,
+        source: Option<(gtk::Widget, gtk::gdk::Paintable)>,
+    ) {
         self.photos.replace(photos);
 
         let len = self.photos.borrow().len();
@@ -836,6 +854,16 @@ impl Lightbox {
         self.last_height.set(0);
         let generation = self.load_generation.get().wrapping_add(1);
         self.load_generation.set(generation);
+
+        // Shared-element opens fade the backdrop in under the moving thumbnail.
+        // Instant opens keep the established presentation unchanged.
+        if source.is_some() {
+            self.backdrop.set_opacity(0.0);
+            self.picture.set_opacity(0.0);
+        } else {
+            self.backdrop.set_opacity(1.0);
+            self.picture.set_opacity(1.0);
+        }
 
         // Make the overlay allocatable before selecting a decode target. On
         // the first open it was previously still 0x0 here, so the initial
@@ -875,6 +903,9 @@ impl Lightbox {
         let picture_viewport = self.picture_viewport.clone();
         let native_texture = self.native_texture.clone();
         let display_texture_cache = self.display_texture_cache.clone();
+        let backdrop_for_transition = self.backdrop.clone();
+        let source_for_transition = Rc::new(RefCell::new(source));
+        let source_for_first_frame = source_for_transition.clone();
         self.root.add_tick_callback(move |root, _| {
             if !root.is_visible() || current_generation.get() != generation {
                 return glib::ControlFlow::Break;
@@ -915,6 +946,85 @@ impl Lightbox {
                 root.height(),
                 zoom.get(),
             );
+
+            if let Some((source_widget, source_paintable)) =
+                source_for_first_frame.borrow_mut().take()
+            {
+                if let Some(source_bounds) = source_widget.compute_bounds(root) {
+                    let dest_width = picture.width_request().max(1);
+                    let dest_height = picture.height_request().max(1);
+                    if source_bounds.width() > 1.0
+                        && source_bounds.height() > 1.0
+                        && dest_width > 1
+                        && dest_height > 1
+                    {
+                        let transition = gtk::Picture::for_paintable(&source_paintable);
+                        transition.set_can_shrink(true);
+                        transition.set_content_fit(gtk::ContentFit::Cover);
+                        transition.set_halign(gtk::Align::Start);
+                        transition.set_valign(gtk::Align::Start);
+                        transition.set_can_target(false);
+                        transition.set_size_request(
+                            source_bounds.width().round() as i32,
+                            source_bounds.height().round() as i32,
+                        );
+                        transition.set_margin_start(source_bounds.x().round().max(0.0) as i32);
+                        transition.set_margin_top(source_bounds.y().round().max(0.0) as i32);
+                        root.add_overlay(&transition);
+
+                        let start_x = source_bounds.x() as f64;
+                        let start_y = source_bounds.y() as f64;
+                        let start_w = source_bounds.width() as f64;
+                        let start_h = source_bounds.height() as f64;
+                        let end_w = dest_width as f64;
+                        let end_h = dest_height as f64;
+                        let end_x = (root.width() as f64 - end_w) * 0.5;
+                        let end_y = (root.height() as f64 - end_h) * 0.5;
+                        let started = Instant::now();
+                        let picture_for_transition = picture.clone();
+                        let backdrop = backdrop_for_transition.clone();
+                        let root_for_transition = root.clone();
+
+                        transition.add_tick_callback(move |transition, _| {
+                            const OPEN_TRANSITION_MS: f64 = 200.0;
+                            let linear = (started.elapsed().as_secs_f64() * 1000.0
+                                / OPEN_TRANSITION_MS)
+                                .clamp(0.0, 1.0);
+                            let eased = 1.0 - (1.0 - linear).powi(3);
+
+                            let x = start_x + (end_x - start_x) * eased;
+                            let y = start_y + (end_y - start_y) * eased;
+                            let w = start_w + (end_w - start_w) * eased;
+                            let h = start_h + (end_h - start_h) * eased;
+                            transition.set_margin_start(x.round().max(0.0) as i32);
+                            transition.set_margin_top(y.round().max(0.0) as i32);
+                            transition.set_size_request(
+                                w.round().max(1.0) as i32,
+                                h.round().max(1.0) as i32,
+                            );
+                            backdrop.set_opacity(linear);
+
+                            if linear >= 1.0 {
+                                picture_for_transition.set_opacity(1.0);
+                                backdrop.set_opacity(1.0);
+                                root_for_transition.remove_overlay(transition);
+                                glib::ControlFlow::Break
+                            } else {
+                                glib::ControlFlow::Continue
+                            }
+                        });
+                    } else {
+                        picture.set_opacity(1.0);
+                        backdrop_for_transition.set_opacity(1.0);
+                    }
+                } else {
+                    picture.set_opacity(1.0);
+                    backdrop_for_transition.set_opacity(1.0);
+                }
+            } else {
+                picture.set_opacity(1.0);
+                backdrop_for_transition.set_opacity(1.0);
+            }
             glib::ControlFlow::Break
         });
         schedule_lightbox_prefetch(
