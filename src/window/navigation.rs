@@ -281,9 +281,9 @@ fn install_smooth_gallery_scroll(
 
             if ctrl_zoom {
                 if dy < 0.0 {
-                    gallery.zoom_in();
+                    gallery.wheel_zoom_in();
                 } else if dy > 0.0 {
-                    gallery.zoom_out();
+                    gallery.wheel_zoom_out();
                 }
                 return glib::Propagation::Stop;
             }
