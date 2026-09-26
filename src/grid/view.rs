@@ -773,6 +773,14 @@ impl Gallery {
     }
 
     pub fn update_width(&self, width: i32) {
+        // While a zoom animation is active, ignore transient width feedback
+        // from GridView/ScrolledWindow reflow and keep using the outer gallery
+        // width captured before the animation began. This prevents the column
+        // calculation from chasing its own changing requisition.
+        if let Some(stable_width) = self.zoom_animation_layout_width.get() {
+            self.update_layout(stable_width, false);
+            return;
+        }
         self.update_layout(width, false);
     }
 
