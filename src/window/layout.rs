@@ -710,6 +710,11 @@
             main_split.set_max_sidebar_width(collapsed_sidebar_width.get());
         }
     }
+    // Prevent AdwOverlaySplitView from automatically changing
+    // show-sidebar as collapsed toggles. PIC owns that visibility transition
+    // so the responsive breakpoint can use the same animated drawer path as
+    // the manual sidebar toggle.
+    main_split.set_pin_sidebar(true);
     main_split.set_enable_show_gesture(true);
     main_split.set_enable_hide_gesture(true);
 
