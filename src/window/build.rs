@@ -1403,9 +1403,14 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let folder_scroll = gtk::ScrolledWindow::new();
     folder_scroll.set_vexpand(true);
     folder_scroll.set_hexpand(true);
-    // Folder mode uses its own virtualized ListView. Full-width folder headers
-    // are ordinary ListView rows, so they move away naturally with the photos.
-    folder_scroll.set_child(Some(&gallery.folder_root));
+    // Folder mode now uses the section-aware flat-photo surface by default.
+    // The legacy ListView remains available behind PICASA_LEGACY_FOLDER_LIST=1.
+    if crate::grid::sectioned_folder_view_enabled() {
+        folder_scroll.set_child(Some(&gallery.folder_sectioned_root));
+        gallery.attach_sectioned_folder_scroll(&folder_scroll);
+    } else {
+        folder_scroll.set_child(Some(&gallery.folder_root));
+    }
     let folder_scroll_overlay = gtk::Overlay::new();
     folder_scroll_overlay.set_hexpand(true);
     folder_scroll_overlay.set_vexpand(true);
@@ -1499,14 +1504,29 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let gallery_scroll_stack = gallery_scroll_stack.clone();
         let gallery_for_folder_view = gallery.clone();
         gallery.set_folder_view_changed_handler(move |folder_mode| {
+            let folder_sectioned =
+                crate::grid::sectioned_folder_view_enabled() && folder_mode;
             let folder_grid_experiment =
-                crate::grid::folder_gridview_experiment_enabled() && folder_mode;
+                crate::grid::folder_gridview_experiment_enabled()
+                    && folder_mode
+                    && !folder_sectioned;
             gallery_scroll_stack.set_visible_child_name(if folder_mode && !folder_grid_experiment {
                 "folders"
             } else {
                 "grid"
             });
             if folder_mode {
+                if folder_sectioned {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!("PIC_FOLDER_SECTIONED enabled mode=flat_photo_virtualized");
+                    }
+                    gallery_for_folder_view.folder_sectioned_root.grab_focus();
+                    let gallery = gallery_for_folder_view.clone();
+                    glib::idle_add_local_once(move || {
+                        gallery.refresh_sectioned_folder();
+                    });
+                    return;
+                }
                 if folder_grid_experiment {
                     if std::env::var_os("PICASA_TRACE").is_some() {
                         eprintln!("PIC_FOLDER_GRIDVIEW enabled mode=photo_grid folder_indicator=sticky");
@@ -1977,7 +1997,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         ) {
             let width = surface.width();
             if width > 100 {
-                if crate::grid::folder_gridview_experiment_enabled() {
+                if gallery_for_resize.using_sectioned_folder_view() {
+                    // Sectioned Folder mode only recomputes lightweight geometry;
+                    // it never rebuilds photo membership or row objects.
+                    gallery_for_resize.update_width(width);
+                } else if crate::grid::folder_gridview_experiment_enabled() {
                     // Gallery v2 has no column-sized Folder row model to
                     // rebuild, so react immediately when the window crosses a
                     // column boundary. Delaying until the width settles leaves
