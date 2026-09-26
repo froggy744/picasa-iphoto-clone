@@ -785,3 +785,11 @@ Commit:
 - `742140c` — `Gallery v2: slow resize FLIP animation`
 
 Validation target: confirm the positional slide is now visible and smooth without feeling sluggish during repeated width changes.
+
+### Resize FLIP timing tuning: 300 ms
+
+User feedback requested a slower, more readable resize transition. The live window-resize FLIP duration is now **300 ms** (previously 220 ms). Manual thumbnail zoom and the Lightbox shared-photo open transition remain unchanged.
+
+Commit:
+
+- `dd2c1e5` — `Gallery v2: slow resize FLIP to 300 ms`
