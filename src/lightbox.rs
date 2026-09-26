@@ -8,7 +8,7 @@ use std::sync::{
     Arc, Condvar, Mutex, OnceLock,
 };
 use std::task::{Context, Poll, Waker};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use gtk4 as gtk;
