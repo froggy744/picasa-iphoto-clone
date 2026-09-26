@@ -873,3 +873,14 @@ Commits:
 The canonical zoom ladder and 180 ms manual zoom timing are unchanged. Folder architecture is untouched.
 
 Validation target: place the cursor over an identifiable thumbnail away from the viewport edges, Ctrl+wheel rapidly across several column-count changes, and verify that the same photo remains the visual focal point throughout the burst. After the gesture stops it may slide horizontally into its final GridView column, but it should not jump several rows or switch to a neighboring photo.
+
+### Cursor anchor recovery correction
+
+Runtime validation showed that cursor-photo zoom anchoring still failed to keep the same photo as the focal point. One concrete fault was the missing-tile recovery path: `GridView::scroll_to(..., None)` was permitted to move the viewport while trying to realize the recycled anchor tile.
+
+Commits:
+
+- `9b7c6ff` — realize the anchor model position with `GtkScrollInfo` horizontal/vertical scrolling disabled, matching the existing session-restore pattern, so recovery cannot move the viewport
+- `a1f2d5a` — add `PIC_ZOOM_ANCHOR` tracing for capture, temporary tile loss, restore deltas, and non-scrolling realization
+
+Status remains **IMPLEMENTED — runtime validation pending**. No rollback was performed. The current v2 anchor experiment remains in place and is being corrected in place.
