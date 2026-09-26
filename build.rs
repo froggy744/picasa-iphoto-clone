@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     // Fedora/Linux proof of concept; do not link private transports for other OSes.
-    #[cfg(target_os = "linux")]
+    #[cfg(any())]
     {
         let samba = pkg_config::Config::new()
             .cargo_metadata(false)
