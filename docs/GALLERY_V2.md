@@ -297,3 +297,22 @@ Keep this file updated continuously while Gallery v2 work proceeds. After every 
 - next concrete validation target
 
 This document is the handover/source-of-truth for the Gallery v2 migration so work can continue across chats/tools without reconstructing the investigation from memory.
+
+### Confirmed result: resize pause fixed
+
+User validation on the real ~3,086-photo library confirmed that the visible application/window resize pause is fixed after the Gallery v2 live-column update changes.
+
+Relevant commits:
+
+- `914fa58` — `Gallery v2: avoid same-column resize churn`
+- `e3dbbb7` — `Gallery v2: update columns live during window resize`
+
+Important distinction from the follow-up log:
+
+- The app now feels responsive during resize.
+- Adwaita still prints repeated `GtkOverlay exceeds AdwApplicationWindow width` warnings while the window is dragged below the grid's requested width.
+- Those warnings are therefore no longer treated as evidence of the user-visible pause. They remain a layout/minimum-size cleanup item, not a current Gallery v2 performance blocker.
+
+Current conclusion: the old width-settle behavior was materially contributing to the resize stutter. Letting the direct GridView respond to column-boundary changes live, while avoiding unnecessary same-column `queue_resize()` calls, fixed the observed responsiveness issue.
+
+Next priority should move back to Gallery v2 interaction parity and large-library behavior rather than further resize optimization, unless the remaining warning indicates a separate UI sizing bug.
