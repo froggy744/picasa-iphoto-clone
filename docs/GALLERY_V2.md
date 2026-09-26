@@ -78,3 +78,9 @@ Keep this branch separate from `rc-bugfixes` and `main` until runtime behavior i
 ## Known issue: window resize pause
 
 On application/window resize there is still a visible pause while the gallery recalculates layout/columns. Treat this separately from Ctrl-wheel zoom smoothness. The target is for resize to update presentation geometry without rebuilding photo membership or triggering expensive synchronous work proportional to the library size.
+
+### Resize investigation update
+
+The resize warning pattern showed the GridView retaining its previous minimum column geometry while the window was being dragged narrower (for example, a ~747 px requested width while the available width fell below it). The old three-frame width settle gate was designed to protect the legacy Folder ListView from repeated row-model rebuilds, but Gallery v2 no longer has that cost.
+
+Gallery v2 now updates column count live during window resize and skips explicit GridView `queue_resize()` calls for width-only changes that do not cross a column boundary. The legacy Folder ListView fallback keeps the settle gate.
