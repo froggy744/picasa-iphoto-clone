@@ -678,3 +678,32 @@ Revert commits:
 Current resize policy: keep the previously validated fast live resize path with immediate column changes. Do not animate resize by temporarily modifying tile geometry or by feeding synthetic widths into GridView column calculation.
 
 If resize transitions are revisited, use a presentation-only FLIP/snapshot/transform layer that animates already-realized tile positions after GTK computes old/new layouts, without changing tile size, viewport width, or column-count inputs during the resize calculation.
+
+## Lightbox shared-photo open transition
+
+Implemented the first presentation-only shared-element transition for opening a realized Gallery v2 thumbnail into Lightbox. This deliberately does not reuse or modify GridView layout geometry.
+
+Commits:
+
+- `8254090` — expose the realized tile's current paintable for transition handoff
+- `bd01a71` — extend gallery activation with an optional source widget + paintable
+- `60ef4bb` — capture the activated GridView tile safely
+- `3a44482` — keep keyboard/folder activation on the instant path
+- `6bc432d`, `ca68969` — adapt Gallery tests to the activation source argument
+- `4c00d22` — animate the thumbnail into the Lightbox viewer
+- `b6d38a4` — use the shared-element path for normal GridView activation
+- `29cdf52` — add transition frame timing import
+- `a330348` — retain the thumbnail as a temporary visual backstop until the full viewer decode lands
+
+Behavior:
+
+- normal realized GridView activation hands Lightbox the exact source widget and its already-painted thumbnail
+- after the Lightbox overlay receives a real allocation, it computes the thumbnail bounds in Lightbox coordinates rather than guessing screen offsets
+- a temporary non-interactive Picture animates from the thumbnail rectangle to the centered fit-to-window Lightbox rectangle over ~200 ms with cubic ease-out
+- the Lightbox backdrop fades in underneath the moving photo
+- the real Lightbox picture stays hidden during the movement, then becomes visible at the destination
+- if full-resolution decode has not completed by transition end, the source paintable remains as a visual backstop until the normal viewer decode replaces it
+- Spacebar, keyboard/folder activation and other non-realized-source opens remain on the established instant Lightbox path for now
+- no GridView column math, model membership, thumbnail decode policy or zoom preference is changed by this transition
+
+Validation target: double-click/open a visible gallery thumbnail and confirm one continuous photo movement into Lightbox with no flash, jump or incorrect destination geometry. Test both portrait and landscape images, different scroll positions, sidebar open/closed, and repeated open/close cycles. Reverse Lightbox -> thumbnail animation should only be added after the open path is visually validated.
