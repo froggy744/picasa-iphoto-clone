@@ -300,6 +300,46 @@ impl Gallery {
         }
     }
 
+    pub fn wheel_zoom_in(self: &Rc<Self>) {
+        let base = self
+            .pending_zoom_width
+            .get()
+            .unwrap_or_else(|| self.tile_width.get());
+        self.request_wheel_zoom(next_zoom_level(base));
+    }
+
+    pub fn wheel_zoom_out(self: &Rc<Self>) {
+        let base = self
+            .pending_zoom_width
+            .get()
+            .unwrap_or_else(|| self.tile_width.get());
+        self.request_wheel_zoom(prev_zoom_level(base));
+    }
+
+    /// Ctrl+wheel is intentionally trailing-edge only. A mouse wheel can emit
+    /// several notches in a fraction of a second; applying the first notch
+    /// immediately and another at the end made the sectioned grid feel dizzy.
+    /// Accumulate the requested ladder level, then perform one 300ms reflow
+    /// after the wheel burst settles.
+    fn request_wheel_zoom(self: &Rc<Self>, width: i32) {
+        let width = nearest_zoom_level(width).clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+        self.auto_default_zoom.set(false);
+        self.pending_zoom_width.set(Some(width));
+
+        if let Some(source) = self.zoom_reflow_source.borrow_mut().take() {
+            source.remove();
+        }
+        let this = self.clone();
+        let source = glib::timeout_add_local(std::time::Duration::from_millis(220), move || {
+            this.zoom_reflow_source.borrow_mut().take();
+            if let Some(width) = this.pending_zoom_width.take() {
+                this.apply_zoom(width);
+            }
+            glib::ControlFlow::Break
+        });
+        self.zoom_reflow_source.replace(Some(source));
+    }
+
     /// Record a zoom request. Isolated clicks apply immediately; a rapid
     /// Ctrl+wheel spin coalesces its extra notches into one trailing reflow so
     /// crossing several column boundaries does not rebuild the Folder rows per
