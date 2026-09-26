@@ -364,6 +364,10 @@ impl Gallery {
             .or_else(|| ranges.last())
         else {
             self.group_header.set_visible(false);
+            self.group_icon.set_visible(false);
+            self.group_separator.set_visible(false);
+            self.group_title.remove_css_class("folder-section-title");
+            self.group_count.remove_css_class("folder-section-count");
             return;
         };
 
