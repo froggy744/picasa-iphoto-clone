@@ -1719,6 +1719,11 @@ impl Gallery {
             return;
         }
 
+        // A model mutation is a hard interaction boundary. Never leave a
+        // floating pointer anchor referring to a position that is about to be
+        // removed or shifted.
+        self.clear_zoom_pointer_anchor();
+
         let scroll_y = self.scroll_position();
         let ids = ids.iter().copied().collect::<HashSet<_>>();
         let positions = self
@@ -1907,6 +1912,9 @@ impl Gallery {
     }
 
     pub fn replace(&self, photos: &[Photo]) {
+        // Navigation/model replacement must not inherit presentation state
+        // from a Ctrl+wheel gesture in the previous view.
+        self.clear_zoom_pointer_anchor();
         if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_NAV gallery_replace photos={}", photos.len()); }
         let generation = self.replace_generation.get().wrapping_add(1);
         self.replace_generation.set(generation);
