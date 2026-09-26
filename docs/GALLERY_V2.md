@@ -404,3 +404,27 @@ widening past 1080 px
 A 30 px hysteresis band (1050 enter / 1080 exit) prevents repeated collapse/expand chatter while dragging near the threshold. The sidebar's logical pin state remains unchanged, and compact hover reveal remains available after collapse.
 
 Validation target: resize slowly and quickly through the 1050–1080 px region with the sidebar visible. The sidebar should visibly complete its slide-out before the content switches to compact overlay mode, and slide back in after returning to expanded mode. Confirm that the previously fixed gallery resize responsiveness remains intact.
+
+### Responsive sidebar shrink path corrected after v4 test
+
+User test result: widening worked correctly (sidebar slid back in), but shrinking still looked like a hard cut rather than a slide-out.
+
+The v4 log showed why. At the shrink boundary GTK was already producing invalid allocations while the sidebar was still participating in the side-by-side layout, including a header width of `-1`, a scrolled-window width of `-1`, and several zero/negative child allocations. Holding the sidebar in the expanded split for ~280 ms while waiting for the slide to finish therefore allowed the shrinking window to squeeze the layout before collapse.
+
+Superseding fix:
+
+- `79d907b` — `Gallery v2: slide sidebar out from overlay mode`
+
+New shrink sequence:
+
+```text
+cross compact threshold while sidebar is visible
+    -> set collapsed=true immediately while keeping sidebar visible
+    -> gallery receives compact/overlay width immediately
+    -> next main-loop turn call set_show_sidebar(false)
+    -> sidebar slides out as an overlay instead of being squeezed by the shrinking split
+```
+
+The working widening sequence is retained: expand while hidden, then slide the pinned sidebar back in.
+
+Validation target: shrink slowly and quickly through the compact threshold. The sidebar itself should remain visible through the side-by-side -> overlay switch and then visibly slide off the left edge, without the negative allocation warnings seen in v4.
