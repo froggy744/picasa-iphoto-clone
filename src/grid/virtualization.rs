@@ -366,6 +366,7 @@ impl Gallery {
 
         let generation = self.zoom_animation_generation.get().wrapping_add(1);
         self.zoom_animation_generation.set(generation);
+        set_grid_zoom_animation_active(true);
         let started = Instant::now();
         let this = self.clone();
 
@@ -374,6 +375,7 @@ impl Gallery {
         // continuously repositions them toward the destination layout.
         self.root.add_tick_callback(move |_, _| {
             if this.zoom_animation_generation.get() != generation {
+                // A newer zoom animation owns the shared motion flag.
                 return glib::ControlFlow::Break;
             }
 
@@ -394,6 +396,7 @@ impl Gallery {
                 // Land exactly on the canonical zoom level and persist only
                 // once. Intermediate animation frames never touch settings.
                 this.apply_tile_geometry(target_width, target_height, true);
+                set_grid_zoom_animation_active(false);
                 glib::ControlFlow::Break
             } else {
                 glib::ControlFlow::Continue
