@@ -475,7 +475,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
             let connection = connection.clone();
             let open_edit = open_edit.clone();
             let open_collage = open_collage.clone();
-            move |photos, selected_index| {
+            move |photos, selected_index, source| {
                 if filter.get() == sidebar::SidebarFilter::History
                     && search_text.borrow().is_empty()
                 {
@@ -498,7 +498,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                 {
                     availability_refresh();
                 }
-                lightbox_for_grid.open(photos, selected_index);
+                lightbox_for_grid.open_from_source(photos, selected_index, source);
                 clear_search_after_result();
             }
         },
