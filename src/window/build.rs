@@ -3134,11 +3134,16 @@ fn start_photo_export_single(
 
                     let split = main_split_for_breakpoint.clone();
                     let transition = transition.clone();
-                    glib::idle_add_local_once(move || {
-                        // Now that the sidebar is an overlay, use the normal
-                        // animated drawer path to slide it off the left edge.
+                    // Wait for one real frame with the sidebar visible in
+                    // overlay mode before starting the hide. The pin button and
+                    // hover auto-hide both use set_show_sidebar() directly;
+                    // starting on the following frame gives this responsive
+                    // transition the same libadwaita drawer animation instead
+                    // of visually merging collapse + hide into one fast cut.
+                    split.add_tick_callback(move |split, _| {
                         split.set_show_sidebar(false);
                         transition.set(false);
+                        glib::ControlFlow::Break
                     });
                 } else {
                     main_split_for_breakpoint.set_collapsed(true);
