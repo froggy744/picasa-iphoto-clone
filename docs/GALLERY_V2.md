@@ -569,3 +569,29 @@ Implementation:
 - GTK's transient competing allocations can no longer make the same animation bounce repeatedly between adjacent column counts
 
 Validation target: repeat the previously jittery boundary several times. The trace should show at most the intended one-way column transition for that zoom step, not repeated alternating old/new column pairs.
+
+### Zoom jitter v9: complete width-path checkout and corrected freeze point
+
+User reported the same jitter now visible around the 4/5-column boundary and supplied `galv2.v9.log`.
+
+The v9 tail proved that the previous frozen-width fix was applied at the wrong layer. During a single animation, `update_layout()` was still receiving alternating widths of roughly 1088 and 1128 px, causing repeated adjacent-column transitions and realized-tile recycling. The animation helper had frozen `GtkGridView::width()`, but the GridView's own requisition changes as columns change, so that value participates in the feedback loop rather than providing a stable viewport measurement.
+
+A complete call-path checkout found:
+
+- `apply_tile_geometry()` is the zoom-driven layout path
+- the outer gallery frame callback in `window/build.rs` also calls `Gallery::update_width()` continuously
+- `window/layout.rs` contains one additional deferred width update path
+- `view.rs::update_layout()` is the only production path that changes GridView min/max columns
+- tile-level `queue_resize()` calls are expected geometry invalidations, not independent column calculations
+- no second model replacement or hidden column setter is causing the jitter
+
+Corrected fix commits:
+
+- `6304a75` — `Gallery v2: freeze outer viewport width during zoom`
+  - `update_width()` now ignores transient resize/requisition feedback while a zoom animation owns a frozen viewport width
+- `c468955` — `Gallery v2: anchor zoom to outer gallery width`
+  - zoom now captures `last_layout_width`, which originates from the outer gallery surface, instead of `GridView::width()`
+
+Expected result: a zoom step may cross each column boundary once as tile geometry changes, but the same animation must no longer alternate between two widths/column counts such as 1088/1128 and 4/5 repeatedly.
+
+Keep `PICASA_ZOOM_TRACE=1` enabled for the next validation run. If the trace shows one-way boundary crossings and the visible jitter is gone, remove the temporary trace instrumentation and mark animated zoom stable.
