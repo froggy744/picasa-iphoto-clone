@@ -707,3 +707,21 @@ Behavior:
 - no GridView column math, model membership, thumbnail decode policy or zoom preference is changed by this transition
 
 Validation target: double-click/open a visible gallery thumbnail and confirm one continuous photo movement into Lightbox with no flash, jump or incorrect destination geometry. Test both portrait and landscape images, different scroll positions, sidebar open/closed, and repeated open/close cycles. Reverse Lightbox -> thumbnail animation should only be added after the open path is visually validated.
+
+### Lightbox shared-photo transition complete
+
+Status: **COMPLETE**
+
+User validation confirmed the Gallery v2 thumbnail -> Lightbox shared-photo open transition looks correct and should be retained.
+
+Final behavior:
+
+- opening a realized Gallery v2 thumbnail animates that same photo into the Lightbox with a short shared-element scale + slide transition
+- the Lightbox backdrop fades in underneath the moving photo
+- the thumbnail paintable remains available as a visual backstop until the full viewer decode lands
+- non-grid opens continue to use the established instant Lightbox path
+- closing the Lightbox intentionally remains immediate; no reverse Lightbox -> thumbnail animation will be added, per user preference
+- manual gallery zoom animation remains unchanged
+- window resize remains on the validated non-animated live resize path
+
+The Lightbox shared-photo open transition is therefore considered finished unless a future regression is reported.
