@@ -789,6 +789,15 @@ impl Gallery {
         let folder_mode = self.group_mode.get() == GroupMode::Folder;
         let folder_list_mode = folder_mode && !crate::grid::folder_gridview_experiment_enabled();
         if columns == old_columns {
+            // A width-only window resize does not need an explicit GridView
+            // relayout when the column count is unchanged. GTK is already
+            // allocating the widget for the new parent width. Calling
+            // queue_resize() on every drag frame creates unnecessary layout
+            // churn and can amplify the window's minimum-width negotiation.
+            if !tile_size_changed && !folder_list_mode {
+                return;
+            }
+
             // Zooming within the same column count only changes tile geometry.
             // Replacing the Folder ListStore here used to invalidate every
             // realized row and cost ~0.8-1.1s for a 4.5k-photo library.
