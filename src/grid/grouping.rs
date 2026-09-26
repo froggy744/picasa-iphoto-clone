@@ -38,10 +38,14 @@ impl Gallery {
         }
 
         if mode == GroupMode::Folder {
-            // The experiment uses the existing external heading as a sticky
-            // folder indicator because GtkGridView has no full-width header
-            // factory in the GTK version available to PIC.
-            if crate::grid::folder_gridview_experiment_enabled() {
+            // The sectioned renderer owns full-width in-stream headers. The
+            // external sticky heading belongs only to the old GridView fallback.
+            if crate::grid::sectioned_folder_view_enabled() {
+                self.group_header.set_visible(false);
+                self.group_title.set_text("");
+                self.group_count.set_text("");
+                self.sectioned_folder.refresh_model();
+            } else if crate::grid::folder_gridview_experiment_enabled() {
                 self.update_group_header_for_scroll(self.last_scroll_y.get());
             } else {
                 self.group_header.set_visible(false);
