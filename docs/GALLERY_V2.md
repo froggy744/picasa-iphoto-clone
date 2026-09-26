@@ -811,3 +811,37 @@ Final behavior:
 - manual thumbnail zoom and Lightbox open transition remain independent and unchanged
 
 The resize FLIP is considered finished unless a future regression is reported.
+
+## Pointer-anchored Ctrl+wheel zoom
+
+Status: **IMPLEMENTED — runtime validation pending**
+
+Ctrl+wheel zoom now preserves the thumbnail point under the mouse instead of letting GridView reflow from its normal layout origin.
+
+Commits:
+
+- `134134c` — add presentation-only pointer zoom anchor state
+- `bdabdac` — capture the realized thumbnail under the pointer and restore its vertical focal point during each zoom animation frame
+- `73a69af` — track the gallery pointer and route Ctrl+wheel through the anchored zoom path
+
+Behavior:
+
+- only Ctrl+wheel uses the pointer anchor
+- toolbar +/- and Reset keep their previous behavior
+- if the pointer is not over a realized thumbnail, Ctrl+wheel falls back to ordinary zoom
+- the anchor stores photo identity plus the relative vertical point within the tile
+- each animation frame compensates the ScrolledWindow vertical adjustment so that point stays under the pointer while columns reflow
+- no photo model replacement, DB access, thumbnail decode, or Folder membership rebuild is added
+- manual zoom duration remains 180 ms for this first validation; timing should only be changed after the anchored feel is tested
+
+Validation target: place the pointer over a thumbnail away from the top-left corner and Ctrl+wheel in/out across column boundaries. The same photo/vertical point should remain visually anchored instead of the grid appearing to zoom from its origin.
+
+### Pointer zoom compile fix
+
+The first pointer-anchored zoom build failed on gtk4-rs 0.10.3 because `ScrolledWindow::upcast_ref()` was ambiguous when passed to `WidgetExt::compute_bounds`. Since `ScrolledWindow` already implements `IsA<Widget>`, both calls now pass `scrolled` directly.
+
+Commit:
+
+- `3b7c606` — `Gallery v2: fix pointer zoom bounds target type`
+
+No zoom behavior changed; this is a compile-only fix.
