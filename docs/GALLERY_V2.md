@@ -428,3 +428,15 @@ cross compact threshold while sidebar is visible
 The working widening sequence is retained: expand while hidden, then slide the pinned sidebar back in.
 
 Validation target: shrink slowly and quickly through the compact threshold. The sidebar itself should remain visible through the side-by-side -> overlay switch and then visibly slide off the left edge, without the negative allocation warnings seen in v4.
+
+### Responsive sidebar animation timing matched to pin/hover behavior
+
+The existing pin button and hover auto-hide/reveal do not use a separate duration; they rely on libadwaita's built-in `AdwOverlaySplitView::set_show_sidebar()` animation.
+
+Commit:
+
+- `ca2366a` — `Gallery v2: match responsive sidebar drawer timing`
+
+The responsive shrink path still switches to collapsed/overlay mode first to free gallery width, but now waits for one actual rendered frame with the sidebar still visible in overlay mode before calling `set_show_sidebar(false)`. This prevents the collapse and hide from visually merging into a faster cut and ensures the drawer motion uses the same libadwaita animation path/speed as the existing pin and hover auto-hide behavior.
+
+Validation target: compare manual pin hide, hover auto-hide, and resize-triggered hide side-by-side. Their drawer motion should now feel the same; only the responsive path has the extra one-frame setup needed to establish overlay mode before the animation starts.
