@@ -451,11 +451,16 @@ impl SectionedFolderView {
             }
 
             if presses == 2 {
-                let photos = photos.borrow().clone();
                 let index = position as usize;
-                let source = tile_for_click
-                    .transition_paintable()
+                let source_paintable = tile_for_click.transition_paintable().or_else(|| {
+                    let photos_ref = photos.borrow();
+                    let photo = photos_ref.get(index)?;
+                    let key = photo_presentation_key(photo)?;
+                    folder_thumbnail_cache_get(&key)
+                });
+                let source = source_paintable
                     .map(|paintable| (tile_for_click.clone().upcast::<gtk::Widget>(), paintable));
+                let photos = photos.borrow().clone();
                 activate(photos, index, source);
             }
         });
