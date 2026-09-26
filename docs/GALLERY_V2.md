@@ -884,3 +884,27 @@ Commits:
 - `a1f2d5a` — add `PIC_ZOOM_ANCHOR` tracing for capture, temporary tile loss, restore deltas, and non-scrolling realization
 
 Status remains **IMPLEMENTED — runtime validation pending**. No rollback was performed. The current v2 anchor experiment remains in place and is being corrected in place.
+
+### Cursor anchor floating-thumbnail correction
+
+Runtime trace showed the anchor identity and vertical correction were working, but the real GridView cell could move hundreds of pixels horizontally when a column boundary was crossed (for example the same anchor photo moved from x≈436 to x≈1338). The previous per-tile `snapshot.translate()` approach could not reliably draw outside the GridView cell's allocation, so the focal image still appeared to jump.
+
+Current correction keeps the existing v2 work in place and changes only presentation:
+
+- add a dedicated `GtkFixed` layer above the existing `grid_overlay`
+- capture the thumbnail paintable once at the start of the Ctrl+wheel burst
+- hide the real anchor cell while GridView performs normal column reflow
+- resize/reposition the floating copy around the original pointer point on every frame
+- keep correcting the real grid vertically so the eventual handoff does not jump in Y
+- after the burst settles, animate the floating copy to the real cell and reveal the real tile
+- recycled tiles reset opacity to prevent hidden-state leakage
+
+Commits:
+
+- `1b9265e` — add floating zoom-layer state to Gallery
+- `1234000` — add the floating thumbnail layer above the photo grid
+- `bc12278` — reset recycled tile opacity
+- `a6c5f65` — replace in-cell horizontal translation with a floating focal thumbnail
+- `2c429d2` — make weak-layer upgrade explicit for compile clarity
+
+Status: **IMPLEMENTED — runtime validation pending**. No rollback or undo was performed. The zoom ladder remains unchanged.
