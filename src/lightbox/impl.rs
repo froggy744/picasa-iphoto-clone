@@ -1005,6 +1005,14 @@ impl Lightbox {
                             backdrop.set_opacity(linear);
 
                             if linear >= 1.0 {
+                                // If the full viewer decode is still pending,
+                                // keep the source paintable as a seamless visual
+                                // backstop. show_photo() will replace it with the
+                                // full-resolution texture when that result lands.
+                                if picture_for_transition.paintable().is_none() {
+                                    picture_for_transition
+                                        .set_paintable(transition.paintable().as_ref());
+                                }
                                 picture_for_transition.set_opacity(1.0);
                                 backdrop.set_opacity(1.0);
                                 root_for_transition.remove_overlay(transition);
