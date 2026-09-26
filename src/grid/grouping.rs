@@ -294,7 +294,10 @@ impl Gallery {
         self.current_photos.replace(cache.photos.clone());
         self.group_ranges.replace(cache.ranges.clone());
         self.store.splice(0, self.store.n_items(), &cache.photos);
-        
+        if crate::grid::sectioned_folder_view_enabled() {
+            self.sectioned_folder.refresh_model();
+        }
+
         true
     }
 
