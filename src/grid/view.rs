@@ -69,6 +69,12 @@ pub struct Gallery {
     // different column.
     zoom_anchor_layer: Rc<RefCell<Option<glib::WeakRef<gtk::Fixed>>>>,
     zoom_reflow_source: Rc<RefCell<Option<glib::SourceId>>>,
+    // Ctrl+wheel is one interaction transaction, not a sequence of 150 ms
+    // bursts. The focal photo stays owned by the floating anchor until the
+    // modifier is released (or another interaction explicitly finishes it).
+    // If release happens while a reflow is still running, defer handoff until
+    // the current animation reaches stable geometry.
+    zoom_pointer_release_pending: Rc<Cell<bool>>,
     // Invalidates an in-flight frame-clock zoom animation when a newer zoom
     // target arrives. The next animation starts from the current visual size,
     // so rapid wheel input retargets instead of queueing animations.
@@ -781,6 +787,7 @@ impl Gallery {
             pending_zoom_pointer_anchor: Rc::new(RefCell::new(None)),
             zoom_anchor_layer: Rc::new(RefCell::new(None)),
             zoom_reflow_source: Rc::new(RefCell::new(None)),
+            zoom_pointer_release_pending: Rc::new(Cell::new(false)),
             zoom_animation_generation: Rc::new(Cell::new(0)),
             zoom_animation_layout_width: Rc::new(Cell::new(None)),
             resize_flip_generation: Rc::new(Cell::new(0)),
