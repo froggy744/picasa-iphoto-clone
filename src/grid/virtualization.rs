@@ -268,6 +268,7 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_sectioned_root.upcast_ref(), &mut tiles);
         crate::window::debug_log(&format!(
             "GALLERY: set_fit_whole_photo({fit}) applying to {} realized tiles",
             tiles.len()
@@ -288,6 +289,7 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_sectioned_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.set_filename_visible(show);
         }
@@ -1180,6 +1182,7 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_sectioned_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             let Some(photo) = tile.imp().photo.borrow().as_ref().cloned() else {
                 continue;
@@ -1207,6 +1210,7 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_sectioned_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.refresh_thumbnail();
         }
@@ -1217,6 +1221,7 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_sectioned_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.set_favorite_indicator_visible(visible);
         }
@@ -1226,6 +1231,7 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_sectioned_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.refresh_favorite_indicator();
         }
@@ -1329,6 +1335,7 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_sectioned_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             let matches = tile
                 .imp()
@@ -1349,6 +1356,7 @@ impl Gallery {
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
         collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(self.folder_sectioned_root.upcast_ref(), &mut tiles);
         for tile in tiles {
             tile.refresh_availability();
         }
@@ -1600,6 +1608,7 @@ impl Gallery {
         let _folder_root = self.folder_root.clone();
         let replace_generation = self.replace_generation.clone();
         let stream_building = self.stream_building.clone();
+        let sectioned_folder = self.sectioned_folder.clone();
 
         glib::idle_add_local(move || {
             if replace_generation.get() != generation {
@@ -1649,7 +1658,12 @@ impl Gallery {
                         );
                     }
 
-                    if crate::grid::folder_gridview_experiment_enabled() {
+                    if crate::grid::sectioned_folder_view_enabled() {
+                        group_header.set_visible(false);
+                        group_title.set_text("");
+                        group_count.set_text("");
+                        sectioned_folder.refresh_model();
+                    } else if crate::grid::folder_gridview_experiment_enabled() {
                         update_group_header_for_index_for(
                             &group_mode,
                             &group_ranges,
