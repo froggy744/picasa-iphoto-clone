@@ -3132,6 +3132,7 @@ fn start_photo_export_single(
 
                     let window = window_for_breakpoint.clone();
                     let split = main_split_for_breakpoint.clone();
+                    let sidebar = sidebar_for_breakpoint.clone();
                     let transition = transition.clone();
                     let generation = generation.clone();
                     glib::timeout_add_local_once(
@@ -3142,7 +3143,7 @@ fn start_photo_export_single(
                             }
                             if window.width() <= SIDEBAR_COMPACT_ENTER_WIDTH {
                                 split.set_collapsed(true);
-                            } else if sidebar::is_pinned(&sidebar_for_breakpoint) {
+                            } else if sidebar::is_pinned(&sidebar) {
                                 split.set_show_sidebar(true);
                             }
                             transition.set(false);
