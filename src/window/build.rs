@@ -2002,10 +2002,8 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     grid_surface.set_hexpand(true);
     grid_surface.set_vexpand(true);
     grid_surface.add_css_class("photo-grid");
-    // Date/History grouping and direct-GridView Folder mode share this
-    // lightweight sticky presentation header. Folder mode styles it with the
-    // existing Picasa-style folder icon/title/count/separator classes; the
-    // legacy Folder ListView keeps its in-flow section headers.
+    // Date grouping keeps its existing heading. Folder grouping hides this
+    // widget and renders its headers inside the folder scroller instead.
     grid_surface.append(&gallery.group_header);
     grid_surface.append(&gallery_scroll_stack);
 
