@@ -59,10 +59,6 @@ pub struct Gallery {
     // the user is still spinning so crossing several column boundaries triggers
     // one Folder row rebuild instead of one per notch.
     pending_zoom_width: Rc<Cell<Option<i32>>>,
-    // Optional Ctrl+wheel focal point. This is presentation state only: it
-    // keeps the photo under the pointer vertically stable while GridView
-    // reflows, without changing photo membership or the backing model.
-    pending_zoom_pointer_anchor: Rc<RefCell<Option<ZoomPointerAnchor>>>,
     zoom_reflow_source: Rc<RefCell<Option<glib::SourceId>>>,
     // Invalidates an in-flight frame-clock zoom animation when a newer zoom
     // target arrives. The next animation starts from the current visual size,
@@ -773,7 +769,6 @@ impl Gallery {
             folder_pending_reframe: Rc::new(Cell::new(false)),
             folder_reframe_photo: Rc::new(Cell::new(None)),
             pending_zoom_width: Rc::new(Cell::new(None)),
-            pending_zoom_pointer_anchor: Rc::new(RefCell::new(None)),
             zoom_reflow_source: Rc::new(RefCell::new(None)),
             zoom_animation_generation: Rc::new(Cell::new(0)),
             zoom_animation_layout_width: Rc::new(Cell::new(None)),
