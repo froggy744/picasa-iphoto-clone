@@ -403,14 +403,27 @@ fn main() {
                     if let Some(new_y) = photo_y(photo_id, &sections, &geometry.borrow()) {
                         let upper = (adj.upper() - adj.page_size()).max(adj.lower());
                         adj.set_value((new_y - offset).clamp(adj.lower(), upper));
-                        let after = anchor_photo(adj.value(), &sections, &geometry.borrow()).map(|x| x.0);
-                        last_anchor_ok.set(after == Some(photo_id));
+                        // Validate the anchor by pixel position, not by asking
+                        // which photo is first in the newly wrapped row. A column-count
+                        // change can put the same anchored photo on a row whose first
+                        // photo has a different index even when the anchor is perfect.
+                        let actual_offset = new_y - adj.value();
+                        let anchor_error_px = (actual_offset - offset).abs();
+                        let anchor_visible = actual_offset >= 0.0
+                            && actual_offset <= adj.page_size()
+                                + f64::from(geometry.borrow().tile_height);
+                        let clamped = (adj.value() - adj.lower()).abs() < 0.5
+                            || (adj.value() - upper).abs() < 0.5;
+                        let anchor_ok = anchor_error_px <= 0.75 || clamped;
+                        last_anchor_ok.set(anchor_ok);
                         eprintln!(
-                            "SECTIONED_ZOOM old={} new={} anchor={} anchor_after={:?} geometry_us={} live_target_scroll={:.1}",
+                            "SECTIONED_ZOOM old={} new={} anchor={} anchor_error_px={:.3} anchor_visible={} clamped={} geometry_us={} live_target_scroll={:.1}",
                             old_zoom,
                             new_zoom,
                             photo_id,
-                            after,
+                            anchor_error_px,
+                            anchor_visible,
+                            clamped,
                             geometry.borrow().last_rebuild_us,
                             adj.value(),
                         );
