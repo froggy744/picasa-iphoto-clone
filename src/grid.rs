@@ -45,6 +45,10 @@ pub(crate) fn folder_gridview_experiment_enabled() -> bool {
     !std::env::var("PICASA_LEGACY_FOLDER_LIST").is_ok_and(|value| value == "1")
 }
 
+fn zoom_trace_enabled() -> bool {
+    std::env::var_os("PICASA_ZOOM_TRACE").is_some()
+}
+
 pub(crate) fn nearest_zoom_level(width: i32) -> i32 {
     let mut best = ZOOM_LEVELS[0];
     for level in ZOOM_LEVELS {
