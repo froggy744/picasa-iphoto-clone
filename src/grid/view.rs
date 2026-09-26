@@ -83,13 +83,14 @@ impl Gallery {
         photos: &[Photo],
         initial_tile_width: i32,
         selected: impl Fn(Option<PhotoObject>) + 'static,
-        activate: impl Fn(Vec<PhotoObject>, usize) + 'static,
+        activate: impl Fn(Vec<PhotoObject>, usize, Option<(gtk::Widget, gtk::gdk::Paintable)>) + 'static,
         context_menu: impl Fn(PhotoObject, gtk::Widget, f64, f64) + 'static,
         unavailable: impl Fn(PhotoObject, gtk::Widget) + 'static,
         on_zoom_changed: impl Fn(i32) + 'static,
     ) -> Self {
         let selected: Rc<dyn Fn(Option<PhotoObject>)> = Rc::new(selected);
-        let activate: Rc<dyn Fn(Vec<PhotoObject>, usize)> = Rc::new(activate);
+        let activate: Rc<dyn Fn(Vec<PhotoObject>, usize, Option<(gtk::Widget, gtk::gdk::Paintable)>)> =
+            Rc::new(activate);
         let context_menu: Rc<dyn Fn(PhotoObject, gtk::Widget, f64, f64)> = Rc::new(context_menu);
         let unavailable: Rc<dyn Fn(PhotoObject, gtk::Widget)> = Rc::new(unavailable);
         let on_zoom_changed: Rc<dyn Fn(i32)> = Rc::new(on_zoom_changed);
@@ -389,7 +390,22 @@ impl Gallery {
                 .iter()
                 .position(|photo| photo.id() == activated.id())
                 .unwrap_or(position as usize);
-            (activate_for_grid)(photos, index);
+            let source = {
+                let mut tiles = Vec::new();
+                collect_tiles(root.upcast_ref(), &mut tiles);
+                tiles
+                    .into_iter()
+                    .find(|tile| {
+                        tile.photo()
+                            .as_ref()
+                            .is_some_and(|photo| photo.id() == activated.id())
+                    })
+                    .and_then(|tile| {
+                        tile.transition_paintable()
+                            .map(|paintable| (tile.upcast::<gtk::Widget>(), paintable))
+                    })
+            };
+            (activate_for_grid)(photos, index, source);
         });
 
         // Folder mode is a flat virtualized ListView. Each Photos model item
