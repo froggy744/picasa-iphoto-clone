@@ -756,7 +756,8 @@ impl SectionedFolderView {
             let local = index - range.start as u32;
             let row = local / columns;
             let col = local % columns;
-            let (start_x, gap) = self.horizontal_grid_metrics(width);
+            let (start_x, gap) =
+                self.horizontal_grid_metrics(self.geometry_width.get().max(1));
             let x = start_x
                 + f64::from(col) * (f64::from(self.tile_width.get()) + gap);
             let y = geometry[section_index].first_photo_y + f64::from(row) * row_height;
@@ -819,7 +820,7 @@ impl SectionedFolderView {
         }
 
         let started = Instant::now();
-        let duration_s = 0.18_f64;
+        let duration_s = 0.30_f64;
         let weak = Rc::downgrade(self);
         self.root.add_tick_callback(move |_, _| {
             let Some(view) = weak.upgrade() else {
