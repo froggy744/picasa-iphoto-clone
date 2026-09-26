@@ -302,6 +302,7 @@ impl Gallery {
                     // column. Hide it while the floating copy carries the visual
                     // identity under the pointer.
                     tile.set_opacity(0.0);
+                    set_grid_zoom_anchor_photo_id(Some(photo_id));
                     layer = Some(anchor_layer);
                     ghost = Some(picture);
                 }
@@ -352,9 +353,10 @@ impl Gallery {
             }
         }
 
+        clear_grid_zoom_anchor_photo_id(anchor.photo_id);
         let mut tiles = Vec::new();
         collect_tiles(self.root.upcast_ref(), &mut tiles);
-        if let Some(tile) = tiles.into_iter().find(|tile| {
+        for tile in tiles.into_iter().filter(|tile| {
             tile.imp()
                 .photo
                 .borrow()
@@ -408,6 +410,9 @@ impl Gallery {
 
         tile.set_presentation_offset(0.0, 0.0);
         if let (Some(layer), Some(ghost)) = (anchor.layer.as_ref(), anchor.ghost.as_ref()) {
+            // Reassert ownership by photo id on every settled frame. GTK may
+            // have recycled the original widget since capture.
+            set_grid_zoom_anchor_photo_id(Some(anchor.photo_id));
             tile.set_opacity(0.0);
             let width = bounds.width().max(1.0);
             let height = bounds.height().max(1.0);
@@ -463,6 +468,7 @@ impl Gallery {
                     layer.remove(ghost);
                 }
             }
+            clear_grid_zoom_anchor_photo_id(anchor.photo_id);
             return;
         };
 
@@ -470,6 +476,7 @@ impl Gallery {
             if ghost.parent().is_some() {
                 layer.remove(&ghost);
             }
+            clear_grid_zoom_anchor_photo_id(anchor.photo_id);
             tile.set_opacity(1.0);
             return;
         };
@@ -496,6 +503,9 @@ impl Gallery {
                     layer.remove(ghost);
                 }
                 if !same_photo_still_owned {
+                    // Only clear if this release still owns the global id. A
+                    // newer anchor for another photo may already have replaced it.
+                    clear_grid_zoom_anchor_photo_id(anchor.photo_id);
                     tile.set_opacity(1.0);
                 }
                 return glib::ControlFlow::Break;
@@ -518,6 +528,7 @@ impl Gallery {
                 if ghost.parent().is_some() {
                     layer.remove(ghost);
                 }
+                clear_grid_zoom_anchor_photo_id(anchor.photo_id);
                 tile.set_opacity(1.0);
                 glib::ControlFlow::Break
             } else {
