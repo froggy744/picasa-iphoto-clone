@@ -3105,7 +3105,6 @@ fn start_photo_export_single(
     // Small hysteresis avoids chattering when the user drags around 1050 px.
     const SIDEBAR_COMPACT_ENTER_WIDTH: i32 = 1050;
     const SIDEBAR_COMPACT_EXIT_WIDTH: i32 = 1080;
-    const SIDEBAR_SLIDE_MS: u64 = 280;
 
     let sidebar_breakpoint_transition = Rc::new(Cell::new(false));
     let sidebar_breakpoint_generation = Rc::new(Cell::new(0u64));
@@ -3123,32 +3122,24 @@ fn start_photo_export_single(
                 && width <= SIDEBAR_COMPACT_ENTER_WIDTH
                 && !transition.get()
             {
-                let next_generation = generation.get().wrapping_add(1);
-                generation.set(next_generation);
+                generation.set(generation.get().wrapping_add(1));
                 transition.set(true);
 
                 if main_split_for_breakpoint.shows_sidebar() {
-                    main_split_for_breakpoint.set_show_sidebar(false);
+                    // Free the gallery width first, but keep the sidebar visible.
+                    // In collapsed mode the sidebar becomes an overlay, so the
+                    // shrinking window no longer squeezes the side-by-side panes
+                    // into invalid/negative allocations while the drawer moves.
+                    main_split_for_breakpoint.set_collapsed(true);
 
-                    let window = window_for_breakpoint.clone();
                     let split = main_split_for_breakpoint.clone();
-                    let sidebar = sidebar_for_breakpoint.clone();
                     let transition = transition.clone();
-                    let generation = generation.clone();
-                    glib::timeout_add_local_once(
-                        Duration::from_millis(SIDEBAR_SLIDE_MS),
-                        move || {
-                            if generation.get() != next_generation {
-                                return;
-                            }
-                            if window.width() <= SIDEBAR_COMPACT_ENTER_WIDTH {
-                                split.set_collapsed(true);
-                            } else if sidebar::is_pinned(&sidebar) {
-                                split.set_show_sidebar(true);
-                            }
-                            transition.set(false);
-                        },
-                    );
+                    glib::idle_add_local_once(move || {
+                        // Now that the sidebar is an overlay, use the normal
+                        // animated drawer path to slide it off the left edge.
+                        split.set_show_sidebar(false);
+                        transition.set(false);
+                    });
                 } else {
                     main_split_for_breakpoint.set_collapsed(true);
                     transition.set(false);
