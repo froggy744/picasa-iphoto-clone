@@ -338,11 +338,11 @@ fn install_smooth_gallery_scroll(
             target_for_scroll.set(adjustment_for_scroll.value());
 
             if ctrl_zoom {
-                // Runtime validation on Fedora/Wayland showed that
-                // EventController::current_event().position() is not available
-                // for these wheel events, while the capture-phase motion
-                // controller reliably tracks the pointer for every Ctrl+wheel
-                // detent. Use that proven source only. If it is ever missing,
+                // Runtime validation on Fedora/Wayland showed that the
+                // attempted raw-event-to-widget coordinate path returned no
+                // usable coordinate for these wheel events, while the
+                // capture-phase motion controller tracked the pointer for every
+                // Ctrl+wheel detent. Use that proven source only. If it is ever missing,
                 // consume the event instead of falling back to unanchored zoom,
                 // which would make the gallery jump.
                 let pointer = zoom_pointer_for_scroll.get();
