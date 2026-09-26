@@ -367,6 +367,20 @@ impl Gallery {
         let generation = self.zoom_animation_generation.get().wrapping_add(1);
         self.zoom_animation_generation.set(generation);
         set_grid_zoom_animation_active(true);
+        if zoom_trace_enabled() {
+            eprintln!(
+                "PIC_ZOOM_TRACE begin generation={} start_width={} target_width={} columns={} realized={}",
+                generation,
+                start_width,
+                target_width,
+                self.current_columns.get(),
+                {
+                    let mut tiles = Vec::new();
+                    collect_tiles(self.root.upcast_ref(), &mut tiles);
+                    tiles.len()
+                }
+            );
+        }
         let started = Instant::now();
         let this = self.clone();
 
@@ -397,6 +411,18 @@ impl Gallery {
                 // once. Intermediate animation frames never touch settings.
                 this.apply_tile_geometry(target_width, target_height, true);
                 set_grid_zoom_animation_active(false);
+                if zoom_trace_enabled() {
+                    let mut tiles = Vec::new();
+                    collect_tiles(this.root.upcast_ref(), &mut tiles);
+                    eprintln!(
+                        "PIC_ZOOM_TRACE end generation={} width={} columns={} realized={} elapsed_ms={:.1}",
+                        generation,
+                        target_width,
+                        this.current_columns.get(),
+                        tiles.len(),
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
+                }
                 glib::ControlFlow::Break
             } else {
                 glib::ControlFlow::Continue
