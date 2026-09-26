@@ -793,3 +793,21 @@ User feedback requested a slower, more readable resize transition. The live wind
 Commit:
 
 - `dd2c1e5` — `Gallery v2: slow resize FLIP to 300 ms`
+
+### Resize FLIP validated complete
+
+Status: **COMPLETE**
+
+User validation confirmed the presentation-only resize FLIP feels correct at **300 ms**.
+
+Final behavior:
+
+- GTK computes the real destination GridView layout immediately
+- only realized thumbnail snapshots receive temporary X/Y presentation offsets
+- offsets ease back to zero over 300 ms
+- no tile-size manipulation, synthetic widths, model replacement or column-math interference
+- sidebar reveal/hide cancels and clears FLIP offsets before structural reallocation
+- rapid window resizing retargets from the current visual position
+- manual thumbnail zoom and Lightbox open transition remain independent and unchanged
+
+The resize FLIP is considered finished unless a future regression is reported.
