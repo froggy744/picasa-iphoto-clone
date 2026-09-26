@@ -6,6 +6,22 @@ pub(crate) fn set_grid_zoom_animation_active(active: bool) {
     GRID_ZOOM_ANIMATION_ACTIVE.with(|flag| flag.set(active));
 }
 
+pub(crate) fn set_grid_zoom_anchor_photo_id(photo_id: Option<i64>) {
+    GRID_ZOOM_ANCHOR_PHOTO_ID.with(|current| current.set(photo_id));
+}
+
+pub(crate) fn clear_grid_zoom_anchor_photo_id(photo_id: i64) {
+    GRID_ZOOM_ANCHOR_PHOTO_ID.with(|current| {
+        if current.get() == Some(photo_id) {
+            current.set(None);
+        }
+    });
+}
+
+fn grid_zoom_anchor_photo_id() -> Option<i64> {
+    GRID_ZOOM_ANCHOR_PHOTO_ID.with(Cell::get)
+}
+
 fn grid_scrub_active() -> bool {
     GRID_SCRUB_ACTIVE.with(Cell::get)
 }
@@ -672,7 +688,15 @@ impl SquareTile {
         // GridView may recycle this widget during a zoom/resize reflow; never
         // let an anchor/FLIP translation leak onto the newly bound photo.
         self.set_presentation_offset(0.0, 0.0);
-        self.set_opacity(1.0);
+        // Cursor-anchored zoom owns the visual identity by photo id, not by
+        // this recycled widget. If GTK rebinds the focal photo into another
+        // GridView cell during a column-count change, keep that real cell
+        // transparent until the floating copy finishes its handoff.
+        self.set_opacity(if grid_zoom_anchor_photo_id() == Some(photo.id()) {
+            0.0
+        } else {
+            1.0
+        });
         self.set_photo_deferred(photo);
         self.load_visual();
         if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_THUMBNAIL gtk_bind elapsed_us={} id={}", started.elapsed().as_micros(), photo.id()); }
