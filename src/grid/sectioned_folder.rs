@@ -591,3 +591,34 @@ impl SectionedFolderView {
         }
     }
 }
+
+
+impl Gallery {
+    pub fn attach_sectioned_folder_scroll(self: &Rc<Self>, scrolled: &gtk::ScrolledWindow) {
+        self.sectioned_folder.attach_scroll(scrolled);
+    }
+
+    pub fn refresh_sectioned_folder(self: &Rc<Self>) {
+        self.sectioned_folder.refresh_model();
+    }
+
+    pub fn using_sectioned_folder_view(&self) -> bool {
+        self.group_mode.get() == GroupMode::Folder && crate::grid::sectioned_folder_view_enabled()
+    }
+
+    fn sectioned_capture_anchor(&self) -> Option<(i64, f64)> {
+        self.sectioned_folder.capture_center_anchor()
+    }
+
+    fn sectioned_restore_anchor(self: &Rc<Self>, anchor: Option<(i64, f64)>) {
+        self.sectioned_folder.invalidate_geometry();
+        self.sectioned_folder.refresh();
+        if let Some((photo_id, offset)) = anchor {
+            self.sectioned_folder.restore_anchor(photo_id, offset);
+        }
+    }
+
+    fn sectioned_sync_selection(&self) {
+        self.sectioned_folder.sync_selection();
+    }
+}
