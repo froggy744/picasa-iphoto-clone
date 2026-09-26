@@ -1104,12 +1104,20 @@ impl Gallery {
     /// only texture creation/application returns to GTK. The hot ListView bind
     /// path stays strictly RAM-only.
     fn visible_folder_photo_index_span(&self) -> Option<(usize, usize)> {
-        if self.group_mode.get() != GroupMode::Folder || self.folder_root.height() <= 0 {
+        if self.group_mode.get() != GroupMode::Folder {
             return None;
         }
-        let viewport = self.folder_root.height() as f32;
+        let root: gtk::Widget = if crate::grid::sectioned_folder_view_enabled() {
+            self.folder_sectioned_root.clone().upcast()
+        } else {
+            self.folder_root.clone().upcast()
+        };
+        if root.height() <= 0 {
+            return None;
+        }
+        let viewport = root.height() as f32;
         let mut tiles = Vec::new();
-        collect_tiles(self.folder_root.upcast_ref(), &mut tiles);
+        collect_tiles(&root, &mut tiles);
         let mut first = usize::MAX;
         let mut last = 0usize;
         let mut found = false;
@@ -1120,7 +1128,7 @@ impl Gallery {
             let Some(index) = tile.imp().photo_index.get() else {
                 continue;
             };
-            let Some(bounds) = tile.compute_bounds(&self.folder_root) else {
+            let Some(bounds) = tile.compute_bounds(&root) else {
                 continue;
             };
             if bounds.y() + bounds.height() < 0.0 || bounds.y() > viewport {
