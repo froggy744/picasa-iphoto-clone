@@ -5,6 +5,7 @@ pub struct Gallery {
     // in a Box/Viewport to implement grouping.
     pub root: gtk::GridView,
     pub folder_root: gtk::ListView,
+    pub folder_sectioned_root: gtk::Fixed,
     pub folder_rubberband: gtk::DrawingArea,
     pub group_header: gtk::Box,
     group_title: gtk::Label,
@@ -78,6 +79,7 @@ pub struct Gallery {
     // (Cover), so portrait thumbnails show portrait, not a centre strip.
     fit_whole_photo: Rc<Cell<bool>>,
     show_file_names: Rc<Cell<bool>>,
+    sectioned_folder: Rc<SectionedFolderView>,
     on_zoom_changed: Rc<dyn Fn(i32)>,
 }
 
@@ -146,6 +148,29 @@ impl Gallery {
         let fit_whole_photo_for_setup = fit_whole_photo.clone();
         let show_file_names = Rc::new(Cell::new(false));
         let show_file_names_for_setup = show_file_names.clone();
+
+        // Folder mode keeps the same flat PhotoObject model as the main GridView,
+        // but renders it through a section-aware virtualized surface so folder
+        // headers can span the full width and every folder begins on a fresh row.
+        // These grouping cells used to be constructed only in Self below; create
+        // them here so the sectioned surface shares the exact same metadata.
+        let group_mode = Rc::new(Cell::new(GroupMode::None));
+        let group_date = Rc::new(Cell::new(GroupDate::Taken));
+        let group_ranges = Rc::new(RefCell::new(Vec::new()));
+        let sectioned_folder = SectionedFolderView::new(
+            current_photos.clone(),
+            group_ranges.clone(),
+            selection.clone(),
+            current_columns.clone(),
+            tile_width.clone(),
+            tile_height.clone(),
+            fit_whole_photo.clone(),
+            show_file_names.clone(),
+            activate.clone(),
+            context_menu.clone(),
+            unavailable.clone(),
+        );
+        let folder_sectioned_root = sectioned_folder.root().clone();
         factory.connect_setup(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
@@ -737,6 +762,7 @@ impl Gallery {
         let gallery = Self {
             root,
             folder_root,
+            folder_sectioned_root,
             folder_rubberband,
             group_header,
             group_title,
@@ -759,9 +785,9 @@ impl Gallery {
             replace_generation: Rc::new(Cell::new(0)),
             stream_building: Rc::new(Cell::new(false)),
             pending_folder_target: Rc::new(RefCell::new(None)),
-            group_mode: Rc::new(Cell::new(GroupMode::None)),
-            group_date: Rc::new(Cell::new(GroupDate::Taken)),
-            group_ranges: Rc::new(RefCell::new(Vec::new())),
+            group_mode,
+            group_date,
+            group_ranges,
             last_scroll_y: Rc::new(Cell::new(0.0)),
             zoom_anchor: Rc::new(Cell::new(None)),
             folder_scroll_generation: Rc::new(Cell::new(0)),
@@ -776,6 +802,7 @@ impl Gallery {
             auto_default_zoom: Cell::new(false),
             fit_whole_photo,
             show_file_names,
+            sectioned_folder,
             on_zoom_changed,
         };
         gallery.replace(photos);
