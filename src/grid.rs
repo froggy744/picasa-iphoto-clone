@@ -105,6 +105,11 @@ thread_local! {
         const { RefCell::new(VecDeque::new()) };
     static GRID_SCRUB_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static GRID_ZOOM_ANIMATION_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    // Presentation-only identity of the photo currently represented by the
+    // floating Ctrl+wheel zoom copy. GridView may recycle the original widget
+    // during a column-count reflow, so any newly bound widget for this photo
+    // must remain hidden until the floating copy hands off.
+    static GRID_ZOOM_ANCHOR_PHOTO_ID: Cell<Option<i64>> = const { Cell::new(None) };
 }
 
 // The grid stays one Rust module for private-state compatibility, while its
