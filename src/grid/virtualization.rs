@@ -228,9 +228,14 @@ impl Gallery {
     /// size. Falls back to the ladder level nearest the legacy fixed default
     /// before the first real layout is known.
     pub fn reset_zoom(self: &Rc<Self>) {
+        let folder_sectioned_mode = self.group_mode.get() == GroupMode::Folder
+            && crate::grid::sectioned_folder_view_enabled();
         let folder_list_mode = self.group_mode.get() == GroupMode::Folder
+            && !folder_sectioned_mode
             && !crate::grid::folder_gridview_experiment_enabled();
-        let width = if folder_list_mode {
+        let width = if folder_sectioned_mode {
+            self.folder_sectioned_root.width()
+        } else if folder_list_mode {
             self.folder_root.width()
         } else {
             self.root.width()
@@ -588,7 +593,8 @@ impl Gallery {
     pub fn queue_visible_grid_cached_tiles_async(&self, budget: usize) -> usize {
         if budget == 0
             || (self.group_mode.get() == GroupMode::Folder
-                && !crate::grid::folder_gridview_experiment_enabled())
+                && (crate::grid::sectioned_folder_view_enabled()
+                    || !crate::grid::folder_gridview_experiment_enabled()))
             || self.root.height() <= 0
         {
             return 0;
@@ -644,7 +650,8 @@ impl Gallery {
     /// finished thumbnails while the scrub is still moving.
     pub fn apply_visible_grid_cached_paintables(&self) -> usize {
         if (self.group_mode.get() == GroupMode::Folder
-            && !crate::grid::folder_gridview_experiment_enabled())
+            && (crate::grid::sectioned_folder_view_enabled()
+                || !crate::grid::folder_gridview_experiment_enabled()))
             || self.root.height() <= 0
         {
             return 0;
@@ -695,7 +702,8 @@ impl Gallery {
     ) -> usize {
         if budget == 0
             || (self.group_mode.get() == GroupMode::Folder
-                && !crate::grid::folder_gridview_experiment_enabled())
+                && (crate::grid::sectioned_folder_view_enabled()
+                    || !crate::grid::folder_gridview_experiment_enabled()))
         {
             return 0;
         }
@@ -752,7 +760,8 @@ impl Gallery {
 
     fn visible_grid_photo_index_span(&self) -> Option<(usize, usize)> {
         if (self.group_mode.get() == GroupMode::Folder
-            && !crate::grid::folder_gridview_experiment_enabled())
+            && (crate::grid::sectioned_folder_view_enabled()
+                || !crate::grid::folder_gridview_experiment_enabled()))
             || self.root.height() <= 0
         {
             return None;
@@ -790,7 +799,8 @@ impl Gallery {
     /// queues the correct visible thumbnail.
     pub fn refresh_visible_grid_tiles(&self) -> usize {
         if (self.group_mode.get() == GroupMode::Folder
-            && !crate::grid::folder_gridview_experiment_enabled())
+            && (crate::grid::sectioned_folder_view_enabled()
+                || !crate::grid::folder_gridview_experiment_enabled()))
             || self.root.height() <= 0
         {
             return 0;
@@ -823,7 +833,8 @@ impl Gallery {
     pub fn prefetch_grid_cached_tiles(&self, budget: usize, direction: f64) -> usize {
         if budget == 0
             || (self.group_mode.get() == GroupMode::Folder
-                && !crate::grid::folder_gridview_experiment_enabled())
+                && (crate::grid::sectioned_folder_view_enabled()
+                    || !crate::grid::folder_gridview_experiment_enabled()))
         {
             return 0;
         }
