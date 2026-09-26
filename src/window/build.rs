@@ -3099,8 +3099,11 @@ fn start_photo_export_single(
         adw::BreakpointCondition::parse("max-width: 1050px")
             .expect("valid compact sidebar breakpoint"),
     );
+    // Only change the presentation mode at the breakpoint. Sidebar
+    // visibility is animated by the collapsed-notify handler in layout.rs.
+    // Setting collapsed + show-sidebar=false atomically makes the sidebar
+    // disappear before the normal drawer animation has a chance to run.
     compact.add_setter(&main_split, "collapsed", Some(&true.to_value()));
-    compact.add_setter(&main_split, "show-sidebar", Some(&false.to_value()));
     window.add_breakpoint(compact);
 
     crate::css::install_foundation(&display);
