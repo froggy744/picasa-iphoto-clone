@@ -55,6 +55,7 @@ struct SectionedFolderView {
     selection_anchor: Rc<Cell<Option<u32>>>,
     scroll_animation_generation: Cell<u64>,
     reflow_animation_generation: Cell<u64>,
+    reflow_active: Cell<bool>,
 }
 
 impl SectionedFolderView {
@@ -126,6 +127,7 @@ impl SectionedFolderView {
             selection_anchor: Rc::new(Cell::new(None)),
             scroll_animation_generation: Cell::new(0),
             reflow_animation_generation: Cell::new(0),
+            reflow_active: Cell::new(false),
         });
 
         let keyboard = gtk::EventControllerKey::new();
@@ -576,6 +578,7 @@ impl SectionedFolderView {
                 let live = self.live_tiles.borrow();
                 live.get(&index).cloned()
             };
+            let was_existing = existing.is_some();
             let tile = if let Some(tile) = existing {
                 tile
             } else {
@@ -603,15 +606,23 @@ impl SectionedFolderView {
                 tile
             };
 
-            tile.tile
-                .set_tile_size(self.tile_width.get(), self.tile_height.get());
             tile.tile.set_manual_selected(self.selection.is_selected(index));
 
-            let (start_x, gap) = self.horizontal_grid_metrics(self.geometry_width.get());
-            let x = start_x
-                + f64::from(col) * (f64::from(self.tile_width.get()) + gap);
-            let y = geometry[section_index].first_photo_y + f64::from(row) * row_height;
-            self.root.move_(&tile.tile, x, y);
+            // While a reflow is active, the frame-clock callback owns position
+            // and size for already-realized tiles. A normal allocation/scroll
+            // refresh must not teleport those widgets to their destination.
+            // Newly realized overscan tiles still start at their correct target.
+            if !self.reflow_active.get() || !was_existing {
+                tile.tile
+                    .set_tile_size(self.tile_width.get(), self.tile_height.get());
+                let (start_x, gap) =
+                    self.horizontal_grid_metrics(self.geometry_width.get());
+                let x = start_x
+                    + f64::from(col) * (f64::from(self.tile_width.get()) + gap);
+                let y =
+                    geometry[section_index].first_photo_y + f64::from(row) * row_height;
+                self.root.move_(&tile.tile, x, y);
+            }
         }
         drop(photos);
 
@@ -638,6 +649,7 @@ impl SectionedFolderView {
                 let live = self.live_headers.borrow();
                 live.get(&section_index).cloned()
             };
+            let header_was_existing = existing.is_some();
             let label = if let Some(label) = existing {
                 label
             } else {
@@ -669,8 +681,10 @@ impl SectionedFolderView {
                 (width - (SECTIONED_SIDE_MARGIN * 2.0) as i32).max(1),
                 SECTIONED_HEADER_HEIGHT as i32,
             );
-            self.root
-                .move_(&label, SECTIONED_SIDE_MARGIN, geometry[section_index].header_y);
+            if !self.reflow_active.get() || !header_was_existing {
+                self.root
+                    .move_(&label, SECTIONED_SIDE_MARGIN, geometry[section_index].header_y);
+            }
         }
     }
 
@@ -681,6 +695,9 @@ impl SectionedFolderView {
     }
 
     fn refresh_model(self: &Rc<Self>) {
+        self.reflow_animation_generation
+            .set(self.reflow_animation_generation.get().wrapping_add(1));
+        self.reflow_active.set(false);
         // A replacement can keep the same numeric positions while changing
         // PhotoObject metadata. Recycle the bounded realized set so every
         // visible tile is rebound exactly once to the current model.
@@ -779,6 +796,7 @@ impl SectionedFolderView {
         self.reflow_animation_generation
             .set(self.reflow_animation_generation.get().wrapping_add(1));
         let generation = self.reflow_animation_generation.get();
+        self.reflow_active.set(true);
 
         self.invalidate_geometry();
         self.refresh();
@@ -878,6 +896,7 @@ impl SectionedFolderView {
             }
 
             if t >= 1.0 {
+                view.reflow_active.set(false);
                 view.refresh();
                 if std::env::var_os("PICASA_TRACE").is_some() {
                     eprintln!(
