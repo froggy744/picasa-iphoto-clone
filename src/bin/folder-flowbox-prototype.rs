@@ -48,7 +48,7 @@ fn build_dataset() -> (gtk::StringList, Vec<FolderSection>) {
         let count = if folder_index == huge_folder {
             2_000
         } else {
-            let extra = u32::from(normal_index < remainder);
+            let extra = if normal_index < remainder { 1 } else { 0 };
             normal_index += 1;
             base + extra
         };
@@ -134,6 +134,23 @@ fn main() {
             row.append(&header);
             row.append(&flow);
             item.set_child(Some(&row));
+        });
+
+        factory.connect_unbind(|_, item| {
+            let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let Some(row) = item.child().and_downcast::<gtk::Box>() else {
+                return;
+            };
+            if let Some(header) = row.first_child().and_downcast::<gtk::Label>() {
+                header.set_label("");
+            }
+            if let Some(flow) = row.last_child().and_downcast::<gtk::FlowBox>() {
+                // Critical for this experiment: recycled outer ListView rows
+                // must release every tile from the folder they just left.
+                flow.unbind_model();
+            }
         });
 
         {
