@@ -1991,10 +1991,15 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     let sidebar_layout_settle_for_tick = sidebar_layout_settle.clone();
     gallery_scroll_stack.add_tick_callback(move |surface, _clock| {
         gallery_for_resize.drain_thumbnail_display_completions();
-        if should_observe_width(
-            sidebar_resize_active_for_tick.get(),
-            sidebar_hover_layout_freeze_for_tick.get(),
-        ) {
+        let sectioned_live_resize = gallery_for_resize.using_sectioned_folder_view()
+            && sidebar_resize_active_for_tick.get()
+            && !sidebar_hover_layout_freeze_for_tick.get();
+        if sectioned_live_resize
+            || should_observe_width(
+                sidebar_resize_active_for_tick.get(),
+                sidebar_hover_layout_freeze_for_tick.get(),
+            )
+        {
             let width = surface.width();
             if width > 100 {
                 if gallery_for_resize.using_sectioned_folder_view() {
