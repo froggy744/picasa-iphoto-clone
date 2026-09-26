@@ -267,7 +267,7 @@ impl Gallery {
                 .zoom_anchor_layer
                 .borrow()
                 .as_ref()
-                .and_then(glib::WeakRef::upgrade)
+                .and_then(|weak| weak.upgrade())
             {
                 if let (Some(point), Some(paintable)) = (
                     scrolled.compute_point(
