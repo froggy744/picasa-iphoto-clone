@@ -441,6 +441,13 @@ impl SquareTile {
             return false;
         };
         picture.set_paintable(Some(paintable));
+        if zoom_trace_enabled() && grid_zoom_animation_active() {
+            eprintln!(
+                "PIC_ZOOM_TRACE paintable_assign id={} position={:?}",
+                photo.id(),
+                self.imp().photo_index.get()
+            );
+        }
         if picture.has_css_class("missing-thumbnail") {
             picture.remove_css_class("missing-thumbnail");
         }
@@ -616,6 +623,13 @@ impl SquareTile {
     fn unload_visual(&self) {
         self.imp().visual_loaded.set(false);
         self.imp().applied_visual_key.borrow_mut().take();
+        if zoom_trace_enabled() && grid_zoom_animation_active() {
+            eprintln!(
+                "PIC_ZOOM_TRACE unload preserve={} position={:?}",
+                preserve_grid_paintable_during_motion(),
+                self.imp().photo_index.get()
+            );
+        }
         if !preserve_grid_paintable_during_motion() {
             if let Some(frame) = self.first_child().and_downcast::<gtk::Overlay>() {
                 if let Some(picture) = frame.child().and_downcast::<gtk::Picture>() {
@@ -629,6 +643,15 @@ impl SquareTile {
         let started = std::time::Instant::now();
         self.set_photo_deferred(photo);
         self.load_visual();
+        if zoom_trace_enabled() && grid_zoom_animation_active() {
+            eprintln!(
+                "PIC_ZOOM_TRACE bind id={} position={:?} visual_loaded={} elapsed_us={}",
+                photo.id(),
+                self.imp().photo_index.get(),
+                self.imp().visual_loaded.get(),
+                started.elapsed().as_micros()
+            );
+        }
         if std::env::var_os("PICASA_TRACE").is_some() { eprintln!("PIC_THUMBNAIL gtk_bind elapsed_us={} id={}", started.elapsed().as_micros(), photo.id()); }
     }
 
