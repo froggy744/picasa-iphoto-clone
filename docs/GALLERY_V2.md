@@ -930,3 +930,30 @@ Fix commits:
 
 Status remains **IMPLEMENTED — runtime validation pending** until the Ctrl+wheel behavior is tested in the real application.
 
+
+
+### Ctrl+wheel interaction-lifetime correction
+
+Runtime trace `gridzoom4` showed that the remaining failure was not photo identity lookup or vertical anchoring. The same photo could be tracked correctly through a column reflow, but `GtkGridView` legitimately moved its real row-major cell hundreds of pixels in X when the column count changed. The floating copy hid that structural move during an animation, then the 150 ms wheel-debounce timer released the anchor. A later wheel detent at effectively the same pointer position therefore captured a different photo and the visual focal identity changed mid-interaction.
+
+The correction treats Ctrl+wheel as one explicit input transaction:
+
+- the 150 ms timer now only coalesces/reflows wheel input; it no longer ends focal-photo ownership
+- the first Ctrl+wheel detent captures one photo id and all later detents reuse that same id while Ctrl remains held
+- releasing Ctrl ends the transaction; pointer leave, a click, ordinary scrolling, and model replacement are deterministic fallback boundaries
+- if Ctrl is released while a zoom animation/reflow is still active, release is deferred until geometry is stable
+- reaching the minimum or maximum zoom level no longer clears the focal photo while the same Ctrl gesture is still active
+- the final handoff no longer flies the floating thumbnail across the window to a potentially distant row-major GridView cell; it uses a short crossfade from the cursor-held copy to the identity-matched real tile
+- the crossfade re-finds the real tile by photo id on every frame, so GridView recycling cannot make the handoff operate on a widget that has since been rebound
+- navigation/model mutation clears pointer-zoom presentation state before positions can change
+
+This deliberately preserves the direct photo-only `GtkGridView`, its direct `GtkScrolledWindow` relationship, the stable photo model, the canonical zoom ladder `[100, 117, 137, 160, 187, 219, 256, 300]`, the 180 ms thumbnail zoom animation, the 300 ms resize FLIP, and the existing Lightbox transition.
+
+Fix commits:
+
+- `9d7396f` — track the lifetime of a pointer-zoom interaction independently from wheel debounce
+- `97b7625` — keep one photo anchor through the full Ctrl gesture and replace long-distance handoff motion with an identity-safe crossfade
+- `405ce6a` — end the gesture on modifier release and other real input boundaries
+- `c2f9fa4` — clear pointer-zoom state before model mutation
+
+Status: **IMPLEMENTED — runtime validation pending**. The next trace should show one `PIC_ZOOM_ANCHOR capture` for a Ctrl-held zoom sequence, repeated `hold` entries for that same photo id across column changes, then one `finish_requested` / `release ... mode=crossfade` when the interaction ends.
