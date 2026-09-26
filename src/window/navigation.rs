@@ -1,28 +1,3 @@
-fn scroll_event_position_in_scrolled(
-    controller: &gtk::EventControllerScroll,
-    scrolled: &gtk::ScrolledWindow,
-) -> Option<(f64, f64)> {
-    // GtkEventControllerScroll does not put pointer coordinates in the scroll
-    // signal arguments, but the GdkEvent currently being handled does. Raw
-    // GdkEvent positions are surface-relative; GtkNative::surface_transform()
-    // converts them into the native widget's coordinates, after which
-    // compute_point() can translate exactly into this ScrolledWindow.
-    //
-    // This is the authoritative Ctrl+wheel pointer source. The motion cache
-    // below is only a fallback for unusual backend/event paths.
-    let event = controller.current_event()?;
-    let (surface_x, surface_y) = event.position()?;
-    let surface = event.surface()?;
-    let native = gtk::Native::for_surface(&surface)?;
-    let (surface_to_native_x, surface_to_native_y) = native.surface_transform();
-    let native_point = gtk::graphene::Point::new(
-        (surface_x + surface_to_native_x) as f32,
-        (surface_y + surface_to_native_y) as f32,
-    );
-    let point = native.compute_point(scrolled, &native_point)?;
-    Some((f64::from(point.x()), f64::from(point.y())))
-}
-
 fn install_smooth_gallery_scroll(
     scrolled: &gtk::ScrolledWindow,
     gallery: Rc<grid::Gallery>,
@@ -363,41 +338,34 @@ fn install_smooth_gallery_scroll(
             target_for_scroll.set(adjustment_for_scroll.value());
 
             if ctrl_zoom {
-                let event_pointer =
-                    scroll_event_position_in_scrolled(controller, &scrolled_for_zoom);
-                let cached_pointer = zoom_pointer_for_scroll.get();
-                let pointer = event_pointer.or(cached_pointer);
+                // Runtime validation on Fedora/Wayland showed that
+                // EventController::current_event().position() is not available
+                // for these wheel events, while the capture-phase motion
+                // controller reliably tracks the pointer for every Ctrl+wheel
+                // detent. Use that proven source only. If it is ever missing,
+                // consume the event instead of falling back to unanchored zoom,
+                // which would make the gallery jump.
+                let pointer = zoom_pointer_for_scroll.get();
 
                 if std::env::var_os("PICASA_TRACE").is_some() {
-                    let source = if event_pointer.is_some() {
-                        "event"
-                    } else if cached_pointer.is_some() {
-                        "motion"
-                    } else {
-                        "none"
-                    };
                     if let Some((x, y)) = pointer {
                         eprintln!(
-                            "PIC_ZOOM_INPUT source={} cursor=({:.1},{:.1}) dy={:.3}",
-                            source, x, y, dy
+                            "PIC_ZOOM_INPUT source=motion cursor=({:.1},{:.1}) dy={:.3}",
+                            x, y, dy
                         );
                     } else {
                         eprintln!("PIC_ZOOM_INPUT source=none dy={:.3}", dy);
                     }
                 }
 
+                let Some((x, y)) = pointer else {
+                    return glib::Propagation::Stop;
+                };
+
                 if dy < 0.0 {
-                    if let Some((x, y)) = pointer {
-                        gallery.zoom_in_at(&scrolled_for_zoom, x, y);
-                    } else {
-                        gallery.zoom_in();
-                    }
+                    gallery.zoom_in_at(&scrolled_for_zoom, x, y);
                 } else if dy > 0.0 {
-                    if let Some((x, y)) = pointer {
-                        gallery.zoom_out_at(&scrolled_for_zoom, x, y);
-                    } else {
-                        gallery.zoom_out();
-                    }
+                    gallery.zoom_out_at(&scrolled_for_zoom, x, y);
                 }
                 return glib::Propagation::Stop;
             }
