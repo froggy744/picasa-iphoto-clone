@@ -541,7 +541,7 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
     // Resolved size for views that only need a number (album covers).
     let grid_thumbnail_size = saved_grid_thumbnail_size.unwrap_or(DEFAULT_GRID_THUMBNAIL_SIZE);
 
-    // Thumbnail appearance (Settings > Library). Square corners toggle a CSS
+    // Thumbnail appearance (Settings > Interface). Square corners toggle a CSS
     // class on the main window; whole-photo fit is applied to the gallery and
     // re-applied live when the toggles change.
     if crate::settings::saved_bool(
@@ -556,6 +556,13 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         crate::settings::saved_bool(
             &connection.borrow(),
             crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
+        )
+        .unwrap_or(false),
+    );
+    gallery.set_show_file_names(
+        crate::settings::saved_bool(
+            &connection.borrow(),
+            crate::db::THUMBNAIL_FILE_NAMES_SETTING_KEY,
         )
         .unwrap_or(false),
     );
@@ -763,6 +770,11 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     crate::db::THUMBNAIL_FIT_WHOLE_PHOTO_SETTING_KEY,
                 )
                 .unwrap_or(false);
+                let show_file_names = crate::settings::saved_bool(
+                    &thumbs_connection.borrow(),
+                    crate::db::THUMBNAIL_FILE_NAMES_SETTING_KEY,
+                )
+                .unwrap_or(false);
                 if square {
                     thumbs_window.add_css_class("square-corners");
                 } else {
@@ -778,6 +790,10 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
                     crate::window::debug_log("THUMB SETTINGS: set_fit_whole_photo begin");
                     gallery_for_fit.set_fit_whole_photo(fit);
                     crate::window::debug_log("THUMB SETTINGS: set_fit_whole_photo end");
+                });
+                let gallery_for_names = thumbs_gallery.clone();
+                glib::idle_add_local_once(move || {
+                    gallery_for_names.set_show_file_names(show_file_names);
                 });
                 crate::window::debug_log("THUMB SETTINGS: apply callback exit");
             }),
@@ -1483,12 +1499,27 @@ pub fn build(app: &adw::Application, connection: Connection) -> adw::Application
         let gallery_scroll_stack = gallery_scroll_stack.clone();
         let gallery_for_folder_view = gallery.clone();
         gallery.set_folder_view_changed_handler(move |folder_mode| {
-            gallery_scroll_stack.set_visible_child_name(if folder_mode {
+            let folder_grid_experiment =
+                crate::grid::folder_gridview_experiment_enabled() && folder_mode;
+            gallery_scroll_stack.set_visible_child_name(if folder_mode && !folder_grid_experiment {
                 "folders"
             } else {
                 "grid"
             });
             if folder_mode {
+                if folder_grid_experiment {
+                    if std::env::var_os("PICASA_TRACE").is_some() {
+                        eprintln!("PIC_FOLDER_GRIDVIEW enabled mode=photo_grid folder_indicator=sticky");
+                    }
+                    gallery_for_folder_view.root.grab_focus();
+                    gallery_for_folder_view
+                        .update_group_header_for_scroll(gallery_for_folder_view.scroll_position());
+                    let gallery = gallery_for_folder_view.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(90), move || {
+                        gallery.refresh_visible_grid_tiles();
+                    });
+                    return;
+                }
                 // Keep keyboard focus on the widget that is actually shown.
                 // Tab/search helpers used to target the hidden GridView.
                 let had_grid_focus = gallery_for_folder_view.root.has_focus();
